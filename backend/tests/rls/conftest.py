@@ -38,14 +38,21 @@ What these fixtures do
    JWT claim set, matching Supabase's own RLS-testing convention
    (`SET ROLE` + `request.jwt.claims`), and run a query as that role.
 
-Coverage scope (deliberately partial -- see the change log)
+Coverage scope (deliberately partial -- see ACTION_ITEMS.md C49 for the
+running total, not this comment, which has already gone stale across
+multiple rounds of additions)
 -------------------------------------------------------------
-This is the start of DB-role-level RLS coverage, not the whole 207-ish
-policy-statement backlog. Five tables, chosen for consequence: `users`,
-`drivers`, `rides` (core consumer-facing tables, sourced from
-`backend/supabase_rls.sql`), `financial_events` (7-year money ledger,
-migrations 58/70/290), and `driver_insurance_periods` (SGI-regulated safety
-audit trail, migration 64).
+This is incremental DB-role-level RLS coverage, not the whole ~127-207
+policy-statement backlog. Started 2026-08-31 with five tables chosen for
+consequence (`users`, `drivers`, `rides` from `backend/supabase_rls.sql`,
+`financial_events` money ledger migrations 58/70/290, `driver_insurance_periods`
+safety audit trail migration 64); extended since across several rounds
+(`saved_addresses`, the transactional outbox, `lost_and_found`(_messages),
+`referral_payouts`, `auto_payout_batches`, `complaints`, the migration-26
+deny-all tables, and -- this round -- the `corporate_*` money/PII tables
+(migrations 05/17/27/142) plus `stripe_disputes`/`stripe_orphan_refunds`
+(88/254)). See each test file's own docstring for what it covers, and
+ACTION_ITEMS.md C49 for the current fraction covered.
 
 Running these tests
 --------------------
@@ -118,6 +125,19 @@ def _extract_create_table(sql_text: str, table_name: str) -> str:
                 end = sql_text.index(";", j) + 1
                 return sql_text[start:end]
     raise AssertionError(f"unbalanced parens extracting {table_name} from {marker!r}")
+
+
+def _extract_section(sql_text: str, start_marker: str, end_marker: str) -> str:
+    """Pull the text between two exact substrings out of a larger .sql file
+    (inclusive of start_marker, exclusive of end_marker). Used for a
+    multi-concern migration where only one section is in this harness's
+    scope and the other sections touch tables the harness doesn't build
+    (e.g. migration 142 also scrubs `disputes` PII and repairs `ride_offers`
+    -- unrelated to the corporate-financial-tables section this pulls out),
+    so the section is read out of the merged file rather than hand-copied."""
+    start = sql_text.index(start_marker)
+    end = sql_text.index(end_marker, start)
+    return sql_text[start:end]
 
 
 _AUTH_SHIM_SQL = """
@@ -411,6 +431,91 @@ def pg_conn(pg_test_dbname):
     # UndefinedColumn/UndefinedTable/"function ... does not exist".)
     cur.execute((migrations_dir / "399_transactional_outbox.sql").read_text())
 
+    # --- corporate billing tables (ACTION_ITEMS.md C49 remaining scope):
+    # migration 05 (corporate_accounts create), 17 (FK-guard + RLS enable +
+    # its own admin-only FOR ALL policy, verbatim -- the FK ALTERs
+    # type-guard-skip harmlessly here since users/rides ids are TEXT while
+    # corporate_accounts.id is UUID, the same real drift already noted above
+    # for complaints/lost_and_found), 27 (creates the 9 corporate money/PII
+    # tables + their original FOR ALL admin policies, verbatim), then
+    # migration 142's corporate-financial-tables section pulled out via
+    # _extract_section() rather than hand-copied, since 142 is a
+    # mixed-concern migration whose other sections (disputes PII scrub,
+    # ride_offers CHECK widening, an accepted-offer repair) touch tables
+    # outside this harness's scope. The extracted slice covers 142's §2
+    # (drops the 9 FOR-ALL policies from 27, replaces them with SELECT-only
+    # admin-read policies restricted to admin/super_admin + REVOKE/GRANT
+    # write lockdown) and the three "Member read own ..." policies that
+    # follow it in the same file section, verbatim.
+    #
+    # Note: corporate_accounts's OWN admin policy (migration 17) was never
+    # touched by 142's fix -- it still checked `users.role = 'admin'` only,
+    # excluding super_admin, unlike the 9 sibling tables. Migration 416 (PR
+    # #5307) closed this the same day, applying 142's exact fix pattern to
+    # this one table -- applied below, after the baseline grant block, for
+    # the same reason 142's own fix is sequenced after it (see that block's
+    # comment: granting then narrowing, not narrowing then re-granting). ---
+    cur.execute((migrations_dir / "05_corporate_accounts.sql").read_text())
+    cur.execute((migrations_dir / "17_corporate_accounts_fk.sql").read_text())
+    cur.execute((migrations_dir / "27_corporate_b2b_v1.sql").read_text())
+
+    # New tables need the same baseline grant as earlier batches -- granted
+    # by name (like the stripe_disputes/stripe_orphan_refunds grant below),
+    # NOT the repeated "ALL TABLES in schema" blanket used earlier in this
+    # fixture. This block runs after migration 399's outbox lockdown (the
+    # last of the earlier batches), and the blanket form would silently
+    # re-open outbox_messages' REVOKE (and financial_events', and the nine
+    # corporate tables' own REVOKE below) the same way it did for
+    # financial_events twice above -- a real bug caught by tracing exactly
+    # which REVOKEs precede this point before writing it this way. A
+    # table-by-name grant can't touch a table it doesn't name, so nothing
+    # needs re-revoking after it.
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON corporate_accounts, corporate_wallets, "
+        "corporate_wallet_transactions, corporate_members, corporate_member_allowances, "
+        "corporate_allowance_requests, corporate_policies, corporate_allowed_domains, "
+        "ride_payment_sources, corporate_policy_evaluations "
+        "TO anon, authenticated, service_role"
+    )
+
+    migration_142_sql = (migrations_dir / "142_fix_rls_financial_tables.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_142_sql,
+            "-- 2. Corporate financial tables:",
+            "-- 3. PIPEDA data minimization:",
+        )
+    )
+
+    # Migration 416 (PR #5307): corporate_accounts's own admin-policy fix,
+    # verbatim -- applies 142's exact pattern (SELECT-only admin/super_admin
+    # policy + REVOKE/GRANT write lockdown) to this one table, which 142
+    # itself never touched.
+    cur.execute((migrations_dir / "416_corporate_accounts_rls_super_admin_fix.sql").read_text())
+
+    # --- stripe_disputes (migration 88) / stripe_orphan_refunds (migration
+    # 254): admin-only read tables, verbatim. Unlike every other
+    # admin-role-check applied in this harness, these two policies check
+    # current_setting('request.jwt.claims', true)::json->>'role' directly,
+    # without the nullif(...,'')-guarded cast the auth.uid()/auth.role()
+    # shim functions use above -- see test_stripe_admin_tables_rls.py's
+    # module docstring for why this harness deliberately never exercises
+    # either policy with a truly empty claims GUC. ---
+    cur.execute((migrations_dir / "88_stripe_disputes.sql").read_text())
+    cur.execute((migrations_dir / "254_stripe_orphan_refunds.sql").read_text())
+
+    # These two new tables need the same baseline grant as every other batch
+    # above -- granted by name rather than the repeated "ALL TABLES in
+    # schema" blanket used earlier, specifically so it does NOT re-open the
+    # financial_events / corporate_* / outbox_messages holes those already
+    # closed (a table-by-name grant can't touch tables it doesn't name, so
+    # no further re-revoke is needed after this one). Neither 88 nor 254
+    # carries its own REVOKE.
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON stripe_disputes, stripe_orphan_refunds "
+        "TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -445,6 +550,14 @@ def pg_cur(pg_conn):
         "auto_payout_batches",
         "refresh_tokens",
         "stripe_events",
+        "corporate_accounts",
+        "corporate_wallets",
+        "corporate_wallet_transactions",
+        "corporate_members",
+        "corporate_member_allowances",
+        "corporate_allowance_requests",
+        "stripe_disputes",
+        "stripe_orphan_refunds",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

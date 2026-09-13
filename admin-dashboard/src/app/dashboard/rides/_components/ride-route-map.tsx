@@ -1,11 +1,12 @@
 /// <reference types="geojson" />
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-    MAP_STYLE_URL,
+    attachBasemapFallback,
+    basemapChain,
     fitBoundsToPoints,
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
@@ -86,6 +87,23 @@ const PICKUP_TRAIL_LAYER_ID = "ride-pickup-trail-lyr";
 const TRIP_TRAIL_SOURCE_ID = "ride-trip-trail-src";
 const TRIP_TRAIL_LAYER_ID = "ride-trip-trail-lyr";
 
+const ROUTE_LAYER_PAIRS: readonly (readonly [string, string])[] = [
+    [PLANNED_LAYER_ID, PLANNED_SOURCE_ID],
+    [ACTUAL_LAYER_ID, ACTUAL_SOURCE_ID],
+    [PICKUP_TRAIL_LAYER_ID, PICKUP_TRAIL_SOURCE_ID],
+    [TRIP_TRAIL_LAYER_ID, TRIP_TRAIL_SOURCE_ID],
+];
+
+/** Drop every route layer/source this component owns, so a redraw (new phase
+ *  data, or a basemap provider swap) is idempotent rather than throwing
+ *  "source already exists". */
+function clearRouteLayers(map: maplibregl.Map): void {
+    for (const [layerId, sourceId] of ROUTE_LAYER_PAIRS) {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+    }
+}
+
 export default function RideRouteMap({
     pickupLat,
     pickupLng,
@@ -101,47 +119,40 @@ export default function RideRouteMap({
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
-    // Memoize so the map-init effect (whose cleanup calls map.remove()) does not
-    // tear down and rebuild the MapLibre map on every parent re-render — an
-    // unmemoized new object here exhausts WebGL contexts and blanks the map.
+    // "ok" shows nothing at all, so a basemap that loads first try — the normal
+    // case — never flashes a banner. "retrying" only appears once a hop has
+    // actually failed, which is the 8-24s window that would otherwise be silent.
+    const [basemapStatus, setBasemapStatus] = useState<"ok" | "retrying" | "failed">("ok");
+    // Memoize so the draw effect does not rebuild the geometry on every parent
+    // re-render — an unmemoized new object here churns the route layers.
     const actualGeometry = useMemo(() => toGeoJsonMultiLineString(actualSegments), [actualSegments]);
 
+    // The latest "draw the route onto this map" routine, held in a ref so the
+    // map-creation effect below can call it without taking the route data as a
+    // dependency.
+    //
+    // That dependency is what used to destroy and rebuild the entire WebGL map
+    // on every parent re-render: ride-detail-modal.tsx builds pickupTrail /
+    // tripTrail / plannedTrail / locationTrail as fresh arrays inside its render
+    // body, so their identity changes every render, and this effect's cleanup
+    // calls map.remove(). Repeated teardown exhausts WebGL contexts and leaves
+    // the canvas blank — the failure the memo note above was added for, which
+    // had only ever been fixed for actualSegments. The map effect now depends on
+    // primitives alone; data changes redraw layers instead of rebuilding the map.
+    const drawRef = useRef<(map: maplibregl.Map, fit: boolean) => void>(() => {});
+
+    // ── Draw the route data ───────────────────────────────────────────────────
+    // Re-runs whenever the route data changes; redraws layers on the existing
+    // map instead of recreating it.
     useEffect(() => {
-        if (!containerRef.current || mapRef.current) return;
+        drawRef.current = (map: maplibregl.Map, fit: boolean) => {
+            const hasPickupTrail = !!pickupTrail && pickupTrail.length > 1;
+            const hasTripTrail = !!tripTrail && tripTrail.length > 1;
+            const hasPlannedTrail = !!plannedTrail && plannedTrail.length > 1;
+            const hasActualSegments = actualGeometry.coordinates.length > 0;
+            const hasRouteGeometry = hasActualSegments || hasPickupTrail || hasTripTrail || hasPlannedTrail;
 
-        const hasPickupTrail = !!pickupTrail && pickupTrail.length > 1;
-        const hasTripTrail = !!tripTrail && tripTrail.length > 1;
-        const hasPlannedTrail = !!plannedTrail && plannedTrail.length > 1;
-        const hasActualSegments = actualGeometry.coordinates.length > 0;
-        const hasRouteGeometry = hasActualSegments || hasPickupTrail || hasTripTrail || hasPlannedTrail;
-
-        const map = new maplibregl.Map({
-            container: containerRef.current,
-            style: MAP_STYLE_URL,
-            center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
-            zoom: 13,
-            // Static-summary view — no zoom buttons, just a compact
-            // attribution badge so the map stays distraction-free.
-            attributionControl: { compact: true },
-        });
-        mapRef.current = map;
-
-        map.on("load", () => {
-            // Pickup marker (green)
-            new maplibregl.Marker({
-                element: makeRoutePinEl({ kind: "pickup", size: 22, title: "Pickup" }),
-            })
-                .setLngLat([pickupLng, pickupLat])
-                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Pickup"))
-                .addTo(map);
-
-            // Dropoff marker (red)
-            new maplibregl.Marker({
-                element: makeRoutePinEl({ kind: "dropoff", size: 22, title: "Dropoff" }),
-            })
-                .setLngLat([dropoffLng, dropoffLat])
-                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
-                .addTo(map);
+            clearRouteLayers(map);
 
             // Road-following planned route (planned_route_polyline) — orange→red
             // gradient, same as every other route surface.
@@ -288,6 +299,7 @@ export default function RideRouteMap({
                 });
             }
 
+            if (!fit) return;
             // Fit bounds over every point we actually drew.
             const allPoints: { lat: number; lng: number }[] = [
                 { lat: pickupLat, lng: pickupLng },
@@ -301,14 +313,138 @@ export default function RideRouteMap({
                 ),
                 ...(!hasRouteGeometry ? (locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })) : []),
             ];
-            fitBoundsToPoints(map, allPoints, 40);
-        });
+            // Extra top padding reserves the status banner's footprint. Markers
+            // anchor at their centre, so a 22px pin overhangs its own coordinate
+            // by ~11px — with a flat 40px the topmost pin could sit underneath
+            // the very banner that exists to keep it visible.
+            fitBoundsToPoints(map, allPoints, { top: 52, bottom: 40, left: 40, right: 40 });
+        };
+
+        const map = mapRef.current;
+        if (map && map.isStyleLoaded()) drawRef.current(map, true);
+    }, [
+        pickupLat, pickupLng, dropoffLat, dropoffLng,
+        locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail,
+        actualGeometry, suppressStraightFallback,
+    ]);
+
+    // ── Create the map ────────────────────────────────────────────────────────
+    // Depends on the pickup/dropoff primitives only. Route data is *not* a
+    // dependency here — see drawRef above for why that matters.
+    useEffect(() => {
+        if (!containerRef.current) return;
+
+        const chain = basemapChain();
+        let disposed = false;
+        let detach: (() => void) | null = null;
+        let current: maplibregl.Map | null = null;
+
+        const build = (attempt: number) => {
+            if (disposed || !containerRef.current) return;
+
+            const map = new maplibregl.Map({
+                container: containerRef.current,
+                style: chain[attempt],
+                center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
+                zoom: 13,
+                // Static-summary view — no zoom buttons, just a compact
+                // attribution badge so the map stays distraction-free.
+                attributionControl: { compact: true },
+            });
+            current = map;
+            mapRef.current = map;
+
+            // Pickup / dropoff pins are DOM overlays, not style layers, so they
+            // render without a single tile. Adding them here rather than inside
+            // on("load") is deliberate: MapLibre fires `load` only once the
+            // style *and every source* finish, so a basemap that never completes
+            // used to hide the pins and the route entirely — on the screen used
+            // for SGI and dispute review. The forensic content must not depend
+            // on a third-party tile host being up.
+            new maplibregl.Marker({
+                element: makeRoutePinEl({ kind: "pickup", size: 22, title: "Pickup" }),
+            })
+                .setLngLat([pickupLng, pickupLat])
+                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Pickup"))
+                .addTo(map);
+
+            new maplibregl.Marker({
+                element: makeRoutePinEl({ kind: "dropoff", size: 22, title: "Dropoff" }),
+            })
+                .setLngLat([dropoffLng, dropoffLat])
+                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
+                .addTo(map);
+
+            // Route layers go on as soon as the *style* is parsed, which happens
+            // well before (and independently of) tile delivery.
+            let fitted = false;
+            const drawWhenReady = () => {
+                if (disposed || !map.isStyleLoaded()) return;
+                drawRef.current(map, !fitted);
+                fitted = true;
+            };
+            map.on("styledata", drawWhenReady);
+            drawWhenReady();
+
+            detach = attachBasemapFallback(map, chain, attempt, {
+                onRetry: (_next, nextAttempt) => {
+                    if (disposed) return;
+                    detach?.();
+                    detach = null;
+                    map.remove();
+                    if (mapRef.current === map) mapRef.current = null;
+                    setBasemapStatus("retrying");
+                    build(nextAttempt);
+                },
+                onExhausted: () => {
+                    if (disposed) return;
+                    // Keep the last map: its pins and route are already drawn,
+                    // and a background-less route still answers the question the
+                    // admin opened this panel to ask.
+                    setBasemapStatus("failed");
+                },
+            });
+        };
+
+        setBasemapStatus("ok");
+        build(0);
 
         return () => {
-            map.remove();
+            disposed = true;
+            detach?.();
+            current?.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry, suppressStraightFallback]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng]);
 
-    return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
+    return (
+        <div className="relative w-full h-[280px] rounded-xl overflow-hidden">
+            <div ref={containerRef} className="absolute inset-0" />
+            {basemapStatus !== "ok" && (
+                // bg-background (not /90), matching monitoring-map.tsx's demand
+                // legend: a translucent panel over map content puts muted text
+                // right at the contrast floor with what's underneath unknowable
+                // — and here "underneath" is the route gradient's saturated
+                // orange/red.
+                //
+                // Neutral (not text-destructive like heat-map.tsx /
+                // monitoring-map.tsx use for the same "chain exhausted"
+                // condition) on purpose: there the map is the whole panel and a
+                // failed basemap means nothing renders, so it is an error. Here
+                // the pins and route still draw, so only the backdrop is
+                // missing — alarm-red would overstate what the admin lost.
+                // Full opacity rather than the sibling emptyHint's /70
+                // (ride-detail-modal.tsx) because muted-on-card already measures
+                // ~4.8:1 in the light theme; /70 would push it under AA.
+                <div
+                    role="status"
+                    className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
+                >
+                    {basemapStatus === "retrying"
+                        ? "Basemap slow to load — trying another provider…"
+                        : "Basemap unavailable — route and pins still shown."}
+                </div>
+            )}
+        </div>
+    );
 }

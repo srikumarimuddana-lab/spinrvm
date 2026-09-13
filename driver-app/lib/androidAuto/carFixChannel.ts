@@ -251,6 +251,15 @@ export function resolveHeading(
  * or the marker and the module cache disagree about which way the car points.
  */
 export function adoptCarFix(fix: CarLatLng): CarLatLng {
+  // Counted HERE, not only in publishCarFix: useCarLocation's own watcher and
+  // its staleness watchdog adopt without publishing, and the phone dashboard's
+  // watcher does not touch this channel at all. A counter fed only by
+  // publishCarFix therefore reported "0 fixes/min" to carSession while the
+  // surface was rendering a current marker — the false "Car location starved"
+  // alarms on 2026-09-12/13, including one during a ride that streamed 564
+  // points to the server. publishCarFix delegates here, so this is the single
+  // choke point and cannot double-count.
+  publishedSinceRead += 1;
   const now = Date.now();
   const { fix: merged, source } = resolveHeading(
     fix,
@@ -330,7 +339,8 @@ export function subscribeCarFix(listener: (fix: CarLatLng) => void): () => void 
  * shared AsyncStorage entry, and re-renders any mounted surface.
  */
 export function publishCarFix(fix: CarLatLng): void {
-  publishedSinceRead += 1;
+  // The arrival counter lives in adoptCarFix (called just below) so that every
+  // path into the channel is counted, not only this one.
   // Subscribers get the MERGED fix, not the raw one — a background task fix with
   // no course would otherwise re-render the marker pointing north even though
   // the module cache still holds the true bearing.

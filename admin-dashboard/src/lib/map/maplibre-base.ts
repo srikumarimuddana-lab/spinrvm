@@ -89,6 +89,128 @@ export function monitoringFallbackStyle(flavor: string = "light"): string | null
     return protomapsStyleUrl(flavor);
 }
 
+// Carto's free GL basemaps — keyless, commercial use permitted with attribution,
+// and served from tiles.basemaps.cartocdn.com: a different host *and* a different
+// CDN from both tiles.openfreemap.org and api.protomaps.com. That independence is
+// the entire point of having them. MAP_STYLE_FALLBACK (same host, different style
+// path) cannot help when the host itself is the problem, and protomapsStyleUrl()
+// returns null whenever NEXT_PUBLIC_PROTOMAPS_API_KEY is unset — so without a
+// keyless third provider a chain can still end up with nowhere to go.
+export const MAP_STYLE_CARTO_LIGHT =
+    "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+export const MAP_STYLE_CARTO_DARK =
+    "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+/**
+ * Keyless Carto basemap for the given resolved theme. Needs no API key, so
+ * unlike protomapsStyleUrl() this never returns null — it is the hop every
+ * chain can always fall back to.
+ */
+export function cartoStyleUrl(resolvedTheme?: string): string {
+    return resolvedTheme === "dark" ? MAP_STYLE_CARTO_DARK : MAP_STYLE_CARTO_LIGHT;
+}
+
+/**
+ * Ordered basemap providers for an admin map, most-preferred first:
+ *   1. OpenFreeMap — today's default, keyless
+ *   2. Protomaps   — only when NEXT_PUBLIC_PROTOMAPS_API_KEY is configured
+ *   3. Carto       — keyless, always present, independent host + CDN
+ *
+ * Passing no theme yields the light styles, which is byte-for-byte the style a
+ * caller that hardcoded MAP_STYLE_URL was already using — adopting this chain
+ * is not a visual change for those callers, only a resilience one.
+ */
+export function basemapChain(resolvedTheme?: string): string[] {
+    const protomaps =
+        resolvedTheme === "dark" ? protomapsStyleUrl("dark") : protomapsStyleUrl();
+    return [
+        themedMapStyle(resolvedTheme),
+        ...(protomaps ? [protomaps] : []),
+        cartoStyleUrl(resolvedTheme),
+    ];
+}
+
+/** How long a basemap gets to fire `load` before it is treated as failed. */
+export const BASEMAP_LOAD_TIMEOUT_MS = 8000;
+
+export interface BasemapFallbackHandlers {
+    /** Another provider is available — rebuild the map against `nextStyleUrl`. */
+    onRetry: (nextStyleUrl: string, nextAttempt: number) => void;
+    /** Every provider in the chain is exhausted. `reason` is safe to show an admin. */
+    onExhausted: (reason: string) => void;
+}
+
+/**
+ * Watch one map's basemap load and walk `chain` when it fails.
+ *
+ * Two failure modes, both of which have actually produced a blank admin map:
+ *   - an explicit `error` (style 404, DNS failure, blocked host)
+ *   - silence: tile requests that hang, or a stale cached TileJSON pointing at
+ *     an expired dated build, leave the map blank forever and fire no error at
+ *     all. Only the timeout catches that one.
+ *
+ * Deliberately keyed on the `load` event rather than on "did a tile actually
+ * paint": e2e/visual-regression.spec.ts stubs tiles.openfreemap.org with a
+ * source-less style that fires `load` immediately and issues no tile requests.
+ * Keying on painted tiles would make CI hop to an un-stubbed third-party host
+ * and reintroduce exactly the network-dependent baseline flake ACTION_ITEMS.md
+ * B38 closed.
+ *
+ * Only pre-`load` failures switch providers. Once `load` has fired the map is
+ * usable, and a single 404 on one tile must never tear down a working map and
+ * swap its whole look out from under the admin mid-session.
+ *
+ * Returns a detach function; call it before removing the map.
+ */
+export function attachBasemapFallback(
+    map: MapLibreMap,
+    chain: string[],
+    attempt: number,
+    handlers: BasemapFallbackHandlers,
+    timeoutMs: number = BASEMAP_LOAD_TIMEOUT_MS,
+): () => void {
+    let settled = false;
+
+    // `timer` is declared below but only ever *called* into after it is
+    // initialised, so closing over it here is TDZ-safe.
+    const settle = () => {
+        settled = true;
+        clearTimeout(timer);
+    };
+
+    const advance = (reason: string) => {
+        if (settled) return;
+        settle();
+        const nextAttempt = attempt + 1;
+        const next = chain[nextAttempt];
+        if (next) handlers.onRetry(next, nextAttempt);
+        else handlers.onExhausted(reason);
+    };
+
+    const onLoad = () => {
+        if (settled) return;
+        settle();
+    };
+
+    // MapLibre's ErrorEvent carries an `ErrorLike`, not a full `Error` (no
+    // `name`), so the parameter has to be this loose to satisfy the overload.
+    const onError = (e: { error?: { message?: string } }) => {
+        if (settled) return;
+        advance(e?.error?.message || "Basemap failed to load.");
+    };
+
+    const timer = setTimeout(() => advance("Basemap timed out."), timeoutMs);
+
+    map.on("load", onLoad);
+    map.on("error", onError);
+
+    return () => {
+        settle();
+        map.off("load", onLoad);
+        map.off("error", onError);
+    };
+}
+
 // Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
 // should land somewhere operational even before service areas load or
 // the user's geolocation resolves. MapLibre uses [lng, lat] ordering.
@@ -211,11 +333,17 @@ export function fitBoundsToGeoJSON(
     map.fitBounds(bounds as LngLatBoundsLike, { padding, duration: 500 });
 }
 
-/** Fit bounds given an array of [lng, lat] or {lat,lng} points. */
+/** Fit bounds given an array of [lng, lat] or {lat,lng} points.
+ *  `padding` accepts MapLibre's per-edge object as well as a single number, for
+ *  callers that overlay chrome on one edge and must keep fitted points clear of
+ *  it — note markers anchor at their *centre*, so a pin overhangs its own
+ *  coordinate by half its height on top of whatever padding is set here. */
 export function fitBoundsToPoints(
     map: MapLibreMap,
     points: Array<[number, number] | { lat: number; lng: number }>,
-    padding = 40,
+    // All four edges required when passing the object form — MapLibre's own
+    // PaddingOptions does the same, and a partial object is not assignable to it.
+    padding: number | { top: number; bottom: number; left: number; right: number } = 40,
 ): void {
     let bounds: [[number, number], [number, number]] | null = null;
     points.forEach((p) => {

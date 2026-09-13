@@ -19,7 +19,8 @@
  *  - handleDeleteAccount: Alert-confirm opens the step-2 modal; typing
  *    anything other than DELETE toasts and does not call the API; typing
  *    DELETE calls DELETE /users/account, logs out, and navigates to
- *    /login; a failed delete toasts the backend's message
+ *    /login; a failed delete toasts the backend's message; a double-tap
+ *    while the request is in flight fires only one DELETE call
  *  - each Account/Emergency row navigates to its destination route
  */
 import React from 'react';
@@ -322,6 +323,43 @@ describe('delete account flow', () => {
     expect(mockShowToast).toHaveBeenCalledWith('error', 'settings.deleteFailedTitle', 'settings.deleteFailedMsg');
     expect(mockLogout).not.toHaveBeenCalled();
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('a double-tap while the delete request is in flight fires only one DELETE call', async () => {
+    let resolveDelete: (value?: any) => void = () => {};
+    mockApiDelete.mockImplementation(() => new Promise((resolve) => { resolveDelete = resolve; }));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    fireEvent.press(screen.getByText('settings.deleteAccount'));
+    const continueBtn = (Alert.alert as jest.Mock).mock.calls[0][2].find((b: any) => b.text === 'settings.deleteContinue');
+    act(() => { continueBtn.onPress(); });
+
+    fireEvent.changeText(screen.getByPlaceholderText('settings.typeDelete'), 'DELETE');
+    const deleteBtn = screen.getByTestId('deleteForeverButton');
+    // Once isDeleting flips true the button's `disabled` prop makes RNTL's
+    // synthetic press bubble to the modal's outer stopPropagation
+    // Pressable (a test-only artifact of tree-walking event dispatch, not
+    // real touch geometry) -- give it a fake event so that bubble doesn't
+    // crash the test.
+    const fakeEvent = { stopPropagation: () => {} } as any;
+
+    // First tap starts the in-flight request (mockApiDelete stays pending
+    // until resolveDelete is called below).
+    await act(async () => { fireEvent.press(deleteBtn, fakeEvent); });
+    expect(mockApiDelete).toHaveBeenCalledTimes(1);
+
+    // A second tap while that request is still pending must be a no-op:
+    // the button is now disabled, so this reaches executeDelete's own
+    // isDeleting guard at most, never a second DELETE.
+    await act(async () => { fireEvent.press(deleteBtn, fakeEvent); });
+    expect(mockApiDelete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDelete({ data: {} });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 
   it('cancel in step-2 closes without deleting', async () => {

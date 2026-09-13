@@ -53,10 +53,10 @@ except ImportError:
     from core.config import settings  # type: ignore
 
 try:
-    from .maps_budget import check_budget, record_call
+    from .maps_budget import reserve_budget
     from .redis_client import redis_get, redis_set
 except ImportError:
-    from utils.maps_budget import check_budget, record_call  # type: ignore
+    from utils.maps_budget import reserve_budget  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -727,7 +727,12 @@ async def _compute_route_via_google(
     except Exception:
         logger.warning("[route_distance] live-route cache get failed", exc_info=False)
 
-    allowed, spent, budget = await check_budget()
+    # ACTION_ITEMS.md C104: reserve_budget() records the spend atomically as
+    # part of the same reservation step, right before the call is made — no
+    # separate post-call record_call() needed. This is one of the "directions"
+    # writers named in C104's follow-up as sharing the same daily-total race
+    # as the already-migrated _shared.py/tools_booking.py call sites.
+    allowed, spent, budget = await reserve_budget("directions")
     if not allowed:
         logger.warning(
             "[route_distance] Maps daily budget reached (%.2f/%.2f USD) — skipping Directions fallback",
@@ -745,7 +750,6 @@ async def _compute_route_via_google(
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
             resp = await client.get(_DIRECTIONS_URL, params=params)
-        await record_call("directions")
         if resp.status_code != 200:
             logger.warning("[route_distance] Directions API returned %d", resp.status_code)
             return None
@@ -833,7 +837,9 @@ async def compute_navigation_steps(
     except Exception:
         logger.warning("[route_distance] nav-steps cache get failed", exc_info=False)
 
-    allowed, spent, budget = await check_budget()
+    # ACTION_ITEMS.md C104: reserve atomically right before the call, same
+    # rationale as _compute_route_via_google above.
+    allowed, spent, budget = await reserve_budget("directions")
     if not allowed:
         logger.warning(
             "[route_distance] Maps daily budget reached (%.2f/%.2f USD) — skipping navigation-steps fetch",
@@ -852,7 +858,6 @@ async def compute_navigation_steps(
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
             resp = await client.get(_DIRECTIONS_URL, params=params)
-        await record_call("directions")
         if resp.status_code != 200:
             logger.warning("[route_distance] Directions API (steps) returned %d", resp.status_code)
             return None

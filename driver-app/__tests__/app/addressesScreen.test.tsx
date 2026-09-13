@@ -15,7 +15,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, Alert } from 'react-native';
+import { TouchableOpacity, Text, Alert, ActivityIndicator } from 'react-native';
 
 import AddressesScreen from '../../app/driver/addresses';
 
@@ -203,6 +203,53 @@ describe('AddressesScreen', () => {
       'Address not found',
       expect.stringContaining('could not locate'),
     );
+  });
+
+  it('disables the Save button (and shows a spinner) while the save request is in flight, preventing a double-tap duplicate', async () => {
+    let resolvePost!: (v: any) => void;
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/addresses') return Promise.resolve({ data: [] });
+      if (url.startsWith('/maps/places/autocomplete')) {
+        return Promise.resolve({ data: { predictions: [{ place_id: 'p1', description: '100 Main St' }] } });
+      }
+      if (url.startsWith('/maps/places/details')) return Promise.resolve({ data: { lat: 50.45, lng: -104.6 } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolvePost = resolve; }));
+    const r = await renderScreen();
+    const headerAddBtn = r.root.findAllByType(TouchableOpacity)[1];
+    act(() => {
+      headerAddBtn.props.onPress();
+    });
+    const nameInput = r.root.findByProps({ placeholder: 'Enter name' });
+    act(() => {
+      nameInput.props.onChangeText('Home');
+    });
+    const addressInput = r.root.findByProps({ placeholder: 'Enter full address' });
+    act(() => {
+      addressInput.props.onChangeText('100 Main St');
+    });
+
+    // First tap kicks off the geocode + POST round trip, which we hold open.
+    await act(async () => {
+      findButtonByText(r, 'Save').props.onPress();
+      await flush();
+    });
+
+    // While the request is in flight, the Save button shows a small spinner
+    // in place of its label and is disabled, so a second real tap can't
+    // fire handleAddAddress again.
+    const saveBtnWhileSaving = r.root.findAllByType(TouchableOpacity).find(
+      (n) => n.findAllByType(ActivityIndicator).some((a) => a.props.size === 'small'),
+    );
+    expect(saveBtnWhileSaving).toBeTruthy();
+    expect(saveBtnWhileSaving!.props.disabled).toBe(true);
+
+    await act(async () => {
+      resolvePost({ data: {} });
+      await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledTimes(1);
   });
 
   it('shows a toast when the save POST fails', async () => {

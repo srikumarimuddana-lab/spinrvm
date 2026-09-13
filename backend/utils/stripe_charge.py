@@ -523,6 +523,44 @@ def _is_incremental_auth_ineligible(e: Any) -> bool:
     return "not eligible for the requested card features" in msg.lower()
 
 
+# Whether Stripe has already told THIS account it cannot request incremental
+# authorization. The refusal is a property of the account's enrolment, not of a
+# card or a request, so once it is observed the first attempt on every later
+# booking is guaranteed to fail — and each guaranteed failure is not free:
+# Stripe mints a real PaymentIntent, fails it, and fires a
+# payment_intent.payment_failed webhook for a ride row that the booking flow has
+# not inserted yet (the pre-auth runs BEFORE the insert, so its id can lose the
+# race). The webhook handler then 500s so Stripe will retry, which is correct in
+# isolation but meant one orphaned failed PI, one 500 and one Sentry error for
+# EVERY booking — observed 4/4 on 2026-09-12 (rides daf28c32, 221e2e5b,
+# 8a6c8cbd, 617e37b9). Skipping the doomed attempt removes the cause rather than
+# the symptom, and also saves a Stripe round trip on the booking path.
+#
+# Process-local and deliberately not persisted: it is a cache, not a setting. If
+# the account is later enrolled, a deploy or restart re-probes; the only cost of
+# being wrong in that direction is losing the tip-merge optimisation until then.
+_account_incremental_auth_ineligible = False
+
+
+def _reset_incremental_auth_eligibility_cache() -> None:
+    """@internal Test-only — clear the per-process ineligibility cache."""
+    global _account_incremental_auth_ineligible
+    _account_incremental_auth_ineligible = False
+
+
+def _mark_incremental_auth_ineligible() -> bool:
+    """Record the account-level refusal; True only on the first observation.
+
+    A setter rather than a ``global`` statement inside ``authorize_ride``:
+    that function reads the flag while building its params, and Python forbids
+    a ``global`` declaration after a name is already used in the same scope.
+    """
+    global _account_incremental_auth_ineligible
+    first_observation = not _account_incremental_auth_ineligible
+    _account_incremental_auth_ineligible = True
+    return first_observation
+
+
 async def authorize_ride(
     *,
     ride: Dict[str, Any],
@@ -577,6 +615,22 @@ async def authorize_ride(
     # retries (double-tap / dropped response) dedupe to the original hold.
     idempotency_key = f"ride-auth-{ride_id}-{amount_cents}"
 
+    # Read the cached account-level ineligibility ONCE, so the params shape and
+    # the idempotency key below can never disagree about it.
+    skip_incremental = _account_incremental_auth_ineligible
+    # An idempotency key must stay 1:1 with the parameters it was first used
+    # with — Stripe rejects a reuse whose params differ. The fallback below has
+    # always paired the no-incremental shape with "<key>-basic", so when the
+    # cache makes THIS call that same shape it must reuse that same key.
+    # Otherwise a second authorize for the same ride+amount (an SCA re-book, a
+    # client retry) would send "ride-auth-…" with params that no longer match
+    # the ones Stripe recorded against it on the first booking — and because a
+    # refused incremental request still mints a real PaymentIntent (observed:
+    # pi_3UEwNFFXFgLO2LdO1txWZDlS), that first pairing IS recorded. The
+    # resulting idempotency error is not the ineligibility string, so it would
+    # fall through to status="failed" and silently drop the pre-auth hold.
+    create_key = f"{idempotency_key}-basic" if skip_incremental else idempotency_key
+
     params: Dict[str, Any] = {
         "amount": amount_cents,
         "currency": CURRENCY,
@@ -598,7 +652,12 @@ async def authorize_ride(
         # card-not-present charge, so the card variant is the correct one; the
         # card_present spelling at top level is not a valid create param at all
         # and would risk a 400 on EVERY booking authorization.
-        "payment_method_options": {"card": {"request_incremental_authorization": "if_available"}},
+        # Omitted entirely once the account has refused it — see
+        # _account_incremental_auth_ineligible. Asking again only mints a
+        # PaymentIntent that is certain to fail.
+        "payment_method_options": {
+            "card": {} if skip_incremental else {"request_incremental_authorization": "if_available"}
+        },
         # Needed to read the granted capability off the charge below.
         "expand": ["latest_charge"],
         # Disable redirect-based payment methods (see charge_ride above):
@@ -621,7 +680,7 @@ async def authorize_ride(
             lambda: stripe.PaymentIntent.create(
                 **params,
                 api_key=secret,
-                idempotency_key=idempotency_key,
+                idempotency_key=create_key,
             )
         )
     except _StripeCardError as e:
@@ -644,10 +703,14 @@ async def authorize_ride(
         # requesting it so the hold itself — the dead-card-before-dispatch
         # protection this function exists for — still goes through; the only
         # loss is the one-Stripe-fee tip-merge optimization documented above.
-        logger.warning(
-            "[preauth] account not eligible for incremental authorization; retrying hold without it for ride=%s",
-            ride_id,
-        )
+        # Remember it, so no later booking mints a PaymentIntent that is
+        # guaranteed to fail (and with it an orphaned payment_failed webhook).
+        if _mark_incremental_auth_ineligible():
+            logger.warning(
+                "[preauth] account not eligible for incremental authorization; "
+                "retrying hold without it for ride=%s and skipping the request from now on",
+                ride_id,
+            )
         fallback_params = {**params, "payment_method_options": {"card": {}}}
         try:
             intent = await asyncio.to_thread(

@@ -62,9 +62,10 @@ _MAPS_TIMEOUT = 3.0
 
 
 try:
-    from .maps_budget import check_budget, record_call
+    from .maps_budget import reserve_budget
     from .redis_client import redis_get, redis_set
 except ImportError:
+    from utils.maps_budget import reserve_budget  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 
@@ -205,9 +206,13 @@ async def get_ride_eta_seconds(
         return eta_seconds
 
     # ── Google Distance Matrix fallback ─────────────────────────────────────
+    # ACTION_ITEMS.md C104: reserve_budget() records the spend atomically as
+    # part of the same reservation step, right before the call is made — no
+    # separate post-call record_call() needed (and no non-atomic gap for a
+    # concurrent burst of pings to race through).
     budget_allowed = True
     if maps_api_key:
-        budget_allowed, spent, budget = await check_budget()
+        budget_allowed, spent, budget = await reserve_budget("distance_matrix")
         if not budget_allowed:
             logger.warning(f"[ETA] daily Maps budget reached ({spent:.2f}/{budget:.2f} USD) — using haversine fallback")
     if maps_api_key and budget_allowed:
@@ -221,10 +226,6 @@ async def get_ride_eta_seconds(
             }
             async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
                 resp = await client.get(_MAPS_URL, params=params)
-            # Recorded as soon as a response comes back — Google received and
-            # answered the request regardless of HTTP status or the
-            # per-element status checked below.
-            await record_call("distance_matrix")
             resp.raise_for_status()
             body = resp.json()
 
@@ -318,7 +319,10 @@ async def batch_get_etas(
             result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
         return result
 
-    budget_allowed, spent, budget = await check_budget()
+    # ACTION_ITEMS.md C104: reserve_budget() records the spend atomically
+    # right before this one batched call is made — no separate post-call
+    # record_call() needed.
+    budget_allowed, spent, budget = await reserve_budget("distance_matrix")
     if not budget_allowed:
         logger.warning(f"[ETA] daily Maps budget reached ({spent:.2f}/{budget:.2f} USD) — batch haversine fallback")
         for d in drivers:
@@ -336,7 +340,6 @@ async def batch_get_etas(
         }
         async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
             resp = await client.get(_MAPS_URL, params=params)
-        await record_call("distance_matrix")
         resp.raise_for_status()
         body = resp.json()
 

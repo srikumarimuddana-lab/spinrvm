@@ -241,6 +241,8 @@ export default function AccountScreen() {
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor={colors.success} iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
               <View style={styles.cardDivider} />
+              <MenuRow styles={styles} colors={colors} icon="trophy" iconColor="#FFB800" iconBg="rgba(255, 184, 0, 0.1)" label="Loyalty" onPress={() => router.push('/loyalty' as any)} />
+              <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="gift" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="Refer & Earn" onPress={() => router.push('/referral' as any)} />
             </View>
           </View>

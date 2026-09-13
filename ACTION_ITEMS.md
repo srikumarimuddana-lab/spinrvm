@@ -25621,8 +25621,9 @@ how much they de-risk a public launch._
   (`_compute_route_via_google`, reference pattern to adapt, not copy verbatim).
 
 ### C106. R12 Phase 1 (turn-by-turn navigation) shipped on the Legacy Google Directions API, not the Routes API this session's own ROADMAP.md audit required
-- [ ] **Status:** OPEN — found, not fixed. Documentation-only finding; no code changed by this
-  entry.
+- [x] **Status:** DECIDED — **NO-GO for now** (2026-09-13). Documentation-only entry; no code
+  changed by this decision. See "GO/NO-GO decision" below for the full reasoning and the concrete
+  trigger condition for revisiting.
 - **Found by:** cross-session verification against `git log origin/main` while checking R12/R13
   status before starting follow-up work. R12 Phase 1 (PRs #5289, #5292, #5294, #5295, merged
   2026-09-12 13:43–16:56) shipped from a **parallel** Claude Code session
@@ -25652,15 +25653,46 @@ how much they de-risk a public launch._
 - **Impact if left as-is:** Legacy Directions works today and is not scheduled for shutdown, only
   maintenance mode (no new features — e.g. no future traffic-aware turn refinements). Real but not
   urgent technical debt, not a live bug or regression.
-- **Recommendation:** do not silently rewrite the already-shipped, driver-facing navigation
-  endpoint without the same review this session's other changes got (CLAUDE.md gate #10). A
-  future session/human should decide GO/NO-GO on migrating `compute_navigation_steps` to Routes
-  API's `computeRoutes`, weighing the ROADMAP's own original SKU-tier concern (Routes API's
-  traffic-aware routing is an Advanced-SKU pricing trigger, unlike Legacy) against Legacy's frozen
-  feature set.
+- **GO/NO-GO decision (2026-09-13): NO-GO for now.** Facts checked before deciding, not
+  assumed from the original ROADMAP framing:
+  - **Feature is dark-launched with zero live exposure.** `backend/schemas.py:168`
+    (`driver_turn_by_turn_enabled: bool = False`) and its one gate,
+    `backend/routes/rides/tracking.py:199` — the flag has never been flipped on. Either API choice
+    costs $0 in production today; this is a pure technical-debt question, not an active cost bleed.
+  - **The shipped call does not actually trigger the cost risk the ROADMAP warned about.** Read
+    `compute_navigation_steps`'s real request params (`backend/utils/route_distance.py`): it sends
+    `origin`, `destination`, `mode=driving`, `steps=true` — no `departure_time`/`traffic_model`, so
+    it is a plain Essentials-tier Legacy Directions call, billed at the same flat `directions` SKU
+    rate (`_PRICE_USD["directions"]` in `maps_budget.py`) as every other Directions call in this
+    codebase. The ROADMAP's "Advanced-SKU pricing trigger" warning is specifically about
+    *traffic-aware* routing preferences (`TRAFFIC_AWARE`/`TRAFFIC_AWARE_OPTIMAL`) on Routes API —
+    which this shipped feature does not request. A same-behavior migration (Basic/non-traffic-aware
+    `computeRoutes`, FieldMask limited to `routes.legs.steps.navigationInstruction`) would very
+    likely land on Routes API's own Essentials-equivalent tier, not Advanced — the specific fear
+    that would flip this to NO-GO per the ROADMAP's own text does not actually apply to what's
+    live today.
+  - **Live pricing could not be re-verified.** `developers.google.com` remains `EGRESS_BLOCKED`
+    from this environment (same limitation the original audit hit) — the above is reasoned from
+    this codebase's own documented SKU comments (`maps_budget.py`'s `distance_matrix` note: Routes
+    API traffic-aware ≈2x the Essentials rate), not a freshly-pulled Google price sheet. Re-verify
+    before treating the cost delta as precisely known.
+  - **Why NO-GO rather than GO anyway:** migrating today is pure debt-paydown on code with no
+    current user — real engineering cost (new request/response shape, `NavigationInstruction`
+    parsing, new tests) for zero present benefit, against CLAUDE.md's "simplicity first — no
+    speculative work" convention. R12 Phase 2 (live re-route + lane guidance, not yet scoped) is
+    the point where traffic-aware re-route calls actually become relevant and Advanced-tier
+    pricing becomes a real design input — deciding the final API generation once, at that point,
+    with real requirements in hand, beats migrating twice (once speculatively now, again if
+    Phase 2's needs turn out to want a different FieldMask/response shape).
+  - **Concrete revisit trigger — do not let this go quiet:** re-open this decision (a) before
+    `driver_turn_by_turn_enabled` is ever flipped on for a real rollout, since that is the point
+    the frozen-Legacy tradeoff starts having a live audience, or (b) when R12 Phase 2 scoping
+    begins, whichever comes first. Do not treat "flag still off" as permission to leave this
+    parked indefinitely — check this entry at that flag-flip or Phase-2-kickoff moment, not later.
 - **Files (reference only, no code changed by this entry):** `backend/utils/route_distance.py`
   (`compute_navigation_steps`), `backend/routes/rides/tracking.py` (`get_navigation_steps`),
-  `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
+  `backend/schemas.py` (`driver_turn_by_turn_enabled` default), `backend/utils/maps_budget.py`
+  (SKU pricing comments), `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
 ### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables

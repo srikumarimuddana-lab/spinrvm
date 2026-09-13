@@ -48,6 +48,10 @@ def test_get_company_subscription(test_client, admin_override):
             "routes.corporate_subscriptions.db_supabase.list_corporate_subscriptions_for_company",
             AsyncMock(return_value=[_sub_row()]),
         ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "subscription_billing_pilot_enabled": True}),
+        ),
     ):
         resp = test_client.get("/api/admin/corporate-accounts/c1/subscription")
 
@@ -55,6 +59,30 @@ def test_get_company_subscription(test_client, admin_override):
     body = resp.json()
     assert body["current"]["status"] == "active"
     assert len(body["history"]) == 1
+    assert body["pilot_enabled"] is True
+
+
+def test_get_company_subscription_pilot_defaults_false(test_client, admin_override):
+    """Migration 419's column defaults false; a company row missing it
+    entirely (or the company not found) must not crash or default true."""
+    with (
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_active_corporate_subscription",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.list_corporate_subscriptions_for_company",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        resp = test_client.get("/api/admin/corporate-accounts/c1/subscription")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["pilot_enabled"] is False
 
 
 class TestAssignGatedByFlag:

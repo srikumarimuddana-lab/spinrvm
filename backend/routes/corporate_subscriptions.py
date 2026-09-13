@@ -95,7 +95,9 @@ async def get_company_subscription(company_id: str, current_admin: dict = Depend
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     current = await db_supabase.get_active_corporate_subscription(normalized_id)
     history = await db_supabase.list_corporate_subscriptions_for_company(normalized_id)
-    return {"current": current, "history": history}
+    company = await db_supabase.get_corporate_account_by_id(normalized_id)
+    pilot_enabled = bool(company and company.get("subscription_billing_pilot_enabled"))
+    return {"current": current, "history": history, "pilot_enabled": pilot_enabled}
 
 
 @router.post("/{company_id}/subscription")

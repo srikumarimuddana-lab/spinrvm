@@ -239,6 +239,7 @@ export interface CorporateSubscription {
 export interface CompanySubscriptionResponse {
     current: CorporateSubscription | null;
     history: CorporateSubscription[];
+    pilot_enabled: boolean;
 }
 
 export const getCorporateSubscriptionPlans = () =>
@@ -257,6 +258,20 @@ export const cancelCompanySubscription = (companyId: string, atPeriodEnd: boolea
     request<CorporateSubscription>(`/api/admin/corporate-accounts/${companyId}/subscription/cancel`, {
         method: "POST",
         body: JSON.stringify({ at_period_end: atPeriodEnd }),
+    });
+
+export interface CompanySubscriptionPilotResponse {
+    company_id: string;
+    subscription_billing_pilot_enabled: boolean;
+}
+
+// Per-company gate on top of the global corporate_subscription_billing_enabled
+// setting (migration 419) — lets one company be opted into billing without
+// exposing assignCompanySubscription for every corporate account.
+export const setCompanySubscriptionPilot = (companyId: string, enabled: boolean) =>
+    request<CompanySubscriptionPilotResponse>(`/api/admin/corporate-accounts/${companyId}/subscription-pilot`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
     });
 
 /* ── Corporate members / allowances (Plan 3) ── */

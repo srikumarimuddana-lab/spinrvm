@@ -36,12 +36,12 @@ Triage of the two rides of 2026-09-13 (`SPR-CYDP69` 00:34–00:51, 4 GPS points;
 ## 3. Fix / remediation
 
 1. Added the SQLite-required `WHERE true` before `ON CONFLICT`, and added a **real-SQLite** test suite that runs the module's actual SQL through `node:sqlite` (built into Node 22+, no new dependency) via the outbox's own `openDatabase` injection point.
-2. Ack booking-stage pre-auth failures instead of 500ing — gated on **both** `metadata.source == "ride_booking_authorization"` **and the ride row being absent** (`current is None`). Behind an `app_settings` kill switch. See §13: an earlier revision keyed on the source alone and was rejected in review.
-3. Bounded the live gap-fill to 4 connectors / 1.5 s (falling through to the already-tested haversine branch), fetched the **newest** 200 points with an explicit chronological sort, and narrowed the select to the three columns actually read.
-4. Log the exception type, the `DatabaseError` original, and the traceback.
+2. Ack booking-stage pre-auth failures instead of 500ing — gated on **both** `metadata.source == "ride_booking_authorization"` **and the ride row being absent** (`current is None`). Behind an `app_settings` kill switch — **migration 417** plus the matching `AppSettings` field, without which there is nothing to set (see §14 F3). See §13: an earlier revision keyed on the source alone and was rejected in review.
+3. Bounded the live gap-fill to 4 connectors / 1.5 s (falling through to the already-tested haversine branch — real worst case ~5.5 s, see §14 F5), fetched the **newest** 200 points with an explicit chronological sort and a `captured_at IS NOT NULL` guard, and narrowed the select to the three columns actually read. Note this changes *which* 200 points are visible, not how many (§14 F6).
+4. Log the exception type, the traceback, and the deepest non-sentinel `DatabaseError` original from the `__cause__` chain (§14 F2).
 5. Report once at the threshold, then keep retrying at the capped 30 s tier; added a `NetInfo` listener so network regain resets the backoff.
-6. Reclassify SQLSTATE 23503 to `warning` via the existing `pg_error_code()`; every other error keeps `logger.error` + traceback.
-7. Moved the arrival counter into `adoptCarFix()`, the single choke point `publishCarFix()` delegates to.
+6. Reclassify SQLSTATE 23503 to `warning` via the existing `pg_error_code()`; every other error keeps `logger.error` + traceback. **Partial** — `_base.py` still logs its own error-level line first (§14 F1).
+7. Split the counter in two — all-arrivals (`adoptCarFix`, what now alarms) and task-origin (`publishCarFix`, diagnostic context). A single counter in either position breaks the alarm in one direction or the other (§14 F4).
 
 Also fixed while verifying #2: `payouts.py` called `.get()` on a `stripe.Account`, which raises in stripe-python 15. It was swallowed by a best-effort `except`, so **every driver was asked for their SIN twice** — the exact double-entry `prefill_sin_to_stripe` exists to prevent.
 
@@ -242,3 +242,25 @@ Postgres sorts NULLs **first** under `ORDER BY … DESC`, so a row with no `capt
 *Fix:* added `"captured_at": {"$notnull": True}` to the filter, matching 371's guard.
 
 **Accepted, not fixed (pre-existing, filed rather than forced):** `future.cancel()` does not stop a callable already running on an executor thread, so an outer cancellation leaves the Supabase call running with its result discarded. This is true of the pre-existing `TimeoutError` branch too and is not introduced here; the one path this batch actually adds (`/health`'s ping) is a harmless `SELECT`. The residual risk is a non-conditional write whose caller treats `CancelledError` as "definitely didn't happen" — worth its own ticket, not a change in this diff. Ride acceptance is already self-healing against it (the atomic `{'status': 'searching'}` filter makes a duplicate claim return 0 rows).
+
+## 14. Second review round (`/code-review high`) — 7 findings, all verified, 5 fixed in code
+
+Every finding was checked against the code before being accepted or dismissed; none was taken on faith, and none was dismissed.
+
+**F3 (most serious) — the documented kill switch did not exist.** `webhook_preauth_failure_ack_enabled` appeared only in this log, one test, and the read in `webhooks.py`. The `settings` table is fixed-flat-column with no JSON catch-all (migration 313's own header), so there was nothing an operator could set and §8's rollback was **false**. Fixed with **migration 417** plus the matching `AppSettings` field — without the schema field `PUT /api/admin/settings` 500s on the unknown column (the incident migrations 313/353/415 each record). `DEFAULT true`, a deliberate deviation from the ship-dark rule that the migration justifies in full: this gates a *fix*, not a feature, so shipping it dark would leave the per-booking 500 and the 3-day retry loop running.
+
+**F4 (worst in effect) — I had made the starvation detector unfirable.** Moving the counter into `adoptCarFix` meant the Android Auto surface's own watcher (`timeInterval: 2000`, ~30/min) plus its 3 s staleness watchdog always cleared `STARVED_FIXES_PER_MIN` of 6 — and those run precisely when `reportFixRate()` does. I had traded false positives for permanent false negatives, which is strictly worse: a silent monitor is more dangerous than a noisy one. Fixed with **two counters** — `arrivedSinceRead` (all arrivals, the user-facing "does the car map have a position" question, which is what now alarms) and `publishedSinceRead` (task-origin only, the Android-throttling diagnostic, carried as `task_fixes_per_min` context). Two regression tests pin both directions.
+
+**F7 — a real defect I introduced.** `lastNetReconnectAtRef` was stamped *before* the `readyState` check, so a NetInfo event that performed no reconnect still burned the 5 s cooldown and a genuine regain seconds later was skipped. Also `state.isConnected ?? state.isInternetReachable` made the second operand dead code (NetInfo always populates `isConnected`), so radio-attached-but-no-internet counted as connectivity regained. Both fixed: reachability first, and the timestamp moved into the branch that actually reconnects.
+
+**F2 — `_orig` could only ever be a sentinel.** `ping()` catches `run_sync`'s `DatabaseError` and re-raises its own, so `details["original"]` was `str(inner)` == `"Database operation failed"`. Fixed by walking the `__cause__` chain for the deepest non-sentinel value. Note the fix's *stated* goal was still met for all 111 events, which are the bare zero-arg `TimeoutError` — this makes the `DatabaseError` case useful too.
+
+**F1 — the 23503 reclassification is PARTIAL, and the log now says so.** `repositories/_base.py` logs `[DB] Supabase call failed` at error level **unconditionally** before wrapping and raising, so that Sentry event still fires; this only removes the duplicate second error from `features.py`. Fully silencing it needs either a 23503 carve-out at the `_base.py` choke point — rejected, because a 23503 on a ride or payment insert is a real error that must stay loud — or an existence check on the recipient, costing a DB read per push. Documented in code as a follow-up rather than left implied.
+
+**F5 — the 1.5 s budget is not the bound.** It is checked only *before* starting a connector, never enforced on one, so the honest worst case is budget + one full OSRM+Google pair ≈ **5.5 s**. Still an order of magnitude under the 80 s it replaces. Comment corrected rather than the claim left standing.
+
+**F6 — `desc=True` changes *which* 200 points are visible, not how many.** On a 564-point ride the trail is the newest ~35% and its start slides forward each poll, so earlier route is no longer rendered. Strictly better than freezing on the first 200 forever, but a stride/downsample is what would show the whole trip — flagged in code as a follow-up rather than changing a rider-facing surface in passing.
+
+**Verified correct by the reviewer, no change needed:** the `CancelledError` probe release; `$notnull`/`desc`/`columns` all being real `get_rows` parameters; `parse_iso_utc` always returning tz-aware UTC so the new sort cannot raise; the `WHERE true` upsert workaround; the `getattr` rewrite in `payouts.py`; and the `connectWebSocket` mutex not being able to drop the only timer-arming caller.
+
+**Re-verified after these fixes:** backend 44/44 on the touched suites, `ruff check`/`format` clean; driver-app **374/375** across 36 suites (66/66 on the two Android Auto suites, including the 2 new tests), `tsc --noEmit` clean. The single failure remains the pre-existing CRLF artifact.

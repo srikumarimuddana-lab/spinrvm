@@ -364,3 +364,51 @@ class TestIneligibilityIsRememberedAcrossBookings:
         assert stripe_charge._mark_incremental_auth_ineligible() is True
         assert stripe_charge._mark_incremental_auth_ineligible() is False
         assert stripe_charge._mark_incremental_auth_ineligible() is False
+
+    async def test_cached_skip_reuses_the_basic_idempotency_key(self):
+        """A key must stay 1:1 with the params it was first used with.
+
+        The no-incremental param shape has always been paired with
+        "<key>-basic" by the fallback. When the cache makes the FIRST call that
+        same shape, it must reuse that same key — otherwise a later authorize
+        for the same ride+amount sends "ride-auth-..." with params that differ
+        from the ones Stripe recorded against it on the first booking, and
+        Stripe answers with an idempotency error. That error is not the
+        ineligibility string, so it would fall through to status="failed" and
+        silently drop the pre-auth hold.
+        """
+        from backend.utils import stripe_charge
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.side_effect = [
+            _FakeAccountIneligibleError(),  # booking 1, attempt 1
+            _intent(),  # booking 1, attempt 2 (fallback)
+            _intent(),  # booking 2, single attempt
+        ]
+
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            for ride_id in ("ride_kx", "ride_kx"):
+                await stripe_charge.authorize_ride(
+                    ride={"id": ride_id},
+                    rider_id="rider_1",
+                    amount=Decimal("25.00"),
+                    payment_method_id="pm_1",
+                    stripe_customer_id="cus_1",
+                )
+
+        calls = mock_stripe.PaymentIntent.create.call_args_list
+        first_key = calls[0].kwargs["idempotency_key"]  # with incremental
+        fallback_key = calls[1].kwargs["idempotency_key"]  # without
+        cached_key = calls[2].kwargs["idempotency_key"]  # without, via cache
+
+        assert fallback_key == f"{first_key}-basic"
+        # The cached-skip call carries the SAME params shape as the fallback, so
+        # it must carry the same key — never the one already bound to the
+        # incremental-request shape.
+        assert cached_key == fallback_key
+        assert cached_key != first_key

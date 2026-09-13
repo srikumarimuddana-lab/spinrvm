@@ -615,6 +615,22 @@ async def authorize_ride(
     # retries (double-tap / dropped response) dedupe to the original hold.
     idempotency_key = f"ride-auth-{ride_id}-{amount_cents}"
 
+    # Read the cached account-level ineligibility ONCE, so the params shape and
+    # the idempotency key below can never disagree about it.
+    skip_incremental = _account_incremental_auth_ineligible
+    # An idempotency key must stay 1:1 with the parameters it was first used
+    # with — Stripe rejects a reuse whose params differ. The fallback below has
+    # always paired the no-incremental shape with "<key>-basic", so when the
+    # cache makes THIS call that same shape it must reuse that same key.
+    # Otherwise a second authorize for the same ride+amount (an SCA re-book, a
+    # client retry) would send "ride-auth-…" with params that no longer match
+    # the ones Stripe recorded against it on the first booking — and because a
+    # refused incremental request still mints a real PaymentIntent (observed:
+    # pi_3UEwNFFXFgLO2LdO1txWZDlS), that first pairing IS recorded. The
+    # resulting idempotency error is not the ineligibility string, so it would
+    # fall through to status="failed" and silently drop the pre-auth hold.
+    create_key = f"{idempotency_key}-basic" if skip_incremental else idempotency_key
+
     params: Dict[str, Any] = {
         "amount": amount_cents,
         "currency": CURRENCY,
@@ -640,9 +656,7 @@ async def authorize_ride(
         # _account_incremental_auth_ineligible. Asking again only mints a
         # PaymentIntent that is certain to fail.
         "payment_method_options": {
-            "card": {}
-            if _account_incremental_auth_ineligible
-            else {"request_incremental_authorization": "if_available"}
+            "card": {} if skip_incremental else {"request_incremental_authorization": "if_available"}
         },
         # Needed to read the granted capability off the charge below.
         "expand": ["latest_charge"],
@@ -666,7 +680,7 @@ async def authorize_ride(
             lambda: stripe.PaymentIntent.create(
                 **params,
                 api_key=secret,
-                idempotency_key=idempotency_key,
+                idempotency_key=create_key,
             )
         )
     except _StripeCardError as e:

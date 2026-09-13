@@ -1512,12 +1512,24 @@ function DriverDashboard() {
             Both symptoms are the same library defect from opposite sides:
             keeping the key risks the crash, dropping it risks a stale route
             line that never clears. A JS change only picks which one you get.
-            The actual fix is the patch-package patch to react-native-maps
-            (bounds guard in removeFeatureAt, do not clear on detach,
-            features.add(index) instead of set) — held for a device repro,
-            because inferred native rendering fixes have failed in this repo
-            before. shared/components/__tests__/RouteLine.test.tsx now pins the
-            child-count behaviour this all turns on.
+
+            The actual fix is upstream's own, now backported to the SDK-pinned
+            1.27.2 as patches/react-native-maps+1.27.2.patch: react-native-maps
+            1.29.0 made savedFeatures the single source of truth while detached,
+            so getFeatureCount/getFeatureAt/removeFeatureAt/safeAddFeature all
+            agree on one list, removeFeatureAt bounds-checks, and add uses
+            add(index) rather than set(index) so it is a true inverse of remove.
+
+            THE KEY STAYS UNTIL THAT PATCH IS CONFIRMED ON A DEVICE. The patch
+            applies cleanly and is upstream's tested code, but nothing here has
+            run it on an Android head unit, and inferred native rendering fixes
+            have failed in this repo before. Once a device shows a clean
+            pickup -> dropoff -> idle cycle with no crash and no vanished route,
+            this key and carSurface.tsx's route.leg keys can both go, and the
+            child-count churn they exist to manage stops mattering.
+
+            shared/components/__tests__/RouteLine.test.tsx pins the child-count
+            and no-remount behaviour this all turns on.
           */
           return (
             <React.Fragment key={`route-${rideState}`}>

@@ -268,6 +268,36 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
     // refreshTokens()'s catch calls logout() which clears the stale token.
     expect(mockSecureStoreBacking['refresh_token']).toBeUndefined();
   });
+
+  it('settles initialization when rejected-token cleanup cannot persist the logout marker', async () => {
+    mockSecureStoreBacking['refresh_token'] = 'expired-refresh';
+    mockPost.mockImplementation((url: string) => {
+      if (url === '/auth/refresh') {
+        const err: any = new Error('refresh token expired');
+        err.response = { status: 401, data: { detail: 'expired' } };
+        return Promise.reject(err);
+      }
+      throw new Error(`unexpected POST ${url}`);
+    });
+    // No writes occur before definitive-401 logout, so this rejects the
+    // spinr_session_ended marker while leaving all delete operations real.
+    (SecureStore.setItemAsync as jest.Mock).mockRejectedValueOnce(new Error('Keychain unavailable'));
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(useAuthStore.getState().initialize()).rejects.toThrow('Unable to save your session securely');
+
+    expect(useAuthStore.getState()).toMatchObject({
+      token: null,
+      refreshToken: null,
+      user: null,
+      isInitialized: true,
+      isLoading: false,
+      sessionRecoverable: false,
+    });
+    expect(mockSecureStoreBacking['refresh_token']).toBeUndefined();
+    expect(errorLog).toHaveBeenCalled();
+    errorLog.mockRestore();
+  });
 });
 
 describe('session-ended marker + full token wipe', () => {

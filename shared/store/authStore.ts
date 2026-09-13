@@ -422,7 +422,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Cache read is best-effort — never block init on it.
       }
 
-      const refreshed = await get().refreshTokens();
+      let refreshed: boolean;
+      try {
+        refreshed = await get().refreshTokens();
+      } catch (e) {
+        // refreshTokens can finish definitive-401 teardown and then surface a
+        // SecureStore failure while persisting the logout marker. The session
+        // is already cleared; ensure routing can leave the splash while the
+        // storage error remains visible to the layout/caller.
+        set({ isInitialized: true, isLoading: false });
+        throw e;
+      }
       if (refreshed) {
         const newToken = get().token;
         try {

@@ -25463,7 +25463,31 @@ how much they de-risk a public launch._
   ROADMAP.md` (R14).
 
 ### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
-- [ ] **Status:** OPEN — found, not fixed. Out of scope for the change that surfaced it.
+- [x] **Status:** RESOLVED (2026-09-13) — `reserve_budget(sku)` added to `maps_budget.py`:
+  a Redis Lua script (`_RESERVE_LUA`) folds the read-and-compare and the increment into one
+  atomic `EVAL`, with an `asyncio.Lock`-guarded equivalent for the `REDIS_URL`-unset
+  in-process-dict fallback. Applied to every clean 1:1 check-then-later-record call site
+  found by grepping the whole repo (more than this entry's own list — see below), each
+  converted to reserve atomically right before the network call instead of checking early
+  and recording late. Concurrency regression test in `backend/tests/test_maps_budget.py`
+  (`test_reserve_budget_never_overshoots_by_more_than_one_call_under_concurrency` + a
+  companion test reproducing the old race for contrast). Full writeup:
+  `docs/change-log/2026-09-13-c104-maps-budget-atomic-fix.md`.
+  - **Blast radius was wider than this entry's own list**: beyond `maps_proxy.py`'s 4
+    endpoints and `_shared.py`'s fare-estimate Directions call (both named below), grepping
+    also found `utils/route_distance.py` (2 call sites: live-route fallback +
+    `compute_navigation_steps`, only one of which — the live-route fallback — was
+    mentioned here, and only as context, not as an enumerated call site) and
+    `utils/maps_eta.py` (2 call sites: `get_ride_eta_seconds` + `batch_get_etas`, the latter
+    on the dispatch-matching hot path — **not mentioned in this entry at all**). All 4 of
+    these newly-found call sites were converted too.
+  - **Residual gap, not closed by this fix**: `ai/tools_booking.py`'s coarse
+    `_places_available()` gate was converted (closes the coarse "many concurrent AI-chat
+    tool calls admitted at once" race), but its 5 individual `record_call()` sites deeper in
+    the file (tied to a 1-of-2 geocode retry, or N concurrent `directions` calls in
+    `asyncio.gather`, where no single SKU/count is known at gate time) were deliberately left
+    as non-atomic bookkeeping, same as before — see the change-log's "What was NOT verified"
+    for the reasoning and a suggested follow-up.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).

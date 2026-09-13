@@ -111,9 +111,9 @@ class TestEnsureBudget:
     async def test_raises_503_when_budget_exceeded(self):
         from backend.routes.maps_proxy import _ensure_budget
 
-        with patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(False, 6.0, 5.0))):
+        with patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(False, 6.0, 5.0))):
             with pytest.raises(HTTPException) as exc:
-                await _ensure_budget()
+                await _ensure_budget("geocode")
             assert exc.value.status_code == 503
             assert "budget" in exc.value.detail.lower()
 
@@ -121,8 +121,8 @@ class TestEnsureBudget:
     async def test_passes_when_within_budget(self):
         from backend.routes.maps_proxy import _ensure_budget
 
-        with patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.1, 5.0))):
-            await _ensure_budget()  # must not raise
+        with patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.1, 5.0))):
+            await _ensure_budget("geocode")  # must not raise
 
 
 # ── places_autocomplete: not-configured / budget / upstream errors / sort ──
@@ -134,7 +134,7 @@ class TestPlacesAutocompleteBranches:
         from backend.routes.maps_proxy import places_autocomplete
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(False, 10.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(False, 10.0, 5.0))),
             patch("backend.routes.maps_proxy.httpx.AsyncClient") as mock_client_cls,
         ):
             with pytest.raises(HTTPException) as exc:
@@ -154,7 +154,7 @@ class TestPlacesAutocompleteBranches:
         from backend.routes.maps_proxy import places_autocomplete
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy.get_app_settings", AsyncMock(return_value={})),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -183,7 +183,7 @@ class TestPlacesAutocompleteBranches:
         client.post = AsyncMock(side_effect=error)
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -206,7 +206,7 @@ class TestPlacesAutocompleteBranches:
         client.post = AsyncMock(side_effect=RuntimeError("connection reset"))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -251,10 +251,9 @@ class TestPlacesAutocompleteBranches:
         client = _mock_async_client(post_result=_mock_httpx_response(payload))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
         ):
             result = await places_autocomplete(
                 request=_fake_request(),
@@ -293,10 +292,9 @@ class TestPlacesAutocompleteBranches:
         client = _mock_async_client(post_result=_mock_httpx_response(payload))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
         ):
             result = await places_autocomplete(
                 request=_fake_request(),
@@ -317,10 +315,9 @@ class TestPlacesAutocompleteBranches:
         client = _mock_async_client(post_result=_mock_httpx_response({"suggestions": []}))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
         ):
             result = await places_autocomplete(
                 request=_fake_request(),
@@ -342,7 +339,7 @@ class TestPlacesDetailsBranches:
     async def test_budget_exceeded_returns_503(self):
         from backend.routes.maps_proxy import places_details
 
-        with patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(False, 10.0, 5.0))):
+        with patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(False, 10.0, 5.0))):
             with pytest.raises(HTTPException) as exc:
                 await places_details(request=_fake_request(), place_id="pid-1", session_token=None, current_user=_RIDER)
             assert exc.value.status_code == 503
@@ -352,7 +349,7 @@ class TestPlacesDetailsBranches:
         from backend.routes.maps_proxy import places_details
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy.get_app_settings", AsyncMock(return_value={})),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -372,7 +369,7 @@ class TestPlacesDetailsBranches:
         client.get = AsyncMock(side_effect=error)
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -388,7 +385,7 @@ class TestPlacesDetailsBranches:
         client.get = AsyncMock(side_effect=RuntimeError("dns failure"))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -404,10 +401,9 @@ class TestPlacesDetailsBranches:
         client = _mock_async_client(get_result=_mock_httpx_response(payload))
 
         with (
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
         ):
             result = await places_details(
                 request=_fake_request(), place_id="pid-1", session_token=None, current_user=_RIDER
@@ -433,10 +429,9 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(side_effect=RuntimeError("redis down"))),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
             patch("backend.routes.maps_proxy.redis_set", AsyncMock()),
         ):
             result = await reverse_geocode(request=_fake_request(), lat=52.1, lng=-106.6, current_user=_RIDER)
@@ -449,7 +444,7 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(False, 10.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(False, 10.0, 5.0))),
         ):
             with pytest.raises(HTTPException) as exc:
                 await reverse_geocode(request=_fake_request(), lat=52.1, lng=-106.6, current_user=_RIDER)
@@ -461,7 +456,7 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy.get_app_settings", AsyncMock(return_value={})),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -477,7 +472,7 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -495,7 +490,7 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
         ):
@@ -511,10 +506,9 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
             patch("backend.routes.maps_proxy.redis_set", AsyncMock()),
         ):
             result = await reverse_geocode(request=_fake_request(), lat=52.12345, lng=-106.65432, current_user=_RIDER)
@@ -535,10 +529,9 @@ class TestReverseGeocodeBranches:
 
         with (
             patch("backend.routes.maps_proxy.redis_get", AsyncMock(return_value=None)),
-            patch("backend.routes.maps_proxy.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch("backend.routes.maps_proxy.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch("backend.routes.maps_proxy._maps_key", AsyncMock(return_value="dummy")),
             patch("backend.routes.maps_proxy.httpx.AsyncClient", return_value=client),
-            patch("backend.routes.maps_proxy.record_call", AsyncMock()),
             patch("backend.routes.maps_proxy.redis_set", AsyncMock(side_effect=RuntimeError("redis write down"))),
         ):
             result = await reverse_geocode(request=_fake_request(), lat=52.1, lng=-106.6, current_user=_RIDER)

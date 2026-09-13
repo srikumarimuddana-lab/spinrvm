@@ -185,7 +185,7 @@ class TestBudgetGate:
         from backend.routes.rides._shared import _fetch_directions_route
 
         with (
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
+            patch(f"{_TARGET}.reserve_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
             patch(f"{_TARGET}._httpx.AsyncClient") as client_cls,
         ):
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
@@ -194,10 +194,9 @@ class TestBudgetGate:
 
     async def test_budget_allowed_records_spend_on_success(self):
         payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
-        record_mock = AsyncMock()
+        reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
         with (
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", record_mock),
+            patch(f"{_TARGET}.reserve_budget", reserve_mock),
             patch(
                 f"{_TARGET}._httpx.AsyncClient",
                 return_value=_mock_async_client(payload),
@@ -207,16 +206,15 @@ class TestBudgetGate:
 
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
         assert route is not None
-        record_mock.assert_awaited_once_with("directions")
+        reserve_mock.assert_awaited_once_with("directions")
 
     async def test_budget_allowed_records_spend_even_on_non_ok_status(self):
-        """The spend happened the moment the request reached Google —
-        record it regardless of what Google answered, same placement as
+        """The reservation happens before the request even goes out — it's
+        recorded regardless of what Google answers, same placement as
         route_distance.py's sibling "directions" call site."""
-        record_mock = AsyncMock()
+        reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
         with (
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", record_mock),
+            patch(f"{_TARGET}.reserve_budget", reserve_mock),
             patch(
                 f"{_TARGET}._httpx.AsyncClient",
                 return_value=_mock_async_client({"status": "ZERO_RESULTS", "routes": []}),
@@ -226,14 +224,14 @@ class TestBudgetGate:
 
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
         assert route is None
-        record_mock.assert_awaited_once_with("directions")
+        reserve_mock.assert_awaited_once_with("directions")
 
     async def test_no_api_key_never_checks_budget(self):
         """An empty key short-circuits before any budget/HTTP work — no
         change from the pre-existing behavior this test already covered."""
         from backend.routes.rides._shared import _fetch_directions_route
 
-        with patch(f"{_TARGET}.check_budget") as budget_mock:
+        with patch(f"{_TARGET}.reserve_budget") as budget_mock:
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="")
         assert route is None
         budget_mock.assert_not_called()
@@ -258,7 +256,7 @@ class TestFareDirectionsCache:
         )
 
         with (
-            patch(f"{_TARGET}.check_budget") as budget_mock,
+            patch(f"{_TARGET}.reserve_budget") as budget_mock,
             patch(f"{_TARGET}._httpx.AsyncClient") as client_cls,
         ):
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
@@ -273,8 +271,7 @@ class TestFareDirectionsCache:
 
         payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         with (
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
         ):
             first = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
@@ -322,8 +319,7 @@ class TestFareDirectionsCache:
 
         payload = _ok_payload([{"distance": {}, "duration": {}}])  # malformed leg
         with (
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
         ):
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
@@ -343,8 +339,7 @@ class TestFareDirectionsCache:
         payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         with (
             patch(f"{_TARGET}.redis_get", AsyncMock(side_effect=RuntimeError("redis down"))),
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
         ):
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
@@ -359,8 +354,7 @@ class TestFareDirectionsCache:
         payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         with (
             patch(f"{_TARGET}.redis_set", AsyncMock(side_effect=RuntimeError("redis down"))),
-            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}.reserve_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
             patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
         ):
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")

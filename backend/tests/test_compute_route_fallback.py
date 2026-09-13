@@ -85,12 +85,14 @@ def _common_patches(
     async def _settings():
         return app_settings
 
-    async def _budget():
-        return (budget_allowed, 5.0 if not budget_allowed else 0.0, 5.0)
-
-    async def _record(sku):
-        if recorded is not None:
+    async def _reserve(sku):
+        # reserve_budget() atomically checks-and-records in one call (C104)
+        # -- combines the old separate _budget()/_record() fakes into one,
+        # matching the real function's signature and only "recording" sku
+        # when the reservation is actually granted.
+        if budget_allowed and recorded is not None:
             recorded.append(sku)
+        return (budget_allowed, 5.0 if not budget_allowed else 0.0, 5.0)
 
     async def _redis_get(_key):
         return cached
@@ -105,8 +107,7 @@ def _common_patches(
             patch.object(rd.settings, "OSRM_URL", ""),
             patch.object(rd.settings, "OSRM_FALLBACK_URL", ""),
             patch.object(rd, "get_app_settings", _settings),
-            patch.object(rd, "check_budget", _budget),
-            patch.object(rd, "record_call", _record),
+            patch.object(rd, "reserve_budget", _reserve),
             patch.object(rd, "redis_get", _redis_get),
             patch.object(rd, "redis_set", _redis_set),
             patch.object(rd.httpx, "AsyncClient", _fake_client(handler, calls)),

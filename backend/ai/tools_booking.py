@@ -54,7 +54,7 @@ try:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from ..utils.maps_budget import check_budget, record_call
+    from ..utils.maps_budget import record_call, reserve_budget
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:
     import db_supabase
@@ -66,7 +66,7 @@ except ImportError:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from utils.maps_budget import check_budget, record_call
+    from utils.maps_budget import record_call, reserve_budget
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -553,6 +553,20 @@ async def _rank_named_place_candidates_by_route(
 
 
 async def _places_available() -> tuple:
+    """Gate entry to this module's Maps-touching tools.
+
+    C104: this single call site admits a flow that may go on to make zero,
+    one, or several differently-priced Google calls (geocode, text_search_new,
+    or N concurrent directions calls in _rank_named_place_candidates_by_route)
+    — unlike this file's other Maps call sites, there is no one known SKU to
+    atomically reserve for here. reserve_budget("geocode") is used as a
+    conservative admission charge (geocode is this module's cheapest, most
+    common downstream call) so concurrent admissions can no longer all pass
+    once the account is genuinely near the cap, closing the coarse version of
+    C104's race for this gate. This does not make the finer-grained,
+    multiple-calls-per-admission case below fully atomic too — those
+    individual calls still use plain record_call() bookkeeping, as before.
+    """
     settings = await get_app_settings()
     api_key = settings.get("google_maps_api_key") or ""
     if not api_key:
@@ -560,7 +574,7 @@ async def _places_available() -> tuple:
             "error": "place lookup is not available right now — ask the rider to pick the location in the app"
         }
 
-    within, spent, budget = await check_budget()
+    within, spent, budget = await reserve_budget("geocode")
     if not within:
         logger.error("ai find_place blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
         return None, {

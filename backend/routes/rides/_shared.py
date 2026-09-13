@@ -20,12 +20,11 @@ from ._deps import (  # noqa: F401
     SpinrException,
     _httpx,
     _re,
-    check_budget,
     get_service_area_polygon,
     logger,
     multi_leg_distance,
     point_in_polygon,
-    record_call,
+    reserve_budget,
 )
 
 # R8 (docs/audit/ride-experience/ROADMAP.md): Redis cache for the
@@ -177,7 +176,12 @@ async def _fetch_directions_route(
     # matching this function's own documented contract (callers treat a
     # ``None`` result as "fall back to straight-line distance") rather than
     # raising, which would break that contract for every caller.
-    allowed, spent, budget = await check_budget()
+    #
+    # reserve_budget() atomically checks AND records this call in one step
+    # (C104) — no separate record_call() afterward, and unlike the old
+    # check_budget() read, concurrent callers can't all pass this gate
+    # before any of them counts.
+    allowed, spent, budget = await reserve_budget("directions")
     if not allowed:
         logger.warning(
             "_fetch_directions_route: daily Maps budget reached ({:.2f}/{:.2f} USD) — falling back to haversine distance",
@@ -199,11 +203,6 @@ async def _fetch_directions_route(
                 params=params,
             )
             data = resp.json()
-        # Record the spend as soon as the call actually reaches Google —
-        # before inspecting the response — so a non-OK status or a malformed
-        # payload still counts against the daily estimate (same placement as
-        # route_distance.py's sibling "directions" call site).
-        await record_call("directions")
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
                 "_fetch_directions_route: status={} — no route returned",

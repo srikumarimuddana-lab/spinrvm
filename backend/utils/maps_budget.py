@@ -15,19 +15,45 @@ so the bucket survives clock skew across replicas at the day boundary.
 Failure mode: if Redis is unavailable, ``record_call`` and ``check_budget`` log
 and return permissively (allow the call). Rationale: a Redis outage should not
 take Maps offline for users; the GCP-side budget alert is still our safety net.
+
+C104: ``check_budget()`` (a read) followed later by ``record_call()`` (a
+write) is a classic check-then-act race under concurrency — N concurrent
+callers can all read "under budget" before any of them increments, letting
+all N through and collectively blowing past ``MAPS_DAILY_BUDGET_USD``.
+``reserve_budget()`` closes this for call sites that gate a single, known
+SKU immediately before making the Google request: it folds the read and the
+increment into one atomic step (a Redis Lua script, or an ``asyncio.Lock``
+on the in-process fallback) so concurrent reservations serialize instead of
+all observing the same stale total. Callers using it must call it BEFORE
+the network request (not after, the way ``check_budget()``+``record_call()``
+were used) and must not also call ``record_call()`` for the same attempt —
+that would double-count. ``check_budget()``/``record_call()`` remain in use
+as a coarse, non-atomic pre-check where a single call site may lead to zero,
+one, or several differently-priced Google calls (see ai/tools_booking.py) —
+narrowing that residual gap is tracked separately, not part of this fix.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 try:
-    from .redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby, redis_mget
+    from .redis_client import (
+        redis_delete,
+        redis_eval,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_incrby,
+        redis_mget,
+    )
 except ImportError:  # pragma: no cover - dual import path
     from utils.redis_client import (  # type: ignore
         redis_delete,
+        redis_eval,
         redis_expire,
         redis_get,
         redis_incr,
@@ -238,3 +264,105 @@ async def check_budget() -> tuple[bool, float, float]:
     budget = _daily_budget_usd()
     spent = await estimate_today_usd()
     return spent < budget, spent, budget
+
+
+# ── C104: atomic check-and-increment ────────────────────────────────────────
+#
+# Fixed key order for the Lua script's KEYS/ARGV — must match _SKU_ORDER's
+# iteration order between the two argument lists built in reserve_budget().
+_SKU_ORDER: tuple[Sku, ...] = tuple(_PRICE_USD.keys())
+
+# KEYS = today's bucket key for each SKU in _SKU_ORDER.
+# ARGV[1] = daily budget (USD), ARGV[2] = bucket TTL (seconds),
+# ARGV[3] = 1-based index (into KEYS/_SKU_ORDER) of the SKU being reserved,
+# ARGV[4..] = price per call for each SKU in _SKU_ORDER, same order as KEYS.
+#
+# Reads every bucket's current count and sums the pre-call total BEFORE
+# touching anything; only if that total is still under budget does it INCR
+# the target SKU's bucket. Because a Lua script runs to completion on Redis
+# without interleaving with any other command (Redis executes EVAL/EVALSHA
+# atomically), no concurrent reservation can observe a state between this
+# script's read and its write -- unlike check_budget() + record_call(),
+# which are two separate round trips with the actual Google HTTP call
+# (unbounded latency) sitting in between them.
+_RESERVE_LUA = """
+local budget = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local idx = tonumber(ARGV[3])
+
+local before_total = 0.0
+for i = 1, #KEYS do
+    local raw = redis.call('GET', KEYS[i])
+    local count = 0
+    if raw then count = tonumber(raw) end
+    before_total = before_total + count * tonumber(ARGV[3 + i])
+end
+
+if before_total >= budget then
+    return {0, tostring(before_total), tostring(budget)}
+end
+
+local new_count = redis.call('INCR', KEYS[idx])
+if new_count == 1 then
+    redis.call('EXPIRE', KEYS[idx], ttl)
+end
+local after_total = before_total + tonumber(ARGV[3 + idx])
+return {1, tostring(after_total), tostring(budget)}
+"""
+
+# Serializes the in-process-dict fallback path (REDIS_URL unset) so
+# concurrent reserve_budget() calls can't interleave between the read and
+# the increment. Defence in depth: redis_client's fallback functions never
+# actually suspend the event loop (no real I/O), so this window is already
+# closed in practice for a single process — but that relies on an
+# implementation detail of redis_client._get_redis() that isn't part of its
+# documented contract, and this is dev/test-only code (production requires
+# REDIS_URL), so an explicit lock costs nothing and doesn't depend on it.
+_LOCAL_RESERVE_LOCK = asyncio.Lock()
+
+
+async def reserve_budget(sku: Sku) -> tuple[bool, float, float]:
+    """Atomically test-and-record one call against the daily budget (C104).
+
+    Equivalent to ``check_budget()`` immediately followed by
+    ``record_call(sku)`` for the SAME sku, but atomic: the two are folded
+    into one round trip (a Redis Lua script, or an ``asyncio.Lock``-guarded
+    equivalent when ``REDIS_URL`` is unset) so N concurrent callers cannot
+    all observe "under budget" before any of them counts. Must be called
+    BEFORE making the Google API request -- a rejected reservation means
+    the caller must skip the network call entirely, not call it anyway and
+    decide afterward. A caller that uses this must NOT also call
+    ``record_call(sku)`` for the same attempt; that would double-count.
+
+    Returns ``(allowed, spent_usd, budget_usd)`` -- same shape as
+    ``check_budget()``. ``spent_usd`` is the total BEFORE this call when
+    rejected (nothing was recorded), or the total INCLUDING this call when
+    allowed.
+
+    Fails open on Redis errors, matching ``check_budget()``'s and
+    ``record_call()``'s documented contract.
+    """
+    budget = _daily_budget_usd()
+    idx = _SKU_ORDER.index(sku) + 1
+    keys = [_key(s) for s in _SKU_ORDER]
+    args = [budget, _BUCKET_TTL_SECONDS, idx, *(_PRICE_USD[s] for s in _SKU_ORDER)]
+    try:
+        result = await redis_eval(_RESERVE_LUA, len(keys), *keys, *args)
+        allowed, spent, returned_budget = result[0], result[1], result[2]
+        return bool(int(allowed)), float(spent), float(returned_budget)
+    except RuntimeError:
+        # REDIS_URL unset -- no local Lua interpreter (see redis_eval's own
+        # docstring). Pure-Python equivalent of the script above, serialized
+        # through _LOCAL_RESERVE_LOCK.
+        async with _LOCAL_RESERVE_LOCK:
+            before_total = await estimate_today_usd()
+            if before_total >= budget:
+                return False, before_total, budget
+            count = await redis_incr(_key(sku))
+            if count == 1:
+                await redis_expire(_key(sku), _BUCKET_TTL_SECONDS)
+            after_total = before_total + _PRICE_USD[sku]
+            return True, after_total, budget
+    except Exception:
+        logger.warning("[maps_budget] reserve_budget(%s) failed; allowing permissively", sku, exc_info=False)
+        return True, 0.0, budget

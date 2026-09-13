@@ -63,7 +63,7 @@ async def test_get_ride_eta_budget_exceeded_skips_google_entirely():
         cache_get,
         cache_set,
         patch.object(me, "_osrm_eta_seconds", AsyncMock(return_value=None)),
-        patch.object(me, "check_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
+        patch.object(me, "reserve_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
         patch.object(me.httpx, "AsyncClient", _google_client_factory),
     ):
         eta = await me.get_ride_eta_seconds(
@@ -84,14 +84,13 @@ async def test_get_ride_eta_budget_exceeded_skips_google_entirely():
 @pytest.mark.asyncio
 async def test_get_ride_eta_budget_allowed_records_spend_on_success():
     dm_payload = {"rows": [{"elements": [{"status": "OK", "duration": {"value": 540}}]}]}
-    record_mock = AsyncMock()
+    reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
     cache_get, cache_set = _no_cache()
     with (
         cache_get,
         cache_set,
         patch.object(me, "_osrm_eta_seconds", AsyncMock(return_value=None)),
-        patch.object(me, "check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-        patch.object(me, "record_call", record_mock),
+        patch.object(me, "reserve_budget", reserve_mock),
         patch.object(me.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=dm_payload))),
     ):
         eta = await me.get_ride_eta_seconds(
@@ -105,7 +104,7 @@ async def test_get_ride_eta_budget_allowed_records_spend_on_success():
         )
 
     assert eta == 540
-    record_mock.assert_awaited_once_with("distance_matrix")
+    reserve_mock.assert_awaited_once_with("distance_matrix")
 
 
 @pytest.mark.asyncio
@@ -115,7 +114,7 @@ async def test_batch_get_etas_budget_exceeded_skips_google_entirely():
 
     drivers = [{"id": "d1", "lat": 50.45, "lng": -104.62}, {"id": "d2", "lat": 50.46, "lng": -104.63}]
     with (
-        patch.object(me, "check_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
+        patch.object(me, "reserve_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
         patch.object(me.httpx, "AsyncClient", _google_client_factory),
     ):
         result = await me.batch_get_etas(drivers, dest_lat=50.44, dest_lng=-104.64, maps_api_key="test-google-key")
@@ -132,23 +131,22 @@ async def test_batch_get_etas_budget_allowed_records_spend():
             {"elements": [{"status": "OK", "duration": {"value": 420}}]},
         ]
     }
-    record_mock = AsyncMock()
+    reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
     drivers = [{"id": "d1", "lat": 50.45, "lng": -104.62}, {"id": "d2", "lat": 50.46, "lng": -104.63}]
     with (
-        patch.object(me, "check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
-        patch.object(me, "record_call", record_mock),
+        patch.object(me, "reserve_budget", reserve_mock),
         patch.object(me.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=dm_payload))),
     ):
         result = await me.batch_get_etas(drivers, dest_lat=50.44, dest_lng=-104.64, maps_api_key="test-google-key")
 
     assert result == {"d1": 300, "d2": 420}
-    record_mock.assert_awaited_once_with("distance_matrix")
+    reserve_mock.assert_awaited_once_with("distance_matrix")
 
 
 @pytest.mark.asyncio
 async def test_batch_get_etas_no_api_key_never_checks_budget():
     drivers = [{"id": "d1", "lat": 50.45, "lng": -104.62}]
-    with patch.object(me, "check_budget") as budget_mock:
+    with patch.object(me, "reserve_budget") as budget_mock:
         result = await me.batch_get_etas(drivers, dest_lat=50.44, dest_lng=-104.64, maps_api_key="")
 
     assert set(result.keys()) == {"d1"}

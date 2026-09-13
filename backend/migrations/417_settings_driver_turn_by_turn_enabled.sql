@@ -1,4 +1,4 @@
--- 416: admin-settable column for the driver_turn_by_turn_enabled dark-launch
+-- 417: admin-settable column for the driver_turn_by_turn_enabled dark-launch
 -- flag (docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md,
 -- schemas.py's AppSettings field added in Phase 1 PR A / #5289).
 --

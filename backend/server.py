@@ -220,7 +220,24 @@ async def _db_ready() -> "tuple[bool, dict]":
     except Exception as exc:
         # Full error is logged server-side; the public body stays generic so the
         # health endpoint never leaks DB internals.
-        _logging.getLogger(__name__).error(f"/health DB readiness check failed: {exc}")
+        #
+        # str(exc) is the EMPTY STRING for the zero-arg asyncio.TimeoutError the
+        # wait_for above raises, so this used to log a bare trailing colon and
+        # nothing else — 111 Sentry events over 6 days with the cause formatted
+        # away (and DatabaseError would have given only "Database operation
+        # failed"). Log the type, the DatabaseError original per CLAUDE.md, and
+        # the traceback. This is the stdlib logger imported at the top of the
+        # module, not loguru, so exc_info= is honoured here.
+        _detail = str(exc) or repr(exc)
+        _orig = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
+        _logging.getLogger(__name__).error(
+            "/health DB readiness check failed after %.1fs: %s: %s%s",
+            _HEALTH_PING_TIMEOUT,
+            type(exc).__name__,
+            _detail,
+            f" | original={_orig}" if _orig else "",
+            exc_info=True,
+        )
 
     _health_cache.update(at=now, ok=ok, detail=detail)
     return ok, detail

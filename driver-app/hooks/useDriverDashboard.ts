@@ -364,6 +364,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // connectWebSocket awaits ensureFreshToken() before it assigns wsRef.current,
+  // so it always yields at least one microtask. Two callers that both see a
+  // closed socket in that window (AppState 'active' and the NetInfo listener can
+  // fire near-simultaneously when a driver picks up a locked phone as signal
+  // returns) would each construct a real WebSocket; the loser is orphaned but
+  // never closed, stays authenticated, and its onmessage still dispatches — so
+  // ride offers get processed twice. This mutex makes the connect path reentrant-safe.
+  const wsConnectingRef = useRef(false);
+  // Wall-clock floor between connectivity-triggered reconnects. Without it a
+  // flapping connection (tunnel edge, cell handoff) fires NetInfo repeatedly,
+  // and each tick zeroing reconnectAttemptRef would pin every retry at tier 0
+  // (~1s) forever — defeating the 30s-capped backoff a few lines below.
+  const lastNetReconnectAtRef = useRef(0);
+  const NET_RECONNECT_COOLDOWN_MS = 5000;
   // Auth watchdog: a socket can open but never complete the auth handshake
   // (lost first message, half-open TLS through a flaky proxy). The server only
   // times that out after ~30s; this self-heals far faster.
@@ -1198,7 +1212,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // handleWSMessage] and recreated on unrelated store changes — the mount
   // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
   // leaving the banner stuck on "Reconnecting…".
-  const connectWebSocket = useCallback(async () => {
+  const openWebSocket = useCallback(async () => {
     // Ensure the access token is fresh before opening the socket. Without
     // this, a driver returning from a long background period opens a WS
     // with an expired token — the server rejects auth and the socket
@@ -1388,14 +1402,26 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (authWatchdogRef.current) { clearTimeout(authWatchdogRef.current); authWatchdogRef.current = null; }
 
       if (isOnlineRef.current && userRef.current) {
-        if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
-          setConnectionState('disconnected');
-          setWsError('Unable to connect to server. Pull down to retry or toggle offline/online.');
+        // Report ONCE at the threshold, then keep retrying at the capped tier.
+        // This used to `return` with no timer armed, which permanently gave up
+        // on the socket: reconnectAttemptRef is only reset on auth_success or
+        // AppState 'active', and a driver already foregrounded (e.g. phone in a
+        // dash mount) never emits 'active', so after ~198s of backoff the
+        // socket stayed dead for the rest of the trip. Consequences seen in
+        // production 2026-09-13 00:38: no live position to dispatch, a frozen
+        // rider map, and the backend's route-deviation alerter firing false
+        // safety incidents on a Period-3 driver it could no longer see. The
+        // copy also told the driver to "pull down to retry" — the dashboard has
+        // no RefreshControl, so that instruction was dead.
+        //
+        // `tier` below already clamps to the last RECONNECT_DELAYS entry, so
+        // falling through retries forever at the 30s cap.
+        if (reconnectAttemptRef.current === MAX_RECONNECT_ATTEMPTS) {
+          setWsError('Connection lost — still retrying.');
           captureException(
             new Error(`WebSocket reconnect exhausted after ${MAX_RECONNECT_ATTEMPTS} attempts`),
             { domain: 'dispatch', ws_event: 'reconnect_exhausted', close_code: String(event.code) },
           );
-          return;
         }
         setConnectionState('reconnecting');
         const tier = Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1);
@@ -1427,6 +1453,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // reassignment that could redefine fetchActiveRide — none exists, only
     // shallow set({...partial}) calls throughout).
   }, [fetchActiveRide]);
+
+  // Reentrancy guard around openWebSocket. Everything that reconnects goes
+  // through this wrapper, never openWebSocket directly, so only one socket can
+  // ever be under construction: openWebSocket awaits ensureFreshToken() before
+  // assigning wsRef.current, and two callers racing through that window would
+  // each build a live, authenticated WebSocket whose onmessage dispatches ride
+  // offers — the orphan is never closed because onclose's `ws !== wsRef.current`
+  // guard correctly makes it a no-op.
+  const connectWebSocket = useCallback(async () => {
+    if (wsConnectingRef.current) return;
+    wsConnectingRef.current = true;
+    try {
+      await openWebSocket();
+    } finally {
+      // Cleared once wsRef.current is assigned (or an early return bailed), so
+      // a later caller sees a real socket and correctly declines to reconnect.
+      wsConnectingRef.current = false;
+    }
+  }, [openWebSocket]);
 
   useEffect(() => {
     if (!isOnline || !user) {
@@ -1529,6 +1574,39 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
     // connectWebSocket is stable; user read via ref. Empty deps so this
     // listener is registered exactly once per hook instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ─── Reconnect on network regain ─────────────────────────────────
+  // "Connectivity came back" is the other signal that should reset the
+  // backoff, and the AppState listener above only covers it for an app that
+  // was actually backgrounded. A driver mid-trip with the phone in a dash
+  // mount stays 'active' through a tunnel or dead zone, so without this the
+  // backoff only ever grows and never resets.
+  useEffect(() => {
+    return NetInfo.addEventListener((state) => {
+      const up = state.isConnected ?? state.isInternetReachable ?? false;
+      if (!up || !isOnlineRef.current || !userRef.current) return;
+      // Cooldown BEFORE zeroing the counter. A marginal connection emits
+      // "restored" repeatedly, and resetting the backoff on every tick would
+      // hold every retry at tier 0 (~1s) indefinitely, defeating the 30s cap
+      // this whole ladder exists to enforce and turning a flapping tunnel into
+      // a reconnect storm against the backend.
+      const nowMs = Date.now();
+      if (nowMs - lastNetReconnectAtRef.current < NET_RECONNECT_COOLDOWN_MS) return;
+      lastNetReconnectAtRef.current = nowMs;
+      reconnectAttemptRef.current = 0;
+      setWsError(null);
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
+        connectWebSocket();
+      }
+    });
+    // connectWebSocket is stable; online/user read via refs. Registered once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

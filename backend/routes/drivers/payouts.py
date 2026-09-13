@@ -202,7 +202,14 @@ async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: st
 
     try:
         account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
-        if ((account.get("individual") or {}).get("id_number_provided")) is True:
+        # Attribute access, not .get(): Account is a StripeObject, and since
+        # stripe-python 8 .get() raises AttributeError("'get' is a dict method,
+        # but a Account is not a dict"). That was swallowed by the best-effort
+        # except below, so every driver was still asked for their SIN twice —
+        # the exact double-entry this function exists to prevent. getattr is
+        # None-safe at both hops, so a missing `individual` stays falsy.
+        individual = getattr(account, "individual", None)
+        if getattr(individual, "id_number_provided", None) is True:
             # Stripe already has one — from its own form, or from a previous
             # run of this. Writing again would be a pointless round-trip.
             await _mirror_id_number_provided(driver["id"], account_id)

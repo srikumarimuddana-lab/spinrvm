@@ -435,6 +435,13 @@ export class TripLocationOutbox {
           lat, lng, accuracy, speed, heading, altitude, source, mocked,
           is_completion_fix, 'signout_unflushed', ?
         FROM trip_location_outbox
+        -- WHERE true is load-bearing, not a no-op: when an UPSERT is attached to
+        -- an INSERT..SELECT, SQLite cannot tell whether ON introduces the
+        -- ON CONFLICT clause or a join's ON, and fails to parse with
+        -- 'near "DO": syntax error'. A WHERE before it resolves the ambiguity.
+        -- The other quarantine inserts in this file are safe only because they
+        -- already filter; this one sweeps the whole table, so it needs this.
+        WHERE true
         ON CONFLICT(session_id, sequence_number) DO NOTHING`,
         [this.now()],
       );

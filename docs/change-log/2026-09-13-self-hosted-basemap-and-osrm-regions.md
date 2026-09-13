@@ -99,20 +99,71 @@ active today. Zero backend, zero money, zero ride-state.**
   that no existing service calls; nothing depends on it until an env var points
   at it. It draws pixels behind the pins and nothing more.
 
-**The one real risk is the OSRM region change, and it is a money path.**
+**The OSRM region change touches the distance pipeline. It is NOT a fare change
+under current production settings — an earlier draft of this document said it
+was, and that was wrong.**
 
-`backend/utils/route_distance.py` bills on road-matched distance. A GPS trace
-entering Alberta today gets a non-`Ok` OSRM response, so the backend falls back
-to Google Roads and then to the haversine value from `complete_ride`. With
-Alberta in the graph, OSRM matches that trace and returns road-following
-distance, which is **longer** than a straight line — so affected fares go **up**.
-That is the documented billing model finally reaching those trips rather than a
-regression, but it is a real fare change on a live-tested surface.
+`spinr-money-auditor` challenged the claim and it does not survive contact with
+the code. The corrected picture, verified rather than reasoned:
 
-Mitigation: **this change ships the capability, not the coverage.** The default
-build arg is unchanged, so no graph changes and no fare moves until someone
-deliberately rebuilds with `EXTRA_REGION_URLS`. Both the Dockerfile header and
-`README.md` §1 carry the warning at the point of use.
+- **Live production is `fare_lock_enabled = true`, `fare_distance_basis = 'road'`**
+  — queried directly on 2026-09-13, not inferred from the migration. Migration
+  `248_fare_road_basis_and_quote_lock.sql:4-14` records this as an
+  owner-confirmed product decision: *"the rider is quoted the actual road
+  distance before the ride starts and is charged that amount… no post-ride GPS
+  re-pricing."* It sets the live row **and** the column default to `TRUE`.
+- **With that flag on, settlement never reprices.**
+  `routes/drivers/ride_complete.py`'s `_fare_lock` branch writes
+  `update_fields["distance_km"]` and **skips `recalculate_fare_for_distance`
+  entirely**; only the `elif` branch reprices. Corroborated independently by
+  `utils/ride_settlement.py:20-24` ("geometry/audit only"),
+  `utils/route_finalizer.py` ("fare is out of scope by design") and
+  `utils/distance_reconciliation.py:12` ("Detection only: it never changes a
+  fare").
+- **The rider's pre-booking quote never touches OSRM at all.**
+  `routes/rides/estimates.py` prices on `_fetch_directions_route()` —
+  Google Directions only (`routes/rides/_shared.py:130-159`).
+
+**So widening OSRM coverage changes the recorded/displayed `actual_distance_km`
+— admin dashboard, SGI dispute map, audit trail — and not the amount charged or
+paid out.** It becomes a genuine fare change only if `fare_lock_enabled` is
+turned off, which is a separate, deliberate decision. That flag is the thing to
+re-check before any rollout; it is now named in the Dockerfile header and
+README warning, neither of which mentioned it before.
+
+Two further findings from the same audit, both verified against the code here:
+
+- **The sanity gate can reject exactly the traces this merge is meant to fix.**
+  `utils/trip_distance.py:304-319` accepts the road distance only within
+  1/3×–3× of the haversine baseline — but that baseline is built by
+  `_sum_phase_distances()`, which **drops** (`continue`, not interpolate) any
+  segment over `MAX_SEG_KM = 5.0`, `MAX_SEG_GAP_S = 300`, or
+  `MAX_SEG_KMH = 150.0`. Long rural stretches near a provincial border are
+  precisely where >5 min signal gaps occur, so the baseline is systematically
+  deflated there; a complete, correct post-merge OSRM distance can land above
+  `3×` it and be discarded, silently keeping the old lower number. **Gate 4's
+  dry run, when it happens, must use a gappy rural cross-border trace — an
+  urban Lloydminster case would not exercise this at all.**
+- **Today's "before" value may not be a clean haversine fallback.** A partial
+  match returns `code:"Ok"` with multiple non-contiguous `matchings`, and
+  `_compute_via_osrm` (`route_distance.py:263`) sums only what matched —
+  `compute_road_route` escalates to Google Roads only when the result is
+  `None`. So a trip dipping into uncovered Alberta and back can already be
+  silently under-counted rather than falling back at all, meaning the recorded
+  distance for those trips may move further than a haversine-vs-road comparison
+  implies.
+
+Also confirmed clean by that audit, and worth recording so it is not re-derived:
+`OSRM_FALLBACK_URL` (the public demo server) is architecturally ineligible for
+the billing path — `compute_road_route`/`compute_segmented_road_route` read
+`settings.OSRM_URL` directly and never `_live_osrm_url()` — so widening our own
+graph cannot change which provider answers a billing call. `snap_to_road` writes
+only `pickup_nav_lat/lng`, and `compute_route` feeds only the live map/ETA.
+
+Mitigation, unchanged and now more clearly sufficient: **this change ships the
+capability, not the coverage.** The default build arg is unchanged, so no graph
+changes and nothing moves — displayed or charged — until someone deliberately
+rebuilds with `EXTRA_REGION_URLS`.
 
 ## 5. User-experience effect
 
@@ -301,11 +352,46 @@ What *was* actually verified, by execution:
     failure this function exists to prevent, inverted. Now `/…/i`, with tests
     for both the mixed-case host and a lookalike (`evilcartocdn.com`) that must
     still not claim Carto's credit.
-- `spinr-cicd-infra-reviewer` and `spinr-money-auditor` were also dispatched
-  against this diff; their findings had not returned when these commits were
-  made. **Anything they raise is owed as a follow-up commit on this branch
-  before a PR is opened** — this is a feature branch with no PR, so nothing has
-  reached a reviewable surface yet.
+- **Reviewed by `spinr-money-auditor` — no blockers in the diff as staged, but
+  it corrected the central billing claim.** Its findings are folded into §4
+  above; the short version is that the earlier "affected fares go up" was wrong
+  under the production default, and the correction was confirmed by querying the
+  live `app_settings` row rather than trusting either the migration or the
+  auditor. It also surfaced the deflated-haversine-baseline rejection risk and
+  the partial-match undercount, both re-verified against the code here and now
+  recorded in §4 and in `deploy/osrm/README.md`.
+- **Reviewed by `spinr-cicd-infra-reviewer` — no blockers; everything it could
+  execute (the merge loop under `dash`, the jq pipeline and its guards, the
+  `${PUBLIC_URL:+…}` expansion, ARG/FROM scoping, JSON validity, `COPY` path
+  resolution) passed under test.** Two warnings, both acted on:
+  1. **`DATA_ID` ↔ `config.json` was a silent-404 trap — now impossible.**
+     `config.json` was copied verbatim while the style was rewritten to
+     `mbtiles://{$DATA_ID}`, so overriding `DATA_ID` (which the README's
+     build-arg table presents as an ordinary option) produced a style pointing
+     at a source `config.json` did not define. That build **succeeds**, the
+     container starts, and the Railway healthcheck passes — only the tiles
+     404. A green deploy serving an empty map is the worst failure shape
+     available, so the coupling was removed rather than documented:
+     `config.json` is now re-keyed from `DATA_ID` at build time, and a final
+     cross-artifact `RUN` re-reads both finished files and fails the build
+     unless every `mbtiles://` source the style names is a key in
+     `config.json`. Tested three ways — default, overridden, and a deliberately
+     desynced pair that now fails the build where it previously shipped.
+  2. **`PLANETILER_TAG`/`TILESERVER_TAG` default to mutable `latest`**, unlike
+     `deploy/osrm`'s pinned `v5.27.1`. Not fixable here — no registry was
+     reachable, so no tag could be confirmed to exist, and a wrong pin fails
+     outright where `latest` at least resolves. Escalated from a soft to-do to
+     a prominent warning in both the Dockerfile and README §2, with the exact
+     `docker image inspect` commands to capture the working digests. **This is
+     an accepted, documented gap, not a closed one.**
+  - Its third note — that the change-log file this diff cites did not exist —
+    was stale: the agent read the tree before the file was written. It is
+    present and committed.
+  - **Caught by my own re-check, not by either reviewer:** the cross-artifact
+    assertion added in response to (1) initially spanned two lines with no
+    trailing backslash on the first — the precise build-breaking bug the
+    surrounding comment warns about. The structural checker flagged it; it is
+    now one line and both Dockerfiles re-verify clean.
 
 ## 10. What was NOT verified
 
@@ -337,11 +423,27 @@ What *was* actually verified, by execution:
   documentation, not observed. If wrong, the merge fails loudly at build time
   rather than producing a bad graph, and the README names the `osmium sort`
   remedy.
-- **No Alberta fare scenario was dry-run** against `mock_supabase_client`
-  fixtures. Gate 4 asks for that on money changes. It is not done here because
-  the default graph is unchanged and no fare can move until someone rebuilds —
-  but **it is owed before anyone actually deploys an AB-merged OSRM image**, and
-  that is the gate to hold, not this commit.
+- **No Alberta distance scenario was dry-run** against `mock_supabase_client`
+  fixtures. Gate 4 asks for that on money-adjacent changes. Not done here
+  because the default graph is unchanged and nothing moves until someone
+  rebuilds — but **it is owed before anyone deploys an AB-merged OSRM image**,
+  and per the money audit it must use a **gappy rural cross-border trace**, not
+  an urban one: the 1/3×–3× gate's haversine baseline drops >300 s / >5 km
+  segments, so only a trace with real signal gaps exercises the rejection path
+  that would silently discard the corrected distance. An urban Lloydminster
+  case would pass while proving nothing.
+- **`fare_lock_enabled` was verified once, on 2026-09-13.** It is an
+  admin-rotatable `app_settings` value, so this document's "display-only"
+  conclusion is a point-in-time reading, not a standing guarantee. Re-check it
+  at rollout rather than citing this entry.
+- **Not traced (flagged by the money audit, left open):**
+  `services/incentive_service.py:191-198` deliberately reads `distance_km`
+  rather than `actual_distance_km` for driver-bonus `min_distance_km`
+  conditions, with a comment explaining why. That is fine if the check runs
+  pre-completion as the comment implies; the caller's timing was not traced
+  precisely enough to rule out a post-completion run, at which point
+  `distance_km` has been overwritten by `ride_complete.py`. Unrelated to this
+  diff and out of its scope, but worth a look before relying on that path.
 - **Nothing was seen rendering, and the coverage gap is wider than "the visual
   baseline doesn't open the modal."** `spinr-design-consistency-reviewer`
   checked this rather than taking the caveat at face value, and found **zero

@@ -66,8 +66,29 @@ map is the normal failure here, and the smoke test is what distinguishes them.
 | `JAVA_OPTS` | `-Xmx4g` | Planetiler heap. Raise for a bigger area; lower if your builder has less RAM. |
 | `STYLE_TARBALL_URL` | openmaptiles/positron-gl-style `master` | Any MapLibre GL style repo tarball. Positron matches the light, low-chrome look the dashboard already gets from Carto, so self-hosting is not a visual change. |
 | `FONTS_ZIP_URL` | openmaptiles/fonts `v2.0` | Pre-generated PBF glyph ranges. |
-| `DATA_ID` | `v3` | Must match the key under `data` in `config.json`. |
-| `PLANETILER_TAG` / `TILESERVER_TAG` | `latest` | Pin these once you have a build that works. |
+| `DATA_ID` | `v3` | Safe to override — `config.json` is re-keyed to match at build time, and the build asserts the style's source resolves against it. |
+| `PLANETILER_TAG` / `TILESERVER_TAG` | `latest` | **Pin these after your first successful build — see below.** |
+
+### Pin the image tags after the first successful build
+
+Both default to the mutable `latest`, unlike `deploy/osrm` which pins a real
+release. That is a consequence of how this was authored, not a preference: the
+environment had no registry access, so no specific tag could be confirmed to
+exist, and a wrong pin fails the build outright where `latest` at least
+resolves.
+
+Leaving them is a real hazard once this is in service. A routine "rebuild to
+refresh the map" would pull whatever `latest` points at that day, and a changed
+CLI or file layout (if `/usr/src/app/run.sh` moved, say) fails the build for
+reasons unrelated to the map refresh — with nothing recorded about what the
+working build used. So on the build that works:
+
+```bash
+docker image inspect ghcr.io/onthegomap/planetiler:latest --format '{{index .RepoDigests 0}}'
+docker image inspect maptiler/tileserver-gl:latest      --format '{{index .RepoDigests 0}}'
+```
+
+and set the two ARG defaults to those versions (or digests) in the Dockerfile.
 
 **Alberta as well as Saskatchewan?** Unlike OSRM, this is not a merge problem —
 planetiler takes one area per build, so either build a second service for AB, or

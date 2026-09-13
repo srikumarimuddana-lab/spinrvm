@@ -19,13 +19,24 @@
 #     -t spinr-osrm .
 # Merging SK+AB is far cheaper than canada-latest (see README §1).
 #
-# BILLING NOTE: widening the region changes billable distance for any trip whose
-# GPS trace enters the newly-covered area. Today such a trace returns NoMatch and
-# the backend falls back to Google Roads, then haversine; once covered, OSRM
-# map-matches it and the road-following distance is legitimately *higher* than
-# the straight-line fallback. That is the documented billing model working as
-# intended, not a regression — but it is a fare change, so roll it out
-# deliberately. See docs/change-log/2026-09-13-self-hosted-basemap-and-osrm-regions.md.
+# DISTANCE NOTE: widening the region changes the RECORDED distance for any trip
+# whose GPS trace enters the newly-covered area — admin dashboard, SGI dispute
+# map, audit trail. Under the current production settings it does NOT change
+# what anyone is charged or paid:
+#
+#   app_settings.fare_lock_enabled = true   (verified against production
+#   app_settings.fare_distance_basis = road  2026-09-13; migration 248)
+#
+# With fare_lock on, settlement keeps the booking-time fare and never reprices
+# on the post-ride GPS distance (routes/drivers/ride_complete.py — the _fare_lock
+# branch writes distance_km only and skips recalculate_fare_for_distance). The
+# rider's pre-booking quote prices on the Google Directions road distance and
+# never touches OSRM at all.
+#
+# It becomes a real FARE change only if fare_lock_enabled is turned off, at
+# which point recalculate_fare_for_distance runs on the measured distance.
+# Re-check that flag before assuming this is display-only.
+# See docs/change-log/2026-09-13-self-hosted-basemap-and-osrm-regions.md.
 
 ARG OSRM_TAG=v5.27.1
 

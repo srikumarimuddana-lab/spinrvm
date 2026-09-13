@@ -66,15 +66,43 @@ with the extract, so a build that fits Railway's builder today may not later.
 If a build dies without a clear error, it is almost certainly OOM in
 `osrm-extract`; drop back to a narrower region.
 
-> **⚠️ This changes billable distance.** `backend/utils/route_distance.py` bills
-> on road-matched distance. A trace that enters Alberta today returns
-> `NoMatch`, so the backend falls back to Google Roads and then to haversine
-> (straight-line). Once Alberta is in the graph, OSRM matches that trace and
-> returns the **road-following** distance, which is legitimately longer than the
-> straight line — so affected fares go **up**. That is the documented billing
-> model finally applying to those trips rather than a regression, but it is a
-> real fare change: roll it out deliberately, and check
-> `docs/change-log/2026-09-13-self-hosted-basemap-and-osrm-regions.md` first.
+> **⚠️ This changes recorded distance. Whether it changes a fare depends on one
+> flag.**
+>
+> Adding Alberta means a trace that enters the province gets map-matched instead
+> of falling through, so `actual_distance_km` — the number on the admin
+> dashboard, the SGI dispute map and the audit trail — changes for those trips.
+>
+> **It does not change what anyone is charged, under current production
+> settings.** Verified against production on 2026-09-13:
+> `fare_lock_enabled = true`, `fare_distance_basis = 'road'`. Migration 248
+> records this as an owner-confirmed product decision — *"no post-ride GPS
+> re-pricing"* — and `routes/drivers/ride_complete.py`'s `_fare_lock` branch
+> writes `distance_km` only, skipping `recalculate_fare_for_distance`
+> entirely. The rider's pre-booking quote is priced on the Google Directions
+> road distance (`routes/rides/_shared.py`) and never touches OSRM either way.
+>
+> **It becomes a real fare change if `fare_lock_enabled` is ever turned off**,
+> at which point settlement reprices on the measured distance. Re-check the live
+> flag before assuming display-only.
+>
+> Two further things to know before enabling this on a real deployment:
+>
+> - **The sanity gate may reject the very trips this fixes.**
+>   `utils/trip_distance.py`'s 1/3×–3× gate compares the road distance against a
+>   haversine baseline that **drops** segments over 5 km, 300 s, or 150 km/h
+>   rather than interpolating them. Long rural stretches near a provincial
+>   border are exactly where those gaps happen, so the deflated baseline can put
+>   a correct, complete OSRM distance above `3×` and get it discarded —
+>   silently keeping the old lower number. Dry-run a gappy rural cross-border
+>   trace, not just an urban one.
+> - **Today's "before" number may already be wrong, not cleanly haversine.** A
+>   partial match returns `code:"Ok"` with several non-contiguous `matchings`,
+>   and `_compute_via_osrm` sums only what matched. A trip that dips into
+>   uncovered Alberta and returns can therefore be silently under-counted today
+>   rather than falling back to Google Roads at all — so the size of the change
+>   for those trips may be larger than a haversine-vs-road comparison suggests.
+>
 > Trips wholly inside Saskatchewan are unaffected — the SK graph is identical
 > either way.
 

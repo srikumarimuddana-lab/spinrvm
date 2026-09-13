@@ -30,6 +30,17 @@
 # stage it sits in, so putting TILESERVER_TAG next to the FROM that uses it
 # would expand to an empty tag and fail the build with "invalid reference
 # format" before a single layer ran.
+#
+# ⚠️ PIN THESE AFTER YOUR FIRST SUCCESSFUL BUILD. They default to the mutable
+# `latest`, unlike the sibling deploy/osrm/Dockerfile which pins a real release
+# (OSRM_TAG=v5.27.1). That is not a preference — the environment this was
+# authored in had no registry access, so no specific tag could be confirmed to
+# exist, and a wrong pin fails the build outright where `latest` at least
+# resolves. The cost is that a routine "rebuild to refresh the map" can silently
+# pull a different planetiler or tileserver-gl release with a changed CLI or
+# file layout (if /usr/src/app/run.sh moved, say) and fail for reasons that have
+# nothing to do with the map data. Record what `latest` resolved to on the build
+# that worked and set these to it — README §2.
 ARG PLANETILER_TAG=latest
 ARG TILESERVER_TAG=latest
 
@@ -70,8 +81,8 @@ FROM debian:bookworm-slim AS assets
 ARG STYLE_TARBALL_URL=https://github.com/openmaptiles/positron-gl-style/archive/refs/heads/master.tar.gz
 # Pre-generated PBF glyph ranges for the fonts the style names.
 ARG FONTS_ZIP_URL=https://github.com/openmaptiles/fonts/releases/download/v2.0/v2.0.zip
-# The data id this style's vector source is rewritten to point at. Must match
-# the key under "data" in config.json.
+# The data id the style's vector source is rewritten to point at. config.json
+# is re-keyed to match below, so overriding this cannot desync the two.
 ARG DATA_ID=v3
 
 RUN apt-get update \
@@ -83,6 +94,30 @@ WORKDIR /assets
 # ends the instruction — Docker would then read `.sources |= …` as a Dockerfile
 # instruction and fail the build.
 COPY rewrite-style.jq /rewrite-style.jq
+COPY config.json /assets/config.src.json
+
+# Re-key config.json's "data" entry to DATA_ID so it cannot drift from the
+# style rewrite.
+#
+# Previously config.json was copied verbatim into the final image while the
+# style was rewritten to `mbtiles://{$DATA_ID}`. Overriding DATA_ID — which the
+# README's build-arg table presents as an ordinary option — therefore produced a
+# style pointing at a source config.json did not define. That build SUCCEEDS,
+# the container starts, and the Railway healthcheck (/styles/basemap/style.json)
+# PASSES, because the style parses fine; only the tiles 404. A green deploy
+# serving an empty map is the worst possible failure shape, so the coupling is
+# removed rather than documented.
+#
+# The final assertion is the one that matters: it re-reads both artifacts and
+# fails the build unless the style's source id is actually a key in config.json.
+RUN set -eux; \
+    jq --arg data "${DATA_ID}" \
+       '.data |= (to_entries | map(.key = $data) | from_entries)' \
+       /assets/config.src.json > /assets/config.json; \
+    rm -f /assets/config.src.json; \
+    jq -e --arg data "${DATA_ID}" '.data | has($data)' /assets/config.json > /dev/null \
+      || { echo "config.json has no '${DATA_ID}' data entry after re-key" >&2; exit 1; }; \
+    echo "config data key:"; jq -c '.data' /assets/config.json
 
 # Fetch the style and rewrite it to reference only local assets.
 #
@@ -161,6 +196,24 @@ RUN set -eux; \
            echo "available:" >&2; ls /assets/fonts >&2; exit 1; }; \
     echo "fonts:"; ls /assets/fonts | head -20
 
+# Final cross-artifact check: every mbtiles source the style names must exist as
+# a key in config.json. This is the assertion that turns a silently-empty map
+# into a failed build, and it reads the two finished files rather than trusting
+# that both were derived from the same ARG.
+RUN set -eux; \
+    jq -r '[.sources[] | select(.url // "" | startswith("mbtiles://")) | .url] | map(ltrimstr("mbtiles://{") | rtrimstr("}")) | .[]' \
+      /assets/styles/basemap/style.json > /tmp/style-sources.txt; \
+    test -s /tmp/style-sources.txt \
+      || { echo "style declares no mbtiles:// source" >&2; exit 1; }; \
+    while IFS= read -r id; do \
+        [ -n "$id" ] || continue; \
+        jq -e --arg id "$id" '.data | has($id)' /assets/config.json > /dev/null \
+          || { echo "style references mbtiles://{$id} but config.json defines no such data key" >&2; \
+               echo "config.json data keys:" >&2; jq -r '.data | keys[]' /assets/config.json >&2; \
+               exit 1; }; \
+    done < /tmp/style-sources.txt; \
+    echo "style sources all resolve against config.json:"; cat /tmp/style-sources.txt
+
 # ── Stage 3: serve ────────────────────────────────────────────────────────────
 # tileserver-gl (NOT tileserver-gl-light — that build drops the renderer and
 # with it every /styles/<id>/{z}/{x}/{y}.png endpoint, which is half the reason
@@ -170,7 +223,9 @@ WORKDIR /data
 COPY --from=tiles   /planetiler/tiles.mbtiles /data/tiles.mbtiles
 COPY --from=assets  /assets/styles            /data/styles
 COPY --from=assets  /assets/fonts             /data/fonts
-COPY config.json                              /data/config.json
+# From the assets stage, not the build context: it is the DATA_ID-re-keyed copy,
+# and it has been asserted against the style's actual source ids.
+COPY --from=assets  /assets/config.json       /data/config.json
 
 ENV PORT=8080
 EXPOSE 8080

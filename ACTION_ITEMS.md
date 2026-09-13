@@ -25475,7 +25475,37 @@ how much they de-risk a public launch._
   ROADMAP.md` (R14).
 
 ### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
-- [ ] **Status:** OPEN — found, not fixed. Out of scope for the change that surfaced it.
+- [~] **Status:** PARTIALLY CLOSED (2026-09-12) — the atomic primitive
+  (`reserve_budget()`, a Lua script run via `redis_eval()`) now exists in
+  `backend/utils/maps_budget.py` and is proven on the highest-volume call
+  site: `backend/routes/rides/_shared.py`'s `_fetch_directions_route`
+  (R2/R8's fare-estimate Directions call) now uses it instead of the old
+  `check_budget()`+`record_call()` pair. See
+  `docs/change-log/2026-09-12-atomic-budget-reserve-c104.md` for the full
+  writeup, including the disclosed reserve-before-call timing change and
+  what was NOT verified (no real-Redis atomicity proof — this repo's unit
+  tests have no real Redis to run the Lua script against).
+  **Remaining, tracked as a clean follow-up:** the other 8 call sites still
+  use the old non-atomic pair and are NOT yet migrated —
+  `backend/routes/maps_proxy.py`'s 4 endpoints (autocomplete, details,
+  reverse-geocode, directions), `backend/ai/tools_booking.py`'s 3 sites, and
+  `backend/utils/maps_eta.py`'s R4 Distance Matrix fallback. The primitive
+  already exists — each remaining site just needs its
+  `check_budget()`/`record_call()` pair swapped for one `reserve_budget(sku)`
+  call, the same one-line-per-site change made to `_shared.py`. Deliberately
+  not done in the same change per CLAUDE.md's task-decomposition guidance
+  (would have exceeded 5 files in one commit) — a future session/PR should
+  pick this up mechanically, file-by-file, each its own small commit.
+  **Practical scope, precisely (per the fix's own follow-up adversarial
+  review):** 3 of these 8 remaining sites (`route_distance.py`'s
+  live-route/OSRM-fallback path, `maps_proxy.py`'s own Directions proxy,
+  `tools_booking.py`'s AI tool) write the exact same shared `"directions"`
+  Redis key `reserve_budget()` now reads atomically. A request burst through
+  any of those unmigrated sites still reproduces this item's original
+  failure mode against the same shared daily total — "closes C104" should be
+  read as "closes it for the one migrated caller's own reservation," not as
+  "the breaker's overall burst-safety is now closed." That only happens once
+  the remaining 8 sites are migrated too.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).
@@ -25527,8 +25557,19 @@ how much they de-risk a public launch._
   should account for `_shared.py`'s call site too, not just `maps_proxy.py`'s four.
 
 ### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
-- [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to
-  ship as-is for now, not a blocker for R7's dark-launched merge.
+- [x] **Status:** CLOSED (2026-09-12) — Redis result cache added to `get_directions`, 30s TTL,
+  fail-open, never caches a degenerate (`distance_km: None`/empty-`coordinates`) result. Uses
+  UNIFORM fine (5-decimal, ~1m) precision on every coordinate (origin, destination, waypoints) —
+  NOT `_compute_route_via_google`'s coarse-origin scheme, despite this entry's own suggestion
+  below to mirror it. An implementation pass checked all 5 real client call sites first and found
+  3 of them (`ride-options.tsx`, `ride-in-progress.tsx`, `driver-arrived.tsx`) pass a FIXED,
+  per-ride pickup as "origin" paired with a fixed dropoff, not a moving position — coarsening the
+  origin there would let two different bookings' distinct-but-nearby pickups collide in the
+  cache whenever their dropoffs also round together (e.g. two riders headed to the same airport
+  from doors 100m apart), serving one rider's confirmed route to another. Only
+  `driver-arriving.tsx` and the driver dashboard have a genuinely moving origin; fine precision
+  there is a cache-hit-rate cost, not a correctness one. See
+  `docs/change-log/2026-09-12-directions-proxy-cache-c105.md` for the full writeup.
 - **Found by:** `spinr-performance-sla-reviewer`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (same source as C104 above).
 - **What's wrong:** `backend/utils/route_distance.py`'s sibling live-route fallback
@@ -25606,26 +25647,68 @@ how much they de-risk a public launch._
   `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
-### C107. `test_settings_column_parity.py`'s regression check only covers migration 313's original 24 fields, not any `SettingsUpdateRequest` field added since
+### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables
+- [ ] **Status:** OPEN — found during independent security review of PR #5307 (a follow-up fix
+  applying migration 142's admin-lockdown pattern to `corporate_accounts`, the one table missed
+  when that pattern was first rolled out to its 9 siblings). Not fixed by this entry — this is a
+  tracking item for a systemic correctness question, not a code change.
+- **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
+  `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
+  RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
+  users.role IN ('admin', 'super_admin'))`. But `backend/migrations/256_users_role_reject_admin_values.sql`
+  adds `chk_users_role_not_admin`, a `CHECK (role NOT IN ('admin','super_admin',...))` on the
+  `users` table — blocking any row from ever holding `role='admin'`/`'super_admin'` again once
+  256 is applied. Real admin auth already runs through a separate identity model
+  (`admin_staff` + `_verify_admin_payload`, `backend/dependencies/__init__.py`), per CLAUDE.md's
+  documented JWT trust model — `users.role` is not how admins actually authenticate today.
+- **Why it matters:** net effect, per independent grep/read during PR #5307's review: the
+  `role IN ('admin','super_admin')` policy on all 10 tables (the 9 migration-142 tables plus
+  `corporate_accounts`) is only reachable for a `users` row that predates migration 256 and was
+  never subsequently updated. For any admin/super_admin provisioned under the current
+  `admin_staff` model, these RLS policies cannot ever admit them — the "fix" migration 142
+  established, and that PR #5307 correctly mirrored for parity, may be **cosmetically correct but
+  functionally unreachable** across the board. Nobody has verified whether a legacy `role='admin'`
+  `users` row still exists in production to even make the policy theoretically reachable today.
+  Real production impact is currently believed to be **none**, because (confirmed independently
+  during PR #5307's review) the backend's only Supabase client (`backend/supabase_client.py`)
+  always uses the service-role key, bypassing RLS entirely — so this is a defense-in-depth
+  correctness gap, not a live incident, but it means the migration-142 hardening effort should not
+  be considered "done" while it rests on a check that may be permanently unreachable.
+- **Action:** (1) check production `users` table for any surviving `role IN ('admin',
+  'super_admin')` row to confirm the policy is fully unreachable today, not just theoretically;
+  (2) decide whether to update these 10 policies to check `admin_staff` (the real admin identity
+  table) instead of `users.role`, or to explicitly document the `users.role` check as legacy/dead
+  and rely solely on the service-role-bypasses-RLS + `admin_staff` JWT model for these tables.
+  Escalate to whoever owns the admin-identity model (CLAUDE.md's "JWT trust model" section) if the
+  intended answer isn't obvious from the code alone.
+- **Files:** `backend/migrations/142_fix_rls_financial_tables.sql`,
+  `backend/migrations/256_users_role_reject_admin_values.sql`,
+  `backend/migrations/416_corporate_accounts_rls_super_admin_fix.sql`, `backend/dependencies/__init__.py`
+  (`_verify_admin_payload`), `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` (its
+  schema fixture applies migrations 05/17/416 only, not 256 — its passing tests seed `users.role`
+  directly and so do not, by themselves, demonstrate reachability against the real current schema).
+
+### C108. `test_settings_column_parity.py`'s regression check only covers migration 313's original 24 fields, not any `SettingsUpdateRequest` field added since
 - [ ] **Status:** OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
 - **Found by:** `spinr-migration-reviewer`'s pre-merge review of PR #5312 (`driver_turn_by_turn_enabled`
-  settings-write fix, migration 416).
+  settings-write fix, migration 417 — originally drafted as 416, renumbered when PR #5307 merged its
+  own, unrelated migration 416 first; see C107 above for that collision).
 - **What's wrong:** `test_every_api_field_has_a_column` in `backend/tests/test_settings_column_parity.py`
   cross-checks parsed `settings` columns against a hardcoded `_EXPECTED_313_COLUMNS` set — the 24
   fields migration 313 originally fixed. Any `SettingsUpdateRequest` field declared after 313
   (confirmed for both `directions_proxy_enabled`, migration 415, and `driver_turn_by_turn_enabled`,
-  migration 416) is invisible to that regression loop. If either PR had added its
+  migration 417) is invisible to that regression loop. If either PR had added its
   `SettingsUpdateRequest` field without its matching migration, this test would still have passed —
   the exact PGRST204 "whole save 500s" failure mode migration 313 exists to prevent would have shipped
   undetected by the shared gate.
-- **Why it hasn't bitten yet:** both 415 and 416 happened to also ship a bespoke, field-specific test
+- **Why it hasn't bitten yet:** both 415 and 417 happened to also ship a bespoke, field-specific test
   (`test_migration_401_adds_the_column_with_false_default`-style) that regexes the new migration's SQL
   directly — real protection, but dependent on each PR's author remembering to write one, which is
   exactly the manual-discipline failure mode migration 313 was created to eliminate in the first place.
 - **Recommendation:** extend `test_every_api_field_has_a_column`'s check to cross-reference *every*
   `Optional[...]` field on `SettingsUpdateRequest` against `_declared_settings_columns()`, not just the
   pinned 313 set — the parsing helper already exists and already works (confirmed it correctly picks up
-  migration 416's `ADD COLUMN` statement). Once generic, a future flag needs no bespoke test for this
+  migration 417's `ADD COLUMN` statement). Once generic, a future flag needs no bespoke test for this
   specific protection (a flag-specific test is still good practice for its own default-value/behavior
   assertions, just not required to catch a missing-migration regression).
 - **Files:** `backend/tests/test_settings_column_parity.py` (`_EXPECTED_313_COLUMNS`,

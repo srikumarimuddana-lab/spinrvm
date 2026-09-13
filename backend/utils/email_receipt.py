@@ -234,16 +234,23 @@ def _build_fare_rows(
             rows.append(_line("Tax", f"${_fmt(tax_amount)}"))
             tax_total = tax_amount
 
-    # Promo discount (C102): applies to ride fare (driver earnings) only —
-    # never fees or taxes — mirroring routes/rides/_shared.py::_build_fare_breakdown,
-    # the JSON receipt's equivalent builder, which already discloses this line.
-    raw_discount = _d(ride.get("discount_amount", 0))
-    ride_fare_for_discount_cap = base_fare + distance_fare + time_fare + min_fare_uplift
-    discount = min(raw_discount, ride_fare_for_discount_cap) if ride_fare_for_discount_cap > 0 else raw_discount
+    # Promo/discount disclosure line (C102) — parity with the JSON receipt's
+    # _build_fare_breakdown (routes/rides/_shared.py), which already shows
+    # this and colors it the same as rider-app's line.type === 'discount'
+    # (shared/theme's `success` token, #10B981). Capped at the ride-fare
+    # portion a promo actually discounts (the driver's 100%-share base plus
+    # any minimum-fare uplift), mirroring that function's cap exactly — never
+    # fees or taxes. The persisted grand_total below is already net of this
+    # discount, so the line is pure disclosure there; the no-persisted-total
+    # fallback also subtracts it so the rows keep summing to the shown total
+    # either way.
+    discount = _d(ride.get("discount_amount", 0))
+    capped_discount = Decimal("0")
     if discount > 0:
-        promo_code = ride.get("promo_code")
-        promo_label = f"Promo ({promo_code})" if promo_code else "Promo discount"
-        rows.append(_line(promo_label, f"-${_fmt(discount)}", label_color="#059669", amount_color="#059669"))
+        promo_label = f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
+        ride_fare_for_cap = base_fare + distance_fare + time_fare + min_fare_uplift
+        capped_discount = min(discount, ride_fare_for_cap) if ride_fare_for_cap > 0 else discount
+        rows.append(_line(promo_label, f"-${_fmt(capped_discount)}", label_color="#10b981", amount_color="#10b981"))
 
     if tip > 0:
         rows.append(_line("Tip", f"${_fmt(tip)}", label_color="#10b981", amount_color="#10b981"))
@@ -279,8 +286,8 @@ def _build_fare_rows(
             + min_fare_uplift
             + area_fees_total
             + tax_total
-            - discount
             + tip
+            - capped_discount
         )
     else:
         # Persisted grand_total includes fees + tax but NOT tip — tip is
@@ -660,13 +667,27 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     fare = _d(ride.get("total_fare", 0))
     fees = _d(ride.get("area_fees_total", 0))
     tax = _d(ride.get("tax_amount", 0))
-    # C102: this fallback (grand_total missing — legacy rows only) must
-    # subtract the promo discount too, or a discounted legacy ride's subject
-    # line would overstate the total the body actually renders. Capped the
-    # same way _build_fare_rows caps it — at ride fare (never fees/tax).
-    raw_discount = _d(ride.get("discount_amount", 0))
-    discount = min(raw_discount, fare) if fare > 0 else raw_discount
-    return _q(fare + fees + tax - discount + tip_d)
+
+    # Promo/discount (C102): this fallback predates any discount handling,
+    # so once _build_fare_rows started disclosing (and subtracting) a promo
+    # line in its own no-persisted-grand_total fallback, this helper's
+    # "matches the body" contract (see docstring) broke for that same case.
+    # Capped the same way _build_fare_rows/_fare_lines/_build_fare_breakdown
+    # cap it — against the ride-fare portion a promo actually discounts,
+    # never fees or taxes.
+    discount = _d(ride.get("discount_amount", 0))
+    capped_discount = Decimal("0")
+    if discount > 0:
+        base_fare = _d(ride.get("base_fare", 0))
+        distance_fare = _d(ride.get("distance_fare", 0))
+        time_fare = _d(ride.get("time_fare", 0))
+        booking_fee = _d(ride.get("booking_fee", 0))
+        airport_fee = _d(ride.get("airport_fee", 0))
+        min_fare_uplift = max(Decimal("0"), fare - (base_fare + distance_fare + time_fare + booking_fee + airport_fee))
+        ride_fare_for_cap = base_fare + distance_fare + time_fare + min_fare_uplift
+        capped_discount = min(discount, ride_fare_for_cap) if ride_fare_for_cap > 0 else discount
+
+    return _q(fare + fees + tax + tip_d - capped_discount)
 
 
 async def build_receipt_pdf_bytes(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> bytes:

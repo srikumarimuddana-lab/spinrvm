@@ -193,7 +193,7 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     if persisted_grand not in (None, "", 0):
         grand = _q(_d(persisted_grand) + tip)
     else:
-        grand = _q(subtotal + area_total + tax_total - capped_discount + tip)
+        grand = _q(subtotal + area_total + tax_total + tip - capped_discount)
     return rows, grand
 
 

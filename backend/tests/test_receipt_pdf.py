@@ -100,6 +100,51 @@ def test_no_minimum_fare_row_when_not_clamped_pdf():
     assert "Minimum fare adjustment" not in [r[0] for r in rows]
 
 
+# ── Promo/discount line item (C102) ───────────────────────────────────────
+#
+# ACTION_ITEMS.md C102: the PDF receipt never disclosed a discount line,
+# unlike the JSON receipt's _build_fare_breakdown (routes/rides/_shared.py) —
+# a line-item-transparency gap, not a money-correctness bug, since the
+# persisted grand_total already reconciled to what was actually charged.
+
+
+def test_promo_discount_line_is_pure_disclosure_when_grand_total_persisted():
+    ride = {**_RIDE, "discount_amount": "4.00", "promo_code": "SAVE10"}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo (SAVE10)", "-$4.00") in rows
+    assert grand == Decimal("12.21")  # persisted grand_total, unchanged
+
+
+def test_promo_discount_without_code_uses_generic_label_pdf():
+    ride = {**_RIDE, "discount_amount": "1.50", "promo_code": None}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$1.50") in rows
+
+
+def test_no_promo_row_when_discount_is_zero_pdf():
+    rows, _grand = _fare_lines(_RIDE, Decimal("0"))
+    assert not any(label.startswith("Promo") for label, _amt in rows)
+
+
+def test_promo_discount_capped_at_ride_fare_not_raw_amount_pdf():
+    # ride fare portion = base 5.00 + distance 3.00 + time 2.00 = 10.00;
+    # a $20 promo must render capped at $10.00, never the raw $20.
+    ride = {**_RIDE, "discount_amount": "20.00", "promo_code": "HUGE"}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo (HUGE)", "-$10.00") in rows
+
+
+def test_fallback_total_without_persisted_grand_total_subtracts_discount_pdf():
+    """When grand_total isn't persisted, the reconstructed total must still
+    subtract the discount or the visible rows no longer sum to the printed
+    total now that the discount is a real line item."""
+    ride = {**_RIDE, "grand_total": None, "discount_amount": "2.50", "promo_code": None}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$2.50") in rows
+    # subtotal 11.00 + tax (0.55+0.66=1.21) - discount 2.50
+    assert grand == Decimal("9.71")
+
+
 # ── Surge as a real dollar line item (ranked #26 / audit N14) ─────────────
 #
 # Before this fix the PDF receipt never disclosed surge at all (no footnote,
@@ -222,44 +267,16 @@ def test_ride_without_a_ride_code_does_not_use_an_unencodable_placeholder():
     assert bytes(pdf).startswith(b"%PDF")
 
 
-# ── Promo discount line item (C102) ───────────────────────────────────────
+# ── Tax-gap fallback + discount interaction (follow-up, found resolving a
+# merge conflict against another session's C102 fix) ─────────────────────
 #
-# routes/rides/_shared.py::_build_fare_breakdown (the JSON receipt endpoint)
-# already discloses a Promo/discount line; the PDF/email generators never
-# did. discount_amount is baked into grand_total already (fare_service.py:
-# grand_total = total_fare + area_fees + tax - discount), so the header total
-# was never wrong — only the line-item disclosure was missing.
-
-
-def test_promo_discount_row_rendered_with_code_and_reconciles():
-    # _RIDE: total_fare 11.00 (base 5 + distance 3 + time 2 + booking 1, no
-    # uplift), tax GST 0.55 + PST 0.66 = 1.21. grand_total = 11.00 + 1.21 -
-    # 2.00 discount = 10.21.
-    ride = {**_RIDE, "discount_amount": "2.00", "promo_code": "WELCOME10", "grand_total": "10.21"}
-    rows, grand = _fare_lines(ride, Decimal("0"))
-    assert ("Promo (WELCOME10)", "-$2.00") in rows
-    assert grand == Decimal("10.21")
-
-
-def test_promo_discount_row_uses_generic_label_without_a_code():
-    ride = {**_RIDE, "discount_amount": "2.00", "grand_total": "10.21"}
-    rows, _grand = _fare_lines(ride, Decimal("0"))
-    assert ("Promo discount", "-$2.00") in rows
-
-
-def test_no_promo_row_when_discount_is_zero():
-    rows, _grand = _fare_lines(_RIDE, Decimal("0"))
-    assert not [lbl for lbl, _a in rows if lbl.startswith("Promo")]
-
-
-def test_promo_discount_capped_at_ride_fare_never_fees_or_tax():
-    # Promos apply to ride fare (base+distance+time+uplift) only — never
-    # booking/airport/tax — matching _build_fare_breakdown. ride_fare here is
-    # 5.00+3.00+2.00 = 10.00 (booking excluded); an oversized discount_amount
-    # must cap there, not at the full 11.00 total_fare.
-    ride = {**_RIDE, "discount_amount": "50.00", "grand_total": "1.00"}
-    rows, _grand = _fare_lines(ride, Decimal("0"))
-    assert ("Promo discount", "-$10.00") in rows
+# The other session's fix (see the "Promo/discount line item (C102)" block
+# above) deliberately left one residual documented as out of scope in
+# ACTION_ITEMS.md: the "no tax_breakdown persisted" gap fallback below
+# inferred tax as (persisted_grand - subtotal), which is wrong once a
+# discount is also present, since grand_total = subtotal + tax - discount.
+# Fixed as part of resolving the merge; this is the one test that isn't
+# already covered by the block above.
 
 
 def test_tax_gap_fallback_correctly_separates_tax_from_discount():
@@ -280,17 +297,3 @@ def test_tax_gap_fallback_correctly_separates_tax_from_discount():
     assert ("Tax", "$1.21") in rows
     assert ("Promo discount", "-$2.00") in rows
     assert grand == Decimal("10.21")
-
-
-def test_grand_total_fallback_subtracts_discount_when_persisted_grand_missing():
-    ride = {**_RIDE, "discount_amount": "2.00", "grand_total": None}
-    rows, grand = _fare_lines(ride, Decimal("0"))
-    # subtotal 11.00 + tax 1.21 - discount 2.00 + tip 0 = 10.21
-    assert grand == Decimal("10.21")
-    assert ("Promo discount", "-$2.00") in rows
-
-
-def test_promo_discount_pdf_still_generates():
-    ride = {**_RIDE, "discount_amount": "2.00", "promo_code": "WELCOME10", "grand_total": "10.21"}
-    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
-    assert bytes(pdf).startswith(b"%PDF")

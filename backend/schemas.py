@@ -166,6 +166,12 @@ class AppSettings(BaseModel):
     # Phase 1 of docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md.
     # Off by default (dark-launch) — gates GET /rides/{id}/navigation-steps.
     driver_turn_by_turn_enabled: bool = False
+    # Migration 417. Kill switch for acking an unlinkable booking-stage pre-auth
+    # failure on the Stripe webhook. ON by default — a deliberate deviation from
+    # the ship-dark rule because it gates a FIX, not a feature: off would leave
+    # one 500 per booking and a 3-day Stripe retry loop per declined pre-auth
+    # running. See the migration for the full justification.
+    webhook_preauth_failure_ack_enabled: bool = True
     google_maps_api_key: str = ""
     stripe_publishable_key: str = ""
     stripe_secret_key: str = ""

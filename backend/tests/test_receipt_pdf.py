@@ -220,3 +220,77 @@ def test_ride_without_a_ride_code_does_not_use_an_unencodable_placeholder():
     ride["id"] = ""
     pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
     assert bytes(pdf).startswith(b"%PDF")
+
+
+# ── Promo discount line item (C102) ───────────────────────────────────────
+#
+# routes/rides/_shared.py::_build_fare_breakdown (the JSON receipt endpoint)
+# already discloses a Promo/discount line; the PDF/email generators never
+# did. discount_amount is baked into grand_total already (fare_service.py:
+# grand_total = total_fare + area_fees + tax - discount), so the header total
+# was never wrong — only the line-item disclosure was missing.
+
+
+def test_promo_discount_row_rendered_with_code_and_reconciles():
+    # _RIDE: total_fare 11.00 (base 5 + distance 3 + time 2 + booking 1, no
+    # uplift), tax GST 0.55 + PST 0.66 = 1.21. grand_total = 11.00 + 1.21 -
+    # 2.00 discount = 10.21.
+    ride = {**_RIDE, "discount_amount": "2.00", "promo_code": "WELCOME10", "grand_total": "10.21"}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo (WELCOME10)", "-$2.00") in rows
+    assert grand == Decimal("10.21")
+
+
+def test_promo_discount_row_uses_generic_label_without_a_code():
+    ride = {**_RIDE, "discount_amount": "2.00", "grand_total": "10.21"}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$2.00") in rows
+
+
+def test_no_promo_row_when_discount_is_zero():
+    rows, _grand = _fare_lines(_RIDE, Decimal("0"))
+    assert not [lbl for lbl, _a in rows if lbl.startswith("Promo")]
+
+
+def test_promo_discount_capped_at_ride_fare_never_fees_or_tax():
+    # Promos apply to ride fare (base+distance+time+uplift) only — never
+    # booking/airport/tax — matching _build_fare_breakdown. ride_fare here is
+    # 5.00+3.00+2.00 = 10.00 (booking excluded); an oversized discount_amount
+    # must cap there, not at the full 11.00 total_fare.
+    ride = {**_RIDE, "discount_amount": "50.00", "grand_total": "1.00"}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$10.00") in rows
+
+
+def test_tax_gap_fallback_correctly_separates_tax_from_discount():
+    """Regression for a latent bug this fix also closes: on a legacy ride with
+    no tax_breakdown, the old gap formula (persisted_grand - subtotal) treated
+    the WHOLE gap as tax — silently wrong (or a dropped Tax line entirely,
+    since a negative gap failed the `> 0.005` guard) whenever a discount was
+    also present, since grand_total = subtotal + tax - discount."""
+    ride = {
+        **_RIDE,
+        "tax_breakdown": {},
+        "discount_amount": "2.00",
+        # True tax is 1.21 (as in _RIDE's GST+PST); grand_total reflects
+        # subtotal(11.00) + tax(1.21) - discount(2.00) = 10.21.
+        "grand_total": "10.21",
+    }
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Tax", "$1.21") in rows
+    assert ("Promo discount", "-$2.00") in rows
+    assert grand == Decimal("10.21")
+
+
+def test_grand_total_fallback_subtracts_discount_when_persisted_grand_missing():
+    ride = {**_RIDE, "discount_amount": "2.00", "grand_total": None}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    # subtotal 11.00 + tax 1.21 - discount 2.00 + tip 0 = 10.21
+    assert grand == Decimal("10.21")
+    assert ("Promo discount", "-$2.00") in rows
+
+
+def test_promo_discount_pdf_still_generates():
+    ride = {**_RIDE, "discount_amount": "2.00", "promo_code": "WELCOME10", "grand_total": "10.21"}
+    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")

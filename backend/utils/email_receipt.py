@@ -234,6 +234,17 @@ def _build_fare_rows(
             rows.append(_line("Tax", f"${_fmt(tax_amount)}"))
             tax_total = tax_amount
 
+    # Promo discount (C102): applies to ride fare (driver earnings) only —
+    # never fees or taxes — mirroring routes/rides/_shared.py::_build_fare_breakdown,
+    # the JSON receipt's equivalent builder, which already discloses this line.
+    raw_discount = _d(ride.get("discount_amount", 0))
+    ride_fare_for_discount_cap = base_fare + distance_fare + time_fare + min_fare_uplift
+    discount = min(raw_discount, ride_fare_for_discount_cap) if ride_fare_for_discount_cap > 0 else raw_discount
+    if discount > 0:
+        promo_code = ride.get("promo_code")
+        promo_label = f"Promo ({promo_code})" if promo_code else "Promo discount"
+        rows.append(_line(promo_label, f"-${_fmt(discount)}", label_color="#059669", amount_color="#059669"))
+
     if tip > 0:
         rows.append(_line("Tip", f"${_fmt(tip)}", label_color="#10b981", amount_color="#10b981"))
 
@@ -268,6 +279,7 @@ def _build_fare_rows(
             + min_fare_uplift
             + area_fees_total
             + tax_total
+            - discount
             + tip
         )
     else:
@@ -648,7 +660,13 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     fare = _d(ride.get("total_fare", 0))
     fees = _d(ride.get("area_fees_total", 0))
     tax = _d(ride.get("tax_amount", 0))
-    return _q(fare + fees + tax + tip_d)
+    # C102: this fallback (grand_total missing — legacy rows only) must
+    # subtract the promo discount too, or a discounted legacy ride's subject
+    # line would overstate the total the body actually renders. Capped the
+    # same way _build_fare_rows caps it — at ride fare (never fees/tax).
+    raw_discount = _d(ride.get("discount_amount", 0))
+    discount = min(raw_discount, fare) if fare > 0 else raw_discount
+    return _q(fare + fees + tax - discount + tip_d)
 
 
 async def build_receipt_pdf_bytes(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> bytes:

@@ -25400,7 +25400,17 @@ how much they de-risk a public launch._
 
 ### C102. Receipt PDF/HTML generator (`utils/receipt_pdf.py` + `utils/email_receipt.py`) never renders a discount/promo line, unlike the JSON receipt endpoint
 
-- [ ] **Status:** OPEN — found, not fixed, deliberately out of scope for the change that surfaced it.
+- [x] **Status:** CLOSED 2026-09-13 — ported `_build_fare_breakdown`'s
+  discount-line logic into `_fare_lines`/`_build_fare_rows`, capped at ride
+  fare (never fees/tax), placed after tax and before tip. Also found and
+  fixed a related latent bug while grounding this: the "no `tax_breakdown`
+  persisted" tax-gap fallback in both files (and `_receipt_total`'s
+  no-`grand_total` fallback) didn't account for a coexisting discount,
+  which would mislabel or silently drop the true tax figure on an
+  affected legacy row. 12 new tests across both files; 148 total receipt
+  tests passing. No shared line-builder refactor done — left for a
+  separate change, per this item's own suggested-fix note. Full detail:
+  `docs/change-log/2026-09-13-c102-receipt-discount-line-item.md`.
 - **Found by:** `spinr-money-auditor`'s adversarial review of the R9 receipt-PDF-reconciliation
   change (`docs/audit/ride-experience/ROADMAP.md` R9,
   `docs/change-log/2026-09-12-receipt-pdf-reconciliation.md`).

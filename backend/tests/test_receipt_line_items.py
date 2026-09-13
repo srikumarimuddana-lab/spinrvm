@@ -334,9 +334,7 @@ class TestPickupLegContextLine:
     CONTEXT — never as a fare row, always explicitly 'not charged'."""
 
     def test_off_by_default_renders_nothing(self):
-        html = generate_receipt_html(
-            _ride(phase_distances={"navigating_to_pickup": 2.4}), _RIDER, _DRIVER
-        )
+        html = generate_receipt_html(_ride(phase_distances={"navigating_to_pickup": 2.4}), _RIDER, _DRIVER)
         assert "approach to pickup" not in html
 
     def test_on_renders_outside_fare_rows_and_marked_not_charged(self):
@@ -364,3 +362,62 @@ class TestPickupLegContextLine:
         # The charged figures render identically either way.
         for token in ("Base fare", "Distance (", "Time ("):
             assert token in html_on and token in html_off
+
+
+# ── Promo discount line item (C102) ─────────────────────────────────────
+#
+# routes/rides/_shared.py::_build_fare_breakdown (the JSON receipt endpoint)
+# already discloses a Promo/discount line; the emailed HTML/PDF receipt
+# never did. discount_amount is baked into grand_total already
+# (fare_service.py: grand_total = total_fare + area_fees + tax - discount),
+# so the header total was never wrong — only the disclosure was missing.
+
+
+class TestPromoDiscountLineItem:
+    def test_promo_row_rendered_with_code(self):
+        # Default fixture: total_fare 12.80, tax 1.41 (0.64+0.77) →
+        # grand_total = 12.80 + 1.41 - 3.00 = 11.21.
+        html = generate_receipt_html(
+            _ride(discount_amount=3.00, promo_code="WELCOME10", grand_total=11.21), _RIDER, _DRIVER
+        )
+        assert "Promo (WELCOME10)" in html
+        assert "-$3.00" in html
+        assert "$11.21" in html  # header total still reconciles
+
+    def test_promo_row_uses_generic_label_without_a_code(self):
+        html = generate_receipt_html(_ride(discount_amount=3.00, grand_total=11.21), _RIDER, _DRIVER)
+        assert "Promo discount" in html
+        assert "-$3.00" in html
+
+    def test_no_promo_row_when_discount_is_zero(self):
+        html = generate_receipt_html(_ride(), _RIDER, _DRIVER)
+        assert "Promo" not in html
+
+    def test_promo_discount_capped_at_ride_fare_never_fees_or_tax(self):
+        # ride_fare = base(3.50) + distance(6.30) + time(2.50) = 12.30
+        # (booking excluded) — an oversized discount must cap there.
+        ride = _ride(discount_amount=50.00, grand_total=1.00)
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "-$12.30" in html
+
+    def test_tax_gap_fallback_correctly_separates_tax_from_discount(self):
+        """Same latent bug the PDF generator had: on a legacy ride with no
+        tax_breakdown, the old gap formula (persisted_grand - subtotal)
+        silently mislabeled (or dropped, via the > 0.005 guard going
+        negative) the Tax line whenever a discount coexisted with it."""
+        ride = _ride(
+            tax_breakdown={},
+            tax_amount=1.41,
+            discount_amount=3.00,
+            # subtotal(12.80) + true tax(1.41) - discount(3.00) = 11.21
+            grand_total=11.21,
+        )
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "$1.41" in html  # correct Tax line, not a mislabeled gap
+        assert "-$3.00" in html
+        assert "$11.21" in html
+
+    def test_receipt_total_fallback_subtracts_discount_when_grand_total_missing(self):
+        ride = _ride(discount_amount=3.00, grand_total=None, tax_amount=1.41)
+        # total_fare(12.80) + fees(0) + tax(1.41) - discount(3.00) = 11.21
+        assert _receipt_total(ride, tip=0) == Decimal("11.21")

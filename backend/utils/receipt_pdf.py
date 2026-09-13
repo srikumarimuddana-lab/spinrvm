@@ -146,6 +146,17 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     rows.append(("__rule__", ""))
     rows.append(("Subtotal", _money(subtotal)))
 
+    # Promo discount (C102): applies to ride fare (driver earnings) only —
+    # never fees or taxes — mirroring routes/rides/_shared.py::_build_fare_breakdown,
+    # the JSON receipt's equivalent builder, which already discloses this line.
+    # Computed before the tax gap fallback below so that fallback isn't fooled
+    # into mislabeling (tax - discount) as pure tax on a discounted ride with
+    # no persisted tax_breakdown.
+    raw_discount = _d(ride.get("discount_amount"))
+    ride_fare_for_discount_cap = base + dist + time_ + min_fare_uplift
+    capped_discount = min(raw_discount, ride_fare_for_discount_cap) if ride_fare_for_discount_cap > 0 else raw_discount
+    promo_label = f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
+
     # GST/PST as separate line items from the persisted breakdown; fall back to
     # the grand_total gap so the lines reconcile to what was actually charged.
     tax_breakdown = ride.get("tax_breakdown") or {}
@@ -166,10 +177,15 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
 
     persisted_grand = ride.get("grand_total")
     if not had_tax and persisted_grand not in (None, "", 0):
-        gap = _d(persisted_grand) - subtotal
+        # grand_total = subtotal + tax - discount, so the implied tax is the
+        # persisted-vs-subtotal gap plus whatever discount already reduced it by.
+        gap = _d(persisted_grand) - subtotal + capped_discount
         if gap > Decimal("0.005"):
             tax_total = gap
             rows.append(("Tax", _money(gap)))
+
+    if capped_discount > 0:
+        rows.append((promo_label, f"-{_money(capped_discount)}"))
 
     if tip > 0:
         rows.append(("Tip", _money(tip)))
@@ -177,7 +193,7 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     if persisted_grand not in (None, "", 0):
         grand = _q(_d(persisted_grand) + tip)
     else:
-        grand = _q(subtotal + area_total + tax_total + tip)
+        grand = _q(subtotal + area_total + tax_total - capped_discount + tip)
     return rows, grand
 
 

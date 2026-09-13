@@ -775,3 +775,82 @@ async def test_autocomplete_503s_when_budget_exhausted(mock_redis, monkeypatch):
         )
     assert exc.value.status_code == 503
     assert "budget" in exc.value.detail.lower()
+
+
+# ── C104: _ensure_budget() now reserves atomically, per-SKU ──────────────────
+
+
+@pytest.mark.anyio
+async def test_ensure_budget_reserves_under_the_given_sku(mock_redis):
+    """C104 migration: _ensure_budget(sku) must call reserve_budget(sku), not
+    the old check_budget()/record_call() pair."""
+    from routes import maps_proxy
+
+    reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
+    with patch("routes.maps_proxy.reserve_budget", reserve_mock):
+        await maps_proxy._ensure_budget("geocode")
+
+    reserve_mock.assert_awaited_once_with("geocode")
+
+
+@pytest.mark.anyio
+async def test_ensure_budget_503s_when_reservation_denied(mock_redis):
+    from routes import maps_proxy
+
+    with patch("routes.maps_proxy.reserve_budget", AsyncMock(return_value=(False, 5.5, 5.0))):
+        with pytest.raises(HTTPException) as exc:
+            await maps_proxy._ensure_budget("directions")
+
+    assert exc.value.status_code == 503
+    assert "budget" in exc.value.detail.lower()
+
+
+@pytest.mark.anyio
+async def test_each_endpoint_reserves_under_its_own_sku(mock_redis, monkeypatch):
+    """Pin the exact SKU each endpoint passes to _ensure_budget -- a
+    copy-paste mistake here would silently misattribute spend to the wrong
+    SKU bucket without failing any endpoint-level test that only checks the
+    HTTP response shape."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+    reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response({"status": "OK", "results": []}))
+    mock_client.post = AsyncMock(return_value=_mock_httpx_response({"suggestions": []}))
+
+    with (
+        patch("routes.maps_proxy.reserve_budget", reserve_mock),
+        patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client),
+    ):
+        await maps_proxy.places_autocomplete(
+            request=_fake_request(),
+            input="a",
+            session_token=None,
+            location=None,
+            radius=50000,
+            current_user={"id": "r1"},
+        )
+        reserve_mock.assert_awaited_with("autocomplete")
+
+        await maps_proxy.places_details(
+            request=_fake_request(), place_id="p1", session_token=None, current_user={"id": "r1"}
+        )
+        reserve_mock.assert_awaited_with("details")
+
+        await maps_proxy.reverse_geocode(request=_fake_request(), lat=52.1, lng=-106.6, current_user={"id": "r1"})
+        reserve_mock.assert_awaited_with("geocode")
+
+        mock_client.get = AsyncMock(return_value=_mock_httpx_response({"status": "ZERO_RESULTS", "routes": []}))
+        with pytest.raises(HTTPException):
+            await maps_proxy.get_directions(
+                request=_fake_request(),
+                origin="52.13,-106.67",
+                destination="52.12,-106.65",
+                waypoints=None,
+                current_user={"id": "r1"},
+            )
+        reserve_mock.assert_awaited_with("directions")

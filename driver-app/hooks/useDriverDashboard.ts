@@ -1585,26 +1585,34 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // backoff only ever grows and never resets.
   useEffect(() => {
     return NetInfo.addEventListener((state) => {
-      const up = state.isConnected ?? state.isInternetReachable ?? false;
+      // isInternetReachable first: NetInfo always populates isConnected as a
+      // boolean, so `isConnected ?? isInternetReachable` made the second operand
+      // dead code and treated radio-attached-but-no-internet (captive portal, a
+      // cell handoff mid-negotiation) as connectivity regained. Reachability is
+      // the question being asked here — it is only null when NetInfo cannot
+      // determine it, which is when isConnected is the right fallback.
+      const up = state.isInternetReachable ?? state.isConnected ?? false;
       if (!up || !isOnlineRef.current || !userRef.current) return;
-      // Cooldown BEFORE zeroing the counter. A marginal connection emits
-      // "restored" repeatedly, and resetting the backoff on every tick would
-      // hold every retry at tier 0 (~1s) indefinitely, defeating the 30s cap
-      // this whole ladder exists to enforce and turning a flapping tunnel into
-      // a reconnect storm against the backend.
+      // A marginal connection emits "restored" repeatedly, and resetting the
+      // backoff on every tick would hold every retry at tier 0 (~1s)
+      // indefinitely, defeating the 30s cap this ladder exists to enforce and
+      // turning a flapping tunnel into a reconnect storm.
       const nowMs = Date.now();
       if (nowMs - lastNetReconnectAtRef.current < NET_RECONNECT_COOLDOWN_MS) return;
+      const ws = wsRef.current;
+      if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) return;
+      // Only now is this a real regain that will actually reconnect. Stamping
+      // the cooldown (and zeroing the counter) before this check burned the slot
+      // on no-op events — a genuine regain seconds later was then skipped and
+      // recovery fell back to the onclose ladder this effect exists to short-cut.
       lastNetReconnectAtRef.current = nowMs;
       reconnectAttemptRef.current = 0;
       setWsError(null);
-      const ws = wsRef.current;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current);
-          reconnectTimeoutRef.current = null;
-        }
-        connectWebSocket();
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
+      connectWebSocket();
     });
     // connectWebSocket is stable; online/user read via refs. Registered once.
     // eslint-disable-next-line react-hooks/exhaustive-deps

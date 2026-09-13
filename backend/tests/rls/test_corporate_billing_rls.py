@@ -4,11 +4,16 @@ ACTION_ITEMS.md C49, picked as the highest-value remaining gap per
 CLAUDE.md's own priority signal (corporate wallet/billing tables move real
 money via `corporate_wallet_apply_delta` and carry corporate-member PII).
 
-`corporate_accounts` (migrations 05 create, 17 FK-guard + RLS): one `FOR
-ALL TO authenticated` policy, `users.role = 'admin'` exactly. No REVOKE was
-ever applied to this table, so anon/non-admin authenticated are denied
-purely by RLS (SELECT/UPDATE/DELETE return zero rows silently; INSERT
-raises, since there's no existing row for a zero-policy INSERT to filter).
+`corporate_accounts` (migrations 05 create, 17 FK-guard + RLS, 416 admin-policy
+fix): migration 416 replaced migration 17's original `FOR ALL TO authenticated`
+(`users.role = 'admin'` exactly) with a SELECT-only `admin` or `super_admin`
+policy, mirroring migration 142's fix on the nine sibling tables below, plus a
+table-level REVOKE of INSERT/UPDATE/DELETE/TRUNCATE from `authenticated` and
+REVOKE ALL from `anon` — so, like the nine sibling tables, every one of
+anon/non-admin-authenticated/admin-authenticated's write attempts now raises a
+grant-level `InsufficientPrivilege`, not a silently-filtered zero-row RLS
+denial, and reads are anon/non-admin-denied by RLS while admin/super_admin
+reads succeed.
 
 `corporate_wallets` / `corporate_wallet_transactions` / `corporate_members`
 / `corporate_member_allowances` / `corporate_allowance_requests` (migration
@@ -31,11 +36,12 @@ remaining four of the nine (`corporate_policies`, `corporate_allowed_domains`,
 admin-read/no-write shape with no member-read-own wrinkle and are left for a
 future round (see conftest.py's coverage-scope note).
 
-Real, unfixed gap found writing this file: `corporate_accounts`'s own admin
-policy (migration 17) was never included in migration 142's admin-check fix
--- it still checks `users.role = 'admin'` exactly, excluding `super_admin`,
-while the five sibling tables tested here explicitly grant `super_admin` the
-same access as `admin`. See test_super_admin_role_cannot_select_corporate_account.
+Gap found writing this file, fixed before merge: `corporate_accounts`'s own
+admin policy (migration 17) was never included in migration 142's
+admin-check fix -- it still checked `users.role = 'admin'` exactly, excluding
+`super_admin`. Migration 416 (PR #5307) closed this the same day, applying
+migration 142's exact fix pattern to this one table. The tests below assert
+the corrected, post-416 behavior.
 """
 
 from __future__ import annotations
@@ -314,14 +320,12 @@ def test_admin_can_select_corporate_account(pg_cur):
     assert [r[0] for r in pg_cur.fetchall()] == [account_id]
 
 
-def test_super_admin_role_cannot_select_corporate_account(pg_cur):
-    """Real, unfixed gap found writing this file: migration 142 fixed the
-    identical 'role = admin only, excludes super_admin' bug (present in
-    migration 27's original FOR ALL policies) on the nine corporate_* money
-    tables above, but corporate_accounts's own admin policy (migration 17)
-    was never included in that fix -- it still checks users.role = 'admin'
-    exactly. Confirmed by grepping every migration touching
-    corporate_accounts for a later fix: none exists."""
+def test_super_admin_role_can_select_corporate_account(pg_cur):
+    """Migration 416 (PR #5307) fixed the identical 'role = admin only,
+    excludes super_admin' bug migration 142 had already fixed on the nine
+    corporate_* money tables above, applying the same fix to
+    corporate_accounts's own admin policy (migration 17 had never been
+    included in migration 142's original sweep)."""
     super_admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, super_admin, role="super_admin")
@@ -329,7 +333,7 @@ def test_super_admin_role_cannot_select_corporate_account(pg_cur):
     _seed_company(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert pg_cur.fetchall() == []
+    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
 
 
 def test_non_admin_authenticated_cannot_select_corporate_account(pg_cur):
@@ -344,37 +348,45 @@ def test_non_admin_authenticated_cannot_select_corporate_account(pg_cur):
 
 
 def test_anon_cannot_select_corporate_account(pg_cur):
-    """No REVOKE was ever applied to corporate_accounts (unlike the nine
-    tables above) -- anon still holds the table-level SELECT grant, so this
-    is a clean RLS-deny (empty result), not a privilege error. The policy is
-    also scoped `TO authenticated` only, so anon has zero applicable
-    policies regardless of role."""
+    """Migration 416 REVOKEd ALL on corporate_accounts from anon (matching
+    the nine sibling tables), so anon has no table-level SELECT grant left
+    at all -- this is a privilege error now, not a silently-filtered RLS
+    deny."""
     as_role(pg_cur, None)
     account_id = _uuid()
     _seed_company(pg_cur, account_id)
     as_role(pg_cur, "anon", None)
-    pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert pg_cur.fetchall() == []
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
 
 
-def test_admin_can_insert_update_delete_corporate_account(pg_cur):
-    """FOR ALL with no explicit WITH CHECK reuses the USING clause for
-    INSERT/UPDATE too -- the admin check doesn't reference the row being
-    written, so it passes uniformly for any row."""
+def test_admin_cannot_write_corporate_account(pg_cur):
+    """Migration 17's original FOR ALL (no explicit WITH CHECK) reused the
+    USING clause for INSERT/UPDATE too, so any admin's write passed
+    uniformly for any row -- migration 416 (PR #5307) narrowed the policy to
+    SELECT-only and REVOKEd INSERT/UPDATE/DELETE/TRUNCATE from authenticated
+    entirely, matching migration 142's nine sibling tables: no role gets RLS
+    write access to these tables anymore, only the backend's service-role
+    connection (which bypasses RLS/grants) writes them."""
     admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, admin, role="admin")
-    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     account_id = _uuid()
     _seed_company(pg_cur, account_id)
-    assert pg_cur.rowcount == 1
-    pg_cur.execute("UPDATE corporate_accounts SET name = 'Renamed Co' WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 1
-    pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 1
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        _seed_company(pg_cur, _uuid())
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("UPDATE corporate_accounts SET name = 'Renamed Co' WHERE id = %s", (account_id,))
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
 
 
 def test_non_admin_authenticated_cannot_write_corporate_account(pg_cur):
+    """Migration 416 REVOKEd INSERT/UPDATE/DELETE/TRUNCATE from authenticated
+    entirely, so every write attempt now raises a grant-level privilege
+    error immediately, rather than being silently filtered to zero rows by
+    RLS."""
     rider = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, rider, role="rider")
@@ -383,23 +395,25 @@ def test_non_admin_authenticated_cannot_write_corporate_account(pg_cur):
     as_role(pg_cur, "authenticated", {"sub": rider, "role": "authenticated"})
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         _seed_company(pg_cur, _uuid())
-    pg_cur.execute("UPDATE corporate_accounts SET name = 'Hacked' WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 0
-    pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 0
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("UPDATE corporate_accounts SET name = 'Hacked' WHERE id = %s", (account_id,))
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
 
 
 def test_anon_cannot_write_corporate_account(pg_cur):
+    """Migration 416 REVOKEd ALL on corporate_accounts from anon, so every
+    write attempt now raises a grant-level privilege error immediately."""
     as_role(pg_cur, None)
     account_id = _uuid()
     _seed_company(pg_cur, account_id)
     as_role(pg_cur, "anon", None)
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         _seed_company(pg_cur, _uuid())
-    pg_cur.execute("UPDATE corporate_accounts SET name = 'Hacked' WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 0
-    pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert pg_cur.rowcount == 0
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("UPDATE corporate_accounts SET name = 'Hacked' WHERE id = %s", (account_id,))
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("DELETE FROM corporate_accounts WHERE id = %s", (account_id,))
 
 
 def test_service_role_bypasses_corporate_accounts(pg_cur):

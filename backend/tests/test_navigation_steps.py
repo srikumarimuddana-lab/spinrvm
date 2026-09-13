@@ -81,12 +81,13 @@ def _rd_patches(app_settings, handler, calls, *, budget_allowed=True, cached=Non
     async def _settings():
         return app_settings
 
-    async def _budget():
-        return (budget_allowed, 5.0 if not budget_allowed else 0.0, 5.0)
-
-    async def _record(sku):
-        if recorded is not None:
+    async def _reserve(sku):
+        # ACTION_ITEMS.md C104: reserve_budget() records the spend as part of
+        # the same atomic step — only an *allowed* reservation is counted,
+        # matching the old check-then-record sequence's behavior.
+        if budget_allowed and recorded is not None:
             recorded.append(sku)
+        return (budget_allowed, 5.0 if not budget_allowed else 0.0, 5.0)
 
     async def _redis_get(_key):
         return cached
@@ -99,8 +100,7 @@ def _rd_patches(app_settings, handler, calls, *, budget_allowed=True, cached=Non
     with ExitStack() as stack:
         for p in (
             patch.object(rd, "get_app_settings", _settings),
-            patch.object(rd, "check_budget", _budget),
-            patch.object(rd, "record_call", _record),
+            patch.object(rd, "reserve_budget", _reserve),
             patch.object(rd, "redis_get", _redis_get),
             patch.object(rd, "redis_set", _redis_set),
             patch.object(rd.httpx, "AsyncClient", _fake_client(handler, calls)),

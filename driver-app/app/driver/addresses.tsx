@@ -73,6 +73,7 @@ export default function AddressesScreen() {
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [newAddress, setNewAddress] = useState({ name: '', address: '' });
+    const [saving, setSaving] = useState(false);
 
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
@@ -124,6 +125,7 @@ export default function AddressesScreen() {
             return;
         }
 
+        setSaving(true);
         try {
             // Geocode the address to get real coordinates
             const coords = await geocodeAddress(newAddress.address.trim());
@@ -146,6 +148,8 @@ export default function AddressesScreen() {
             showToast('success', 'Address Saved', 'Address has been saved.');
         } catch (err: any) {
             showToast('error', 'Save Failed', getApiErrorMessage(err, 'Could not save your address. Please try again.'));
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -272,10 +276,15 @@ export default function AddressesScreen() {
                                 <Text style={styles.cancelBtnText}>Cancel</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[styles.modalBtn, styles.saveBtn]}
+                                style={[styles.modalBtn, styles.saveBtn, saving && { opacity: 0.6 }]}
                                 onPress={handleAddAddress}
+                                disabled={saving}
                             >
-                                <Text style={styles.saveBtnText}>Save</Text>
+                                {saving ? (
+                                    <ActivityIndicator color="#fff" size="small" />
+                                ) : (
+                                    <Text style={styles.saveBtnText}>Save</Text>
+                                )}
                             </TouchableOpacity>
                         </View>
                     </Pressable>

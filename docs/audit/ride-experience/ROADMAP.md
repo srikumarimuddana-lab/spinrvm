@@ -313,13 +313,18 @@ surface defect with a known, already-proven fix sitting unapplied one file away.
   implementation did **not** apply this entry's own "Architecture change to the proposal" above:
   it built on the Legacy Directions endpoint (`steps=true`) rather than the Routes API
   (`computeRoutes`) this entry explicitly required, apparently because the parallel session's own
-  decision log never cross-referenced this entry. Tracked as `ACTION_ITEMS.md` C106 rather than
-  silently corrected in place — a live, driver-facing endpoint should get the same review this
-  session's other changes got before anyone rewrites it. Remaining open work on R12: Phase 2
-  (live re-route + lane guidance) and Phase 3 (offline/CarPlay/Android Auto nav surface) per the
-  proposal's own phasing — neither started, both still require the Routes-API-vs-Legacy call to
-  be resolved first (C106) since Phase 2's re-route logic sits on top of whichever API Phase 1
-  ends up using.
+  decision log never cross-referenced this entry. Tracked as `ACTION_ITEMS.md` C106.
+  **Decided 2026-09-13: NO-GO for now** — stay on Legacy Directions. The feature is dark-launched
+  (`driver_turn_by_turn_enabled` defaults `false`, never flipped on) and the shipped call doesn't
+  actually request traffic-aware routing, so the Advanced-SKU pricing risk this entry originally
+  warned about doesn't apply to what's live today; migrating now would be pure debt-paydown on
+  code with no current user. Full reasoning and a concrete revisit trigger (before the flag ever
+  flips on, or when Phase 2 scoping starts) in `ACTION_ITEMS.md` C106 — this is a considered
+  deferral, not an open question. Remaining open work on R12: Phase 2 (live re-route + lane
+  guidance) and Phase 3 (offline/CarPlay/Android Auto nav surface) per the proposal's own phasing
+  — neither started. Phase 2 scoping should re-open the Legacy-vs-Routes-API call itself (its
+  re-route logic is exactly where traffic-aware pricing becomes a real design input), not inherit
+  today's NO-GO by default.
 
 ### R13 — GCP Billing Budgets integration for real Maps/Firebase spend **[P2]**
 

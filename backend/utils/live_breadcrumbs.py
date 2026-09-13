@@ -27,27 +27,47 @@ try:
         compute_gap_route_via_google,
         compute_gap_route_via_osrm,
     )
-    from .route_reconstruction import (
-        CONTINUITY_TOLERANCE_M,
-        MAX_INFERRED_CONNECTORS,
-    )
+    from .route_reconstruction import CONTINUITY_TOLERANCE_M
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.route_distance import (  # type: ignore
         compute_gap_route_via_google,
         compute_gap_route_via_osrm,
     )
-    from utils.route_reconstruction import (  # type: ignore
-        CONTINUITY_TOLERANCE_M,
-        MAX_INFERRED_CONNECTORS,
-    )
+    from utils.route_reconstruction import CONTINUITY_TOLERANCE_M  # type: ignore
 
 import math
+import time
+from datetime import datetime, timezone
+
+# Sort floor for a point whose captured_at will not parse. Such a point is
+# already degenerate for gap maths (_time_gap_seconds yields 0 for it); this
+# just keeps it from making the chronological sort below raise on a None.
+_SORT_FLOOR = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 logger = logging.getLogger(__name__)
 
 # Performance bounds
 MAX_BREADCRUMB_POINTS = 200
+# This path runs inside the client's 15 s request budget (rider/driver
+# shared/api/client.ts REQUEST_TIMEOUT, forwarded as X-Timeout-Ms).
+# route_reconstruction's MAX_INFERRED_CONNECTORS=20 is sized for the POST-TRIP
+# finalizer, which has no client deadline. Here, 20 gaps x (2 s OSRM + 2 s
+# Google, each on a freshly-opened httpx client) is up to 80 s of sequential
+# HTTP — which spends the whole budget, so whichever DB call runs next gets a
+# near-zero deadline and raises "[DB] Executor wait exceeded the request
+# deadline" (repositories/_base.py). That is what 503'd GET /live-route six
+# times on 2026-09-13 01:56 once GPS started actually producing points: the
+# table was empty before, so this loop had never run at volume.
+# Falling through the cap uses the haversine interpolation branch below.
+#
+# The budget is checked BEFORE starting a connector, never enforced on the
+# connector itself, so the honest worst case is the budget plus one full
+# OSRM+Google pair — about 1.5 + 2.0 + 2.0 = 5.5 s, not 1.5 s. That is a
+# deliberate simplicity trade (no per-call wait_for wrapper) and still an order
+# of magnitude under the 80 s it replaces, but do not read 1.5 s as the bound.
+LIVE_CONNECTOR_BUDGET_S = 1.5
+LIVE_MAX_CONNECTORS = 4
 
 
 def _haversine_m(a: List[float], b: List[float]) -> float:
@@ -88,12 +108,44 @@ async def get_gap_filled_breadcrumbs(ride_id: str) -> List[List[float]]:
     using the same 4-tier strategy as post-trip reconstruction.
     """
     # Fetch recent raw GPS points for the trip_in_progress phase
+    # desc=True + reverse: the LAST 200 fixes. get_rows' `desc` defaults to
+    # False, so this asked for the OLDEST 200 — past that many points the live
+    # trail froze on the start of the trip and never advanced again, while every
+    # poll still paid the full gap-fill cost below. Ride SPR-S5ZKQC (2026-09-13)
+    # logged 564 points, so the rider's map showed only the first third of it.
+    # columns= drops ~200 full GPS rows per poll (get_rows selects "*" by
+    # default); only lat/lng/captured_at are read from these rows.
+    #
+    # Known limitation, stated rather than implied: this changes WHICH 200 points
+    # are visible, it does not make a long trip fully visible. On a 564-point ride
+    # the trail is the newest ~35% and its start slides forward each poll, so the
+    # earlier route is no longer rendered. That is strictly better than freezing
+    # on the first 200 forever, but a DB-side stride/downsample (or a higher cap
+    # on this path) is what would show the whole trip — a behaviour change worth
+    # its own review rather than a rider-facing surface changed in passing here.
+    # captured_at IS NOT NULL is load-bearing with desc=True: Postgres sorts
+    # NULLs FIRST under ORDER BY ... DESC, so a row with no capture time would
+    # take one of the 200 newest slots ahead of genuinely recent points — the
+    # same "blind the monitor" failure migration 371 was written to fix on this
+    # exact table and column (ride SPR-PE7TTB, an 11-minute mid-trip outage went
+    # undetected). Such rows are still reachable: routes/websocket.py falls back
+    # through device_timestamp/timestamp and can persist a NULL captured_at.
     points = await get_rows(
         "driver_location_history",
-        {"ride_id": ride_id, "tracking_phase": "trip_in_progress"},
+        {
+            "ride_id": ride_id,
+            "tracking_phase": "trip_in_progress",
+            "captured_at": {"$notnull": True},
+        },
         order="captured_at",
+        desc=True,
         limit=MAX_BREADCRUMB_POINTS,
+        columns="lat,lng,captured_at",
     )
+    # Restore chronological order. Sorting on the parsed timestamp rather than
+    # reversing keeps this correct whatever order the provider hands back, so
+    # the trail can never render backwards if that ordering ever changes.
+    points.sort(key=lambda p: parse_iso_utc(p.get("captured_at")) or _SORT_FLOOR)
 
     if len(points) < 2:
         return []
@@ -119,6 +171,7 @@ async def get_gap_filled_breadcrumbs(ride_id: str) -> List[List[float]]:
     # Gap-fill between consecutive points
     filled: List[List[float]] = [coords[0]]
     connector_attempts = 0
+    _connector_deadline = time.monotonic() + LIVE_CONNECTOR_BUDGET_S
 
     for i in range(1, len(coords)):
         start = coords[i - 1]
@@ -133,7 +186,7 @@ async def get_gap_filled_breadcrumbs(ride_id: str) -> List[List[float]]:
 
         # Fill the gap
         connector_attempts += 1
-        if connector_attempts > MAX_INFERRED_CONNECTORS:
+        if connector_attempts > LIVE_MAX_CONNECTORS or time.monotonic() > _connector_deadline:
             # Too many gaps — straight-line interpolate the rest
             filled.extend(_interpolate_haversine(start, end, max(2, int(gap_m / 50))))
             continue

@@ -417,8 +417,7 @@ async def test_compute_route_via_google_survives_a_cache_read_failure():
     }
     with (
         patch.object(rd, "redis_get", AsyncMock(side_effect=RuntimeError("redis down"))),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(rd, "redis_set", AsyncMock()),
         patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload))),
     ):
@@ -431,7 +430,7 @@ async def test_compute_route_via_google_survives_a_cache_read_failure():
 async def test_compute_route_via_google_returns_none_when_budget_exhausted():
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(False, 10.0, 10.0))),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(False, 10.0, 10.0))),
     ):
         result = await rd._compute_route_via_google(50.45, -104.62, 50.46, -104.63, "key")
     assert result is None
@@ -441,8 +440,7 @@ async def test_compute_route_via_google_returns_none_when_budget_exhausted():
 async def test_compute_route_via_google_returns_none_on_http_error():
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(status_code=500))),
     ):
         result = await rd._compute_route_via_google(50.45, -104.62, 50.46, -104.63, "key")
@@ -453,8 +451,7 @@ async def test_compute_route_via_google_returns_none_on_http_error():
 async def test_compute_route_via_google_returns_none_on_request_exception():
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(rd.httpx, "AsyncClient", _client_factory(exc=RuntimeError("boom"))),
     ):
         result = await rd._compute_route_via_google(50.45, -104.62, 50.46, -104.63, "key")
@@ -465,8 +462,7 @@ async def test_compute_route_via_google_returns_none_on_request_exception():
 async def test_compute_route_via_google_returns_none_when_status_is_not_ok():
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(
             rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload={"status": "ZERO_RESULTS", "routes": []}))
         ),
@@ -480,8 +476,7 @@ async def test_compute_route_via_google_returns_none_when_polyline_too_short():
     payload = {"status": "OK", "routes": [{"overview_polyline": {"points": ""}, "legs": []}]}
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload))),
     ):
         result = await rd._compute_route_via_google(50.45, -104.62, 50.46, -104.63, "key")
@@ -501,8 +496,7 @@ async def test_compute_route_via_google_survives_a_cache_write_failure():
     }
     with (
         patch.object(rd, "redis_get", AsyncMock(return_value=None)),
-        patch.object(rd, "check_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
-        patch.object(rd, "record_call", AsyncMock()),
+        patch.object(rd, "reserve_budget", AsyncMock(return_value=(True, 0.0, 10.0))),
         patch.object(rd, "redis_set", AsyncMock(side_effect=RuntimeError("redis down"))),
         patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload))),
     ):

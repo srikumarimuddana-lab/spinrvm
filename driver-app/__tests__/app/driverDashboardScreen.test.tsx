@@ -1244,3 +1244,49 @@ describe('Directions proxy (R7)', () => {
     expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Source-text guard for the MapView child-churn fix.
+ *
+ * This suite mocks RouteLine/RoutePins/CarMarker to `() => null`, so it cannot
+ * observe map children at all — the assertion below is therefore deliberately a
+ * source check rather than a render one, matching the pattern several hooks
+ * suites in this app already use.
+ *
+ * Every needle is a SINGLE LINE on purpose: this repo's working tree is CRLF on
+ * Windows, and a multi-line needle containing \n can never match there even
+ * though it passes in CI on Linux. See
+ * docs/change-log/2026-09-12-live-ride-triage-gps-webhook-health.md.
+ */
+describe('MapView child churn', () => {
+  const src = require('fs').readFileSync(
+    require('path').resolve(__dirname, '../../app/driver/(tabs)/index.tsx'),
+    'utf8',
+  );
+
+  it('KEEPS the rideState key until the native patch is device-verified', () => {
+    // Inverted from its original form on purpose. Re-keying an ancestor churns
+    // up to 24 sibling <Polyline>s per ride-state transition, which is the
+    // crash trigger — so removing this key looks like the fix and briefly was
+    // one. It is not, yet:
+    //
+    //   * carSurface.tsx keys RouteLine/RoutePins on route.leg DELIBERATELY, to
+    //     drop a leftover route overlay per leg. That is the documented
+    //     replacement for once keying the whole car MapView, which ANR'd the
+    //     head unit on the 2026-09-11 test ride. The same pattern is therefore
+    //     load-bearing elsewhere in this app.
+    //   * A driver reported the route vanishing mid-drive on Android Auto —
+    //     the same library defect from the other side. Keeping the key risks
+    //     the crash; dropping it risks a stale route line. A JS change only
+    //     picks which.
+    //
+    // The real fix is patches/react-native-maps+1.27.2.patch, and it has NOT
+    // been run on a device. Remove this key only after a real head unit shows a
+    // clean pickup -> dropoff -> idle cycle with that patch built in, and delete
+    // this test in the same commit.
+    //
+    // Single-line needle on purpose: this working tree is CRLF on Windows, so a
+    // needle spanning two lines can never match here even though it would in CI.
+    expect(src).toContain('key={`route-${rideState}`}');
+  });
+});

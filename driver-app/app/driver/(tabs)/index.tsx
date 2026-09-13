@@ -1488,6 +1488,23 @@ function DriverDashboard() {
             destination = { latitude: pNavLat, longitude: pNavLng };
           }
 
+          /*
+            Keep the existing overlay remount workaround pending Android testing.
+            carSurface.tsx also keys overlays per leg to clear stale routes.
+            Removing this key reduces child churn but cannot repair a native
+            list lost during detach (PR #5333 versus #5332).
+
+            Both apps patch maps 1.27.2 with upstream's feature-list fix plus
+            interrupted-restore guards: retain pending children across another
+            detach, reject callbacks from old attachments, and restore children
+            even when no Google map state was saved. JVM tests exercise those
+            methods; they do not prove Android rendering is fixed.
+
+            Verify a new native build through pickup -> dropoff -> idle and
+            repeated background/reconnect cycles. Any later key removal needs
+            its own device check for stale overlays. Analysis and release steps:
+            docs/change-log/2026-09-13-map-restore-lifecycle.md.
+          */
           return (
             <React.Fragment key={`route-${rideState}`}>
               {needsDirections && (

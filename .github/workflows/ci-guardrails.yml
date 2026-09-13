@@ -900,8 +900,28 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
+          # Diff from the actual merge-base, not raw BASE_SHA. BASE_SHA is the
+          # base branch's CURRENT tip, which keeps moving as main advances — a
+          # PR branch that falls behind (hasn't merged/rebased main in a while)
+          # would otherwise show every file main gained since the PR's fork
+          # point as part of "this PR's diff", tripping this check on migration
+          # files the PR never touched. Same false-positive class documented in
+          # migration-check.yml's own merge-base fix (PR #3497) and CR-2026-035
+          # (found on PR #5321: a false hard failure on a migration file an
+          # admin-dashboard-only PR never touched). Falls back to BASE_SHA if
+          # merge-base computation itself fails/returns empty — this is a
+          # hard-blocking gate (continue-on-error: false), so silently diffing
+          # an empty ref (which would report "no migration files" and pass
+          # unchecked) is worse than falling back to the old behavior. Mirrors
+          # change-impact-log-gate's MERGE_BASE pattern in this same file.
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
+
           result = subprocess.run(
-              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
+              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True
           )
           migration_files = [f for f in result.stdout.strip().split('\n')
@@ -995,9 +1015,21 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
+          # Diff from the actual merge-base, not raw BASE_SHA — same
+          # CR-2026-035 fix as this job's "Check for dangerous migration
+          # patterns" step above; this step has its own independent env/diff
+          # and was missed in the first pass of that fix. Falls back to
+          # BASE_SHA if merge-base computation fails/returns empty (this is a
+          # hard-blocking gate).
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
+
           # Only added migration files in this PR
           result = subprocess.run(
-              ['git', 'diff', '--name-only', '--diff-filter=A', BASE_SHA, HEAD_SHA],
+              ['git', 'diff', '--name-only', '--diff-filter=A', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True,
           )
           new_migrations = [
@@ -1133,9 +1165,20 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
+          # Diff from the actual merge-base, not raw BASE_SHA — same
+          # CR-2026-035 fix as this job's other diff steps; this step has its
+          # own independent env/diff and was missed in the first pass of that
+          # fix. Falls back to BASE_SHA if merge-base computation fails/returns
+          # empty (this is a hard-blocking gate).
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
+
           # New migration files added by this PR only
           result = subprocess.run(
-              ['git', 'diff', '--name-only', '--diff-filter=A', BASE_SHA, HEAD_SHA],
+              ['git', 'diff', '--name-only', '--diff-filter=A', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True,
           )
           new_migrations = [
@@ -1415,8 +1458,24 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
+          # Diff from the actual merge-base, not raw BASE_SHA — see CR-2026-035.
+          # BASE_SHA is main's current tip, which keeps moving; a PR branch that
+          # falls behind main inflates this diff with every file main gained
+          # since the branch's fork point, misclassifying doc-only PRs as
+          # risk:high. Falls back to BASE_SHA if merge-base computation itself
+          # fails/returns empty (this job is continue-on-error: true already,
+          # but an empty diff would still mislabel every PR risk:low, so keep
+          # the same defensive fallback as the other jobs in this file rather
+          # than relying on that safety net). Mirrors change-impact-log-gate's
+          # MERGE_BASE pattern in this same file.
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
+
           result = subprocess.run(
-              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
+              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True,
           )
           changed = [f for f in result.stdout.strip().split('\n') if f]

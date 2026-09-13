@@ -11,7 +11,7 @@ already worked fine via the schema-default merge in get_app_settings().
 
 Follows the same wiring as test_dispatch_direct_pool_flag_settings.py: a
 plain boolean on SettingsUpdateRequest, no credential masking, no
-super-admin gate, backed by migration 417's column (see
+super-admin gate, backed by migration 418's column (see
 test_settings_column_parity.py for why a column is required, not optional,
 for any field accepted by the API).
 """
@@ -111,7 +111,7 @@ def test_flag_is_not_masked_as_a_credential():
     assert _FLAG not in _SUPER_ADMIN_ONLY_FIELDS
 
 
-def test_migration_417_adds_the_column_with_false_default():
+def test_migration_418_adds_the_column_with_false_default():
     """See test_settings_column_parity.py's module docstring: any field
     SettingsUpdateRequest accepts without a matching `settings` column 500s
     the WHOLE save (PGRST204) on first use, not just this field."""
@@ -119,10 +119,10 @@ def test_migration_417_adds_the_column_with_false_default():
     from pathlib import Path
 
     sql = (
-        Path(__file__).resolve().parents[1] / "migrations" / "417_settings_driver_turn_by_turn_enabled.sql"
+        Path(__file__).resolve().parents[1] / "migrations" / "418_settings_driver_turn_by_turn_enabled.sql"
     ).read_text(encoding="utf-8")
     match = re.search(rf"{_FLAG}\s+BOOLEAN NOT NULL DEFAULT (TRUE|FALSE)", sql, re.IGNORECASE)
-    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 417"
+    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 418"
     assert match.group(1).upper() == "FALSE", (
         f"{_FLAG} must default FALSE -- applying the migration must not silently enable "
         "the feature for every ride in progress at deploy time."

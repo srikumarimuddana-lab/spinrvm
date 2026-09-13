@@ -251,6 +251,12 @@ export function resolveHeading(
  * or the marker and the module cache disagree about which way the car points.
  */
 export function adoptCarFix(fix: CarLatLng): CarLatLng {
+  // Every arrival lands here — useCarLocation's own watcher and its staleness
+  // watchdog adopt without publishing, and publishCarFix delegates here — so
+  // this is the single choke point for the all-arrivals counter and cannot
+  // double-count. The task-only counter stays in publishCarFix; see the
+  // two-counter rationale on arrivedSinceRead.
+  arrivedSinceRead += 1;
   const now = Date.now();
   const { fix: merged, source } = resolveHeading(
     fix,
@@ -302,8 +308,44 @@ export function seedCarFix(fix: CarLatLng): CarLatLng {
  */
 let publishedSinceRead = 0;
 
-/** Read and reset the counter. Called on carSession's refresh tick. */
+/**
+ * ALL fix arrivals since the last read, whatever produced them.
+ *
+ * Two counters, because one cannot answer both questions and conflating them
+ * breaks the alarm in one direction or the other:
+ *
+ *   - `publishedSinceRead` counts only the background/location TASKS
+ *     (publishCarFix). That is the diagnostic question in the comment above —
+ *     does Android throttle the task while our CarAppService is bound.
+ *   - `arrivedSinceRead` counts every arrival, including useCarLocation's own
+ *     foreground watcher and its staleness watchdog, which adopt without
+ *     publishing. That is the USER-FACING question: does the car map have a
+ *     current position at all.
+ *
+ * Alarming on the task counter alone produced false "0 fixes/min" reports while
+ * the surface was rendering fine (2026-09-12/13, including during a ride that
+ * streamed 564 points to the server). But simply counting everything in one
+ * number is worse: the surface's own watcher runs at timeInterval 2000 (~30/min)
+ * plus a 3s staleness watchdog, against STARVED_FIXES_PER_MIN of 6 — so while
+ * the surface is mounted, which is exactly when reportFixRate runs, a single
+ * counter can never drop below the threshold and the alarm could never fire
+ * again. A silent monitor is more dangerous than a noisy one.
+ */
+let arrivedSinceRead = 0;
+
+/** Read and reset the ALL-arrivals counter. Called on carSession's refresh tick. */
 export function consumeFixCount(): number {
+  const n = arrivedSinceRead;
+  arrivedSinceRead = 0;
+  return n;
+}
+
+/**
+ * Read and reset the TASK-ONLY counter — diagnostic context, never the alarm
+ * condition on its own. A healthy surface with a throttled task is not a user
+ * -visible fault; it is the thing we are still trying to learn about Android.
+ */
+export function consumeTaskFixCount(): number {
   const n = publishedSinceRead;
   publishedSinceRead = 0;
   return n;
@@ -330,6 +372,8 @@ export function subscribeCarFix(listener: (fix: CarLatLng) => void): () => void 
  * shared AsyncStorage entry, and re-renders any mounted surface.
  */
 export function publishCarFix(fix: CarLatLng): void {
+  // Task-origin only. The all-arrivals counter lives in adoptCarFix, which this
+  // delegates to just below — so a task fix increments both, by design.
   publishedSinceRead += 1;
   // Subscribers get the MERGED fix, not the raw one — a background task fix with
   // no course would otherwise re-render the marker pointing north even though
@@ -392,5 +436,6 @@ export function _resetCarFixChannel(): void {
   lastCacheWriteAt = 0;
   lastCachedPoint = null;
   publishedSinceRead = 0;
+  arrivedSinceRead = 0;
   fixListeners.clear();
 }

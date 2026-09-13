@@ -220,7 +220,37 @@ async def _db_ready() -> "tuple[bool, dict]":
     except Exception as exc:
         # Full error is logged server-side; the public body stays generic so the
         # health endpoint never leaks DB internals.
-        _logging.getLogger(__name__).error(f"/health DB readiness check failed: {exc}")
+        #
+        # str(exc) is the EMPTY STRING for the zero-arg asyncio.TimeoutError the
+        # wait_for above raises, so this used to log a bare trailing colon and
+        # nothing else — 111 Sentry events over 6 days with the cause formatted
+        # away (and DatabaseError would have given only "Database operation
+        # failed"). Log the type, the DatabaseError original per CLAUDE.md, and
+        # the traceback. This is the stdlib logger imported at the top of the
+        # module, not loguru, so exc_info= is honoured here.
+        _detail = str(exc) or repr(exc)
+        # Walk the __cause__ chain for the FIRST informative "original". ping()
+        # catches run_sync's DatabaseError and re-raises its own, so the outer
+        # details["original"] is just str(inner) == "Database operation failed"
+        # — the real PostgREST/httpx text is one level further down. Take the
+        # deepest non-sentinel value rather than the first one found.
+        _orig = None
+        _seen, _cur = 0, exc
+        while _cur is not None and _seen < 5:
+            _candidate = getattr(_cur, "details", None)
+            if isinstance(_candidate, dict):
+                _val = _candidate.get("original")
+                if _val and _val != "Database operation failed":
+                    _orig = _val
+            _cur, _seen = getattr(_cur, "__cause__", None), _seen + 1
+        _logging.getLogger(__name__).error(
+            "/health DB readiness check failed after %.1fs: %s: %s%s",
+            _HEALTH_PING_TIMEOUT,
+            type(exc).__name__,
+            _detail,
+            f" | original={_orig}" if _orig else "",
+            exc_info=True,
+        )
 
     _health_cache.update(at=now, ok=ok, detail=detail)
     return ok, detail

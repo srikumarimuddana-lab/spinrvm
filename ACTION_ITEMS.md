@@ -17784,10 +17784,32 @@ Remaining, roughly in order of user impact:
       `admin_debit_wallet` (an admin moving money in/out of a rider or
       driver's wallet with zero trace to the user) — now sends a best-effort
       push, `target_app` resolved from the user's role. Deliberately left
-      open: `utils/referral_payout.py`'s rider-referral wallet credit
-      (separate money flow/audience, needs its own file + tests) and
+      open at the time: `utils/referral_payout.py`'s rider-referral wallet
+      credit (separate money flow/audience, needed its own file + tests) and
       driver-side cancellation/no-show fee wallet debits in
-      `routes/rides/cancellation.py` (owned by a parallel session).
+      `routes/rides/cancellation.py` (owned by a parallel session, still
+      open).
+      - **2026-09-13, `utils/referral_payout.py` follow-up CLOSED**:
+        `_credit()`'s rider-wallet-credit branch (both call sites — the
+        initial payout and the failed-claim re-credit retry, since both
+        route through this one function) now sends the same best-effort,
+        try/except-wrapped push, mirroring `admin_credit_wallet`/
+        `admin_debit_wallet` exactly. One real bug caught by
+        `spinr-money-auditor` before commit and fixed pre-merge: an initial
+        draft hardcoded `target_app="rider"` reasoning that `kind` (the
+        referral-CODE type, rider-referral vs driver-referral program)
+        guaranteed the recipient's role — it doesn't;
+        `routes/users.py`'s `apply_rider_referral` resolves the referrer
+        from the shared `users` table with no role filter, so a driver
+        account can legitimately end up as `referrer_user_id` on a
+        `kind="rider"` payout. Fixed to resolve `target_app` from the
+        recipient's actual role via `db_supabase.get_user_by_id`, matching
+        `routes/admin/wallet.py`'s `_wallet_target_app` pattern, with a
+        dedicated regression test for that exact scenario. 9 tests total in
+        `test_referral_payout_credit.py` (5 new), full 59-test
+        `referral_payout` suite re-run clean. Driver-side cancellation fee
+        debits above remain open (still owned by a parallel session — not
+        touched here).
     - **R33 (promos)**: the rider-initiated `POST /promotions/apply` already
       returns `discount_applied` synchronously — not silent, left alone. The
       real gap was the admin "apply promo on behalf of a rider" path

@@ -54,7 +54,7 @@ try:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from ..utils.maps_budget import check_budget, record_call
+    from ..utils.maps_budget import check_budget, reserve_budget
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:
     import db_supabase
@@ -66,7 +66,7 @@ except ImportError:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from utils.maps_budget import check_budget, record_call
+    from utils.maps_budget import check_budget, reserve_budget
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -392,16 +392,30 @@ async def _geocode_with_locality_retry(params: Dict[str, Any], city: Optional[st
     """Geocode with a hard `components=locality:<city>` filter when a city is
     known, retrying once without it on ZERO_RESULTS — a mismatched or
     unusually-formatted locality name must degrade to the unfiltered lookup,
-    not break the query outright (B7)."""
+    not break the query outright (B7).
+
+    ACTION_ITEMS.md C104: each of the (up to two) Google calls this makes
+    reserves its own spend atomically right before that call, rather than
+    relying solely on the caller's earlier, non-atomic _places_available()
+    precondition check. A denied reservation degrades through the same
+    "unrecognized status" path a real Google error already takes — callers
+    already treat any status outside ("OK", "ZERO_RESULTS") as a failure.
+    """
     if city:
         scoped_params = dict(params)
         scoped_params["components"] = f"locality:{city}|country:CA"
+        allowed, spent, budget = await reserve_budget("geocode")
+        if not allowed:
+            logger.error("ai geocode blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
+            return {"status": "BUDGET_EXCEEDED"}
         data = await _maps_get(_GEOCODE_URL, scoped_params)
-        await record_call("geocode")
         if data.get("status") != "ZERO_RESULTS":
             return data
+    allowed, spent, budget = await reserve_budget("geocode")
+    if not allowed:
+        logger.error("ai geocode blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
+        return {"status": "BUDGET_EXCEEDED"}
     data = await _maps_get(_GEOCODE_URL, params)
-    await record_call("geocode")
     return data
 
 
@@ -423,6 +437,12 @@ async def _lookup_place_candidates(
                 # param below, a HARD filter: Google cannot return a candidate
                 # outside it at all (B5). Falls through to the legacy geocode
                 # branch (or an empty result) if nothing matches inside it.
+                allowed, spent, budget = await reserve_budget("text_search_new")
+                if not allowed:
+                    logger.error("ai find_place blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
+                    return {
+                        "error": "place lookup is not available right now — ask the rider to pick the location in the app"
+                    }
                 payload = build_text_search_payload(query, near_lat, near_lng, _PLACE_RADIUS_METERS)
                 status_code, data = await _maps_post(
                     PLACES_NEW_TEXT_SEARCH_URL,
@@ -432,7 +452,6 @@ async def _lookup_place_candidates(
                 if status_code != 200:
                     logger.error("ai find_place Places API (New) error: %s", data.get("error") or status_code)
                     return {"error": "place lookup failed — try again or pick the location in the app"}
-                await record_call("text_search_new")
                 results = legacy_place_results_from_text_search(data)
             else:
                 # (No "Places API (New)" equivalent applies here — pure
@@ -500,6 +519,15 @@ async def _rank_named_place_candidates_by_route(
     """
 
     async def route(candidate: Dict[str, Any]):
+        # ACTION_ITEMS.md C104: these calls run concurrently (one per
+        # candidate) -- exactly the burst shape the atomic reserve_budget()
+        # exists to guard, unlike a single sequential call. A denied
+        # reservation degrades through the same "no route" path a real
+        # Google failure already takes -- callers already fall back to
+        # proximity ordering when any candidate's route is unknown.
+        allowed, _spent, _budget = await reserve_budget("directions")
+        if not allowed:
+            return None
         data = await _maps_get(
             _DIRECTIONS_URL,
             {
@@ -510,7 +538,6 @@ async def _rank_named_place_candidates_by_route(
                 "key": api_key,
             },
         )
-        await record_call("directions")
         if data.get("status") != "OK" or not data.get("routes"):
             return None
         legs = data["routes"][0].get("legs") or []
@@ -628,19 +655,26 @@ async def get_rider_location(user: Dict[str, Any]) -> Dict[str, Any]:
     elif hint["source"] == "device":
         # Reverse geocode so the model has an address label for the booking
         # card. Budget-gated like every other Maps call; coords still work
-        # without it.
+        # without it. _places_available()'s check_budget() here is an
+        # advisory pre-check (skip the work entirely when already
+        # exhausted); reserve_budget() right before the actual call closes
+        # the TOCTOU gap between that check and this call (ACTION_ITEMS.md
+        # C104).
         api_key, error = await _places_available()
         if not error:
-            try:
-                data = await _maps_get(
-                    _GEOCODE_URL,
-                    {"latlng": f"{hint['lat']},{hint['lng']}", "key": api_key, "language": "en"},
-                )
-                if data.get("status") == "OK" and data.get("results"):
-                    result["address"] = data["results"][0].get("formatted_address")
-                    await record_call("geocode")
-            except Exception:
-                logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
+            allowed, spent, budget = await reserve_budget("geocode")
+            if not allowed:
+                logger.error("ai get_rider_location blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
+            else:
+                try:
+                    data = await _maps_get(
+                        _GEOCODE_URL,
+                        {"latlng": f"{hint['lat']},{hint['lng']}", "key": api_key, "language": "en"},
+                    )
+                    if data.get("status") == "OK" and data.get("results"):
+                        result["address"] = data["results"][0].get("formatted_address")
+                except Exception:
+                    logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
     if hint["source"] == "device":
         result["note"] = "This is a recent fix from the rider's device — confirm the address with them before booking."
     else:

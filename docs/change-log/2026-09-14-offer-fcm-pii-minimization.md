@@ -218,3 +218,76 @@ _FCM_EXCLUDE = {
       sibling gap in `routes/admin/rides.py` is called out explicitly, not silently left out).
 - [x] No silent behavior change to an already-shipped flow — the flag defaults off, so this PR
       changes zero live behavior on merge; the "User-experience effect" field above states this.
+
+## Addendum — round 2 (real adversarial review, 2026-09-14)
+
+The manual self-review disclosed above was superseded by real `spinr-dispatch-reviewer` and
+`spinr-security-auditor` passes once a session with the Agent tool became available. Findings and
+what was done about each:
+
+**Fixed in this PR (commit follows this addendum):**
+
+- **BLOCKER (dispatch-reviewer): TOCTOU in `get_ride_offer`'s authorization check.** The
+  endpoint's "is this offer still live" gate reused the `ride` snapshot fetched at the top of the
+  function (before the `ride_offers` ownership check) instead of re-reading it. `accept_ride`
+  flips the winning driver's `rides.status` to `driver_accepted` well before it flips *other*
+  drivers' `ride_offers` rows to `preempted` (several awaits later: re-read ride, cache
+  invalidation, insurance-period write, acceptance-rate update, then the `ride_offers` updates
+  themselves) — a losing driver's request landing in that real, multi-round-trip window would see
+  its own `ride_offers` row still `pending`, and the stale `ride` snapshot's status check would
+  pass, returning 200 with full offer detail (precise GPS + `rider_rating`) for a ride already won
+  by someone else. This was exploitable **independent of the feature flag** — the endpoint is
+  unconditionally mounted. **Fix:** re-fetch `ride` immediately before the authorization decision
+  (after the `ride_offers` check, not before it) and re-verify both status and (for the
+  direct-assignment branch) `driver_id` against the fresh read, closing the window to one final
+  round trip. **Regression tests added:** `test_stale_ride_snapshot_does_not_leak_offer_after_preemption`
+  and `test_stale_ride_snapshot_does_not_leak_direct_assignment_after_reassignment` — both
+  simulate the exact interleaving (stale first read vs. fresh second read disagreeing) and
+  confirmed to fail without the fix (reverted locally, watched both fail with "DID NOT RAISE",
+  restored the fix, confirmed both pass) before being counted as real coverage.
+
+**Tracked, not fixed in this PR (correctly out of scope per surgical-changes discipline — filed
+as `ACTION_ITEMS.md` entries instead of left as change-log prose only, since a paragraph here
+isn't a follow-up anyone will find later):**
+
+- **`ACTION_ITEMS.md` C112** — `backend/routes/admin/rides.py`'s `admin_create_ride` (a different
+  direct-assignment code path than the one this PR touches) builds its own FCM push with no
+  `_FCM_EXCLUDE` filtering at all — full name/email/phone fallback, precise GPS, and
+  `rider_rating`, unfiltered, in production today, regardless of this PR's flag. Security-auditor
+  flagged that this PR's own investigation found this gap but only wrote it up in prose; C112 is
+  the actual tracked entry.
+- **`ACTION_ITEMS.md` C113** — `backend/routes/drivers/ride_reads.py`'s entire read-endpoint
+  family (`get_active_ride`, `get_ride_history`, and this PR's new `get_ride_offer`) has no rate
+  limiting at all, decorator or global middleware. Low practical risk today (`ride_id` is a
+  non-enumerable UUID) but a real gap on a PII-bearing read endpoint; scoped as its own follow-up
+  rather than bolted onto this PR inconsistently (only the newest endpoint would have gotten it).
+
+**Noted, accepted as-is (low severity, not tracked separately):**
+
+- **Timing side-channel (security-auditor):** a nonexistent `ride_id` short-circuits after one
+  query; an existing-but-not-mine ride costs a second `ride_offers` round trip before also
+  returning 404 — both return byte-identical bodies, but the extra round trip is a measurable
+  latency difference an attacker could in principle use to distinguish "no such ride" from "ride
+  exists, not yours." Not fixed: `ride_id` is a UUID (128 bits, not guessable/enumerable), so the
+  practical exploitability is negligible, and padding the fast path to match the slow one's cost
+  would add complexity for a threat model that doesn't apply here (CLAUDE.md's simplicity-first
+  principle). Documented rather than silently accepted.
+- **`offer_expires_at` fallback is dead code in practice for direct-assignment (security-auditor):**
+  the fallback reads `ride.get("driver_notified_at")`, but `admin_create_ride` (the only producer
+  of the direct-assignment shape) never actually sets that field — confirmed via grep, only
+  `services/dispatch_service.py` writes it. In production this means every admin-direct-assigned
+  offer returns `offer_expires_at: null`, not a real countdown. The PR's own
+  `test_live_direct_assignment_with_no_ride_offers_row` test masks this by manually setting
+  `driver_notified_at` on its fixture — a gap between the test and the real code path, not a
+  security issue (a null countdown fails safe, it doesn't leak anything), but worth knowing this
+  specific field is unverified against real admin-assign behavior. Not fixed here: the actual fix
+  belongs in `admin_create_ride` (setting `driver_notified_at` on direct-assignment), which is
+  outside this PR's stated scope (FCM payload minimization, not the admin-assignment flow's own
+  field completeness) — left as a known gap rather than silently patched over.
+- **404 instead of 410 for a since-accepted direct-assignment (security-auditor):** once a
+  direct-assigned ride moves past `driver_assigned` (driver accepted, arrived, in progress),
+  `is_direct_assigned` becomes `False` and there's no `ride_offers` row for this path, so the
+  endpoint returns 404 ("not found") rather than the intended 410 ("no longer available")
+  semantics. Not a security issue — 404 is still the safe, no-leak answer — just an inconsistent
+  status code for that one case. Not fixed here; low enough severity not to warrant a dedicated
+  `ACTION_ITEMS.md` entry, noted here for anyone touching this function next.

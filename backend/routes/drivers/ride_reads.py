@@ -306,10 +306,39 @@ async def get_ride_offer(ride_id: str, current_user: dict = Depends(get_current_
             raise HTTPException(status_code=410, detail="Offer no longer available")
         raise HTTPException(status_code=404, detail="Offer not found")
 
-    # Defense in depth alongside the ride_offers status check above — mirrors
-    # decline_ride's own ride.status gate (WS-18).
-    if ride.get("status") not in (RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED):
-        raise HTTPException(status_code=410, detail="Offer no longer available")
+    # Re-fetch `ride` fresh here rather than reusing the snapshot from the
+    # very first read above (spinr-dispatch-reviewer finding, PR #5382): a
+    # losing driver's own `ride_offers` row can still read "pending" for a
+    # real, multi-round-trip window after the winner's accept_ride has
+    # already flipped `rides.status` to driver_accepted — accept_ride only
+    # flips OTHER drivers' `ride_offers` rows to 'preempted' several awaits
+    # later (re-read ride, cache invalidation, insurance-period write,
+    # acceptance-rate update, then the ride_offers updates themselves).
+    # Using the pre-`ride_offers`-check snapshot for the status gate below
+    # would let a request that lands in that exact window return 200 with
+    # full offer detail (precise GPS + rider_rating) for a ride the calling
+    # driver has already lost — leaking exactly the PII this endpoint exists
+    # to protect, in the highest-contention case (a batch-dispatched offer
+    # multiple drivers are racing). Re-fetching immediately before the
+    # authorization decision shrinks that window to this one round trip.
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if is_direct_assigned:
+        # Re-verify the direct assignment itself against the fresh read, not
+        # just its status: an admin could have reassigned the ride to a
+        # different driver (or moved it past driver_assigned) in the gap
+        # since the first read, and a status-only check wouldn't catch a
+        # reassignment that leaves the ride in the same driver_assigned state.
+        if not (ride.get("driver_id") == driver["id"] and ride.get("status") == RideStatus.DRIVER_ASSIGNED):
+            raise HTTPException(status_code=410, detail="Offer no longer available")
+    else:
+        # Batch-dispatch path: defense in depth alongside the ride_offers
+        # status check above — mirrors decline_ride's own ride.status gate
+        # (WS-18), now checked against the fresh read.
+        if ride.get("status") not in (RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED):
+            raise HTTPException(status_code=410, detail="Offer no longer available")
 
     try:
         from ...utils.pii import first_name_only

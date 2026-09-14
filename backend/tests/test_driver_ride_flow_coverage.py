@@ -2734,3 +2734,63 @@ class TestGetRideOffer:
         assert result["ride_id"] == _RIDE_ID
         assert result["quest_hint"] is None
         assert result["offer_expires_at"] is not None
+
+    async def test_stale_ride_snapshot_does_not_leak_offer_after_preemption(self):
+        """Regression for a spinr-dispatch-reviewer finding on PR #5382: the
+        very first `ride` read (used only to decide is_direct_assigned) must
+        never be reused for the final authorization decision. accept_ride
+        flips rides.status to driver_accepted for the winner well before it
+        flips OTHER drivers' ride_offers rows to 'preempted' (several awaits
+        later) -- a losing driver's request can land with its own
+        ride_offers row still reading 'pending' after the winner's accept
+        has already landed. Using a stale ride snapshot for the status gate
+        would leak full offer detail (precise GPS + rider_rating) in exactly
+        that window; must 410 instead, using a fresh re-read."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        stale_ride = _ride(status="searching", driver_id=None)
+        fresh_ride = _ride(status="driver_accepted", driver_id="other-driver-id")
+        ride_reads = [stale_ride, fresh_ride]
+
+        async def fake_get_ride(_ride_id):
+            return ride_reads.pop(0)
+
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(side_effect=fake_get_ride)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(return_value=MagicMock(data=[{"status": "pending", "expires_at": None}])),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 410
+        assert not ride_reads, "get_ride_offer must re-fetch `ride` before the authorization decision"
+
+    async def test_stale_ride_snapshot_does_not_leak_direct_assignment_after_reassignment(self):
+        """Same TOCTOU class, direct-assignment branch: a status-only recheck
+        wouldn't catch a reassignment to a DIFFERENT driver that leaves the
+        ride in the same driver_assigned status -- must re-verify driver_id
+        against a fresh read too, not just status."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        stale_ride = _ride(status="driver_assigned", driver_id=_DRIVER_ID)
+        fresh_ride = _ride(status="driver_assigned", driver_id="other-driver-id")
+        ride_reads = [stale_ride, fresh_ride]
+
+        async def fake_get_ride(_ride_id):
+            return ride_reads.pop(0)
+
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(side_effect=fake_get_ride)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 410
+        assert not ride_reads, "get_ride_offer must re-fetch `ride` before the authorization decision"

@@ -259,6 +259,132 @@ describe('backgroundMessaging (Android)', () => {
     });
   });
 
+  describe('minimal FCM offer payload (#1231 finding 15)', () => {
+    const MINIMAL_OFFER = {
+      type: 'new_ride_assignment',
+      ride_id: 'r1',
+      pickup_address: '1 Main St',
+      dropoff_address: '2 Side Rd',
+      fare: '14.50',
+      countdown_seconds: '20',
+      offer_minimal: 'true',
+      // Backend does not send these at all when offer_minimal is set --
+      // deliberately absent here too, not just empty strings.
+    };
+    const FULL_OFFER = {
+      ride_id: 'r1',
+      booking_id: 'r1',
+      pickup_address: '1 Main St',
+      dropoff_address: '2 Side Rd',
+      pickup_lat: 52.14,
+      pickup_lng: -106.68,
+      dropoff_lat: 52.11,
+      dropoff_lng: -106.63,
+      fare: 14.5,
+      distance_km: 4.2,
+      duration_minutes: 11,
+      rider_name: 'Alex',
+      rider_rating: 4.9,
+      requires_wav: false,
+      quiet_mode: false,
+      countdown_seconds: 20,
+      offer_expires_at: '2026-01-01T00:00:20Z',
+      surge_multiplier: null,
+      incentives: null,
+      total_bonus: null,
+      quest_hint: null,
+      payment_method: 'card',
+    };
+
+    async function fireOffer(data: Record<string, unknown>) {
+      const { registerBackgroundMessageHandlers } = loadModule();
+      registerBackgroundMessageHandlers();
+      const handler = mockSetBackgroundMessageHandler.mock.calls[0][0];
+      await handler({ data });
+    }
+
+    it('does not fetch at all when offer_minimal is absent (flag off, unchanged)', async () => {
+      await fireOffer(OFFER);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('fetches the authenticated offer and hydrates coordinates + rider_rating from it', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(FULL_OFFER) });
+
+      await fireOffer(MINIMAL_OFFER);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.spinr.test/api/v1/drivers/rides/r1/offer',
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({ Authorization: 'Bearer driver-token' }),
+        }),
+      );
+      expect(mockSetItem).toHaveBeenCalledTimes(1);
+      const [, body] = mockSetItem.mock.calls[0];
+      const persisted = JSON.parse(body);
+      expect(persisted.pickup_lat).toBe(52.14);
+      expect(persisted.dropoff_lng).toBe(-106.63);
+      expect(persisted.rider_rating).toBe(4.9);
+      // Notifee's local card also gets the fetched rating, not just storage.
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ rider_rating: 4.9 }),
+        undefined,
+      );
+    });
+
+    it('shows nothing at all when the backend says the offer is gone (404/410)', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 410 });
+
+      await fireOffer(MINIMAL_OFFER);
+
+      expect(mockSetItem).not.toHaveBeenCalled();
+      expect(mockDisplayRideOfferNotification).not.toHaveBeenCalled();
+    });
+
+    it('degrades gracefully (still notifies, no fabricated coordinates) on a retryable fetch failure', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('offline'));
+
+      await fireOffer(MINIMAL_OFFER);
+
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('minimal-offer fetch failed'),
+        'r1',
+      );
+      // Never left with zero notification for a live offer.
+      expect(mockSetItem).toHaveBeenCalledTimes(1);
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledTimes(1);
+      const [, body] = mockSetItem.mock.calls[0];
+      const persisted = JSON.parse(body);
+      // No fabricated (0,0) pin -- left undefined rather than defaulted.
+      expect(persisted.pickup_lat).toBeUndefined();
+      expect(persisted.dropoff_lat).toBeUndefined();
+      expect(persisted.rider_rating).toBeUndefined();
+      // Everything the FCM push DID carry is still shown.
+      expect(persisted.pickup_address).toBe('1 Main St');
+      expect(persisted.fare).toBe(14.5);
+    });
+
+    it('degrades gracefully on a 5xx from the offer endpoint', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+
+      await fireOffer(MINIMAL_OFFER);
+
+      expect(mockSetItem).toHaveBeenCalledTimes(1);
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('degrades gracefully when there is no background auth token at all', async () => {
+      mockGetBackgroundAuthToken.mockResolvedValueOnce(null);
+
+      await fireOffer(MINIMAL_OFFER);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockSetItem).toHaveBeenCalledTimes(1);
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('notifee.onBackgroundEvent routing', () => {
     async function fireEvent(parsed: unknown) {
       const { registerBackgroundMessageHandlers } = loadModule();

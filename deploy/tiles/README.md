@@ -107,6 +107,17 @@ other, and only the OSRM one affects billing.
   which looks exactly like a dead basemap.
 - Healthcheck is `/styles/basemap/style.json` — more informative than `/health`
   because it only passes once the config parsed *and* the style resolved.
+- **Do not "simplify" `railway.json`'s `startCommand`.** It looks redundant —
+  it re-invokes the image's own `ENTRYPOINT` (`/usr/src/app/docker-entrypoint.sh`)
+  from inside the `sh -c` that Railway already runs. Both halves are load-bearing:
+  the `sh -c` is the only thing that expands `${PORT}`/`${PUBLIC_URL}` (Railway
+  passes the start command as argv, not through a shell), and re-entering the
+  entrypoint with a **non-executable** first argument (`--config`) is what makes
+  it start **Xvfb** before exec'ing node. Point the start command straight at
+  node and it boots fine, serves vector tiles fine, and every raster `.png`
+  fails — there is no headless GL display. Raster is half the reason this
+  service exists (`static-route-map.tsx`), so that failure is worth the odd-looking
+  command.
 - Give it more RAM/CPU than the OSRM service. Rasterising is headless GL and is
   the expensive part; vector-only serving is cheap.
 
@@ -147,6 +158,8 @@ in Vercel requires a redeploy, not just a restart.
 | Build fails with "style still reaches a third party after rewrite" | Working as intended — the rewrite missed a source, glyph or sprite URL. The message names the exact field. |
 | Build fails at the fonts step | `FONTS_ZIP_URL` moved. Point it at a current release. |
 | Build OOMs during planetiler | Raise `JAVA_OPTS` if the builder has headroom, or use a smaller `AREA`. |
+| Container restart-loops with `exec: /usr/src/app/run.sh: not found` | There is no `run.sh` in `maptiler/tileserver-gl` — the entrypoint is `/usr/src/app/docker-entrypoint.sh`. Fixed in `railway.json`; see §3 for why the start command re-enters that entrypoint rather than calling node directly. |
+| Vector tiles fine, every raster `.png` 500s or hangs | Xvfb never started, so the renderer has no display. Almost always a "simplified" `startCommand` whose first argument is an executable — the entrypoint then skips its Xvfb branch. See §3. |
 | Build fails with `Unable to access jarfile /planetiler.jar` or `no main manifest attribute, in /app/libs/planetiler-*.jar` | The planetiler image is built by **Jib** (see its `planetiler-dist/pom.xml`), not from a Dockerfile, so it has no executable jar and no launcher script — only `/app/resources`, `/app/classes`, `/app/libs/*.jar` and an `ENTRYPOINT` a build-time `RUN` cannot invoke. The Dockerfile reconstructs that entrypoint (`java -cp '/app/resources:/app/classes:/app/libs/*' com.onthegomap.planetiler.Main`); the quotes are load-bearing, since `/app/libs/*` is a **Java** classpath wildcard the shell must not glob. Picking any single jar out of `/app/libs` cannot work — none of them carries a `Main-Class`. |
 
 ## 6. What this replaces, and what it does not

@@ -26767,6 +26767,51 @@ how much they de-risk a public launch._
   `followMode`/`onFollowToggle` props), `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`
   (`onReady`, the `webglOk` guard).
 
+### C116. `admin-dashboard/src/components/driver-map.tsx` has no importer anywhere in the codebase — correct code, unreachable from any route
+- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
+  reviewing the WebGL-stub-guard port to `live-map.tsx`/`driver-map.tsx`
+  (this same session — see
+  `docs/change-log/2026-09-14-live-driver-map-webgl-stub-guard.md`) — asked
+  to independently verify a suspicion this session raised while doing the
+  same fix, since the fix itself doesn't depend on the answer either way.
+- **Issue/gap:** `DriverMap` (`components/driver-map.tsx`) is not imported
+  by any page, layout, or other component in `admin-dashboard`. Confirmed
+  two ways: a repo-wide grep for both `driver-map` and `DriverMap` (no
+  dynamic `import()`, no barrel re-export, no aliasing) returns only the
+  file's own self-references and a mention in
+  `src/lib/map/webgl-support.ts`'s module docstring listing it as one of
+  the admin maps that "can adopt the same probe"; and `git log
+  --diff-filter=A` back to the file's original add (`62dd549aa`) shows no
+  point in its history search where a consumer existed. The candidate
+  page this component looks purpose-built for —
+  `app/dashboard/drivers/page.tsx` (the real Drivers list) — has no map
+  import of any kind today; `app/dashboard/monitoring/page.tsx` renders
+  its own sibling `MonitoringMap`, a separate component, not this one.
+- **Why this is worth tracking, not just noting once:** this file has now
+  absorbed **two consecutive same-day fixes** while apparently orphaned —
+  this session's WebGL-stub guard, and an earlier same-day commit
+  (`ee3498254`, "route the four chainless maps at our tile server too")
+  that also touched it and described it as one of "seven admin maps"
+  without anyone questioning reachability at the time. That pattern (real,
+  correct maintenance work landing on dead code repeatedly, because
+  nothing signals it's dead) is exactly the kind of drift CLAUDE.md's
+  Claude-Adjacent-Directories table already calls out for a different
+  class of file: "exists, purpose unclear... should not be a permanent
+  state."
+- **Recommendation:** either wire `DriverMap` into a real route — it looks
+  purpose-built for a fleet-map view the Drivers list page doesn't
+  currently have, which would also be the natural place to have caught
+  this gap sooner — or delete it if the fleet-map-on-Drivers-page idea
+  isn't wanted. Whoever picks this up should re-confirm reachability fresh
+  (a grep this stale by the time it's read is exactly how this happened
+  twice already) rather than trusting this entry indefinitely.
+- **Files (reference only, nothing changed by this entry):**
+  `admin-dashboard/src/components/driver-map.tsx`,
+  `admin-dashboard/src/app/dashboard/drivers/page.tsx` (candidate wiring
+  site, confirmed to have no map import today),
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx` +
+  `monitoring-map.tsx` (confirmed to use a different, separate component).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

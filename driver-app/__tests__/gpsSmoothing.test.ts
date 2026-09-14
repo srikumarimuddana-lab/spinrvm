@@ -104,6 +104,24 @@ describe('smoothFix', () => {
     expect(laggedByM).toBeLessThan(8); // true displacement is ~50m; not stuck near the start
   });
 
+  it('fully trusts a fresh fix after a long gap even at moderate average speed (spinr-edge-case-reviewer finding, 2026-09-14)', () => {
+    // A genuine drive-away spread across a backgrounding/tunnel gap can
+    // average out to a deceptively low implied speed even though the
+    // vehicle is now moving and the filter should trust the fresh fix MOST:
+    // 30m over a 20s gap implies 1.5 m/s, under STATIONARY_SPEED_THRESHOLD_MPS
+    // (2.0) if the gap ceiling didn't exist. MAX_STATIONARY_GAP_SEC (10s)
+    // means this 20s gap must fall back to full trust (the caller's own
+    // processNoiseMps, unmodified) rather than being extra-damped.
+    const seeded = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 0 });
+    // ~30m north over 20s.
+    const after = smoothFix(seeded, { latitude: 52.1 + 0.00027, longitude: -106.6, timestampMs: 20_000 });
+    const movedM = distanceMeters(seeded.latitude, seeded.longitude, after.latitude, after.longitude);
+    // With full trust (gain close to 1 given the large predictedVariance a
+    // 20s*36 process-noise term produces), the estimate should land close to
+    // the new fix, not be held back near the stale pre-gap position.
+    expect(movedM).toBeGreaterThan(20); // true segment is ~30m
+  });
+
   it('damps a low-accuracy (weak-signal) fix harder than the same jitter reported as high-accuracy', () => {
     // Same ~30m jitter, same elapsed time — only the reported accuracy
     // differs. A parked vehicle near buildings/underground parking commonly

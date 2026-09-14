@@ -91,6 +91,22 @@ const DEFAULT_PROCESS_NOISE_MPS = 6;
  */
 const STATIONARY_SPEED_THRESHOLD_MPS = 2.0;
 /**
+ * Ceiling on how large a gap between fixes this stationary check will
+ * reason about at all. It reads implied speed as a single AVERAGE over the
+ * whole gap, which stops being a meaningful proxy for "is this parked or
+ * driving" once the gap is long enough that the vehicle could plausibly have
+ * been doing either for part of it (backgrounding, a tunnel) — a real
+ * drive-away spread across a long gap can average out to a deceptively low
+ * implied speed. Set comfortably above the normal ingest cadence
+ * (MARKER_HEARTBEAT_MS = 2.5s; on-trip fixes arrive faster) so an
+ * occasionally-missed tick doesn't fall through, while staying well under
+ * what this file's own isImplausibleJump doc calls an ordinary gap (tens of
+ * seconds to minutes). Past this ceiling, smoothFix falls back to the
+ * caller's own processNoiseMps unmodified — full trust in the fresh fix,
+ * this function's original behavior for gaps, rather than guessing.
+ */
+const MAX_STATIONARY_GAP_SEC = 10;
+/**
  * Process noise used below STATIONARY_SPEED_THRESHOLD_MPS. Reuses
  * markerPlayback.ts's MIN_EXTRAPOLATION_SPEED_MPS value (1.5) for the same
  * "about walking pace, not driving" looseness, rather than inventing an
@@ -138,8 +154,21 @@ export function smoothFix(
   // fixes — no extra state to carry, and the running estimate is the
   // filter's own best belief about true position, so a single outlier fix
   // can't itself inflate the speed estimate beyond that one fix's own tick).
+  //
+  // Only trusted within MAX_STATIONARY_GAP_SEC of the normal fix cadence
+  // (spinr-edge-case-reviewer finding, 2026-09-14): this speed is an AVERAGE
+  // over the whole gap, and after a long one (backgrounding, tunnel) that
+  // average can easily read "stationary" even for a genuine drive-away —
+  // e.g. 30m over a 20s gap implies 1.5 m/s, well under the threshold, right
+  // when the filter should trust the fresh fix MOST. Past the cadence
+  // ceiling this falls back to the caller's own processNoiseMps unmodified
+  // (full trust in the new fix), matching this function's pre-existing
+  // behavior for gaps rather than applying extra damping to a window it
+  // cannot reason about.
   const impliedSpeedMps =
-    dtSec > 0 ? distanceMeters(state.latitude, state.longitude, fix.latitude, fix.longitude) / dtSec : 0;
+    dtSec > 0 && dtSec <= MAX_STATIONARY_GAP_SEC
+      ? distanceMeters(state.latitude, state.longitude, fix.latitude, fix.longitude) / dtSec
+      : Infinity;
   const effectiveProcessNoiseMps =
     impliedSpeedMps < STATIONARY_SPEED_THRESHOLD_MPS
       ? Math.min(processNoiseMps, STATIONARY_PROCESS_NOISE_MPS)

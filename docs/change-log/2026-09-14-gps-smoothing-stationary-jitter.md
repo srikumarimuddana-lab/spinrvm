@@ -44,8 +44,8 @@ Driver-facing, visible mid-session to any driver whose app is rendering the live
 
 | File path | What changed | Why |
 |---|---|---|
-| `shared/utils/gpsSmoothing.ts` | Added `STATIONARY_SPEED_THRESHOLD_MPS`/`STATIONARY_PROCESS_NOISE_MPS`; `smoothFix` derives implied speed and scales process noise down when below threshold | Damps GPS jitter at the source when the vehicle reads as parked, without touching accuracy handling |
-| `driver-app/__tests__/gpsSmoothing.test.ts` | Two new tests: adversarial stationary-jitter sequence (asserts max per-tick segment `< 2m`, matching `MIN_SEGMENT_MOVE_M`), and a steady 2.5 m/s crawl (asserts it isn't mistaken for parked) | Proves the fix against the actual downstream-relevant metric, and guards the opposite failure mode |
+| `shared/utils/gpsSmoothing.ts` | Added `STATIONARY_SPEED_THRESHOLD_MPS`/`STATIONARY_PROCESS_NOISE_MPS`/`MAX_STATIONARY_GAP_SEC`; `smoothFix` derives implied speed (only within the gap ceiling) and scales process noise down when below threshold | Damps GPS jitter at the source when the vehicle reads as parked, without touching accuracy handling or misfiring after a long gap |
+| `driver-app/__tests__/gpsSmoothing.test.ts` | Three new tests: adversarial stationary-jitter sequence (asserts max per-tick segment `< 2m`, matching `MIN_SEGMENT_MOVE_M`), a steady 2.5 m/s crawl (asserts it isn't mistaken for parked), and a long-gap moderate-distance case (asserts full trust, not extra damping) | Proves the fix against the actual downstream-relevant metric, guards the opposite failure mode, and locks in the reviewer-found gap-handling fix |
 
 ## 7. Before / after
 
@@ -72,12 +72,16 @@ const predictedVariance = state.variance + dtSec * effectiveProcessNoiseMps * ef
 ## 9. Verification performed
 
 - [x] New unit tests (both described above) — pass.
-- [x] Full `gpsSmoothing.test.ts` re-run: 14/14 passing (12 pre-existing + 2 new).
-- [x] Broader regression sweep, both apps: `gpsSmoothing markerPlayback CarMarker vehicleTracking` — driver-app 43/43 passing, rider-app 78/78 passing.
+- [x] Full `gpsSmoothing.test.ts` re-run: 15/15 passing (12 pre-existing + 3 new).
+- [x] Broader regression sweep, both apps: `gpsSmoothing markerPlayback CarMarker vehicleTracking` — driver-app 44/44 passing, rider-app 78/78 passing.
 - [x] `npx tsc --noEmit` clean in both `driver-app` and `rider-app` (this module is shared).
 - [x] Blast-radius grep: exactly 2 call sites of `smoothFix` repo-wide, both read and confirmed unaffected in their `trackingV2`/accuracy-gating logic.
 - [x] Confirmed no file-level overlap with the concurrent same-day Android Auto heading/course-reference work already merged to `main`.
-- [ ] `spinr-edge-case-reviewer` run against this diff — pending at commit time; any finding lands as a follow-up commit before merge.
+- [x] `spinr-edge-case-reviewer` run against this diff — found one real issue (see below), fixed and re-verified before this PR's first review request.
+
+### Review finding, fixed
+
+`spinr-edge-case-reviewer` caught a real regression risk the initial implementation missed: `impliedSpeedMps` is `distance/dtSec`, an **average over the whole gap**. After a long gap (backgrounding, a tunnel) with moderate real movement — e.g. 30m over 20s ≈ 1.5 m/s — that average reads as "stationary" and gets the reduced process noise applied, exactly when the filter should trust the fresh fix *most* (resuming from an unknown gap). This was strictly worse than the pre-fix behavior for that one case. Fixed by adding `MAX_STATIONARY_GAP_SEC = 10`: the stationary check now only applies within that many seconds of the normal fix cadence; past it, `smoothFix` falls back to the caller's own `processNoiseMps` unmodified (full trust), matching the function's original gap-handling behavior rather than guessing. New test `'fully trusts a fresh fix after a long gap even at moderate average speed'` reproduces the reviewer's exact scenario and would have failed against the pre-fix code (manually verified: the buggy version's gain settles at ~0.41 for this scenario, landing the estimate ~12m from center vs. the fixed version's ~27.5m, against a true ~30m segment).
 
 **What was NOT verified:** no real device was available this session (same gap already tracked for this feature area) — the 2.0 m/s threshold and 1.5 m/s stationary process-noise value are measured against this module's own formula using synthetic fixtures, not against a real phone's actual GPS noise floor. `gpsSmoothing.ts`'s own existing comments already flag `DEFAULT_ACCURACY_M`/`DEFAULT_PROCESS_NOISE_MPS` as "not tuned against live device data" for the same reason — this fix inherits that same limitation for its two new constants. No visual-regression tooling exists for driver-app or rider-app (repo-wide, not specific to this fix), so the on-screen effect was reasoned about via the segment-distance metric, not screenshotted.
 

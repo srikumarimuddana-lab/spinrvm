@@ -122,6 +122,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "meta_test_event_code",
         "min_driver_app_version",
         "min_driver_rating",
+        "minimal_fcm_offer_payload_enabled",
         "min_rider_app_version",
         "notification_daily_cap",
         "notification_quiet_hours_end",

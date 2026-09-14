@@ -529,6 +529,12 @@ class SettingsUpdateRequest(BaseModel):
     # above (scheduled_dispatch_enabled etc.). Default False; Phase 2 (T12/T13,
     # not yet built) is the only thing that reads this as True having any effect.
     dispatch_direct_pool_enabled: Optional[bool] = None
+    # #1231 finding 15 kill switch (schemas.AppSettings.minimal_fcm_offer_payload_enabled
+    # is the source of truth for the comment/rationale). Not a credential, no
+    # masking/super-admin gate needed — same posture as the other kill switches
+    # above. Default False; requires human device verification before True has
+    # any real effect in production.
+    minimal_fcm_offer_payload_enabled: Optional[bool] = None
 
     @field_validator("dispatch_geo_provider")
     @classmethod

@@ -183,6 +183,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     },
     android: {
+        // Fabric markerRotation/flat require the patched native maps binary.
+        // Keep iOS on the existing top-level runtime; OTA cannot repair old APKs.
+        runtimeVersion: '2.8.0',
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'

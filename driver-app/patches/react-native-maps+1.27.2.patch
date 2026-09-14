@@ -156,3 +156,158 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
          if (feature instanceof MapMarker) {
              markerMap.remove(feature.getFeature());
              feature.removeFromMap(markerCollection);
+diff --git a/node_modules/react-native-maps/src/specs/NativeComponentMarker.ts b/node_modules/react-native-maps/src/specs/NativeComponentMarker.ts
+--- a/node_modules/react-native-maps/src/specs/NativeComponentMarker.ts
++++ b/node_modules/react-native-maps/src/specs/NativeComponentMarker.ts
+@@ -8,7 +8,8 @@
+ 
+ import {codegenNativeComponent, codegenNativeCommands} from 'react-native';
+ import type {
+   Int32,
++  Float,
+   Double,
+   BubblingEventHandler,
+   DirectEventHandler,
+@@ -71,7 +72,10 @@
+   y: Double; // Non-nullable Double for y
+ }>;
+ 
+ export interface MarkerFabricNativeProps extends ViewProps {
++  /** Android map bearing; not the generic native View rotation. */
++  markerRotation?: WithDefault<Float, 0>;
++  flat?: WithDefault<boolean, false>;
+   /**
+    * Sets the anchor point for the marker.
+    * The anchor specifies the point in the icon image that is anchored to the marker's position on the Earth's surface.
+diff --git a/node_modules/react-native-maps/src/MapMarker.tsx b/node_modules/react-native-maps/src/MapMarker.tsx
+--- a/node_modules/react-native-maps/src/MapMarker.tsx
++++ b/node_modules/react-native-maps/src/MapMarker.tsx
+@@ -515,8 +515,13 @@
+ 
+     return (
+       <AIRMapMarker
+         {...this.props}
++        // Android Fabric needs an explicit map prop in its codegen schema.
++        // Keep the iOS rotation path unchanged.
++        {...(Platform.OS === 'android'
++          ? {markerRotation: this.props.rotation ?? 0, rotation: undefined}
++          : {})}
+         ref={this.marker}
+         // @ts-ignore
+         image={image}
+         // @ts-ignore
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/fabric/MarkerManager.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/fabric/MarkerManager.java
+--- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/fabric/MarkerManager.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/fabric/MarkerManager.java
+@@ -76,8 +76,8 @@
+             if (initialProps.hasKey("draggable")){
+                 options.draggable(initialProps.getBoolean("draggable", false));
+             }
+-            if (initialProps.hasKey("rotation")){
+-                options.rotation(initialProps.getFloat("rotation", 0));
++            if (initialProps.hasKey("markerRotation")){
++                options.rotation(initialProps.getFloat("markerRotation", 0));
+             }
+             if (initialProps.hasKey("flat")) {
+                 options.flat(initialProps.getBoolean("flat", false));
+@@ -129,8 +129,18 @@
+         return MapMarker.getExportedCustomDirectEventTypeConstants();
+     }
+ 
+     @Override
++    public void setMarkerRotation(MapMarker view, float value) {
++        view.setRotation(value);
++    }
++
++    @Override
++    public void setFlat(MapMarker view, boolean value) {
++        view.setFlat(value);
++    }
++
++    @Override
+     public void setAnchor(MapMarker view, @Nullable ReadableMap map) {
+         double x = map != null && map.hasKey("x") ? map.getDouble("x") : 0.5;
+         double y = map != null && map.hasKey("y") ? map.getDouble("y") : 1.0;
+         view.setAnchor(x, y);
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerInterface.java b/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerInterface.java
+--- a/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerInterface.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerInterface.java
+@@ -14,7 +14,9 @@
+ import com.facebook.react.bridge.ReadableMap;
+ import com.facebook.react.uimanager.ViewManagerWithGeneratedInterface;
+ 
+ public interface RNMapsMarkerManagerInterface<T extends View> extends ViewManagerWithGeneratedInterface {
++  void setMarkerRotation(T view, float value);
++  void setFlat(T view, boolean value);
+   void setAnchor(T view, @Nullable ReadableMap value);
+   void setCalloutAnchor(T view, @Nullable ReadableMap value);
+   void setImage(T view, @Nullable ReadableMap value);
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerDelegate.java b/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerDelegate.java
+--- a/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerDelegate.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/facebook/react/viewmanagers/RNMapsMarkerManagerDelegate.java
+@@ -24,8 +24,14 @@
+   }
+   @Override
+   public void setProperty(T view, String propName, @Nullable Object value) {
+     switch (propName) {
++      case "markerRotation":
++        mViewManager.setMarkerRotation(view, value == null ? 0f : ((Double) value).floatValue());
++        break;
++      case "flat":
++        mViewManager.setFlat(view, value == null ? false : (boolean) value);
++        break;
+       case "anchor":
+         mViewManager.setAnchor(view, (ReadableMap) value);
+         break;
+       case "calloutAnchor":
+diff --git a/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.h b/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.h
+--- a/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.h
++++ b/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.h
+@@ -1652,9 +1652,11 @@
+   RNMapsMarkerProps() = default;
+   RNMapsMarkerProps(const PropsParserContext& context, const RNMapsMarkerProps &sourceProps, const RawProps &rawProps);
+ 
+ #pragma mark - Props
+ 
++  Float markerRotation{0.0};
++  bool flat{false};
+   RNMapsMarkerAnchorStruct anchor{};
+   RNMapsMarkerCalloutAnchorStruct calloutAnchor{};
+   ImageSource image{};
+   RNMapsMarkerCalloutOffsetStruct calloutOffset{};
+diff --git a/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.cpp b/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.cpp
+--- a/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.cpp
++++ b/node_modules/react-native-maps/android/src/main/jni/react/renderer/components/RNMapsSpecs/Props.cpp
+@@ -637,10 +637,12 @@
+ #endif
+ RNMapsMarkerProps::RNMapsMarkerProps(
+     const PropsParserContext &context,
+     const RNMapsMarkerProps &sourceProps,
+     const RawProps &rawProps): ViewProps(context, sourceProps, rawProps),
+ 
++    markerRotation(convertRawProp(context, rawProps, "markerRotation", sourceProps.markerRotation, {0.0})),
++    flat(convertRawProp(context, rawProps, "flat", sourceProps.flat, {false})),
+     anchor(convertRawProp(context, rawProps, "anchor", sourceProps.anchor, {})),
+     calloutAnchor(convertRawProp(context, rawProps, "calloutAnchor", sourceProps.calloutAnchor, {})),
+     image(convertRawProp(context, rawProps, "image", sourceProps.image, {})),
+     calloutOffset(convertRawProp(context, rawProps, "calloutOffset", sourceProps.calloutOffset, {})),
+@@ -667,13 +669,19 @@
+ folly::dynamic RNMapsMarkerProps::getDiffProps(
+     const Props* prevProps) const {
+   static const auto defaultProps = RNMapsMarkerProps();
+   const RNMapsMarkerProps* oldProps = prevProps == nullptr
+       ? &defaultProps
+       : static_cast<const RNMapsMarkerProps*>(prevProps);
+   if (this == oldProps) {
+     return folly::dynamic::object();
+   }
+   folly::dynamic result = HostPlatformViewProps::getDiffProps(prevProps);
++  if (markerRotation != oldProps->markerRotation) {
++    result["markerRotation"] = markerRotation;
++  }
++  if (flat != oldProps->flat) {
++    result["flat"] = flat;
++  }
+   
+   if (anchor != oldProps->anchor) {
+     result["anchor"] = toDynamic(anchor);

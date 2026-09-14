@@ -1,13 +1,13 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     ScrollView,
     Platform,
     ActivityIndicator,
     TouchableOpacity,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';

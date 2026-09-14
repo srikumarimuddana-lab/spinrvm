@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { SPACING, FONT } from '@shared/utils/responsive';
 // getAuthHeader / SpinrConfig were only needed by the hand-rolled fetch()
 // this screen used for photo uploads; api.post now handles the URL, auth,
@@ -47,6 +48,8 @@ export default function ReportSafetyScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
+    // #1231 finding 17: safety/SOS screens must never enter session replay.
+    useLogRocketPrivacyScreen();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [category, setCategory] = useState<SafetyCategory | null>(null);
     const [issue, setIssue] = useState('');

@@ -106,6 +106,34 @@ module.exports = defineConfig([
     },
   },
   {
+    // UX1 follow-up (ACTION_ITEMS.md): shared/components/Text.tsx applies the
+    // Plus Jakarta Sans brand font by fontWeight; RN's own Text silently
+    // renders the OS system font instead. All qualifying existing screens
+    // were migrated to the wrapper, but nothing stopped a *new* screen from
+    // importing Text straight from 'react-native' and shipping off-brand —
+    // this was the one open follow-up the rollout explicitly flagged.
+    // 'warn' (not 'error') because a fresh grep found files the original
+    // migration's "has fontWeight, zero fontFamily" criterion didn't catch
+    // (plain default-weight Text) — same pre-existing-violations posture as
+    // the hex-color/SPACING rules above; tighten once cleaned up.
+    files: ['app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'warn',
+        {
+          paths: [
+            {
+              name: 'react-native',
+              importNames: ['Text'],
+              message:
+                "Import Text from '@shared/components/Text' instead — it applies the Plus Jakarta Sans brand font by fontWeight; react-native's own Text silently renders the OS system font.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // MIN_TOUCH (44pt Apple HIG touch-target) half of the same design-audit
     // finding as the SPACING/FONT rule above — deliberately left out of the
     // PR that added that rule (#4951) because a plain no-restricted-syntax

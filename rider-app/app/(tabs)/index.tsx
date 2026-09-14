@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, useContext } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   useWindowDimensions,
@@ -10,6 +9,7 @@ import {
   Linking,
   AppState,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';

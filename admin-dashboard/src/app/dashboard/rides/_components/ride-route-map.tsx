@@ -10,6 +10,7 @@ import {
     fitBoundsToPoints,
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
+import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 import StaticRouteMap from "./static-route-map";
 import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
 import {
@@ -95,30 +96,6 @@ const ROUTE_LAYER_PAIRS: readonly (readonly [string, string])[] = [
     [TRIP_TRAIL_LAYER_ID, TRIP_TRAIL_SOURCE_ID],
 ];
 
-/**
- * Can this browser actually render a MapLibre map?
- *
- * Not just "does getContext succeed": privacy and ad-blocking extensions
- * commonly hand back a stubbed WebGL context that never throws and never
- * draws, which produced a blank canvas with no error of any kind — no failed
- * request, no CSP violation, nothing in the console. Probing a real parameter
- * separates a working context from a stub. Falling back costs a slightly
- * plainer map; guessing wrong costs an empty panel on the dispute-review
- * screen, so this fails toward the raster renderer.
- */
-function hasWebGL(): boolean {
-    if (typeof document === "undefined") return false;
-    try {
-        const canvas = document.createElement("canvas");
-        const gl = (canvas.getContext("webgl2") ||
-            canvas.getContext("webgl")) as WebGLRenderingContext | null;
-        if (!gl || typeof gl.getParameter !== "function") return false;
-        return Boolean(gl.getParameter(gl.VERSION));
-    } catch {
-        return false;
-    }
-}
-
 /** Drop every route layer/source this component owns, so a redraw (new phase
  *  data, or a basemap provider swap) is idempotent rather than throwing
  *  "source already exists". */
@@ -152,7 +129,7 @@ export default function RideRouteMap({
     // loads this component with ssr:false, so there is always a document; doing
     // it in an effect instead would cost an extra render and briefly mount a
     // MapLibre map we may be about to discard.
-    const [webglOk] = useState<boolean>(() => hasWebGL());
+    const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
     // Memoize so the draw effect does not rebuild the geometry on every parent
     // re-render — an unmemoized new object here churns the route layers.
     const actualGeometry = useMemo(() => toGeoJsonMultiLineString(actualSegments), [actualSegments]);

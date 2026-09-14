@@ -48,6 +48,10 @@ def test_get_company_subscription(test_client, admin_override):
             "routes.corporate_subscriptions.db_supabase.list_corporate_subscriptions_for_company",
             AsyncMock(return_value=[_sub_row()]),
         ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "subscription_billing_pilot_enabled": True}),
+        ),
     ):
         resp = test_client.get("/api/admin/corporate-accounts/c1/subscription")
 
@@ -55,6 +59,30 @@ def test_get_company_subscription(test_client, admin_override):
     body = resp.json()
     assert body["current"]["status"] == "active"
     assert len(body["history"]) == 1
+    assert body["pilot_enabled"] is True
+
+
+def test_get_company_subscription_pilot_defaults_false(test_client, admin_override):
+    """Migration 419's column defaults false; a company row missing it
+    entirely (or the company not found) must not crash or default true."""
+    with (
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_active_corporate_subscription",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.list_corporate_subscriptions_for_company",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        resp = test_client.get("/api/admin/corporate-accounts/c1/subscription")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["pilot_enabled"] is False
 
 
 class TestAssignGatedByFlag:
@@ -116,6 +144,28 @@ class TestAssignGatedByFlag:
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"] == "subscription_already_active"
 
+    def test_assign_maps_pilot_not_enabled_to_403(self, test_client, admin_override):
+        """Migration 419's per-company gate lives inside assign_subscription
+        (service layer, covered directly in test_corporate_subscription_service.py)
+        — this only proves the route's _ERROR_STATUS mapping for that reason
+        code, same shape as test_assign_maps_service_error_to_http_status."""
+        with (
+            patch(
+                "routes.corporate_subscriptions.get_app_settings",
+                AsyncMock(return_value={"corporate_subscription_billing_enabled": True}),
+            ),
+            patch(
+                "routes.corporate_subscriptions.assign_subscription",
+                AsyncMock(side_effect=CorporateSubscriptionError("company_not_in_pilot")),
+            ),
+        ):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/c1/subscription",
+                json={"plan_id": "plan_pro"},
+            )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == "company_not_in_pilot"
+
     def test_assign_rejects_extra_fields(self, test_client, admin_override):
         with patch(
             "routes.corporate_subscriptions.get_app_settings",
@@ -168,6 +218,78 @@ class TestCancelNeverGatedByFlag:
                 json={},
             )
         assert resp.status_code == 404, resp.text
+
+
+class TestSubscriptionPilotToggle:
+    """POST /{company_id}/subscription-pilot — migration 419's per-company
+    gate. Never itself starts or cancels a Stripe subscription; it only
+    flips the column assign_subscription reads (test_corporate_subscription_service.py)."""
+
+    def test_enable_pilot_succeeds_and_audit_logs(self, test_client, admin_override):
+        with (
+            patch(
+                "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+                AsyncMock(return_value={"id": "c1", "name": "Acme Co"}),
+            ),
+            patch(
+                "routes.corporate_subscriptions.db_supabase.update_corporate_account",
+                AsyncMock(return_value={"id": "c1", "subscription_billing_pilot_enabled": True}),
+            ) as m_update,
+            patch("routes.corporate_subscriptions.log_admin_action", AsyncMock()) as m_audit,
+        ):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/c1/subscription-pilot",
+                json={"enabled": True},
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"company_id": "c1", "subscription_billing_pilot_enabled": True}
+        m_update.assert_awaited_once_with("c1", {"subscription_billing_pilot_enabled": True})
+        m_audit.assert_awaited_once()
+        assert m_audit.await_args.kwargs["action"] == "corporate_subscription_pilot_toggled"
+        assert m_audit.await_args.kwargs["details"] == {"company_id": "c1", "enabled": True}
+
+    def test_disable_pilot_succeeds(self, test_client, admin_override):
+        with (
+            patch(
+                "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+                AsyncMock(return_value={"id": "c1", "subscription_billing_pilot_enabled": True}),
+            ),
+            patch(
+                "routes.corporate_subscriptions.db_supabase.update_corporate_account",
+                AsyncMock(return_value={"id": "c1", "subscription_billing_pilot_enabled": False}),
+            ),
+            patch("routes.corporate_subscriptions.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/c1/subscription-pilot",
+                json={"enabled": False},
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["subscription_billing_pilot_enabled"] is False
+
+    def test_unknown_company_returns_404(self, test_client, admin_override):
+        with patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value=None),
+        ):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/does-not-exist/subscription-pilot",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 404, resp.text
+
+    def test_rejects_extra_fields(self, test_client, admin_override):
+        with patch(
+            "routes.corporate_subscriptions.db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1"}),
+        ):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/c1/subscription-pilot",
+                json={"enabled": True, "plan_id": "plan_pro"},
+            )
+        assert resp.status_code == 422, resp.text
 
 
 def test_module_gate_rejects_admin_without_corporate_accounts_module(test_client):

@@ -3,7 +3,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import {
   View,
-  Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -15,6 +14,7 @@ import {
   Alert,
   BackHandler,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';

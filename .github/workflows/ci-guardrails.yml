@@ -873,40 +873,62 @@ jobs:
           changed = [f for f in result.stdout.strip().split('\n')
                      if f.endswith(('.ts', '.tsx', '.js', '.jsx', '.env', '.json'))]
 
-          # Two independent false-positive classes found blocking PR #5350
-          # (which touched neither an env var name nor a real secret):
+          # Two independent false-positive classes, found and fixed by two
+          # different PRs landing around the same time (merge-conflict
+          # reconciliation, 2026-09-14):
           #
-          # 1. The old `.*` between EXPO_PUBLIC_ and the sensitive suffix
-          #    matches ANY text on the line, including plain English prose in
-          #    a comment ("... EXPO_PUBLIC_* value inlined empty). Once the
-          #    key was restored ...") -- the lowercase word "key" in a
-          #    sentence, nowhere near an actual env var reference. Restricted
-          #    to `[A-Z0-9_]*` so it only spans a single contiguous
-          #    UPPER_SNAKE_CASE-shaped identifier (still case-insensitive via
-          #    re.IGNORECASE, so a stray lowercase declaration is still
-          #    caught) -- prose containing spaces/punctuation can no longer
-          #    bridge the match.
-          # 2. A handful of *_KEY/*_TOKEN-suffixed names are, by the
-          #    provider's own documented security model, meant to ship
-          #    client-side and are not secrets: GOOGLE_MAPS_API_KEY (client-
-          #    side, Google-Console-restricted; CLAUDE.md's own "Required
-          #    Environment Variables" list names it explicitly for
-          #    rider-app), FIREBASE_API_KEY (Firebase's own docs: identifies
-          #    the project only, access is enforced by Firebase Security
-          #    Rules, safe to publish), and FB_CLIENT_TOKEN (Meta's Facebook
-          #    SDK client-side init token, distinct from the app secret,
-          #    required by react-native-fbsdk-next's Expo config plugin).
+          # 1. (PR #5350) The old `.*` between EXPO_PUBLIC_ and the sensitive
+          #    suffix matches ANY text on the line, including plain English
+          #    prose in a comment ("... EXPO_PUBLIC_* value inlined empty).
+          #    Once the key was restored ...") -- the lowercase word "key" in
+          #    a sentence, nowhere near an actual env var reference.
+          #    Restricted to `[A-Z0-9_]*` so it only spans a single
+          #    contiguous UPPER_SNAKE_CASE-shaped identifier (still
+          #    case-insensitive via re.IGNORECASE, so a stray lowercase
+          #    declaration is still caught) -- prose containing
+          #    spaces/punctuation can no longer bridge the match.
+          # 2. (CR-2026-090 / #5351) KEY is dropped from this combined
+          #    pattern's alternation entirely and handled by the separate,
+          #    suffix-based BARE_KEY_RE/SAFE_KEY_SUFFIX_RE check below
+          #    instead of a per-name exemption list -- it already covers
+          #    GOOGLE_MAPS_API_KEY and FIREBASE_API_KEY (both match the
+          #    general `_API_KEY` suffix) plus STRIPE_PUBLISHABLE_KEY and
+          #    SUPABASE_ANON_KEY (PR #5350's exact-name list didn't cover
+          #    these two, documented-but-not-yet-in-code vars -- see that
+          #    check's own comment). FB_CLIENT_TOKEN is a TOKEN-suffixed
+          #    exemption the KEY-only check below can't cover, so it keeps
+          #    its own negative-lookahead exemption here: Meta's Facebook SDK
+          #    client-side init token, distinct from the app secret, required
+          #    by react-native-fbsdk-next's Expo config plugin.
           # This is a whole-file text scan (not diff-hunk-scoped), so any of
           # these matching ANYWHERE in a changed file blocks the PR
           # regardless of what that file's diff actually touches -- these
-          # three names alone already appear in ~25 files repo-wide.
+          # names already appear in ~25 files repo-wide.
           PRIVATE_PATTERNS = [
-              r'EXPO_PUBLIC_(?!GOOGLE_MAPS_API_KEY\b|FIREBASE_API_KEY\b|FB_CLIENT_TOKEN\b)'
-              r'[A-Z0-9_]*(?:SECRET|PRIVATE|PASSWORD|KEY|TOKEN)',
+              r'EXPO_PUBLIC_(?!FB_CLIENT_TOKEN\b)[A-Z0-9_]*(?:SECRET|PRIVATE|PASSWORD|TOKEN)',
               r'EXPO_PUBLIC_SUPABASE_SERVICE',
               r'EXPO_PUBLIC_JWT',
               r'EXPO_PUBLIC_ADMIN',
           ]
+
+          # KEY is handled separately (CR-2026-090 / #5351): a bare "KEY" substring
+          # match also flags extremely common, legitimate public-key naming
+          # conventions — "..._API_KEY" (Google Maps, Firebase), "..._PUBLISHABLE_KEY"
+          # (Stripe, EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY — docs/ENVIRONMENT_VARIABLES.md),
+          # "..._ANON_KEY" (Supabase, EXPO_PUBLIC_SUPABASE_ANON_KEY —
+          # docs/runbooks/supabase-region-migration.md) — values that are
+          # *designed* to be public/client-side (restricted by domain/bundle-ID,
+          # RLS, or publishable-key semantics, not secrecy), not a secret-exposure
+          # risk the way EXPO_PUBLIC_SECRET_KEY or EXPO_PUBLIC_PRIVATE_KEY would
+          # be. Exempt only these exact, well-known suffixes (word-boundary
+          # anchored) — anything else ending in KEY (EXPO_PUBLIC_ENCRYPTION_KEY,
+          # EXPO_PUBLIC_PRIVATE_KEY, EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY, etc.)
+          # still trips this check.
+          BARE_KEY_RE = re.compile(r'EXPO_PUBLIC_[A-Za-z0-9_]*KEY\b', re.IGNORECASE)
+          SAFE_KEY_SUFFIX_RE = re.compile(
+              r'EXPO_PUBLIC_[A-Za-z0-9_]*_(?:API|PUBLISHABLE|ANON)_KEY\b', re.IGNORECASE
+          )
+
           issues = []
           for filepath in changed:
               try:
@@ -914,6 +936,11 @@ jobs:
                   for pat in PRIVATE_PATTERNS:
                       if re.search(pat, content, re.IGNORECASE):
                           issues.append(f"{filepath}: matches {pat}")
+                  for m in BARE_KEY_RE.finditer(content):
+                      token = m.group(0)
+                      if not SAFE_KEY_SUFFIX_RE.fullmatch(token):
+                          issues.append(f"{filepath}: matches EXPO_PUBLIC_...KEY ({token}, not an exempted public-key suffix)")
+                          break
               except (OSError, UnicodeDecodeError):
                   pass
 

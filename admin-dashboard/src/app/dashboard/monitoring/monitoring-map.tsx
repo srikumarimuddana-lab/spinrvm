@@ -9,11 +9,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import {
     DEFAULT_CENTER,
     addStandardControls,
+    attachBasemapFallback,
+    basemapChain,
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
     makeRoutePinEl,
-    monitoringFallbackStyle,
-    themedMapStyle,
 } from "@/lib/map/maplibre-base";
 import {
     buildPathGradient,
@@ -210,6 +210,7 @@ export function MonitoringMap({
     const mapRef = useRef<maplibregl.Map | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [basemapStatus, setBasemapStatus] = useState<"ok" | "retrying" | "failed">("ok");
 
     const driverMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
     const driverVisibleRef = useRef<Map<string, boolean>>(new Map());
@@ -439,22 +440,15 @@ export function MonitoringMap({
         if (!containerRef.current || mapRef.current) return;
 
         let cancelled = false;
-        // Guards the retry to exactly one attempt — a fallback style that
-        // itself fails to load must surface the error, not loop forever.
-        let usedFallback = false;
+        let detach: (() => void) | null = null;
+        const chain = basemapChain(resolvedTheme);
 
-        // Building the map is a function (not inline) so a style-load
-        // failure can tear down and rebuild once against a different
-        // provider, instead of only ever surfacing the error. MapLibre
-        // doesn't support swapping an already-mounted map's style at
-        // runtime without losing sources/layers (see themedMapStyle's own
-        // doc comment), so "retry" means a real new Map instance on the
-        // same container, same as remounting via a theme-keyed component
-        // does elsewhere in this codebase.
-        const buildMap = (styleUrl: string) => {
+        const buildMap = (attempt: number) => {
+            if (cancelled || !containerRef.current) return;
+
             const map = new maplibregl.Map({
-                container: containerRef.current!,
-                style: styleUrl,
+                container: containerRef.current,
+                style: chain[attempt],
                 center: DEFAULT_CENTER,
                 zoom: DEFAULT_ZOOM,
                 attributionControl: { compact: true },
@@ -501,30 +495,49 @@ export function MonitoringMap({
                     fitArea,
                 });
             });
-            map.on("error", (e) => {
-                if (cancelled) return;
-                const err = e?.error as Error | undefined;
-                if (!(err && /style/i.test(err.message ?? ""))) return;
 
-                const fallback = !usedFallback ? monitoringFallbackStyle(resolvedTheme) : null;
-                if (fallback && fallback !== styleUrl) {
-                    usedFallback = true;
+            detach = attachBasemapFallback(map, chain, attempt, {
+                onLoaded: () => {
+                    if (cancelled) return;
+                    setBasemapStatus("ok");
+                },
+                onRetry: (_next, nextAttempt) => {
+                    if (cancelled) return;
+                    detach?.();
+                    detach = null;
+                    driverMarkersRef.current.forEach((m) => m.remove());
+                    driverMarkersRef.current.clear();
+                    driverVisibleRef.current.clear();
+                    rideMarkersRef.current.forEach((r) => {
+                        r.pickup.remove();
+                        r.dropoff.remove();
+                    });
+                    rideMarkersRef.current.clear();
+                    rideVisibleRef.current.clear();
+                    setIsLoaded(false);
                     map.remove();
-                    buildMap(fallback);
-                    return;
-                }
-                setLoadError(err.message);
+                    if (mapRef.current === map) mapRef.current = null;
+                    setBasemapStatus("retrying");
+                    buildMap(nextAttempt);
+                },
+                onExhausted: (reason) => {
+                    if (cancelled) return;
+                    setLoadError(reason);
+                    setBasemapStatus("failed");
+                },
             });
         };
 
         try {
-            buildMap(themedMapStyle(resolvedTheme));
+            setBasemapStatus("ok");
+            buildMap(0);
         } catch (err: unknown) {
             setLoadError(err instanceof Error ? err.message : String(err));
         }
 
         return () => {
             cancelled = true;
+            detach?.();
             driverMarkersRef.current.forEach((m) => m.remove());
             driverMarkersRef.current.clear();
             driverVisibleRef.current.clear();
@@ -622,6 +635,14 @@ export function MonitoringMap({
             {!isLoaded && (
                 <div className="absolute inset-0 flex items-center justify-center bg-muted">
                     <p className="text-sm text-muted-foreground">Loading map…</p>
+                </div>
+            )}
+            {basemapStatus === "retrying" && (
+                <div
+                    role="status"
+                    className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
+                >
+                    Basemap slow to load — trying another provider…
                 </div>
             )}
             {demandData && demandData.length > 0 && (

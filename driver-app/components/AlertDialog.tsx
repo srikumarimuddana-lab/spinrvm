@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Dimensions, BackHandler, Platform, Alert,
+  View, TouchableOpacity, StyleSheet, Dimensions, BackHandler, Platform, Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { create } from 'zustand';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';

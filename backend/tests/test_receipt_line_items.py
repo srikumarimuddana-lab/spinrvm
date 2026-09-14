@@ -330,6 +330,18 @@ class TestReceiptTotal:
         # 12.80 (total_fare) + 0 (fees) + 0.69 (tax_amount) - 2.00 (discount)
         assert _receipt_total(ride, tip=0) == Decimal("11.49")
 
+    def test_receipt_total_caps_discount_at_ride_fare_excluding_booking_fee(self):
+        """_receipt_total must cap the discount the same way _build_fare_rows/
+        _fare_lines/_build_fare_breakdown do — against base+distance+time+
+        min_fare_uplift only, never booking_fee/airport_fee — or a large
+        promo could eat into fee revenue. ride_fare_for_cap here =
+        3.50+6.30+2.50 = 12.30 (booking_fee 0.50 excluded, no min-fare uplift
+        since components already sum to total_fare); a $50 discount must cap
+        there, not at the full $12.80 total_fare."""
+        ride = _ride(grand_total=None, discount_amount=50.00, promo_code=None, tax_amount=0)
+        # 12.80 (total_fare) + 0 (fees) + 0 (tax) - 12.30 (capped discount) = 0.50
+        assert _receipt_total(ride, tip=0) == Decimal("0.50")
+
 
 # ── Reconciliation: visible rows sum to header total ───────────────────
 

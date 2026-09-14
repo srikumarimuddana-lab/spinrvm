@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -11,6 +10,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -903,7 +903,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   header: { padding: 20, flexDirection: 'row', alignItems: 'center' },
   backButton: { marginRight: 20 },
-  title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
+  title: { fontSize: 24, fontWeight: 'bold' },
   stepIndicator: { color: colors.textDim, fontSize: 14 },
   scrollContent: { padding: 20, paddingBottom: 50 },
   sectionTitle: { fontSize: FONT.h3, fontWeight: 'bold', marginBottom: 15, color: colors.text },
@@ -914,7 +914,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
   input: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
-    fontSize: FONT.bodyLg, color: '#000', fontFamily: 'PlusJakartaSans'
+    fontSize: FONT.bodyLg, color: '#000', fontFamily: 'PlusJakartaSans_400Regular'
   },
   dateInput: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,

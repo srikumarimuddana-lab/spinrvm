@@ -25,6 +25,11 @@ def _company(**extra):
         "billing_email": "billing@acme.example",
         "legal_name": "Acme Co Ltd",
         "stripe_customer_id": "cus_1",
+        # Migration 419's per-company pilot gate — defaults on here so every
+        # existing test below keeps exercising the rest of assign_subscription
+        # unchanged; test_pilot_not_enabled_rejected below is what actually
+        # covers the gate itself.
+        "subscription_billing_pilot_enabled": True,
         **extra,
     }
 
@@ -86,6 +91,33 @@ class TestAssignSubscription:
     async def test_unknown_company_rejected(self):
         with patch.object(svc.db_supabase, "get_corporate_account_by_id", AsyncMock(return_value=None)):
             with pytest.raises(svc.CorporateSubscriptionError, match="company_not_found"):
+                await svc.assign_subscription(company_id="c1", plan_id="plan_pro", admin_id="admin-1")
+
+    @pytest.mark.unit
+    @pytest.mark.anyio
+    async def test_pilot_not_enabled_rejected(self):
+        """Migration 419's per-company gate — a company not opted into the
+        pilot is refused even before the plan is looked up, independent of
+        the route-level global corporate_subscription_billing_enabled
+        setting (which is tested separately in
+        test_corporate_subscriptions_route.py)."""
+        with patch.object(
+            svc.db_supabase,
+            "get_corporate_account_by_id",
+            AsyncMock(return_value=_company(subscription_billing_pilot_enabled=False)),
+        ):
+            with pytest.raises(svc.CorporateSubscriptionError, match="company_not_in_pilot"):
+                await svc.assign_subscription(company_id="c1", plan_id="plan_pro", admin_id="admin-1")
+
+    @pytest.mark.unit
+    @pytest.mark.anyio
+    async def test_pilot_flag_missing_defaults_to_rejected(self):
+        """A company row from before migration 419's column existed (or any
+        row where the key is simply absent) must fail closed, not open."""
+        company = _company()
+        del company["subscription_billing_pilot_enabled"]
+        with patch.object(svc.db_supabase, "get_corporate_account_by_id", AsyncMock(return_value=company)):
+            with pytest.raises(svc.CorporateSubscriptionError, match="company_not_in_pilot"):
                 await svc.assign_subscription(company_id="c1", plan_id="plan_pro", admin_id="admin-1")
 
     @pytest.mark.unit

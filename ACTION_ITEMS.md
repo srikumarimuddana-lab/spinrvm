@@ -13456,6 +13456,63 @@ record of what was assumed vs. what was actually true</summary>
   field-name bug in the monitor script itself, fixed same-day in PR #5038.
   Fly, the primary, was never actually missing secrets; only the
   Railway-token half of #5034 reflects this still-deferred item.)
+- **Update (2026-09-14) — root cause has CHANGED since 2026-09-05; `RAILWAY_TOKEN`
+  is no longer the blocker.** Picked this item up fresh and re-verified against
+  live `deploy-backend.yml` run history rather than trusting the 2026-09-05 entry
+  above — it is now stale. Findings, from the actual job logs (not assumed):
+  - **`RAILWAY_TOKEN` is valid as of at least 2026-09-05T20:48Z** (run #4208) and
+    every run since, through today's run #4275 (`railway status` succeeds,
+    resolves to project `name=cooperative-harmony`, `environment=production`).
+    Someone rotated it after the earlier same-day 2026-09-05 update above was
+    written; this was never recorded, so the file kept saying "not valid" for 9
+    days after it stopped being true. Sampled ~15 runs across 2026-09-05 through
+    2026-09-14 (every one on `main`, every one a push-triggered deploy attempt) —
+    100% valid-token, 100% failure, no exceptions found.
+  - **New, different blocker: the Railway project has no service named
+    `spinr-backend`.** Every run since fails at the "Verify required Railway
+    variables are set" step with `Service 'spinr-backend' not found` (from
+    `railway variables --service spinr-backend --json`). `RAILWAY_SERVICE:
+    spinr-backend` is hardcoded in both `.github/workflows/deploy-backend.yml`
+    and `.github/workflows/standby-parity-monitor.yml`. Either the service was
+    never created under that exact name in the `cooperative-harmony` project, or
+    it exists under a different name/casing.
+  - **Genuinely ambiguous, not resolved here — did not guess-fix.** Grepped the
+    repo for any other recorded Railway service name: `docs/ENVIRONMENT_VARIABLES.md`
+    implies `spinr-backend` (`RAILWAY_PUBLIC_URL` example:
+    `https://spinr-backend.up.railway.app`), but a much older doc
+    (`docs/claude-audit-2026-04-22.md`, 2026-04-22) references
+    `spinr-backend-production.up.railway.app` — a different name. Neither is
+    current, verified evidence of what the service is named *today* in the
+    Railway dashboard, and this session has no Railway CLI/API/MCP access to
+    check directly (confirmed: no `railway`-named tool available, and
+    `.claude/context/connector-scoping.md` has no Railway row at all — Railway
+    is not a connector any session currently has). Per CLAUDE.md's "escalate,
+    don't silently ship" gate, did not rename `RAILWAY_SERVICE` on a guess —
+    picking the wrong name would just trade one silent-failure mode for
+    another, on the pipeline that is supposed to keep the failover standby from
+    drifting further.
+  - **Also noted, not chased:** `railway service list` (in the "verify token"
+    step) prints `Service "list" not found` — `service list` does not appear to
+    be a valid Railway CLI v4 subcommand, so that diagnostic line has never
+    actually listed anything, on any run. Cosmetic (guarded by `|| true`,
+    doesn't fail the job), but worth fixing in the same pass as the real
+    service-name issue since a correct `railway service` listing would have
+    surfaced the real service name immediately instead of requiring this log
+    archaeology.
+  - **Net effect: unchanged from the reader's perspective (Railway standby
+    still deploys 0% of pushes, still drifting from `main`, still a stale
+    fail-over target), but the actual fix is now different and human-only:**
+    someone with Railway dashboard access to the `cooperative-harmony` project
+    needs to open it, find the real service name under the `production`
+    environment, and either (a) rename it to `spinr-backend` to match the
+    workflows as-is, or (b) report the actual name back so `RAILWAY_SERVICE` can
+    be corrected in both workflow files in one small PR. Token rotation (the
+    prior blocker) is done and should not be re-attempted.
+  - **Still consciously deferred** per the 2026-09-02/09-04 decisions above —
+    this update only corrects the record on *why* it's still broken, it does
+    not re-open the go-live-vs-fix-now tradeoff. Re-surface with whoever owns
+    Railway dashboard access once device testing/go-live winds down, per the
+    existing plan.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here
@@ -18718,16 +18775,37 @@ mechanical follow-up work, prioritizable independently.
     `docs/change-log/2026-09-11-ux1-rider-app-text-wrapper-rollout-round3.md`.
     A post-migration fresh sweep found **zero remaining files** matching
     the criterion — rider-app is fully migrated (15 + 8 + 10 = 33 files).
-  - **Remaining follow-up scope:** none for this item's acceptance bar —
-    both apps are fully migrated. Two related-but-separate gaps remain
-    open as their own future work, not blocking this item's closure: (1)
-    6 rider-app files with partial/manual `fontFamily` coverage found in
-    round 2 (`app/(tabs)/index.tsx`, `app/become-driver.tsx`,
-    `app/driver-arriving.tsx`, `app/ride-details.tsx`, `app/ride-status.tsx`,
-    `app/ride-tracking-webview.tsx`) — hand-written literals instead of the
-    wrapper; (2) the wrapper isn't yet lint-enforced in either app, so a
-    new screen could still ship without adopting it. `components/VoltraRideActivity.tsx`
-    is out of scope permanently (doesn't use RN's `Text`).
+  - **Remaining follow-up scope — CLOSED 2026-09-14:** both follow-up
+    gaps below are now done. (1) A fresh, independent grep (not trusting
+    the prior "6 files" estimate, per this item's own "don't trust the
+    prior count" warning) found the true count was larger: 19 rider-app
+    files and 9 driver-app files still imported `Text` directly from
+    `react-native` — the original migration's "has `fontWeight`, zero
+    `fontFamily`" criterion only ever caught a subset of files that
+    actually render `Text` off-brand, not literally every one. All 28
+    (19 + 9) are now migrated to `@shared/components/Text`. (2) Added a
+    `warn`-level
+    `no-restricted-imports` rule to both `rider-app/eslint.config.js` and
+    `driver-app/eslint.config.js` banning `Text` from `react-native`, so a
+    new screen can no longer silently opt out — matches this file's own
+    established `warn`-for-pre-existing-violations posture (hex-color/
+    SPACING rules). One test (`test_paymentConfirmScreen`) needed a fix:
+    the wrapper's `style={[{fontFamily}, style]}` composition nests the
+    caller's own style array one level deeper, which broke a
+    top-level-only `arrayContaining` assertion (real rendering was
+    unaffected — RN flattens nested style arrays; this was a
+    test-introspection gap, fixed by asserting on
+    `StyleSheet.flatten(style)` instead). `spinr-design-consistency-reviewer`
+    (run before push, per CLAUDE.md gate #10) also caught a pre-existing bug
+    in both apps' `become-driver.tsx`: a stray `fontFamily: 'PlusJakartaSans'`
+    (no weight suffix — not one of the 4 registered families) on the header
+    `title` style overrode the wrapper's correct `fontWeight: 'bold'` →
+    `PlusJakartaSans_700Bold` mapping, and the same bare literal appeared on
+    the `input` `TextInput` style too — both fixed in the same PR. Full
+    Change Impact Log:
+    `docs/change-log/2026-09-14-ux1-text-wrapper-lint-and-remaining-migrations.md`.
+    `components/VoltraRideActivity.tsx` remains out of scope permanently
+    (doesn't use RN's `Text`).
   - **Files:** rider-app — see all three "Action taken" bullets above for
     each round's exact list (33 files total); `shared/components/Text.tsx`
     is the wrapper (unchanged since round 1). driver-app — see the
@@ -25189,8 +25267,57 @@ how much they de-risk a public launch._
   "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
   and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
   #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
-  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — needs a real compiled iOS build not
-  available here.
+  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below,
+  which resolves this without needing a compiled build.
+- **Addendum (2026-09-13) — #5 resolved via exhaustive config-plugin source trace, not a compiled
+  build, and rescoped to a much narrower (currently inert) impact than finding #10 implied:**
+  `driver-app` has no checked-in `ios/` directory (confirmed: pure managed Expo workflow), so the
+  generated `Info.plist`'s `UIBackgroundModes` array can only be populated by a config plugin
+  listed in `driver-app/app.config.ts`'s `plugins` array — there is no other path (no hand-edited
+  native project) for this key to be set. Read every plugin in that array that touches
+  `UIBackgroundModes`:
+  - `expo-location` (`isIosBackgroundLocationEnabled: true`, `app.config.ts:233`) —
+    `node_modules/expo-location/plugin/build/withLocation.js:26-36` unconditionally pushes
+    `'location'` into the array. **Confirmed present.**
+  - `'expo-notifications'` is **not listed** in `app.config.ts`'s `plugins` array at all, so its
+    plugin (`node_modules/expo-notifications/plugin/build/withNotificationsIOS.js`) never runs.
+    Even if it were added bare, `withBackgroundRemoteNotifications` (lines 21-29) only pushes
+    `'remote-notification'` when `enableBackgroundRemoteNotifications` is explicitly `true` — the
+    default is `undefined` (falsy), so a bare `'expo-notifications'` entry would still be a no-op
+    here.
+  - `@react-native-firebase/messaging`'s config plugin was grepped along with every other
+    `@react-native-firebase/*` plugin file for `UIBackgroundModes` — zero hits. It does not touch
+    this key on iOS at all (only Android FCM-icon setup).
+  - **Conclusion: `UIBackgroundModes` will contain `['location']` but not `'remote-notification'`**
+    — upgrading finding #10 from SUSPECTED to confirmed, short only of physically inspecting a
+    compiled `Info.plist` from a real EAS build (the one remaining gap, but a static trace of
+    every plugin that could set this key leaves no other candidate).
+  - **Rescoped impact — this does NOT explain the ride-offer or general-notification complaints.**
+    Read the actual APNs payload construction in `backend/features.py:1376-1421`:
+    `new_ride_assignment` (`is_dispatch`) is sent with a real `aps.alert` block (`messaging.Aps(
+    alert=messaging.ApsAlert(title=title, body=body), ...)`, `apns-push-type: "alert"`) — a
+    normal visible push, not a silent one, so iOS delivers/displays it regardless of
+    `UIBackgroundModes`. Every non-data-only type gets a real `messaging.Notification(title, body)`
+    block for the same reason. **Only `is_live_activity` is sent as a genuinely silent push**
+    (`messaging.Aps(content_available=True)`, `apns-push-type: "background"`,
+    `backend/features.py:1403-1405`) — that is the one case `UIBackgroundModes: remote-notification`
+    would actually matter for on iOS.
+  - **And that one case has no live user impact today:** grepped `driver-app` for
+    `ActivityKit`/`widget`/`LiveActivity` and found no native Live Activity extension target, no
+    config plugin for one, and no dedicated `live_activity` display branch in
+    `useDriverDashboard.ts` or `backgroundMessaging.ts` beyond the log-only fallback comment
+    already covered by recommendation #4's 2026-09-11 fix. iOS Live Activities are not a shipped
+    feature in this codebase yet, so the missing background mode currently has zero observable
+    effect on any real driver.
+  - **Recommendation: no code change now** (simplicity-first — fixing a config gap for a feature
+    that isn't built yet is speculative work with no bug behind it today). If/when a native iOS
+    Live Activity feature is actually implemented, add `'expo-notifications'` to
+    `app.config.ts`'s `plugins` array with `{ enableBackgroundRemoteNotifications: true }` (or a
+    small custom config plugin matching the existing `driver-app/plugins/` pattern) at that time,
+    and re-verify with a real EAS build before shipping.
+  - **What was NOT verified:** an actual compiled `Info.plist` from a real EAS iOS build (this
+    session has no such artifact) — the conclusion above is a static trace of every plugin that
+    could write this key, not a physical read of the generated file.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -25506,13 +25633,20 @@ how much they de-risk a public launch._
   amount in that fallback case — fixed in the same commit. Full detail, before/after, and blast
   radius: `docs/change-log/2026-09-13-c102-receipt-discount-line.md`.
 - **Not fixed, deliberately out of scope (two pre-existing issues surfaced by the same review):**
-  1. the "gap"-based tax fallback in both files (used only when `tax_breakdown` is empty) can
-     silently omit the Tax line entirely when a large discount pushes the gap negative —
-     legacy-row-only.
+  1. ~~the "gap"-based tax fallback (used only when `tax_breakdown` is empty) can silently omit
+     the Tax line entirely when a large discount pushes the gap negative — legacy-row-only.~~
+     **Fixed 2026-09-13, same day, in a follow-up commit** — another session had independently
+     fixed the same C102 disclosure gap (including this exact residual) in parallel; resolving
+     the merge conflict between the two branches surfaced the difference and kept the more
+     complete fix rather than re-deferring it. Correction to this note's own claim: the gap-based
+     fallback only exists in `receipt_pdf.py::_fare_lines` — `email_receipt.py::_build_fare_rows`'s
+     legacy branch reads `ride.get("tax_amount")` directly, no gap inference, so "in both files"
+     above was wrong; nothing needed fixing there. Full detail:
+     `docs/change-log/2026-09-13-c102-tax-gap-fallback-discount-followup.md`.
   2. `routes/rides/_shared.py`'s stop-edit re-estimate path already has a documented residual
      (comment marked "N3") where its discount subtraction is uncapped, unlike every render-side
-     cap. Neither is introduced or worsened by this fix; both are candidates for their own
-     ACTION_ITEMS entries if picked up later.
+     cap. Not introduced or worsened by this fix; still a candidate for its own ACTION_ITEMS
+     entry if picked up later.
 - **Shared-line-builder refactor** (a future fare-line type shouldn't have to be added in three
   places) remains a separate, larger change from this one-line-item fix, out of scope here as
   originally noted.
@@ -25859,7 +25993,40 @@ how much they de-risk a public launch._
   directly and so do not, by themselves, demonstrate reachability against the real current schema).
 
 ### C110. `test_settings_column_parity.py`'s regression check only covers migration 313's original 24 fields, not any `SettingsUpdateRequest` field added since
-- [ ] **Status:** OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
+- [x] **Status:** CLOSED 2026-09-13 — `test_every_api_field_has_a_column` now cross-references
+  every field on `SettingsUpdateRequest` (not just the pinned 313 set) against
+  `_declared_settings_columns() | _baseline_settings_columns()`.
+  **Revised after `spinr-test-coverage-reviewer`'s adversarial pass on the first draft**, which
+  found the first draft's `_baseline_settings_columns()` (a hand-typed 22-field allowlist) had a
+  real problem: 7 of those 22 fields (`company_app_download_url`, `safety_team_email`,
+  `safety_team_phone`, `sos_show_share_trip`, `sos_show_report_issue`,
+  `new_ride_requests_enabled`, `dispute_stripe_evidence_submission_enabled`) had **zero** schema
+  evidence anywhere in the repo, and two are kill switches whose own Change Impact Logs
+  (`docs/change-log/2026-08-22-g5-new-ride-requests-kill-switch.md` §10,
+  `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`) explicitly say they
+  were never exercised against a real Supabase row — "reviewed against production usage" was not
+  a safe claim for those 7. Final fix: (1) `_baseline_settings_columns()` now mechanically parses
+  `backend/supabase_schema.sql`'s bootstrap `CREATE TABLE settings (...)` block instead of a
+  hand-typed guess, which independently confirms 15 of the original 22 (including the 3 that were
+  a genuine open question — see C111, closed below); (2) the remaining 7 got migration
+  **420_settings_missing_columns_round2.sql** (reviewed by `spinr-migration-reviewer`) rather than
+  a baseline guess — the direct fix for a genuinely missing column, matching migration 313/415/418's
+  own precedent. Added two regression tests: one proves a field injected directly into
+  `SettingsUpdateRequest.model_fields` with neither a migration nor a baseline entry is caught by
+  the *actual* check's own field-selection code path (not just the extracted set-arithmetic
+  helper — the reviewer flagged the first draft's version of this test for only exercising the
+  helper), the other asserts the two column sources (migrations, bootstrap file) don't overlap.
+  **Renumbered 419 → 420 post-merge**: PR #5340 (`corporate_subscription_billing_pilot`) also
+  drafted its new migration as 419 and merged around the same time; neither PR's CI could see the
+  other's new file (the cross-PR numbering race `backend/migrations/CLAUDE.md` and CR #4187
+  describe), so both landed on `main` as `419_*`. Fixed by renaming this file to 420, the next free
+  slot, in a follow-up PR — no SQL content changed. Reviewed by `spinr-migration-reviewer`
+  (verdict: safe to apply). **Open follow-up for a human with prod access**: run
+  `python -m backend.scripts.run_migrations --status` to confirm `419_settings_missing_columns_round2.sql`
+  was never applied under its old name before the rename — this file's SQL is fully idempotent so a
+  false positive there is harmless, but an orphaned `schema_migrations` row would otherwise go
+  undetected (see the change-log addendum for detail).
+  Old status: OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
 - **Found by:** `spinr-migration-reviewer`'s pre-merge review of PR #5312 (`driver_turn_by_turn_enabled`
   settings-write fix, migration 418 — originally drafted as 416, renumbered to 417 when PR #5307
   merged its own, unrelated migration 416 first, then renumbered again to 418 when a second,
@@ -25884,7 +26051,37 @@ how much they de-risk a public launch._
   specific protection (a flag-specific test is still good practice for its own default-value/behavior
   assertions, just not required to catch a missing-migration regression).
 - **Files:** `backend/tests/test_settings_column_parity.py` (`_EXPECTED_313_COLUMNS`,
-  `test_every_api_field_has_a_column`), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`).
+  `test_every_api_field_has_a_column`, `_regressed_settings_fields` — new,
+  `_baseline_settings_columns` — rewritten to parse `supabase_schema.sql`,
+  `_fields_missing_columns` — new), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`),
+  `backend/migrations/420_settings_missing_columns_round2.sql` (new, renamed from 419 post-merge —
+  see status note above).
+
+### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110 [duplicate item number — see the other C111 below at "`emergency_contacts` ... has no admin/super_admin override policy," filed by a different, parallel session the same day; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above, to avoid breaking either item's own cross-references (this entry is referenced from this file's C110 entry above; the other C111 is referenced from this file's C49 entry)]
+- [x] **Status:** CLOSED 2026-09-13, same session — resolved without a live schema connection.
+  `backend/supabase_schema.sql` (the bootstrap "run this in the Supabase SQL Editor" DDL) has an
+  explicit `CREATE TABLE settings (...)` block that lists all three columns verbatim
+  (`driver_matching_algorithm TEXT DEFAULT 'nearest'`, `min_driver_rating FLOAT DEFAULT 4.0`,
+  `search_radius_km FLOAT DEFAULT 10.0`), alongside 12 of the other original-22 baseline entries —
+  found by `spinr-test-coverage-reviewer`'s pass on C110, which had not been checked before this
+  was filed. `test_settings_column_parity.py`'s `_baseline_settings_columns()` now parses this
+  file mechanically instead of asserting a reviewed-by-hand claim, so this is a structural fix,
+  not just a one-off confirmation. No migration or code change needed for these 3 specifically —
+  they coexist by design with the per-service-area override columns
+  `10b_service_area_driver_matching.sql` adds to `service_areas` (global default vs. per-area
+  override, per `dispatch_service.py::resolve_matching_config`'s own precedence comment).
+  Old status: OPEN — needs a live schema check, not code.
+- **What was suspicious:** these 3 fields are declared on `SettingsUpdateRequest`
+  (`backend/routes/admin/settings.py`) and read as a *global* default in
+  `services/dispatch_service.py::resolve_matching_config` (`app_settings.get("driver_matching_algorithm")`
+  etc., falling back to a per-area override in `service_areas` first). No migration in
+  `backend/migrations/` adds any of the three to `settings` — the only migration that adds
+  columns with these exact names is `10b_service_area_driver_matching.sql`, and it targets
+  `service_areas`, not `settings`.
+- **Files:** `backend/tests/test_settings_column_parity.py` (`_baseline_settings_columns` now
+  parses `backend/supabase_schema.sql`), `backend/services/dispatch_service.py`
+  (`resolve_matching_config`), `backend/schemas.py` (`AppSettings`), `backend/routes/admin/settings.py`
+  (`SettingsUpdateRequest`), `backend/migrations/10b_service_area_driver_matching.sql`.
 
 ### C108. `auth.users` is completely empty in production — every `auth.uid()`-based RLS policy in the schema (not just C107's 10 tables) is currently unreachable for the same reason
 - [ ] **Status:** OPEN, informational/documentation-debt — no live incident, no action required
@@ -26036,7 +26233,7 @@ how much they de-risk a public launch._
   was the only ADMIT-direction, unguarded instance found.
 - **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
 
-### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger
+### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger [duplicate item number — see the other C111 above at "`driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column," filed by a different, parallel session the same day working C110; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above]
 - [ ] **Status:** OPEN, informational — not a live bug, no code path is affected today.
   Found by `spinr-security-auditor`'s adversarial review (CLAUDE.md gate #10) of this
   session's C49 RLS-coverage work while independently re-deriving `emergency_contacts`'

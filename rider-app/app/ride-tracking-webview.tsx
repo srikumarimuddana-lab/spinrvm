@@ -1,7 +1,8 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Share, Platform,
+  View, StyleSheet, TouchableOpacity, ActivityIndicator, Share, Platform,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +11,7 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { TrackBaseUrlContext } from './_layout';
 
 // Hosts that are allowed to load inside the in-app WebView.
@@ -38,6 +40,9 @@ export default function RideTrackingWebviewScreen() {
   const { trackingUrl, rideId } = useLocalSearchParams<{ trackingUrl?: string; rideId?: string }>();
   const router = useRouter();
   const { colors } = useTheme();
+  // #1231 finding 17: live-tracking screens show real-time location — must
+  // never enter session replay.
+  useLogRocketPrivacyScreen();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const webViewRef = useRef<WebView>(null);
 

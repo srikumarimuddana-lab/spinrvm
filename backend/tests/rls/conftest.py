@@ -38,6 +38,30 @@ What these fixtures do
    JWT claim set, matching Supabase's own RLS-testing convention
    (`SET ROLE` + `request.jwt.claims`), and run a query as that role.
 
+What this tier proves -- and doesn't (ACTION_ITEMS.md C108)
+-------------------------------------------------------------
+These tests prove policy *logic*: given a claim set, is access correctly
+granted or denied. They do not prove any of this is exercised by real
+production traffic today. This app's entire end-user auth model is the
+custom `JWT_SECRET`-signed scheme CLAUDE.md documents, verified by the
+backend's own dependency functions -- no anon/publishable-key Supabase
+client (`createClient(...)`) exists anywhere in shipped code, and this
+app's `JWT_SECRET` is a wholly separate secret from whatever key Supabase's
+PostgREST validates `authenticated`/`anon`-role requests against. No rider,
+driver, or admin has ever obtained a real Supabase-issued session JWT, so
+no `anon`/`authenticated`-role RLS policy in this schema is reachable by a
+real request; the backend's exclusive use of the service-role key (which
+bypasses RLS entirely) is the only path real traffic ever takes. That makes
+this tier dormant-but-correct rather than actively enforcing anything today
+-- still worth testing (it protects against a future direct-PostgREST path
+and against RLS regressions if the auth model ever changes), but not a
+claim that these policies are live-enforced against real users. See
+ACTION_ITEMS.md C108 for the full finding and the corrected mechanism
+(earlier drafts of this finding cited an empty `auth.users` table as the
+reason; that was wrong on its own -- JWT signature validation doesn't
+require a matching `auth.users` row -- though the no-live-traffic
+conclusion holds on the grounds above).
+
 Coverage scope (deliberately partial -- see ACTION_ITEMS.md C49 for the
 running total, not this comment, which has already gone stale across
 multiple rounds of additions)

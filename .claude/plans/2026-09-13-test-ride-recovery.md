@@ -12,3 +12,14 @@ TodoWrite is unavailable in this harness; this checklist tracks sequential subta
 - [ ] Insurance attribution: backend/migrations/419_insurance_period_ride_identity.sql, backend/tests/sql/insurance_period_ride_identity.sql, docs/change-log/2026-09-13-insurance-period-ride-identity.md. Run synthetic PostgreSQL assertions against the old function (must fail on A-to-B Period 2), then new function (must pass). Compare period plus NULL-safe ride identity. Preserve grants, signature, close/open semantics, original closed rows, and migration 253. Review migration; commit.
 - [ ] Findings report: docs/audit/2026-09-13-test-ride-code-review.md. Explain corrections to F1/F2 claims; trace F3 distance fallback, F5 accuracy ingestion, F6 audience policy. Document native symbolication/device validation, historical correction and fare-policy follow-ups. Verify all source references; commit.
 - [ ] Run focused regression checks and mobile production JS exports; record exact limits. Review final diff, push branch, create PR with risks and remaining gates. Do not merge.
+
+## PR #5348 review follow-up
+
+The other agent committed the insurance migration, CI integration tests, startup isolation,
+pre-initialization 401 handling, and logout marker handling. Review continues on this PR.
+
+- [x] Subtask 1 (test + impact log + this checklist): cover partial token writes, unavailable recovery rereads, and logout callbacks; focused Jest passed (31 driver + 20 shared/rider tests).
+- [ ] Subtask 2 (two layouts + shared auth store): correct comments that incorrectly say refresh persistence errors escape initialization; commit.
+- [ ] Subtask 3 (findings report + insurance impact log + this checklist): record independent review/test results, correct stale completion and fare-policy claims, and commit.
+- [ ] Publish review commits to PR #5348, replace stale PR description with completed required fields, and verify required-fields CI. Keep PR open; no deployment or historical data changes.
+- [ ] Migration sequencing follow-up: latest CI reports main already at 420; fetch main, choose next free prefix, rename the unapplied migration, and update fixture/manual SQL references in one commit (three files). Update documentation references in subsequent small commits.

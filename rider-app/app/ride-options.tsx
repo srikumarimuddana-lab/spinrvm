@@ -2,7 +2,6 @@ import React, { useEffect, useState, useRef, useMemo, useCallback, useContext } 
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
@@ -12,6 +11,7 @@ import {
   Keyboard,
   BackHandler,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import CustomToggle from '../components/CustomToggle';

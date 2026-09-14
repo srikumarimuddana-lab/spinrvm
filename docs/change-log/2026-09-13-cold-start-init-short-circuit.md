@@ -1,7 +1,15 @@
 # Change Impact & Risk — cold-start init must not abort when auth init throws
 
+> PR #5348 review correction: the original explanation below describes an earlier
+> revision. Token-write errors are caught by refreshTokens and resolve false;
+> logout now reports marker failures without rejecting. Layout catches defend
+> against other unexpected rejections, such as cache cleanup failure, and do not
+> guarantee successful ride hydration. Review corrected the code comments.
+> Both apps' production Android/iOS JS exports passed CI run 34799821238 at
+> d1621b8f1; no signed native build or physical-device validation was performed.
+
 **Date:** 2026-09-13
-**Surfaces:** rider-app, driver-app (live-tested)
+**Surfaces:** rider-app, driver-app (startup paths; not device-tested in this review)
 **Related:** F2/F4 in `docs/audit/2026-09-13-driver-app-mid-ride-process-death.md`; commits `b4f279e13`, `eaa90b29c`
 
 ## Issue/gap identified

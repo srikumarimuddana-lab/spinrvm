@@ -815,12 +815,16 @@ def init_middleware(app):
     # CORS Middleware
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
-    # Always allow the admin and default apps explicitly regardless of env variables
+    # Always allow the admin and default apps explicitly regardless of env variables.
+    # Only Spinr-controlled origins belong here. spinr.app / www.spinr.app /
+    # spinr-track.app / www.spinr-track.app were removed 2026-09-14: none of the
+    # four resolve (NXDOMAIN, no A and no NS records) and none is registered to
+    # Spinr, so each was an allowlist entry for a hostname any third party could
+    # buy. Every backend cookie is SameSite=Strict, so this was defence-in-depth
+    # rather than a live bypass — but a future cookie without Strict would have
+    # silently turned it into one. See
+    # docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
     always_allowed = [
-        "https://spinr.app",
-        "https://www.spinr.app",
-        "https://spinr-track.app",
-        "https://www.spinr-track.app",
         "https://track.spinr.ca",
         "https://admin-spinr.spinr.ca",
         "http://localhost:3000",

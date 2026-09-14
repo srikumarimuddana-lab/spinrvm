@@ -454,7 +454,16 @@ function RootLayout() {
         // first_name/last_name/email, so a stale `profile_complete=false`
         // flag can't push a user with existing profile data back into
         // onboarding.
-        await Promise.all([initializeAuth(), initializeLocation()]);
+        // Keep an unexpected auth rejection from skipping Firebase,
+        // notifications, the relaunch marker, and ride-offer channel setup.
+        // SecureStore read/write failures normally settle inside the store;
+        // this catch reports other failures without aborting unrelated setup.
+        await Promise.all([
+          initializeAuth().catch((e) => {
+            console.error('[Auth] initialize failed; continuing app init:', e);
+          }),
+          initializeLocation(),
+        ]);
 
         // Device-local alert prefs (sound/vibration) must be hydrated
         // before the first ride offer can ring, not on first Settings

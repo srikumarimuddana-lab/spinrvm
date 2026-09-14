@@ -35,7 +35,7 @@ rather than asserting a hand-typed list. 7 fields that were neither in that boot
 any migration (`company_app_download_url`, `safety_team_email`, `safety_team_phone`,
 `sos_show_share_trip`, `sos_show_report_issue`, `new_ride_requests_enabled`,
 `dispute_stripe_evidence_submission_enabled` — two of them kill switches whose own Change Impact
-Logs admit they were never exercised against a real Supabase row) got migration 419 instead of a
+Logs admit they were never exercised against a real Supabase row) got migration 420 instead of a
 baseline guess, found by `spinr-test-coverage-reviewer`'s adversarial pass on this fix's first
 draft.
 """
@@ -97,7 +97,7 @@ def _baseline_settings_columns() -> set[str]:
     as good as whoever last reviewed it, which is exactly what put 7 fields
     with zero schema evidence into an earlier draft of this allowlist before
     `spinr-test-coverage-reviewer`'s pass caught it (see C110/C111 in
-    ACTION_ITEMS.md) — they got migration 419 instead.
+    ACTION_ITEMS.md) — they got migration 420 instead.
     """
     if not _BOOTSTRAP_SCHEMA.exists():
         return set()

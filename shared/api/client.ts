@@ -179,16 +179,34 @@ export function setRefreshCallback(fn: RefreshFn): void {
  * 'refresh_token'. On web the token lives in an HttpOnly cookie the client
  * cannot read (authStore's storage helper is a no-op there), so this reports
  * false and the pre-init branch never applies — web keeps the clear-and-logout
- * behaviour it always had. Any read failure also counts as "none", which
- * keeps the caller on the conservative (clear) path.
+ * behaviour it always had.
+ *
+ * A read FAILURE is deliberately reported as "may exist", not as "none". This
+ * used to return false on a throw, described as "the conservative (clear)
+ * path" — but per the caller's own comment below, clearing is the DESTRUCTIVE
+ * path: it deletes the refresh token that is the whole session. The two
+ * descriptions contradicted each other, and the throwing case took the
+ * destructive branch.
+ *
+ * expo-secure-store throws (rather than returning null) for any OSStatus
+ * except errSecItemNotFound — notably while the keychain is locked, which is
+ * exactly the state a backgrounded app hits. So the old behaviour reproduced
+ * the very bug the caller's guard was added to fix (SPR-T9NYPB, 2026-09-11,
+ * and again as F2 on 2026-09-13).
+ *
+ * Reporting "may exist" is safe in both directions: if a token really is on
+ * disk the session is preserved and initialize() decides; if there is no token
+ * at all, there is no session to lose and initialize() lands on the same
+ * logged-out state one beat later.
  */
-async function hasStoredRefreshToken(): Promise<boolean> {
+async function mayHaveStoredRefreshToken(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
   try {
     const SecureStore = require('expo-secure-store');
     return !!(await SecureStore.getItemAsync('refresh_token'));
   } catch {
-    return false;
+    // Unreadable !== absent. Defer the decision rather than wipe the session.
+    return true;
   }
 }
 
@@ -1169,7 +1187,7 @@ const handleApiError = async (
     // refresh token is on disk and no one has tried it, reject and leave the
     // decision to initialize(), which refreshes on its first run and only
     // logs out on a definitive 401 of its own.
-    if (!_refreshCallback && (await hasStoredRefreshToken())) {
+    if (!_refreshCallback && (await mayHaveStoredRefreshToken())) {
       console.log('[API] 401 before auth init — refresh token untouched, deferring to initialize()');
       addBreadcrumb(`api 401 pre-init on ${method} ${breadcrumbPath(url)} — session kept for initialize()`);
     } else {

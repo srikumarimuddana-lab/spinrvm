@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "sh -c '/usr/src/app/run.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}'",
+    "startCommand": "sh -c 'exec /usr/src/app/docker-entrypoint.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}'",
     "healthcheckPath": "/styles/basemap/style.json",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
@@ -9,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';

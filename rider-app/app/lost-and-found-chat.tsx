@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
@@ -13,6 +12,7 @@ import {
   Image,
   Modal,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';

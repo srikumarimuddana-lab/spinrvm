@@ -6,7 +6,7 @@ ride-offer FCM `data` payload (backend/routes/rides/matching.py's
 `_FCM_EXCLUDE`). It follows the same wiring as
 `dispatch_direct_pool_enabled` (test_dispatch_direct_pool_flag_settings.py):
 a plain boolean on SettingsUpdateRequest, no credential masking, no
-super-admin gate, backed by migration 422's column.
+super-admin gate, backed by migration 424's column.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def test_flag_is_not_masked_as_a_credential():
     assert _FLAG not in _SUPER_ADMIN_ONLY_FIELDS
 
 
-def test_migration_422_adds_the_column_with_false_default():
+def test_migration_424_adds_the_column_with_false_default():
     """See test_settings_column_parity.py's module docstring: any field
     SettingsUpdateRequest accepts without a matching `settings` column 500s
     the WHOLE save (PGRST204) on first use, not just this field."""
@@ -113,10 +113,10 @@ def test_migration_422_adds_the_column_with_false_default():
     from pathlib import Path
 
     sql = (
-        Path(__file__).resolve().parents[1] / "migrations" / "422_settings_minimal_fcm_offer_payload_enabled.sql"
+        Path(__file__).resolve().parents[1] / "migrations" / "424_settings_minimal_fcm_offer_payload_enabled.sql"
     ).read_text(encoding="utf-8")
     match = re.search(rf"{_FLAG}\s+BOOLEAN NOT NULL DEFAULT (TRUE|FALSE)", sql, re.IGNORECASE)
-    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 422"
+    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 424"
     assert match.group(1).upper() == "FALSE", (
         f"{_FLAG} must default FALSE -- applying the migration must not silently start "
         "stripping fields from a live FCM payload without a human flipping the flag."

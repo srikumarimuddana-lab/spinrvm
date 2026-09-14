@@ -741,7 +741,7 @@ class AppSettings(BaseModel):
     # is unaffected either way) and the driver-app background handler refetches
     # them via the new authenticated GET /drivers/rides/{ride_id}/offer
     # endpoint. Default False = today's full-payload behaviour, unchanged.
-    # See migration 422. Ships dark -- requires human device verification
+    # See migration 424. Ships dark -- requires human device verification
     # (physical iOS + Android, staging) before enabling in production.
     minimal_fcm_offer_payload_enabled: bool = False
     # ── Dispatch geo provider / candidate pool ───────────────────────────

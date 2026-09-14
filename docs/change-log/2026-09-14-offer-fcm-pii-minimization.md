@@ -41,7 +41,7 @@ else on-device, and with no legitimate reason to transit third-party push infra 
 
 ## 3. Fix / remediation
 
-1. New `app_settings`-backed flag `minimal_fcm_offer_payload_enabled` (migration 422), default
+1. New `app_settings`-backed flag `minimal_fcm_offer_payload_enabled` (migration 424), default
    `FALSE` — matches today's behavior exactly when off.
 2. New authenticated `GET /api/v1/drivers/rides/{ride_id}/offer` endpoint
    (`backend/routes/drivers/ride_reads.py`), reusing `decline_ride`'s exact ownership-check logic
@@ -118,7 +118,7 @@ token-signing/TTL-management surface.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/422_settings_minimal_fcm_offer_payload_enabled.sql` | New `settings.minimal_fcm_offer_payload_enabled BOOLEAN NOT NULL DEFAULT FALSE` column | Kill switch, additive, no table rewrite |
+| `backend/migrations/424_settings_minimal_fcm_offer_payload_enabled.sql` | New `settings.minimal_fcm_offer_payload_enabled BOOLEAN NOT NULL DEFAULT FALSE` column | Kill switch, additive, no table rewrite |
 | `backend/routes/admin/settings.py` | Registers the new flag in the admin settings read/write allowlist | So it's toggleable from the admin dashboard without a redeploy |
 | `backend/schemas.py` | Adds the new field to the settings Pydantic schema | Validation + typed access |
 | `backend/routes/drivers/__init__.py` | Mounts the new endpoint's router | Wiring |
@@ -291,3 +291,19 @@ isn't a follow-up anyone will find later):**
   semantics. Not a security issue — 404 is still the safe, no-leak answer — just an inconsistent
   status code for that one case. Not fixed here; low enough severity not to warrant a dedicated
   `ACTION_ITEMS.md` entry, noted here for anyone touching this function next.
+
+## Round 3 addendum (2026-09-14) — migration renumbered 422 → 424
+
+While merging `main` forward into this PR's branch to pick up an unrelated CI infra fix (#5386,
+artifact-download retry), CI's `migration-check.yml` CHECK B correctly hard-failed with a real
+numeric-prefix collision: two other PRs (`422_dispatch_latency_by_zone.sql`,
+`423_retention_cohorts.sql`) had merged to `main` in the meantime and claimed both 422 and 423.
+Per `backend/migrations/CLAUDE.md`'s "the second one renames to the next free slot" rule — this
+PR's migration is the later one to actually reach `main` — renamed
+`422_settings_minimal_fcm_offer_payload_enabled.sql` to
+`424_settings_minimal_fcm_offer_payload_enabled.sql` and updated every reference (the file's own
+header comment, `backend/schemas.py`, `backend/routes/rides/matching.py`, this file, and
+`backend/tests/test_minimal_fcm_offer_payload_flag_settings.py`, including that test's function
+name). Since this migration was never merged to `main` before the rename (still on this PR's own
+branch, not yet applied to any real database), the rename is a pure pre-merge correction, not an
+append-only-rule violation — no idempotency-key history exists yet for the old filename.

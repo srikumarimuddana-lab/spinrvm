@@ -1,4 +1,4 @@
--- 422_settings_minimal_fcm_offer_payload_enabled.sql
+-- 424_settings_minimal_fcm_offer_payload_enabled.sql
 --
 -- Rollback:
 --   ALTER TABLE public.settings DROP COLUMN IF EXISTS minimal_fcm_offer_payload_enabled;

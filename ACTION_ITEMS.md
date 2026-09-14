@@ -26444,7 +26444,8 @@ how much they de-risk a public launch._
   coordinate/rating stripping is still wanted across both dispatch paths, that's a new, separate
   feature decision requiring its own design — not this item. **Update (same day, merge of PR #5382):**
   PR #5382 landed separately and *did* add exactly that flag (`minimal_fcm_offer_payload_enabled`,
-  migration 422) — but scoped to the batch-dispatch path in `matching.py` only, shipped dark
+  migration 424 — renumbered from 422 during merge-forward, see that PR's own change-log for why)
+  — but scoped to the batch-dispatch path in `matching.py` only, shipped dark
   (default off). `admin_create_ride`'s direct-assignment path still has no equivalent flag/filtering
   for coordinates/`rider_rating` — tracked as C114 below rather than reopening this closed item.
 - **Fix:** excluded `rider_name` from the FCM push `data` dict built in `admin_create_ride` (a

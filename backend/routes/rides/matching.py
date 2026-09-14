@@ -1447,7 +1447,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         }
                         # #1231 finding 15 (remaining half), ships dark behind
                         # minimal_fcm_offer_payload_enabled (app_settings,
-                        # default False — see migration 422): precise GPS pins
+                        # default False — see migration 424): precise GPS pins
                         # and rider_rating are far more sensitive than the
                         # human-readable pickup/dropoff label already visible
                         # in the OS notification body/alert below, and unlike

@@ -29,7 +29,9 @@ implemented. The comment described a contract the function did not honour.
 
 ## Fix/remediation
 
-Migration 419 adds a NULL-safe ride-identity comparison to the no-op check.
+Migration 421 adds a NULL-safe ride-identity comparison to the no-op check.
+It was originally numbered 419; PR review found that main already contained 419
+and 420. The unmerged, unapplied migration was renumbered to the next free slot.
 
 ## Before/after
 
@@ -74,14 +76,15 @@ correctness fix; the ride state machine, dispatch, and fares are untouched.
 
 | File | What changed | Why |
 |---|---|---|
-| `backend/migrations/419_insurance_period_ride_identity.sql` | New migration; ride-identity-aware no-op + `migration-override-ok` annotation | Fix F4; annotation is required because it redefines 253's function and `ci-guardrails.yml`'s CREATE-OR-REPLACE gate hard-fails otherwise |
-| `backend/tests/direct_pool/conftest.py` | Added 419 to `_MIGRATION_FILES` | Without it every CI run installs 253's buggy body and asserts against the bug |
+| `backend/migrations/421_insurance_period_ride_identity.sql` | New migration; ride-identity-aware no-op + `migration-override-ok` annotation | Fix F4; annotation is required because it redefines 253's function and `ci-guardrails.yml`'s CREATE-OR-REPLACE gate hard-fails otherwise |
+| `backend/tests/direct_pool/conftest.py` | Added 421 to `_MIGRATION_FILES` | Without it every CI run installs 253's buggy body and asserts against the bug |
 | `backend/tests/direct_pool/test_insurance_period_ride_identity.py` | New, 7 tests | CI-collected regression coverage |
 | `backend/tests/sql/insurance_period_ride_identity.sql` | Manual psql repro (from the original investigation) | **Superseded** by the pytest file above — reviewer may drop it; kept only as a hand-run repro |
 
 ## Rollback plan
 
-Restore 253's function body via `CREATE OR REPLACE` (the exact statement is in 419's header comment) —
+Restore 253's function body via `CREATE OR REPLACE` (421's header references that migration;
+it does not include the full rollback SQL), retaining 421's service-role-only grants —
 this is code-only, so no data reconciliation is needed. **No historical rows are rewritten by this
 migration**, so a rollback leaves the audit trail intact and simply resumes the old no-op behaviour. A
 `git revert` alone is NOT sufficient once applied: the function must be explicitly replaced in the
@@ -96,15 +99,28 @@ database.
     exactly the F4 behaviours, and the 4 that still pass are 253's pre-existing guarantees 419 must not
     break. The test is a genuine regression test, not a tautology.
 - CI gate simulated locally with the workflow's own regex → `migration-override-ok` matches → **PASS**.
+- Independent PR review: PostgreSQL 17 direct-pool suite with migration 421:
+  **36 passed, 1 skipped**. On Windows, set `PYTHONUTF8=1`,
+  `PGCLIENTENCODING=UTF8`, and `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; use a temporary
+  pytest INI and a disposable local `TEST_DATABASE_URL`. The skip is the optional
+  psycopg3 test. The initial run exposed a timezone-sensitive timestamp string
+  assertion; comparing aware datetimes now verifies the same instant in Regina
+  and UTC sessions. No SQL behavior changed during renumbering.
+- Independent migration review reconfirmed preserved grants, retention trigger,
+  function signature, null-safe retries, and unchanged unique-index race handling.
 
 ## What was NOT verified
 
-- **Migration 419 has NOT been applied to production.** No production DB write of any kind was made; all
+- **Migration 421 has NOT been applied to production.** No production DB write of any kind was made; all
   production access during this investigation was read-only.
 - **No historical correction** was made for the affected ride (`294ed8e4…`). Its Period 2 interval is still
   attributed to the cancelled ride. That requires a separately reviewed, append-only correction record —
   `driver_insurance_period_corrections` exists for this — and is deliberately out of scope here.
-- Tested on **Postgres 15.19** (matching CI's `postgres:15` service), not on the production Postgres 17.6.
+- Original implementation tested on **Postgres 15.19**; independent review tested
+  a disposable **Postgres 17** cluster. Neither run exercises production traffic.
 - The `race` branch (concurrent callers losing the unique-index race) is **not** exercised by these tests.
-- Migration 419 does not install on a vanilla Postgres without the `anon`/`authenticated` roles present;
+- Migration 421 does not install on a vanilla Postgres without the `anon`/`authenticated` roles present;
   the `direct_pool` fixture supplies them, but a hand-run against a bare cluster will fail at the REVOKE.
+- The existing unique index prevents multiple open intervals, but does not order
+  delayed competing calls. The reconciler's same-period/wrong-ride repair now works
+  as intended; stale snapshots remain an inherited ordering limitation.

@@ -1,4 +1,4 @@
--- Run ONLY in a disposable database with migration 253 or 419 installed.
+-- Run ONLY in a disposable database with migration 253 or 421 installed.
 -- psql -v ON_ERROR_STOP=1 -f backend/tests/sql/insurance_period_ride_identity.sql
 -- Synthetic fixture table; the transaction always rolls back on success.
 BEGIN;

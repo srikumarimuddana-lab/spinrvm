@@ -1,7 +1,7 @@
 /// <reference types="geojson" />
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -12,6 +12,7 @@ import {
     makeCircleMarkerEl,
     polygonPointsToGeoJSON,
 } from "@/lib/map/maplibre-base";
+import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 
 interface ServiceArea {
     id: string;
@@ -51,10 +52,19 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
     const markersRef = useRef<maplibregl.Marker[]>([]);
     const popupsRef = useRef<maplibregl.Popup[]>([]);
     const isLoadedRef = useRef(false);
+    // Lazy initializer, computed once — same idiom ride-route-map.tsx and
+    // monitoring-map.tsx already use for this probe. Without it, a browser
+    // whose WebGL context is a non-drawing stub (common with privacy/ad-
+    // blocking extensions) still gets a MapLibre map built here: MapLibre's
+    // own "load" event only reflects style/tile JSON reaching the page, not
+    // the GPU actually painting, so the canvas would sit blank with nothing
+    // on screen explaining why. See src/lib/map/webgl-support.ts.
+    const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
 
     // Initialise map once
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
+        if (!webglOk) return;
 
         const map = new maplibregl.Map({
             container: containerRef.current,
@@ -112,7 +122,7 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
             mapRef.current = null;
             isLoadedRef.current = false;
         };
-    }, []);
+    }, [webglOk]);
 
     // Update driver markers + service-area polygons when data changes
     useEffect(() => {
@@ -254,7 +264,22 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
                 )}
             </div>
             {/* Map */}
-            <div ref={containerRef} style={{ height: "500px", width: "100%" }} />
+            {webglOk ? (
+                <div ref={containerRef} style={{ height: "500px", width: "100%" }} />
+            ) : (
+                <div
+                    role="status"
+                    className="flex items-center justify-center bg-muted px-6 text-center"
+                    style={{ height: "500px", width: "100%" }}
+                >
+                    <p className="text-sm text-muted-foreground">
+                        Live map can&apos;t render in this browser — often an ad
+                        or privacy blocker. Try disabling it for this site, or
+                        use a different browser. Driver counts above are still
+                        live.
+                    </p>
+                </div>
+            )}
         </div>
     );
 }

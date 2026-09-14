@@ -20,6 +20,10 @@ export interface CarLatLng {
   longitude: number;
   /** Course over ground in degrees, for rotating the car marker. */
   heading: number | null;
+  /** Native measurement time, never the callback arrival time. */
+  timestampMs?: number;
+  accuracyM?: number | null;
+  speedMps?: number | null;
 }
 
 /**
@@ -250,7 +254,7 @@ export function resolveHeading(
  * the return value for their own setState rather than the fix they passed in,
  * or the marker and the module cache disagree about which way the car points.
  */
-export function adoptCarFix(fix: CarLatLng): CarLatLng {
+export function adoptCarFix(fix: CarLatLng): CarLatLng | null {
   // Every arrival lands here — useCarLocation's own watcher and its staleness
   // watchdog adopt without publishing, and publishCarFix delegates here — so
   // this is the single choke point for the all-arrivals counter and cannot
@@ -258,22 +262,32 @@ export function adoptCarFix(fix: CarLatLng): CarLatLng {
   // two-counter rationale on arrivedSinceRead.
   arrivedSinceRead += 1;
   const now = Date.now();
+  const capturedAt = fix.timestampMs ?? now;
+  // Every producer shares this gate, so a delayed background batch cannot
+  // rewind a newer foreground reading and derive the opposite course.
+  if (!validCoordinate(fix) || !Number.isFinite(capturedAt) ||
+      capturedAt > now + 5_000 || now - capturedAt > MAX_COURSE_BASELINE_AGE_MS ||
+      (lastFix?.timestampMs != null &&
+        (fix.timestampMs == null || capturedAt <= lastFix.timestampMs))) return lastFix;
+  const baselineAge = lastFixAt === 0 ? Infinity : capturedAt - lastFixAt;
+  if (lastFix && baselineAge > 0 && baselineAge <= MAX_COURSE_BASELINE_AGE_MS &&
+      metresBetween(lastFix, fix) > Math.max(20, baselineAge / 1000 * 60)) return lastFix;
   const { fix: merged, source } = resolveHeading(
     fix,
     lastFix,
     lastHeadingAt === 0 ? Infinity : now - lastHeadingAt,
     // Infinity for a seeded fix: seedCarFix deliberately never stamps the age
     // clock, so a seed can never become the baseline for a derived course.
-    carFixAgeMs(),
+    baselineAge,
   );
   // Stamped only when this fix ESTABLISHED a bearing (GPS course, or derived
   // from real movement). A carried one keeps the age of the reading it came
   // from, or it would renew itself on every watchdog tick and never expire —
   // which is exactly the bug this block exists to end.
-  if (source === 'gps' || source === 'derived') lastHeadingAt = now;
+  if (source === 'gps' || source === 'derived') lastHeadingAt = capturedAt;
   lastHeadingSource = source;
   lastFix = merged;
-  lastFixAt = now;
+  lastFixAt = capturedAt;
   return merged;
 }
 
@@ -288,7 +302,15 @@ export function adoptCarFix(fix: CarLatLng): CarLatLng {
 export const getHeadingSource = (): HeadingSource => lastHeadingSource;
 
 /** Seed the module cache only if nothing better has landed. Returns what won. */
-export function seedCarFix(fix: CarLatLng): CarLatLng {
+function validCoordinate(fix: CarLatLng): boolean {
+  return Number.isFinite(fix.latitude) && Math.abs(fix.latitude) <= 90 &&
+    Number.isFinite(fix.longitude) && Math.abs(fix.longitude) <= 180;
+}
+
+export function seedCarFix(fix: CarLatLng): CarLatLng | null {
+  if (!validCoordinate(fix) || (fix.timestampMs != null &&
+      (!Number.isFinite(fix.timestampMs) || fix.timestampMs > Date.now() + 5_000 ||
+        Date.now() - fix.timestampMs > MAX_SEED_AGE_MS))) return lastFix;
   const chosen = lastFix ?? fix;
   lastFix = chosen;
   // Deliberately does NOT touch lastFixAt: a seed is stale by construction, and
@@ -378,7 +400,9 @@ export function publishCarFix(fix: CarLatLng): void {
   // Subscribers get the MERGED fix, not the raw one — a background task fix with
   // no course would otherwise re-render the marker pointing north even though
   // the module cache still holds the true bearing.
+  const previous = lastFix;
   const merged = adoptCarFix(fix);
+  if (!merged || merged === previous) return;
   persistFix(merged);
   for (const l of fixListeners) {
     try {
@@ -420,7 +444,7 @@ export function persistFix(fix: CarLatLng, force = false): void {
     // is invisible to them.
     AsyncStorage.setItem(
       LAST_LOCATION_KEY,
-      JSON.stringify({ lat: fix.latitude, lng: fix.longitude, at: now }),
+      JSON.stringify({ lat: fix.latitude, lng: fix.longitude, at: fix.timestampMs ?? now }),
     ).catch(() => {});
   } catch {
     // AsyncStorage absent (tests/web) — the cache simply is not refreshed.

@@ -78,13 +78,16 @@ export function useCarLocation(): CarLatLng | null {
       try {
         const { status } = await Location.getForegroundPermissionsAsync();
         if (cancelled || status !== 'granted') return;
-        const last = await Location.getLastKnownPositionAsync();
+        const last = await Location.getLastKnownPositionAsync({ maxAge: MAX_SEED_AGE_MS });
         if (cancelled || !last?.coords) return;
         setLoc(
           seedCarFix({
             latitude: last.coords.latitude,
             longitude: last.coords.longitude,
             heading: last.coords.heading ?? null,
+            timestampMs: last.timestamp,
+            accuracyM: last.coords.accuracy,
+            speedMps: last.coords.speed,
           }),
         );
       } catch {
@@ -126,9 +129,12 @@ export function useCarLocation(): CarLatLng | null {
           latitude: current.coords.latitude,
           longitude: current.coords.longitude,
           heading: current.coords.heading ?? null,
+          timestampMs: current.timestamp,
+          accuracyM: current.coords.accuracy,
+          speedMps: current.coords.speed,
         });
         setLoc(next);
-        persistFix(next, true); // bypass throttle: freshest thing we will have
+        if (next) persistFix(next);
       } catch {
         // Timed out or unavailable — the cached seeds and the watcher stand.
       }
@@ -151,7 +157,7 @@ export function useCarLocation(): CarLatLng | null {
           // Don't clobber a live fix that may have already landed — including
           // one carried across a surface remount.
           setLoc(
-            seedCarFix({ latitude: lat as number, longitude: lng as number, heading: null }),
+            seedCarFix({ latitude: lat as number, longitude: lng as number, heading: null, timestampMs: at }),
           );
         }
       } catch {
@@ -176,15 +182,19 @@ export function useCarLocation(): CarLatLng | null {
             distanceInterval: 5,
           },
           (p) => {
+            if (cancelled) return;
             // The one path that genuinely produces a course over ground, so
             // this is normally where a fresh bearing enters the system.
             const next = adoptCarFix({
               latitude: p.coords.latitude,
               longitude: p.coords.longitude,
               heading: p.coords.heading ?? null,
+              timestampMs: p.timestamp,
+              accuracyM: p.coords.accuracy,
+              speedMps: p.coords.speed,
             }); // survives the next surface teardown/rebuild
             setLoc(next);
-            persistFix(next);
+            if (next) persistFix(next);
           },
         );
         if (cancelled) {
@@ -211,9 +221,11 @@ export function useCarLocation(): CarLatLng | null {
     // while the watcher (or a foreground-service task) is healthy — it only
     // spends battery on the exact failure it exists to cover, and Android Auto
     // generally means the phone is charging.
+    let watchdogPending = false;
     const staleWatchdog = setInterval(() => {
-      if (cancelled || !Location) return;
+      if (cancelled || !Location || watchdogPending) return;
       if (carFixAgeMs() < STALE_AFTER_MS) return;
+      watchdogPending = true;
       (async () => {
         try {
           const { status } = await Location.getForegroundPermissionsAsync();
@@ -230,11 +242,16 @@ export function useCarLocation(): CarLatLng | null {
             latitude: current.coords.latitude,
             longitude: current.coords.longitude,
             heading: current.coords.heading ?? null,
+            timestampMs: current.timestamp,
+            accuracyM: current.coords.accuracy,
+            speedMps: current.coords.speed,
           });
           setLoc(next);
-          persistFix(next);
+          if (next) persistFix(next);
         } catch {
           // Still unavailable — try again on the next tick.
+        } finally {
+          watchdogPending = false;
         }
       })();
     }, WATCHDOG_INTERVAL_MS);

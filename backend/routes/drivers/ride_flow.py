@@ -814,10 +814,13 @@ async def _flag_uncorroborated_arrival_if_needed(
     doubly unsafe -- Postgres sorts NULLs first under ``DESC``, so legacy rows
     would crowd out real ones ahead of the ``LIMIT`` (the exact hazard
     migration 371's ``route_gap_latest_captures`` already documents from a
-    real incident, ride SPR-PE7TTB). This matches that migration's own
-    resolution instead: match on ``captured_at`` OR ``timestamp`` (whichever a
-    row actually has), ordered on the always-populated ``timestamp`` --
-    correct for both writer generations today, and for v2 rows (where the two
+    real incident, ride SPR-PE7TTB -- that function takes a different
+    resolution, DISTINCT-ON ``captured_at`` per ride with a per-ride
+    fallback, suited to picking one latest row; the per-row symmetric OR
+    below suits this check's different job, matching *any* row in a
+    window). Match on ``captured_at`` OR ``timestamp`` (whichever a row
+    actually has), ordered on the always-populated ``timestamp`` -- correct
+    for both writer generations today, and for v2 rows (where the two
     columns hold the same value) the ``captured_at`` OR-branch keeps this
     working unmodified even if ``timestamp`` is ever retired in favour of it.
     """
@@ -829,8 +832,8 @@ async def _flag_uncorroborated_arrival_if_needed(
                 "driver_id": driver_id,
                 "ride_id": ride_id,
                 "$or": [
-                    {"captured_at": {"$gte": window_start}},
-                    {"timestamp": {"$gte": window_start}},
+                    {"captured_at": {"$gte": window_start.isoformat()}},
+                    {"timestamp": {"$gte": window_start.isoformat()}},
                 ],
             },
             order="timestamp",

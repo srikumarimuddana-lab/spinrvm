@@ -1041,10 +1041,14 @@ class TestArriveAtPickupCorroborationSignal:
             ((col, predicate),) = leaf.items()
             assert set(predicate) == {"$gte"}, (col, predicate)
             bound = predicate["$gte"]
-            assert isinstance(bound, datetime)
+            # isoformat string, matching this repo's established convention
+            # for $gte datetime filters (driver_daily_rollup.py, profile.py,
+            # earnings.py) -- not a raw datetime object.
+            assert isinstance(bound, str)
+            bound_dt = datetime.fromisoformat(bound)
             # ~5 minutes back -- tolerate scheduling jitter, not a
             # different window entirely.
-            age = datetime.now(timezone.utc) - bound
+            age = datetime.now(timezone.utc) - bound_dt
             assert timedelta(minutes=4) < age < timedelta(minutes=6), age
         assert kwargs.get("order") == "timestamp"
         assert kwargs.get("desc") is True

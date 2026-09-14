@@ -21784,6 +21784,102 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-14, later still same day): 3 more tables, still not
+  closed.** Checked for concurrent work first (`git fetch origin main` +
+  an open-PR search for anything touching `backend/tests/rls/` or
+  `ACTION_ITEMS.md`) — found the admin-export-audit-trail round below
+  (PR #5401) had merged since this worktree's checkout was cut; fast-
+  forwarded onto latest `origin/main` before starting (no local commits
+  lost — this worktree had none of its own yet), so this round is built on
+  top of that one, not a duplicate of it. Picked the "ride distance/GPS
+  integrity audit trail" theme from the remaining-table list the round
+  below published: `ride_distance_integrity_events` (migration 246),
+  `ride_distance_recomputes` (242), and `ride_location_gap_events` (237, +
+  370's additive `status`-value widening) — three tables backing
+  fraud/dispute detection on ride billing *distance*, distinct from the
+  money ledger itself (`financial_events`, already covered). Picked
+  deliberately for the same regulatory/dispute-audit stakes class as last
+  round's insurance-period tables — `ride_distance_recomputes`' own
+  migration comment states its purpose as letting "a rider/driver dispute
+  or SGI review... reconstruct exactly when and why a displayed distance
+  changed." New file `backend/tests/rls/test_ride_distance_integrity_rls.py`,
+  43 tests (33 test functions, 3 parametrized over 3 roles, 1 parametrized
+  over 5 `kind` values). Full `tests/rls` suite: **369 passed, 0 failed**,
+  against the same real local Postgres 16 `rlstest` cluster (port 5544,
+  isolated from the pre-existing `main` cluster's auth config, per this
+  backlog item's own standing constraint) the two rounds above this one
+  already stood up in this environment.
+  - **Blast radius:** grepped every `.py`/`.sql`/`.ts`/`.tsx` file
+    repo-wide for all three table names. Production request-path
+    reads/writes go through `db_supabase` (service-role client) from
+    `utils/distance_integrity.py`, `utils/route_finalizer.py`,
+    `utils/route_gap_monitor.py`, and `utils/retention_purge.py`; no
+    admin-dashboard/rider-app/driver-app/shared file references any of
+    the three. Two extra, non-request-path consumers found (missed in an
+    earlier pass of this same grep, caught by `/code-review`'s own diff
+    review below): `scripts/analyze_ride_route.py`, a read-only
+    per-ride diagnostic CLI, also reads `ride_location_gap_events` and
+    `ride_distance_recomputes` (also via `db_supabase`), and
+    `scripts/delete_test_driver_accounts.sql`
+    `DELETE`s from all three (a manual, superuser-run cleanup tool). Both
+    are out of scope for this tier — neither is part of the RLS-gated
+    request surface, by the same reasoning already applied to every other
+    ops/diagnostic script
+    in this backlog).
+  - **Review used:** the Task/Agent tool needed to invoke
+    `spinr-security-auditor` as a full subagent was not available in this
+    session's isolated-worktree environment (checked via tool search,
+    confirmed absent) — used the CLAUDE.md-sanctioned fallback,
+    `/code-review` at high effort, against the actual diff, per gate #10's
+    explicit "(or `/code-review` at medium+ effort)" allowance. Real,
+    not-a-rubber-stamp findings, both fixed before commit: (1) the blast-
+    radius bullet above had already missed `scripts/analyze_ride_route.py`
+    (a read-only diagnostic CLI that also reads `ride_location_gap_events`/
+    `ride_distance_recomputes`) in its first draft — corrected above rather
+    than left wrong; (2) the test file's `_seed_driver` helper was defined
+    but never called — fixed by adding
+    `test_gap_event_driver_id_references_real_driver`, which exercises the
+    FK against a real seeded driver (the test count above already reflects
+    this fix, not the pre-fix count).
+  - **One real, previously-undiscovered finding, not fixed here:** neither
+    `ride_distance_integrity_events` nor `ride_distance_recomputes` has any
+    DB-level trigger preventing `service_role` (the only role that can
+    write to either table at all) from directly `UPDATE`ing or `DELETE`ing
+    a row, despite each migration's own comment asserting "event rows are
+    immutable" / "audit rows are immutable" "on purpose" — unlike
+    `audit_logs` (migrations 51/56/57) and `compliance_export_events`
+    (263/285), which each got a dedicated anti-tamper trigger specifically
+    *because* they are regulatory/security audit trails. No production
+    code path issues either kind of write today (confirmed by the same
+    blast-radius grep above), so nothing is broken in practice, but the
+    guarantee these two "immutable" audit tables assert rests entirely on
+    application-code discipline, not DB enforcement — a weaker guarantee
+    than the pattern this codebase already uses elsewhere for tables
+    making the identical claim, and these two feed the same class of
+    SGI/dispute-forensics stakes that justified building that pattern in
+    the first place. Reproduced directly against real Postgres (not
+    inferred) via `test_integrity_event_service_role_can_mutate_despite_immutable_comment`
+    / `test_recompute_service_role_can_mutate_despite_immutable_comment`
+    in the new test file — both pass today, documenting current behavior
+    without fixing it. Filed as **C118** (new); not fixed here, since
+    adding a trigger is a production schema change with its own review,
+    out of scope for a test-coverage-only PR. `ride_location_gap_events`
+    does NOT share this gap — its own migration comment never claims
+    immutability (it has real, live UPDATE/DELETE production paths:
+    status-transition updates from `route_gap_monitor.py` and a 7-year
+    retention DELETE from `purge_trip_route_geometry()`), so there's no
+    comment/enforcement mismatch to flag for that one.
+  - **Running total after this round:** 42 of ~70 distinct policy-bearing
+    tables (39 + these 3, by the same corrected multiline-aware sweep
+    method the round below established). Still not closed: of the
+    remaining ~28, the "ride tracking/integrity" theme the round below
+    named now has only `ride_live_activities`/`ride_messages`/`ride_offers`
+    left in it (this round closed the other three); every other themed
+    group from that list (`ai_conversations`/`ai_messages`; notifications;
+    the four remaining `corporate_*` tables; `disputes`; driver ops;
+    reference/static data; the three `financial_*`/`subscription_payments`
+    tables; the three singletons) is untouched by this round.
+  Change log: `docs/change-log/2026-09-14-c49-ride-distance-integrity-rls-coverage.md`.
 - [ ] **Status (2026-09-14, later same day): 3 more tables, still not
   closed.** Checked for concurrent work first (`git fetch origin main` +
   open-PR search for any PR touching `backend/tests/rls/` or
@@ -26963,6 +27059,71 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-14-plugin-activation-never-worked.md` (full evidence),
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
+
+### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — real gap, not fixed here
+- [ ] **Status:** OPEN, informational (nothing broken in production today).
+  Found while adding RLS coverage for these two tables under C49
+  (`backend/tests/rls/test_ride_distance_integrity_rls.py`), reproduced
+  directly against a real Postgres 16 rather than inferred from reading
+  the migration files.
+- **What's true today:** migration 246 (`ride_distance_integrity_events`)
+  and migration 242 (`ride_distance_recomputes`) each `ENABLE ROW LEVEL
+  SECURITY` and define four explicit `USING (false)` / `WITH CHECK
+  (false)` policies `TO authenticated` for SELECT/INSERT/UPDATE/DELETE, so
+  `anon`/`authenticated` can never touch either table — `service_role` is
+  the only role with any access at all. Each migration's own comment
+  asserts the resulting rows are immutable "on purpose" ("No UPDATE/DELETE
+  policy exists on purpose — event/audit rows are immutable"). But RLS
+  policies restrict `anon`/`authenticated` only; `service_role` carries
+  `BYPASSRLS` and is unaffected by any policy on the table. Unlike
+  `audit_logs` (migrations 51/56/57) and `compliance_export_events`
+  (263/285) — both of which back the identical "immutable audit trail"
+  claim with a dedicated `BEFORE UPDATE OR DELETE` trigger that blocks
+  even `service_role` — neither 246 nor 242 has any such trigger. A direct
+  `UPDATE`/`DELETE` as `service_role` against either table succeeds today,
+  confirmed by `test_integrity_event_service_role_can_mutate_despite_immutable_comment`
+  and `test_recompute_service_role_can_mutate_despite_immutable_comment`
+  in the new test file (both pass — they document current behavior, they
+  do not assert it's blocked).
+- **Why this matters:** both tables exist specifically for regulatory/
+  dispute-forensics purposes — `ride_distance_recomputes`' own comment
+  says its audit trail lets "a rider/driver dispute or SGI review
+  reconstruct exactly when and why a displayed distance changed." That is
+  the same threat model class (an actor tampering with evidence to win a
+  dispute, or covering up a fraud/billing-accuracy issue) that justified
+  building trigger-level tamper-evidence for `audit_logs` and
+  `compliance_export_events`. Today, the "immutable" guarantee for these
+  two distance tables rests entirely on application-code discipline (no
+  call site anywhere issues an UPDATE/DELETE against either table — see
+  the blast-radius grep in the C49 entry above) rather than the DB itself,
+  which is a weaker guarantee than the comment claims and inconsistent
+  with the pattern this codebase already uses elsewhere.
+- **Not a bug in the sense of "something is broken":** no production code
+  path currently performs either mutation, so nothing is silently
+  corrupting these tables today. This is a defense-in-depth /
+  documentation-vs-enforcement gap, not an active incident.
+- **What was NOT done:** no trigger was added. That's a production schema
+  change (new migration, its own review, its own pre-merge gates per
+  CLAUDE.md) and is out of scope for a test-coverage-only PR. `ride_location_gap_events`
+  (the third table in the same C49 round) does NOT share this gap and
+  needs no equivalent trigger — its own migration comment never claims
+  immutability, and it has real, live production UPDATE (status
+  transitions) and DELETE (7-year retention purge) paths by design.
+- **Recommendation for whoever picks this up:** if these two tables'
+  immutability guarantee should be enforced the same way `audit_logs`/
+  `compliance_export_events` are, add a migration with a `BEFORE UPDATE OR
+  DELETE` trigger mirroring `audit_logs_no_mutate`'s shape (raise
+  unconditionally — neither table has a legitimate flag-gated exception
+  like `compliance_export_events`' retention DELETE, since nothing ever
+  deletes rows from either table). Decide first whether the stakes justify
+  the added trigger-maintenance surface (see C112's finding on triggers
+  not composing safely across migrations) versus leaving this as a
+  documented, accepted risk.
+- **Files (reference only, nothing changed by this entry):**
+  `backend/migrations/246_ride_distance_integrity_events.sql`,
+  `backend/migrations/242_ride_distance_recomputes.sql`,
+  `backend/tests/rls/test_ride_distance_integrity_rls.py` (new regression
+  tests documenting current behavior).
 
 ## Recently completed (do not redo)
 

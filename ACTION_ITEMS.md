@@ -26718,6 +26718,55 @@ how much they de-risk a public launch._
   `backend/routes/drivers/ride_reads.py`, `backend/routes/rides/_deps.py` (existing
   `ride_read_limit` definition, for reference), `backend/utils/rate_limiter.py`.
 
+### C115. `admin-dashboard`'s Live Monitoring service-area jump buttons and Follow toggle silently no-op when the map can't render
+- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
+  reviewing the WebGL-stub-guard fix for `monitoring-map.tsx` (this same
+  session, see `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`)
+  — a non-blocking WARNING on that review, deliberately not fixed there
+  since closing it needs a separate design change to a different file.
+- **Issue/gap:** `MonitoringMap`'s `onReady` callback (`page.tsx:784`)
+  only ever fires from inside `map.on("load", ...)`, which is unreachable
+  whenever the new WebGL-capability guard bails out (stubbed/broken WebGL
+  context, or one of `live-map.tsx`/`driver-map.tsx` once they get the same
+  guard — C49-adjacent work, ACTION_ITEMS.md's ongoing map-reliability
+  thread). In that state, `page.tsx`'s `mapHandlesRef.current` stays `null`
+  for the page's entire life. Every other `mapHandlesRef.current?.foo()`
+  call site in `page.tsx` already tolerates this via optional chaining (the
+  file's own established, consistent pattern) — but the service-area
+  "jump" pill buttons (`page.tsx:797-809`, `handleAreaFit` →
+  `mapHandlesRef.current?.fitArea(...)`) and the Follow toggle (routed
+  through `MonitoringToolbar`, `onFollowToggle`) are UI whose entire
+  purpose *is* a map-visual effect, with no other on-screen feedback
+  substituting for it when that effect can't happen. An admin whose
+  browser can't render the map can click a jump pill repeatedly, or flip
+  Follow on, and nothing will ever happen anywhere, with zero indication
+  why — unlike every other silently-no-op'd handle call, which has some
+  other UI (a detail panel opening, a marker updating) reacting to the same
+  user action regardless of map state.
+- **Why not fixed inline:** `mapHandlesRef` is a plain ref, not React
+  state, so `page.tsx` cannot reactively hide/disable UI based on it today.
+  Closing this properly needs a new reactive "map can render" signal
+  threaded from `MonitoringMap` back to `page.tsx` (e.g. a second callback
+  prop alongside `onReady`, or folding both into one richer status
+  callback) and then conditionally hiding or disabling the two affected
+  controls (with a tooltip explaining why, matching this repo's established
+  "explain, don't just disable silently" pattern from the WebGL-guard fix
+  itself). That's a real, separable change to a second file with its own
+  design surface — bundling it into the guard fix would have widened that
+  diff past CLAUDE.md's task-decomposition/surgical-changes rules for a fix
+  whose actual priority (stop showing a silently blank map) was already
+  fully addressed without it.
+- **Recommendation:** add the reactive signal + disable/tooltip treatment
+  to `page.tsx` in a small, standalone follow-up. Low urgency — it only
+  matters on the same already-rare browser configuration the guard fix
+  itself targets — but worth closing so "nothing happens when I click" isn't
+  the next unexplained-map report on this page.
+- **Files (reference only, nothing changed by this entry):**
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx` (`mapHandlesRef`,
+  `handleAreaFit`, the jump-buttons JSX, `MonitoringToolbar`'s
+  `followMode`/`onFollowToggle` props), `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`
+  (`onReady`, the `webglOk` guard).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -771,6 +771,38 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       materially harder reconciliation problem than a single-account one,
       so this matters for how much confidence the $185.31–$228.08 range
       above actually deserves.
+    - **RESOLVED, 2026-09-14 (CR-2026, #4109) — directly verified against
+      live Stripe with the platform account now connected, superseding
+      the 2026-09-07 verbal answer above.** Pulled all 50 distinct
+      `stripe_account_id` values referenced across `driver_stripe_ledger`
+      and `driver_stripe_payouts` from production Supabase, then called
+      `GET /v1/accounts/{id}` directly against the connected platform key
+      for 18 of them (36%, spread across the full list, not just the
+      first few). **All 18 resolved successfully with
+      `controller.is_controller: true`** under one platform account —
+      `acct_1SSk2XFXFgLO2LdO` ("Spinr Mobility Inc", live mode) — zero
+      exceptions. A Stripe Connect account can only ever be controlled by
+      one platform account, so this **structurally rules out** "blended
+      across two different Stripe platform accounts" as the 2026-09-07
+      answer stated it: the mirror's connected-account population is
+      single-platform, matching the 08-16 doc's original dated-evidence
+      inference, not the verbal "both" answer. **What remains genuinely
+      open** (a different, narrower question than the one just resolved):
+      whether the *old* app also posted transactions into this *same*
+      platform account before migration (Stripe-migration runbook's
+      "Scenario A") — that needs the old app's own Stripe key for a
+      side-by-side `stripe.Account.retrieve()` comparison, which is not
+      available from this session; only one platform account is
+      connected here. Also newly surfaced: the mirror has synced
+      **exactly once**, 2026-08-30T15:40:22Z (357 ledger rows, 168 payout
+      rows) — over two weeks stale as of this note, which per the
+      runbook's own "`MAX(synced_at)` bounds every conclusion" caveat
+      means the $185.31–$228.08 figure above should be treated as
+      dated-as-of-08-30, not current, until the sync job runs again.
+      Full 18-account cross-check log intentionally excluded from this
+      file — it necessarily touches real driver bank/identity data;
+      available on request to whoever owns this follow-up, re-run
+      directly against Stripe rather than copied here.
     - **2026-09-07, same interview — the 2 ambiguous buckets ($42.77):
       product owner wants this investigated now, but it can't be done
       from this session.** Resolving `350b5267…` ($33.32, a payment row

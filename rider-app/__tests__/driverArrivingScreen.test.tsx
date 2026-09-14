@@ -216,7 +216,7 @@ const CURRENT_DRIVER = {
   license_plate: 'ABC 123', photo_url: null,
 };
 
-let mockTrackBaseUrl: string | null = 'https://spinr-track.app';
+let mockTrackBaseUrl: string | null = 'https://track.spinr.ca';
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
 async function renderScreen() {
@@ -261,7 +261,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers();
   mockParams = { rideId: 'ride-1' };
-  mockTrackBaseUrl = 'https://spinr-track.app';
+  mockTrackBaseUrl = 'https://track.spinr.ca';
   mockDirectionsReadyCallbacks = [];
   mockRouteLinePaths = [];
   mockFreeCancelTimerOnExpire = null;
@@ -859,7 +859,7 @@ describe('DriverArrivingScreen', () => {
         message: expect.stringContaining('Plate: Pending'),
       }));
       expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
-        message: expect.stringContaining('Track: https://spinr-track.app/demo'),
+        message: expect.stringContaining('Track: https://track.spinr.ca/demo'),
       }));
     });
 

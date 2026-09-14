@@ -13456,6 +13456,63 @@ record of what was assumed vs. what was actually true</summary>
   field-name bug in the monitor script itself, fixed same-day in PR #5038.
   Fly, the primary, was never actually missing secrets; only the
   Railway-token half of #5034 reflects this still-deferred item.)
+- **Update (2026-09-14) — root cause has CHANGED since 2026-09-05; `RAILWAY_TOKEN`
+  is no longer the blocker.** Picked this item up fresh and re-verified against
+  live `deploy-backend.yml` run history rather than trusting the 2026-09-05 entry
+  above — it is now stale. Findings, from the actual job logs (not assumed):
+  - **`RAILWAY_TOKEN` is valid as of at least 2026-09-05T20:48Z** (run #4208) and
+    every run since, through today's run #4275 (`railway status` succeeds,
+    resolves to project `name=cooperative-harmony`, `environment=production`).
+    Someone rotated it after the earlier same-day 2026-09-05 update above was
+    written; this was never recorded, so the file kept saying "not valid" for 9
+    days after it stopped being true. Sampled ~15 runs across 2026-09-05 through
+    2026-09-14 (every one on `main`, every one a push-triggered deploy attempt) —
+    100% valid-token, 100% failure, no exceptions found.
+  - **New, different blocker: the Railway project has no service named
+    `spinr-backend`.** Every run since fails at the "Verify required Railway
+    variables are set" step with `Service 'spinr-backend' not found` (from
+    `railway variables --service spinr-backend --json`). `RAILWAY_SERVICE:
+    spinr-backend` is hardcoded in both `.github/workflows/deploy-backend.yml`
+    and `.github/workflows/standby-parity-monitor.yml`. Either the service was
+    never created under that exact name in the `cooperative-harmony` project, or
+    it exists under a different name/casing.
+  - **Genuinely ambiguous, not resolved here — did not guess-fix.** Grepped the
+    repo for any other recorded Railway service name: `docs/ENVIRONMENT_VARIABLES.md`
+    implies `spinr-backend` (`RAILWAY_PUBLIC_URL` example:
+    `https://spinr-backend.up.railway.app`), but a much older doc
+    (`docs/claude-audit-2026-04-22.md`, 2026-04-22) references
+    `spinr-backend-production.up.railway.app` — a different name. Neither is
+    current, verified evidence of what the service is named *today* in the
+    Railway dashboard, and this session has no Railway CLI/API/MCP access to
+    check directly (confirmed: no `railway`-named tool available, and
+    `.claude/context/connector-scoping.md` has no Railway row at all — Railway
+    is not a connector any session currently has). Per CLAUDE.md's "escalate,
+    don't silently ship" gate, did not rename `RAILWAY_SERVICE` on a guess —
+    picking the wrong name would just trade one silent-failure mode for
+    another, on the pipeline that is supposed to keep the failover standby from
+    drifting further.
+  - **Also noted, not chased:** `railway service list` (in the "verify token"
+    step) prints `Service "list" not found` — `service list` does not appear to
+    be a valid Railway CLI v4 subcommand, so that diagnostic line has never
+    actually listed anything, on any run. Cosmetic (guarded by `|| true`,
+    doesn't fail the job), but worth fixing in the same pass as the real
+    service-name issue since a correct `railway service` listing would have
+    surfaced the real service name immediately instead of requiring this log
+    archaeology.
+  - **Net effect: unchanged from the reader's perspective (Railway standby
+    still deploys 0% of pushes, still drifting from `main`, still a stale
+    fail-over target), but the actual fix is now different and human-only:**
+    someone with Railway dashboard access to the `cooperative-harmony` project
+    needs to open it, find the real service name under the `production`
+    environment, and either (a) rename it to `spinr-backend` to match the
+    workflows as-is, or (b) report the actual name back so `RAILWAY_SERVICE` can
+    be corrected in both workflow files in one small PR. Token rotation (the
+    prior blocker) is done and should not be re-attempted.
+  - **Still consciously deferred** per the 2026-09-02/09-04 decisions above —
+    this update only corrects the record on *why* it's still broken, it does
+    not re-open the go-live-vs-fix-now tradeoff. Re-surface with whoever owns
+    Railway dashboard access once device testing/go-live winds down, per the
+    existing plan.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

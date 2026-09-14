@@ -178,6 +178,30 @@ If `dashboard-rides` does diff, the correct response is to investigate, not to
 re-seed — re-seeding needs `update-visual-baselines.yml`, which this agent
 integration cannot dispatch.
 
+## 9a. Post-review corrections (same day, second commit)
+
+Two review passes (`spinr-design-consistency-reviewer`-style manual pass and
+`/code-review medium`) ran against commit `0054a80` and found six issues. All
+are fixed in the follow-up commit; none required reintroducing a third party.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| `selfHostedRasterTemplate()` assumed every `NEXT_PUBLIC_MAP_STYLE_URL` is a tileserver-gl style. That variable is a *generic* provider override — a hosted Protomaps style (`…/v5/light/en.json?key=…`) produced a bogus, key-stripped pyramid that 404s on every tile and was then **misreported to the admin as "blocked — often an ad or privacy blocker"** | **Highest** — wrong diagnosis shown to an operator | Derivation now requires the path to end `/style.json` (tileserver-gl's own shape). Anything else derives nothing. Not guessing beats guessing wrong |
+| Zero-tile state was silent: `allTilesBlocked` requires `tiles.length > 0`, so it can never fire when there are no tiles, and `ride-route-map.tsx` suppresses its own band under `useStatic` | **High** — reintroduced the exact diagnostic gap the blocked-tiles notice exists to close | New `noTileSource` state and a distinct notice ("No basemap configured — set NEXT_PUBLIC_RASTER_TILE_URL"). Separate wording on purpose: this one is fixed by an operator setting a variable, not by an admin disabling a blocker |
+| Normalisation order bug: `/style.json` was stripped *before* trailing slashes, and fragments never were, so `…/style.json/` and `…/style.json#v2` yielded `…/style.json/{z}/{x}/{y}.png` | Medium | Fragment → query → trailing slashes → *then* the suffix test. Five spellings pinned by test |
+| `selfHostedRasterTemplate()` ignored `NEXT_PUBLIC_MAP_STYLE_URL_DARK`, which `selfHostedStyleUrl()` accepts standalone — a dark-only deployment got a working vector basemap and zero static tiles | Medium | Falls back to the dark variable |
+| `.env.example` and `deploy/tiles/README.md` still promised Carto as the always-last hop and the raster default, including "safe to set because maps degrade to Carto" | Medium — operator-facing and now false | Both rewritten. The README's staged rollout ("set the raster variable second, it has no fallback") is explicitly inverted: neither variable has a fallback now, so the **vector** one is the bigger commitment |
+| Stale comments: `static-route-map.tsx`'s file header and `MAX_ZOOM` rationale still named Carto as the source, and `ride-route-map.tsx`'s banner-suppression comment justified itself on "StaticRouteMap renders a real basemap from a different host" — now false | Low | All three updated; the suppression is now justified by the static renderer raising its own notice |
+
+**Accepted, not fixed:** the reviewers noted that deriving the raster pyramid
+from the vector style couples the static renderer to the same host as the
+MapLibre chain, removing the independent last-resort paint. That coupling is
+the point of the request — an independent third-party paint is exactly what was
+asked to be removed — so it stands, and §4's "what regresses, deliberately" is
+the honest statement of it. The reachable consequence (a WebGL-blocked admin
+seeing route and pins over a bare panel) is now labelled on screen rather than
+silent.
+
 ## 10. Sign-off
 
 - [x] Rollback plan is concrete and testable, and states why the previous

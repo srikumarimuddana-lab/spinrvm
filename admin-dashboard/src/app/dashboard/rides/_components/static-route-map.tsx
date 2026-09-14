@@ -24,20 +24,22 @@ import {
  * in src/lib/map/webgl-support.ts and
  * the basemapStatus === "failed" branch in ride-route-map.tsx.
  *
- * Raster tiles come from Carto rather than OpenFreeMap because OpenFreeMap
- * serves vector tiles only — its one raster endpoint is low-zoom shaded relief,
- * not a street map. Carto's basemaps are free for OSM-derived use with the
- * attribution rendered below, and sit on a different host from every provider
- * the MapLibre path already tried.
+ * Raster tiles come from our own tile server (deploy/tiles), via
+ * NEXT_PUBLIC_RASTER_TILE_URL or derived from a tileserver-gl
+ * NEXT_PUBLIC_MAP_STYLE_URL. OpenFreeMap cannot serve this role — it is vector
+ * only, and its one raster endpoint is low-zoom shaded relief, not a street
+ * map. Carto filled it until 2026-09-14, when the third-party basemaps were
+ * removed; with neither variable set there is now no basemap at all, and the
+ * component says so rather than rendering a silently blank panel.
  */
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 1;
-/** Carto's light_all raster pyramid tops out here. Kept as the ceiling for
- *  every provider: tileserver-gl rasterises by overzooming its vector data so
- *  it answers past its own maxzoom anyway, and a provider that doesn't just
- *  404s — which the per-tile onError already hides, leaving the route and pins
- *  untouched. */
+/** Ceiling for every provider. tileserver-gl rasterises by overzooming its
+ *  vector data so it answers past its own maxzoom anyway, and a provider that
+ *  doesn't just 404s — which the per-tile onError already hides, leaving the
+ *  route and pins untouched. (Originally picked as Carto's light_all maxzoom,
+ *  back when Carto was this renderer's default source.) */
 const MAX_ZOOM = 20;
 
 /**
@@ -50,18 +52,37 @@ const MAX_ZOOM = 20;
  * needs one variable, not two. Any query string belongs to the style document,
  * not the pyramid, so it is dropped.
  *
- * Returns "" when nothing is configured. That is deliberate: a keyless Carto
- * pyramid used to be the default here, and it was removed on 2026-09-14 along
- * with the rest of the third-party basemaps. An unconfigured deployment now
- * draws the route and pins over an empty grid instead of over somebody else's
- * tiles — each <img> just fails its own onError, which this component already
- * hides (see the file header).
+ * Deliberately narrow: it derives ONLY from tileserver-gl's own style-document
+ * shape, a path ending `/style.json`. NEXT_PUBLIC_MAP_STYLE_URL is documented
+ * as a generic provider override, and most styles have no sibling PNG pyramid —
+ * a hosted Protomaps style (`…/v5/light/en.json?key=…`) would yield a bogus,
+ * key-stripped URL that 404s on every single tile and then gets misreported to
+ * the admin as "blocked — often an ad or privacy blocker". Guessing wrong is
+ * worse here than not guessing: set NEXT_PUBLIC_RASTER_TILE_URL explicitly for
+ * anything that is not tileserver-gl.
+ *
+ * Falls back to NEXT_PUBLIC_MAP_STYLE_URL_DARK because selfHostedStyleUrl()
+ * accepts that as standalone configuration — without this, a dark-only
+ * deployment would get a working vector basemap and zero static tiles.
+ *
+ * Returns "" when nothing usable is configured. That is deliberate: a keyless
+ * Carto pyramid used to be the default here, and it was removed on 2026-09-14
+ * along with the rest of the third-party basemaps. The caller surfaces the
+ * empty case rather than rendering a silently blank panel.
  */
 export function selfHostedRasterTemplate(): string {
-    const style = process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim();
+    const style =
+        process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim() ||
+        process.env.NEXT_PUBLIC_MAP_STYLE_URL_DARK?.trim() ||
+        "";
     if (!style) return "";
-    const base = style.split("?")[0].replace(/\/style\.json$/i, "").replace(/\/+$/, "");
-    return `${base}/{z}/{x}/{y}.png`;
+    // Fragment and query first, then trailing slashes, and only then the
+    // suffix test — stripping `/style.json` first (as the first cut of this did)
+    // let `…/style.json/` and `…/style.json#v2` through with the suffix still
+    // embedded in the middle of the tile path.
+    const path = style.split("#")[0].split("?")[0].replace(/\/+$/, "");
+    if (!/\/style\.json$/i.test(path)) return "";
+    return `${path.replace(/\/style\.json$/i, "")}/{z}/{x}/{y}.png`;
 }
 
 /**
@@ -294,6 +315,7 @@ export default function StaticRouteMap({
             tiles,
             strokes,
             attribution: rasterAttribution(tileTemplate),
+            hasTileSource: !!tileTemplate,
             pins: pins.map((p) => ({ ...p, ...toLocal(p.lat, p.lng) })),
         };
     }, [size, pickupLat, pickupLng, dropoffLat, dropoffLng, paths, topPadding]);
@@ -318,6 +340,16 @@ export default function StaticRouteMap({
     // so this is a notice, not an error.
     const allTilesBlocked =
         !!view && view.tiles.length > 0 && view.tiles.every((t) => failedTiles.has(t.key));
+
+    // A separate condition, because allTilesBlocked requires tiles.length > 0
+    // and so can never fire when there are no tiles at all. Removing the Carto
+    // default made "no tile source configured" reachable, and without this it
+    // would render as a silently blank panel — reintroducing exactly the
+    // diagnostic gap the notice above exists to close. Different cause,
+    // different remedy, so it gets its own wording rather than being folded in:
+    // this one is fixed by an operator setting a variable, not by an admin
+    // disabling a blocker.
+    const noTileSource = !!view && !view.hasTileSource;
 
     return (
         <div ref={boxRef} className="absolute inset-0 overflow-hidden bg-muted">
@@ -402,6 +434,16 @@ export default function StaticRouteMap({
                     className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
                 >
                     Basemap tiles blocked — often an ad or privacy blocker. The route and
+                    pins below are accurate.
+                </div>
+            )}
+
+            {noTileSource && (
+                <div
+                    role="status"
+                    className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
+                >
+                    No basemap configured — set NEXT_PUBLIC_RASTER_TILE_URL. The route and
                     pins below are accurate.
                 </div>
             )}

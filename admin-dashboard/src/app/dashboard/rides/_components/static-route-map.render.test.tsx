@@ -87,6 +87,14 @@ describe("StaticRouteMap rendering", () => {
         // The ride itself must still be readable without a basemap.
         expect(document.querySelector('[title="Pickup"]')).toBeTruthy();
         expect(document.querySelector('[title="Dropoff"]')).toBeTruthy();
+        // And it must not be SILENT. allTilesBlocked requires tiles.length > 0,
+        // so it can never fire here — without its own notice this is a blank
+        // panel with no explanation anywhere, which is the exact gap the
+        // blocked-tiles notice was added to close.
+        expect(screen.getByText(/no basemap configured/i)).toBeInTheDocument();
+        // Different cause, different remedy: an operator sets a variable, an
+        // admin disables a blocker. The two notices must not be confused.
+        expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
     });
 
     it("always renders attribution, even before anything loads", () => {

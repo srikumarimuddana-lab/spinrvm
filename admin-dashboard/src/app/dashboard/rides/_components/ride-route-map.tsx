@@ -471,9 +471,13 @@ export default function RideRouteMap({
                 <div ref={containerRef} className="absolute inset-0" />
             )}
             {/* Only while MapLibre is still failing over. Once the chain is
-                exhausted we hand off to StaticRouteMap, which renders a real
-                basemap from a different host with no WebGL — so the old
-                "basemap unavailable" wording would have been untrue there. */}
+                exhausted we hand off to StaticRouteMap, which draws the route
+                and pins with no WebGL — so the old "basemap unavailable"
+                wording would have been untrue there. Since 2026-09-14 that
+                renderer may legitimately have no basemap at all (Carto was its
+                third-party default and was removed), but it raises its own
+                notice for both the blocked and the unconfigured case, so
+                suppressing this band there still leaves the admin told. */}
             {basemapStatus === "retrying" && !useStatic && (
                 // bg-background (not /90), matching monitoring-map.tsx's demand
                 // legend: a translucent panel over map content puts muted text

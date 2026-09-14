@@ -60,18 +60,32 @@ ARG AREA=saskatchewan
 ARG JAVA_OPTS="-Xmx4g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
-# Planetiler images have moved the jar between versions (/planetiler.jar →
-# /app/planetiler.jar). Find it dynamically so a tag bump doesn't break the
-# build for a path change.
-RUN JAR=$(find / -maxdepth 3 -name 'planetiler*.jar' -print -quit 2>/dev/null) \
- && test -n "$JAR" || { echo "planetiler jar not found in image — check PLANETILER_TAG" >&2; exit 1; } \
- && echo "using $JAR" \
- && java -jar "$JAR" \
+# Planetiler ≥0.8 switched from a single executable jar to a Gradle
+# application-plugin layout: /app/bin/<script> + /app/libs/*.jar.
+# Older images had /planetiler.jar or /app/planetiler.jar. Try the
+# Gradle script first (current), then fall back to the legacy jar paths.
+RUN set -eux; \
+    RUNNER=""; \
+    for candidate in \
+        /app/bin/planetiler-dist \
+        /app/bin/planetiler-examples \
+        /app/bin/planetiler \
+        $(find /app/bin -maxdepth 1 -type f -name 'planetiler*' 2>/dev/null | head -1); do \
+      if [ -x "$candidate" ]; then RUNNER="$candidate"; break; fi; \
+    done; \
+    if [ -z "$RUNNER" ]; then \
+      for jar in /planetiler.jar /app/planetiler.jar; do \
+        if [ -f "$jar" ]; then RUNNER="java -jar $jar"; break; fi; \
+      done; \
+    fi; \
+    test -n "$RUNNER" || { echo "no planetiler executable found — check PLANETILER_TAG" >&2; exit 1; }; \
+    echo "using: $RUNNER"; \
+    $RUNNER \
       --download \
       --area="${AREA}" \
       --output=/planetiler/tiles.mbtiles \
-      --force \
- && ls -lh /planetiler/tiles.mbtiles
+      --force; \
+    ls -lh /planetiler/tiles.mbtiles
 
 # ── Stage 2: fetch the style + glyphs ─────────────────────────────────────────
 # Kept separate from the runtime image so curl/jq/unzip never ship to production.

@@ -81,11 +81,14 @@ corporate tables (`corporate_policies`, `corporate_allowed_domains`,
 `ride_payment_sources`, `corporate_policy_evaluations`), `audit_logs`
 (security audit trail, migrations 06/51/57) plus its two insurance-period
 audit siblings `driver_insurance_period_corrections` (355) and
-`driver_period_distances` (249), and -- this round -- the admin PII-export
+`driver_period_distances` (249), the admin PII-export
 audit trail: `data_transfer_export_jobs` (262), `compliance_export_events`
-(263), and `admin_export_approval_requests` (268)). See each test file's own docstring
-for what it covers, and ACTION_ITEMS.md C49 for the current fraction
-covered.
+(263), and `admin_export_approval_requests` (268), and -- this round -- the
+ride distance/GPS integrity audit trail: `ride_distance_integrity_events`
+(246), `ride_distance_recomputes` (242), and `ride_location_gap_events`
+(237, + 370's additive status-value widening)). See each test file's own
+docstring for what it covers, and ACTION_ITEMS.md C49 for the current
+fraction covered.
 
 Running these tests
 --------------------
@@ -722,6 +725,48 @@ def pg_conn(pg_test_dbname):
         "TO anon, authenticated, service_role"
     )
 
+    # --- ride distance/GPS integrity audit trail (ACTION_ITEMS.md C49):
+    # three tables backing fraud/dispute detection on ride billing distance
+    # -- distinct from the money ledger itself (financial_events, already
+    # covered above). `ride_distance_integrity_events` (246) and
+    # `ride_distance_recomputes` (242) are each self-contained, single-
+    # migration tables with no later migration touching either (confirmed
+    # by a repo-wide grep on both table names). `ride_location_gap_events`
+    # (237) picks up migration 370's additive CHECK-constraint widening
+    # (adds 'unresolved_at_completion' to the allowed `status` values),
+    # applied verbatim in filename order right after 237, matching how
+    # run_migrations.py would actually apply it.
+    #
+    # All three ENABLE ROW LEVEL SECURITY then define four EXPLICIT
+    # `USING (false)` / `WITH CHECK (false)` policies `TO authenticated`
+    # for SELECT/INSERT/UPDATE/DELETE -- unlike the admin-export-audit
+    # trio just above (RLS's *implicit* default-deny, zero policy at all),
+    # these are *explicit* deny-all policies, but the observable behavior
+    # for anon/authenticated is identical: SELECT/UPDATE/DELETE filter
+    # silently to zero rows, INSERT raises InsufficientPrivilege. No
+    # policy exists for `anon` at all on any of the three, so anon gets
+    # the same RLS implicit-default-deny the other tables use.
+    #
+    # Migration 238 (trip_route_integrity_retention) is deliberately NOT
+    # applied: it ALTERs `ride_routes`, a table outside this harness's
+    # build scope (applying it verbatim would raise UndefinedTable), and
+    # its only touch on ride_location_gap_events is a plain index plus a
+    # reference inside purge_trip_route_geometry() -- neither an RLS
+    # policy nor a CHECK constraint this harness's tests need, so it's
+    # skipped exactly like migrations 280/315 were skipped for
+    # safety_incidents above (see that comment for the same "not the
+    # migration that defines the policies" reasoning). ---
+    cur.execute((migrations_dir / "237_ride_location_gap_events.sql").read_text())
+    cur.execute((migrations_dir / "370_add_unresolved_at_completion_status_to_gap_events.sql").read_text())
+    cur.execute((migrations_dir / "242_ride_distance_recomputes.sql").read_text())
+    cur.execute((migrations_dir / "246_ride_distance_integrity_events.sql").read_text())
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ride_location_gap_events, "
+        "ride_distance_recomputes, ride_distance_integrity_events "
+        "TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -778,6 +823,9 @@ def pg_cur(pg_conn):
         "data_transfer_export_jobs",
         "admin_export_approval_requests",
         "compliance_export_events",
+        "ride_location_gap_events",
+        "ride_distance_recomputes",
+        "ride_distance_integrity_events",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

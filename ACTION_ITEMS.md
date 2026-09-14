@@ -26964,6 +26964,23 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
 
+### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
+
+- [ ] **Status:** open — registry only, not a fix. Found 2026-09-14: every CR filed via the CI-audit template exists solely as a standalone GitHub issue (`change-request` + `needs-approval` labels); none had ever been linked from `ACTION_ITEMS.md`, so the only way to know the current CR backlog was to search GitHub issues directly. This entry is that missing index — **update it whenever a CR is filed, approved, implemented, or closed**, rather than letting it drift stale like the pre-2026-08-23 migration-duplicate-number list this file's own Database & Migration Conventions section warns against relying on.
+- **Full list, open as of 2026-09-14 (queried via `label:change-request`, `state:open` — 6 total, repo-wide, not just CI-audit-sourced):**
+
+  | CR ID | Issue | Title | Priority | Blocker |
+  |---|---|---|---|---|
+  | CR-2026-008 | [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295) | Implement ADR-010's metrics-aggregation MVP (Grafana Cloud scraper + 2 alert rules) | P1 | Needs a human to choose Option A vs. B and provision a Grafana Cloud account — no code-only path from an agent session |
+  | (unassigned) | [#4109](https://github.com/srikumarimuddana-lab/spinrvm/issues/4109) | Confirm which Stripe platform account the Supabase reconciliation mirror covers | P1 | Needs live Stripe API/dashboard access this session doesn't have (ties to A34's dual-run Stripe checklist) |
+  | CR-2026-032 | [#5181](https://github.com/srikumarimuddana-lab/spinrvm/issues/5181) | Roll out `surface:subsurface:check` naming convention for CI job/check names | P2 | **Hard-gated on C21** (this file) — renaming a required-status-check's `name:` before C21's audit is done risks silently breaking merge-blocking |
+  | CR-2026-034 | [#5398](https://github.com/srikumarimuddana-lab/spinrvm/issues/5398) | Consolidate `ci-guardrails.yml` vs `migration-check.yml`'s two independent migration-safety scanners | P2 | Phase 1 (additive-only, doesn't touch `ci-guardrails.yml`) implemented in PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review). Phase 2 (the actual one-job merge) is gated on the same C21 unknown as CR-2026-032 — deleting/renaming `ci-guardrails.yml`'s job risks the same required-check-name breakage |
+  | CR-2026-086 | [#5408](https://github.com/srikumarimuddana-lab/spinrvm/issues/5408) | `migration-check.yml` hard-crashes (not silently passes) on `merge_group` — no BASE/HEAD fallback at all | P2 | **Approved 2026-09-14.** Already implemented as a byproduct of CR-2026-034 Phase 1 — same fix, same file/step — see PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review) |
+  | CR-2026-087 | [#5409](https://github.com/srikumarimuddana-lab/spinrvm/issues/5409) | `coverage-regression-gate`'s merge-base fallback hardcodes `origin/main` — wrong base for a `staging`-targeted `merge_group` run | P3 | **Approved 2026-09-14.** Implemented in PR [#5422](https://github.com/srikumarimuddana-lab/spinrvm/pull/5422) (draft, pending review) |
+- **Why CR-2026-086/087 aren't blocked on C21 the way CR-2026-032/034-Phase-2 are:** neither touches a job's `name:` field or removes/merges a job — both are pure internal-logic fixes (a bash fallback for an empty ref) inside jobs that keep their current names and keep running exactly as before on the common `pull_request` trigger. The required-status-checks-name risk that gates CR-2026-032 and CR-2026-034 Phase 2 doesn't apply to these two.
+- **Already resolved, for reference (not re-litigated here):** CR-2026-033 (#5251, migration 413's `DELETE FROM` — admin merge-override, no code change) and CR-2026-085 (#5381, `ci-guardrails.yml`'s own `merge_group` BASE/HEAD fix — merged via PR #5399).
+- **Not fixed here:** this entry is a registry, not an implementation. CR-2026-086/087 are small and low-risk enough to implement on request; CR-2026-008/#4109 need external (Grafana Cloud / Stripe) access no session here has; CR-2026-032/034-Phase-2 need a human to pull `main`'s branch-protection required-status-checks list (Settings → Branches → main → required status checks) since no GitHub App/token available to any session so far has read access to that endpoint.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

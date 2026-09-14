@@ -322,7 +322,7 @@ describe('backgroundMessaging (Android)', () => {
       );
       expect(mockSetItem).toHaveBeenCalledTimes(1);
       const [, body] = mockSetItem.mock.calls[0];
-      const persisted = JSON.parse(body);
+      const persisted = JSON.parse(body as string);
       expect(persisted.pickup_lat).toBe(52.14);
       expect(persisted.dropoff_lng).toBe(-106.63);
       expect(persisted.rider_rating).toBe(4.9);
@@ -355,7 +355,7 @@ describe('backgroundMessaging (Android)', () => {
       expect(mockSetItem).toHaveBeenCalledTimes(1);
       expect(mockDisplayRideOfferNotification).toHaveBeenCalledTimes(1);
       const [, body] = mockSetItem.mock.calls[0];
-      const persisted = JSON.parse(body);
+      const persisted = JSON.parse(body as string);
       // No fabricated (0,0) pin -- left undefined rather than defaulted.
       expect(persisted.pickup_lat).toBeUndefined();
       expect(persisted.dropoff_lat).toBeUndefined();

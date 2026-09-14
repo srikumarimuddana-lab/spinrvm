@@ -48,7 +48,7 @@ JSON body when those are missing (see below).
   "message": "Too many requests. Please slow down and try again later.",
   "retry_after": 60,
   "limit": 3,
-  "documentation_url": "https://spinr.app/docs/rate-limits"
+  "documentation_url": "https://spinr.ca/docs/rate-limits"
 }
 ```
 
@@ -183,7 +183,7 @@ to `body.limit` for `RateLimit-Limit`, otherwise `null`.
 # inspect the 4th call's headers + body. Replace the URL host as
 # appropriate.
 for i in 1 2 3 4; do
-  curl -sS -i -X POST https://api.spinr.app/auth/logout \
+  curl -sS -i -X POST https://api-spinr.spinr.ca/auth/logout \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
     -d '{"refresh_token":"x"}' | head -20

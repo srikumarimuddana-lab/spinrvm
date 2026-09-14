@@ -238,6 +238,123 @@ describe('selectBearing — bearing source priority', () => {
   });
 });
 
+describe('selectBearing — courseReference veto (Android Auto opt-in)', () => {
+  // Head-unit report 2026-09-14: on a course-up map the icon showed the same
+  // WORLD bearing (~180°) whichever way the driver went — northbound drawn
+  // facing south, east/west drawn sideways, southbound looking correct because
+  // it happened to agree. On a course-up map the on-screen angle is
+  // (marker bearing − travel bearing), so all four observations solve to one
+  // number: a bearing pinned near 180 while travel was not.
+  const FROM = { latitude: 50.4383, longitude: -104.62 };
+  const NORTH_OF_IT = { latitude: 50.43848, longitude: -104.62 }; // ~20 m north
+  const MIN_MOVE = 3;
+
+  /** A route segment running due south past a driver heading due north. */
+  const southboundSnap = {
+    coordinate: NORTH_OF_IT,
+    bearing: 180,
+    segmentIndex: 0,
+    deviationMeters: 4,
+  };
+
+  const northbound = {
+    snap: southboundSnap,
+    from: FROM,
+    to: NORTH_OF_IT,
+    heading: 0 as number | null,
+    hasMovementBearing: true,
+    minMoveMeters: MIN_MOVE,
+    movedMeters: 20,
+  };
+
+  it('REGRESSION: a south-directed route cannot point a northbound car backwards', () => {
+    const r = selectBearing({ ...northbound, courseReference: 0 });
+    expect(r.bearing).not.toBeCloseTo(180, 0);
+    expect(r.bearing).toBeCloseTo(0, 0);
+  });
+
+  it('leaves default callers (rider-app, driver phone) byte-identical', () => {
+    // The same inputs WITHOUT the opt-in must still take the route branch —
+    // this is the guarantee that shipping the veto cannot move the phone apps.
+    const r = selectBearing(northbound);
+    expect(r).toEqual({ bearing: 180, source: 'route' });
+  });
+
+  it('still prefers the route when it agrees with the vouched-for course', () => {
+    // The veto must not cost the road-alignment the snap exists to provide:
+    // a route bearing a few degrees off the course is ordinary lane geometry.
+    const agreeing = { ...southboundSnap, bearing: 8 };
+    const r = selectBearing({ ...northbound, snap: agreeing, courseReference: 0 });
+    expect(r).toEqual({ bearing: 8, source: 'route' });
+  });
+
+  it('vetoes the travel bearing too, since from/to are snapped positions', () => {
+    // A bad snap corrupts the measured travel bearing as well, so it must not
+    // stand in as independent corroboration once the route has been refused.
+    const r = selectBearing({
+      ...northbound,
+      snap: southboundSnap,
+      from: NORTH_OF_IT,
+      to: FROM, // measured travel also reads southbound
+      courseReference: 0,
+    });
+    expect(r).toEqual({ bearing: 0, source: 'reference' });
+  });
+
+  it('wraps across north rather than reading 359° vs 1° as a contradiction', () => {
+    const r = selectBearing({
+      ...northbound,
+      snap: { ...southboundSnap, bearing: 359 },
+      courseReference: 1,
+    });
+    expect(r).toEqual({ bearing: 359, source: 'route' });
+  });
+
+  it('does NOT veto an ordinary 90° corner — the marker renders ~5 s behind', () => {
+    // markerPlayback delays the rendered position by PLAYBACK_DELAY_MS, so the
+    // reference (roughly now) and the route segment being drawn legitimately
+    // describe different pieces of road through a turn. Vetoing at 90 would
+    // snap the icon onto the post-turn course seconds early, on every corner.
+    const cornering = { ...southboundSnap, bearing: 90 };
+    const r = selectBearing({ ...northbound, snap: cornering, courseReference: 0 });
+    expect(r).toEqual({ bearing: 90, source: 'route' });
+  });
+
+  it('still vetoes a reversal, which is what the threshold is for', () => {
+    for (const bearing of [150, 180, 210]) {
+      const r = selectBearing({
+        ...northbound,
+        snap: { ...southboundSnap, bearing },
+        courseReference: 0,
+      });
+      expect(r.source).not.toBe('route');
+    }
+  });
+
+  it('ignores an unusable reference (-1 / null / NaN) and behaves as before', () => {
+    for (const courseReference of [-1, null, NaN]) {
+      expect(selectBearing({ ...northbound, courseReference })).toEqual({
+        bearing: 180,
+        source: 'route',
+      });
+    }
+  });
+
+  it('does not invent a course at rest just because a reference was supplied', () => {
+    // Stationary, movement has already established a bearing: the marker holds.
+    // Handing it the reference here would reintroduce exactly the placeholder
+    // spin hasMovementBearing exists to prevent.
+    const r = selectBearing({
+      ...northbound,
+      snap: null,
+      movedMeters: 1,
+      courseReference: 0,
+    });
+    expect(r.source).toBe('none');
+    expect(r.bearing).toBeNull();
+  });
+});
+
 describe('coalescePlaybackBearing — per-tick chord can be < 3 m while driving', () => {
   const none: ReturnType<typeof selectBearing> = { bearing: null, source: 'none' };
   const headingZero: ReturnType<typeof selectBearing> = { bearing: 0, source: 'heading' };

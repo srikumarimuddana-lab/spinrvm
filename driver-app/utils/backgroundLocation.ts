@@ -308,6 +308,9 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
       heading: location.coords.heading ?? null,
+      timestampMs: location.timestamp,
+      accuracyM: location.coords.accuracy,
+      speedMps: location.coords.speed,
     });
   }
 

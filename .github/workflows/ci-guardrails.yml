@@ -302,10 +302,22 @@ jobs:
           # silently always fall back to origin/main regardless of what the
           # dispatch input asked for.
           BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
+          # BASE prefers github.event.merge_group.base_sha (the real base
+          # commit GitHub already computed for this merge group) over
+          # reconstructing "origin/main" from the workflow_dispatch
+          # base_branch input -- this workflow's pull_request trigger covers
+          # both `main` and `staging`, but the base_branch-input fallback
+          # alone would always assume "main" even for a staging-targeted
+          # merge_group run (this job is advisory, continue-on-error: true,
+          # so the worst case pre-fix was a misleading coverage-regression
+          # number, never a blocked merge). Same refinement already applied
+          # to migration-safety-gate's 3 steps (CR-2026-085/#5381,
+          # spinr-cicd-infra-reviewer-reviewed) -- CR-2026-087/#5409.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           if [ -z "$BASE" ]; then
-            BASE="origin/${BASE_BRANCH_INPUT:-main}"
+            BASE="${MERGE_GROUP_BASE_SHA:-origin/${BASE_BRANCH_INPUT:-main}}"
           fi
           MB=$(git merge-base "$BASE" HEAD 2>/dev/null || echo "$BASE")
           echo "sha=$MB" >> "$GITHUB_OUTPUT"

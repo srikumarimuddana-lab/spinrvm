@@ -804,6 +804,22 @@ async def _flag_uncorroborated_arrival_if_needed(
     rate signal to watch. Log + metric only, never a block, and never
     touches ``rides.status`` -- already committed by the time this runs
     (see the ``spawn()`` call site in ``arrive_at_pickup``).
+
+    NOTE on which time column: ``captured_at`` is v2-only (migration 235's
+    column comment: "Immutable device capture time for v2 trip breadcrumbs")
+    -- the legacy/WS-single-ping path (``persist_ride_breadcrumbs``, still the
+    dominant ingestion path) never populates it, only ``timestamp``. Filtering
+    on ``captured_at`` alone would silently exclude every breadcrumb from that
+    path (NULL fails a ``>=`` comparison), and ordering ``DESC`` on it is
+    doubly unsafe -- Postgres sorts NULLs first under ``DESC``, so legacy rows
+    would crowd out real ones ahead of the ``LIMIT`` (the exact hazard
+    migration 371's ``route_gap_latest_captures`` already documents from a
+    real incident, ride SPR-PE7TTB). This matches that migration's own
+    resolution instead: match on ``captured_at`` OR ``timestamp`` (whichever a
+    row actually has), ordered on the always-populated ``timestamp`` --
+    correct for both writer generations today, and for v2 rows (where the two
+    columns hold the same value) the ``captured_at`` OR-branch keeps this
+    working unmodified even if ``timestamp`` is ever retired in favour of it.
     """
     window_start = datetime.now(timezone.utc) - _ARRIVAL_CORROBORATION_WINDOW
     try:
@@ -812,7 +828,10 @@ async def _flag_uncorroborated_arrival_if_needed(
             {
                 "driver_id": driver_id,
                 "ride_id": ride_id,
-                "timestamp": {"$gte": window_start},
+                "$or": [
+                    {"captured_at": {"$gte": window_start}},
+                    {"timestamp": {"$gte": window_start}},
+                ],
             },
             order="timestamp",
             desc=True,

@@ -1018,6 +1018,38 @@ class TestArriveAtPickupCorroborationSignal:
 
         return _capture
 
+    def _assert_scoped_corroboration_query(self, filters, kwargs):
+        """Shape assertions for the `driver_location_history` query itself.
+
+        Without this, a fake that branches only on `table` gives zero
+        protection against a future silent regression here (wrong column,
+        dropped driver_id/ride_id scope, an inverted comparison) -- the
+        suite would still show "3 passed" even if the query stopped
+        matching anything real. Also locks in the `$or(captured_at,
+        timestamp)` shape from the column-choice reasoning in
+        `_flag_uncorroborated_arrival_if_needed`'s docstring: `captured_at`
+        alone would silently exclude every legacy/WS-single-ping breadcrumb
+        (NULL fails `>=`), so both branches must be present.
+        """
+        assert filters["driver_id"] == _DRIVER_ID
+        assert filters["ride_id"] == _RIDE_ID
+        or_clause = filters["$or"]
+        assert isinstance(or_clause, list) and len(or_clause) == 2
+        or_cols = {next(iter(leaf)) for leaf in or_clause}
+        assert or_cols == {"captured_at", "timestamp"}, or_cols
+        for leaf in or_clause:
+            ((col, predicate),) = leaf.items()
+            assert set(predicate) == {"$gte"}, (col, predicate)
+            bound = predicate["$gte"]
+            assert isinstance(bound, datetime)
+            # ~5 minutes back -- tolerate scheduling jitter, not a
+            # different window entirely.
+            age = datetime.now(timezone.utc) - bound
+            assert timedelta(minutes=4) < age < timedelta(minutes=6), age
+        assert kwargs.get("order") == "timestamp"
+        assert kwargs.get("desc") is True
+        assert kwargs.get("limit") == 200
+
     async def test_arrival_succeeds_and_no_signal_when_breadcrumb_corroborates(self):
         from backend.routes.drivers.ride_flow import arrive_at_pickup
         from backend.utils import metrics
@@ -1025,6 +1057,7 @@ class TestArriveAtPickupCorroborationSignal:
         ride = _ride(status="driver_accepted")
         # Within ARRIVAL_RADIUS_KM (200m) of the pickup pin at (52.1, -106.6).
         corroborating_point = {"lat": 52.1005, "lng": -106.6005}
+        dlh_calls: list = []
 
         async def fake_get_rows(table, filters=None, **kw):
             if table == "drivers":
@@ -1032,6 +1065,7 @@ class TestArriveAtPickupCorroborationSignal:
             if table == "rides":
                 return [ride]
             if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
                 return [corroborating_point]
             return []
 
@@ -1055,12 +1089,16 @@ class TestArriveAtPickupCorroborationSignal:
 
         after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
         assert after == before
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
 
     async def test_arrival_still_succeeds_but_signal_fires_with_no_corroborating_breadcrumb(self):
         from backend.routes.drivers.ride_flow import arrive_at_pickup
         from backend.utils import metrics
 
         ride = _ride(status="driver_accepted")
+        dlh_calls: list = []
 
         async def fake_get_rows(table, filters=None, **kw):
             if table == "drivers":
@@ -1068,6 +1106,7 @@ class TestArriveAtPickupCorroborationSignal:
             if table == "rides":
                 return [ride]
             if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
                 return []  # no corroborating breadcrumb at all
             return []
 
@@ -1091,6 +1130,9 @@ class TestArriveAtPickupCorroborationSignal:
 
         after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
         assert after == before + 1
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
 
     async def test_breadcrumb_read_failure_is_swallowed_not_raised(self):
         """A DB error on this best-effort read must never surface into the

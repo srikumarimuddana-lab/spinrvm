@@ -25293,16 +25293,20 @@ how much they de-risk a public launch._
 
 ### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
 
-- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+- [x] **Status:** CLOSED (2026-09-14) — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
   Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
   fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
   status line above wrongly listed #4 as still open two days after it had already shipped
   2026-09-09; caught by re-reading the actual code rather than trusting the prior note), the
   delivery-outcome metric (recommendation #3), and the `expo-notifications` dead-code fix
   (recommendation #6, see 2026-09-11 addendum below — turned out bigger than "cleanup") have all
-  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on
-  Fly/Railway, #1) and the iOS background-mode confirmation (#5) remain open — both need access
-  this session doesn't have.
+  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on Fly, #1)
+  and the iOS background-mode confirmation (#5) — the two items this line previously said "need
+  access this session doesn't have" — are both now resolved too, see the 2026-09-13 and
+  2026-09-14 addenda below. All 6 recommendations addressed; closing the entry. Residual caveat
+  carried into the 2026-09-14 addendum rather than claimed away: confirming the *current* Fly
+  credential works is not the same as having confirmed the *original*, pre-remediation one was
+  ever actually broken in production.
 - **Addendum (2026-09-11) — recommendation #6 turned out to be a real routing gap, not just dead
   code, and was fixed, untested on a real device (user's explicit choice — see below):**
   Going deeper on #6 found the original "misleading dead code, cleanup" framing understated it.
@@ -25450,9 +25454,10 @@ how much they de-risk a public launch._
   the OS already shows for every non-data-only type per the correction above; closes the
   "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
   and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
-  #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
-  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below,
-  which resolves this without needing a compiled build.
+  #1 (ops check on Fly/Railway Firebase credential) — see 2026-09-14 addendum below, resolved via
+  a scoped Fly API credential rather than the ops access C99 said no Claude session had; #5 (iOS
+  `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below, which resolves this without
+  needing a compiled build.
 - **Addendum (2026-09-13) — #5 resolved via exhaustive config-plugin source trace, not a compiled
   build, and rescoped to a much narrower (currently inert) impact than finding #10 implied:**
   `driver-app` has no checked-in `ios/` directory (confirmed: pure managed Expo workflow), so the
@@ -25502,6 +25507,45 @@ how much they de-risk a public launch._
   - **What was NOT verified:** an actual compiled `Info.plist` from a real EAS iOS build (this
     session has no such artifact) — the conclusion above is a static trace of every plugin that
     could write this key, not a physical read of the generated file.
+- **Addendum (2026-09-14) — #1 resolved: the Fly-hosted backend's Firebase Admin SDK is confirmed
+  initializing successfully on a verified-valid credential, via a scoped Fly API credential added
+  to this Claude Code environment (network access + API-credential auth, see PR #5403 for the
+  `autoMode` permission side of this) rather than the ops access C99 said no session had:**
+  - Queried `spinr-backend-yyz`'s current secrets via Fly's GraphQL API (`app.secrets`) — this
+    itself hit a real gap: an app-scoped **deploy** token (chosen deliberately over an org-wide
+    **readonly** token, to keep the credential's blast radius to this one app) returns an empty
+    `secrets: []` list even when secrets exist, which is a token-scope limitation of that API
+    path, not evidence of a missing secret — worth remembering for any future session that hits
+    the same empty result.
+  - While setting `FIREBASE_SERVICE_ACCOUNT_JSON` via Fly's dashboard, the value was briefly set
+    to a local file **path** instead of the JSON file's **contents** (a real, human error, not a
+    code bug) — corrected to the actual JSON text in the same session.
+  - A dashboard secret-set does **not** auto-restart already-running Machines-platform machines
+    (confirmed empirically: `updated_at` on both running machines stayed at their pre-edit
+    timestamp after the secret was corrected) — the fix does not take effect until the running
+    machines are actually restarted. Fly's `restartApp` GraphQL mutation (the more discoverable
+    API) does not work for apps on Fly's newer Machines platform — it returned a consistent
+    `SERVER_ERROR` on every attempt; use the Machines API's own
+    `POST /v1/apps/:app/machines/:machine_id/restart` per machine instead.
+  - Restarted both of `spinr-backend-yyz`'s currently-running machines (`894526a9005298`,
+    `863994ce20016d`) individually via that endpoint. Both came back `state: started` with a
+    fresh `updated_at`. Searched Sentry immediately after for `"Firebase initialization failed"`
+    (the exact log/capture text `backend/core/security.py`'s `init_firebase()` emits on failure,
+    tagged `domain=drivers`/`surface=backend`) — zero results in the 24h window covering both
+    restarts, and the app's own status stayed `deployed` throughout (no crash-loop).
+  - **What this confirms:** the Firebase Admin SDK credential currently deployed on Fly parses
+    and initializes without error. **What this does NOT confirm:** whether the *original*,
+    pre-this-session credential (before the file-path mistake and its correction) was itself
+    valid or invalid — the file-path mistake happened md-session while investigating, so there is
+    no clean "before" read to compare against. The infra-shaped root cause finding #1 named at
+    the top of this entry (ADC fallback silently failing on a non-GCP host) remains a real,
+    demonstrated failure *mode* — it's just not confirmed as the thing that was actually
+    happening in production before this session touched the secret.
+  - **Recommendation:** no further action needed on this recommendation. If driver-app push
+    notifications are still reported as not visible after this, the backend credential path is
+    no longer the likely cause — look at the client-side findings (#2, already addressed by
+    recs #4/#6) or gather a fresh Sentry event from the actual device, same as the still-open
+    Notifications-screen crash tracked separately (PR #5341's `ErrorBoundary`).
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 

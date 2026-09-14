@@ -454,16 +454,10 @@ function RootLayout() {
         // first_name/last_name/email, so a stale `profile_complete=false`
         // flag can't push a user with existing profile data back into
         // onboarding.
-        // authStore.initialize() re-throws a SecureStore failure on purpose,
-        // after settling isInitialized/isLoading, so the error stays visible
-        // (shared/store/authStore.ts, the `throw e` added in eaa90b29c).
-        // Catch it HERE: Promise.all short-circuits on the first rejection,
-        // which would skip everything below — Firebase init, notification
-        // permission, the cold-start relaunch marker this app relies on as its
-        // only relaunch counter, and the Notifee ride-offer channel setup.
-        // A driver would go online and never be rung for a ride offer.
-        // The session state is already settled by initialize(); this only
-        // stops one failure from aborting the rest of cold-start.
+        // Keep an unexpected auth rejection from skipping Firebase,
+        // notifications, the relaunch marker, and ride-offer channel setup.
+        // SecureStore read/write failures normally settle inside the store;
+        // this catch reports other failures without aborting unrelated setup.
         await Promise.all([
           initializeAuth().catch((e) => {
             console.error('[Auth] initialize failed; continuing app init:', e);

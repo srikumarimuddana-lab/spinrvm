@@ -405,15 +405,10 @@ function RootLayout() {
         } catch { /* non-fatal */ }
 
         await Promise.all([
-          // authStore.initialize() re-throws a SecureStore failure on purpose,
-          // after settling isInitialized/isLoading, so the error stays visible
-          // (shared/store/authStore.ts, the `throw e` added in eaa90b29c).
-          // Catch it HERE: Promise.all short-circuits on the first rejection,
-          // which would skip hydrateActiveRide() below and leave a rider who
-          // is mid-ride staring at a home screen with no active ride — plus
-          // Firebase init, notification permission, and the Android channels.
-          // The session state is already settled by initialize(); this only
-          // stops one failure from aborting the rest of cold-start.
+          // Keep an unexpected auth rejection from skipping active-ride
+          // hydration and notification/Firebase setup. SecureStore failures
+          // normally settle inside the store; this isolates other failures.
+          // Hydration still requires a usable session and backend response.
           initializeAuth().catch((e) => {
             console.error('[Auth] initialize failed; continuing app init:', e);
           }),

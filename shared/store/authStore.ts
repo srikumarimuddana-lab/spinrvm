@@ -426,10 +426,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       try {
         refreshed = await get().refreshTokens();
       } catch (e) {
-        // refreshTokens can finish definitive-401 teardown and then surface a
-        // SecureStore failure while persisting the logout marker. The session
-        // is already cleared; ensure routing can leave the splash while the
-        // storage error remains visible to the layout/caller.
+        // Defensive guard for unexpected refresh/teardown rejections, such as
+        // cache cleanup failure. Token write errors normally resolve false in
+        // refreshTokens; logout reports marker write errors without rejecting.
+        // Settle loading flags while keeping unexpected errors visible.
         set({ isInitialized: true, isLoading: false });
         throw e;
       }

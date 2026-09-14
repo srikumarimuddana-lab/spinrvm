@@ -278,3 +278,28 @@ State plainly, because the boundary here is unusually wide:
   the edit (12 cases). This does not execute Expo config plugins or Gradle.
 - Not verified: no native build, prebuild, device/head-unit test, Sentry mapping
   upload, or visual test. These apps have no active visual regression tooling.
+
+
+### EAS profile correction
+
+- Issue/root cause: both `test` profiles use `developmentClient: true`, which takes
+  precedence over `buildType: apk` and selects `:app:assembleDebug`. A release-only
+  R8 flag cannot validate minification there. Production also omitted the flag,
+  allowing a value from the selected EAS environment or invoking shell to opt in.
+- Fix/files: both `eas.json` files explicitly set `0` on development, test and
+  production; only preview and driver's android-auto set `1`. This log records it.
+- Before: test=`1`, production/development unset. After: all three explicitly `0`.
+- Alternative: convert test to release. Rejected to preserve its existing Metro
+  development-client workflow; preview already serves release APK testing.
+- Risk/UX: both apps' build configuration only; no mid-session or iOS build-type
+  change. Production remains unminified even when the ambient flag is `1`, provided
+  EAS applies the committed profile env as documented. Debug clients are retained.
+- Rollback: change the affected profile value to `0`, then rebuild/reinstall;
+  do not delete the variable, since that can reveal an inherited value of `1`.
+- Verification: Node profile checks first failed on the original missing explicit
+  off value. After the edit, 39 config/profile cases pass: 12 direct flag cases and
+  27 profile/env cases covering all 9 profiles with ambient unset/`0`/`1` values.
+  Confirmed test clients remain debug and Android Auto submission remains internal.
+  JSON parse and `git diff --check` pass. These checks model documented profile env
+  precedence; they do not run EAS or prove env forwarding on a build worker.
+- Not verified: no native APK/AAB build or installed-binary rollback/device test.

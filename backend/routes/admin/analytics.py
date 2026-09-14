@@ -42,6 +42,13 @@ _KPI_TARGETS: dict = {
     "driver_cancel_rate": {"target": 3.0, "direction": "max", "label": "Driver cancellation rate"},
     "utilization_pct": {"target": 55.0, "direction": "min", "label": "Driver utilization"},
     "dispatch_p95_ms": {"target": 2000.0, "direction": "max", "label": "P95 dispatch latency (offer→accept)"},
+    # Distinct from CLAUDE.md's "weekly active driver retention (week-over-
+    # week)" line — this is signup-cohort W1 retention, not rolling
+    # week-over-week active retention. Same 80% figure reused as a
+    # provisional target since no cohort-specific target has been set; treat
+    # as a placeholder until a human confirms it's the right bar for this
+    # different metric.
+    "driver_retention_w1_pct": {"target": 80.0, "direction": "min", "label": "Driver W1 retention (signup cohort)"},
 }
 
 
@@ -1220,6 +1227,104 @@ async def get_dispatch_latency(
         # so a zone with zero accepted offers in the window simply doesn't
         # appear rather than showing a misleading 0ms.
         "by_zone": dl.get("by_zone") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Retention cohorts ───────────────────────────────────────────────────
+
+
+@api_router.get("/retention-cohorts")
+async def get_retention_cohorts(
+    date_range: str = Query("90d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """W1/W4/W12 rider and driver retention, bucketed by signup week.
+
+    CLAUDE.md lists "weekly active driver retention >= 80%" as a KPI target,
+    but nothing computed it anywhere before this endpoint -- confirmed by
+    grep (zero hits for retention/cohort/repeat_rider/churn in an analytics
+    sense) and by _KPI_TARGETS above, which never included it.
+
+    "Retained" = >= 1 completed ride in that later week (same rule for
+    riders and drivers) -- a deliberate, explicit product decision, not the
+    only possible definition (app-open/session-based retention was
+    considered and set aside since this session couldn't confirm queryable
+    app-open telemetry exists).
+
+    date_range here selects which SIGNUP cohorts to include (default 90d,
+    wider than the other endpoints' 30d default, since a cohort needs up to
+    12 weeks to elapse before its W12 row can appear at all -- a 30d window
+    would exclude most cohorts old enough to have one).
+
+    Aggregated in Postgres (admin_retention_cohorts, migration 421).
+    Cached 5 min, per range + area.
+    """
+    import json as _json
+
+    cache_key = f"analytics:retention-cohorts:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        rc = await db.rpc(
+            "admin_retention_cohorts",
+            {
+                "p_cohort_start": start_date.isoformat(),
+                "p_cohort_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate retention cohorts: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    rc = rc[0] if isinstance(rc, list) and rc else rc
+    if not isinstance(rc, dict):
+        rc = {}
+
+    riders = rc.get("riders") or []
+    drivers = rc.get("drivers") or []
+
+    # CLAUDE.md's KPI target is phrased "week-over-week" (of drivers active
+    # in week N, % still active in week N+1) — a rolling-cohort metric this
+    # endpoint does NOT compute. What's reported here is signup-cohort W1
+    # retention (of drivers who signed up in week X, % active in week X+1),
+    # a related but distinct metric per this session's explicit cohort
+    # definition. Do not treat driver_retention_w1_pct as literally
+    # satisfying that KPI line without re-checking which definition CLAUDE.md
+    # actually intends — see the CLAUDE.md correction this session also made.
+    # Reported only when at least one driver cohort has a W1 row yet — same
+    # "omit rather than fabricate" rule as the SQL function itself.
+    driver_w1 = [row for row in drivers if row.get("horizon_weeks") == 1]
+    kpis = []
+    if driver_w1:
+        latest = max(driver_w1, key=lambda row: row["cohort_week"])
+        kpis.append(_kpi("driver_retention_w1_pct", float(latest.get("retained_pct") or 0)))
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "riders": riders,
+        "drivers": drivers,
+        "kpis": kpis,
     }
     try:
         await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)

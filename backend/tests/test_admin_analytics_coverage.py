@@ -1042,6 +1042,173 @@ class TestDispatchLatencyMigration420:
         assert "WHERE status = 'accepted'" in self._body()
 
 
+class TestRetentionCohorts:
+    RIDER_ROW_W1 = {
+        "cohort_week": "2026-08-03",
+        "horizon_weeks": 1,
+        "cohort_size": 50,
+        "retained": 30,
+        "retained_pct": 60.0,
+    }
+    DRIVER_ROW_W1 = {
+        "cohort_week": "2026-08-03",
+        "horizon_weeks": 1,
+        "cohort_size": 10,
+        "retained": 9,
+        "retained_pct": 90.0,
+    }
+    DRIVER_ROW_W1_LATER = {
+        "cohort_week": "2026-08-10",
+        "horizon_weeks": 1,
+        "cohort_size": 8,
+        "retained": 5,
+        "retained_pct": 62.5,
+    }
+    COHORTS = {"riders": [RIDER_ROW_W1], "drivers": [DRIVER_ROW_W1, DRIVER_ROW_W1_LATER]}
+
+    def _call(self, admin_client, payload=_UNSET, **params):
+        body = self.COHORTS if payload is _UNSET else payload
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[body])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/retention-cohorts", params=params)
+
+    def test_riders_and_drivers_pass_through(self, admin_client):
+        data = self._call(admin_client).json()
+        assert data["riders"] == [self.RIDER_ROW_W1]
+        assert data["drivers"] == [self.DRIVER_ROW_W1, self.DRIVER_ROW_W1_LATER]
+
+    def test_kpi_uses_the_most_recent_driver_w1_cohort(self, admin_client):
+        """Two driver W1 rows exist — the KPI must reflect the latest cohort, not the first."""
+        kpi = self._call(admin_client).json()["kpis"][0]
+        assert kpi["key"] == "driver_retention_w1_pct"
+        assert kpi["actual"] == 62.5  # 2026-08-10 cohort, not the 60-day-old 2026-08-03 one
+        assert kpi["meeting_target"] is False  # 62.5 < 80
+
+    def test_kpi_omitted_when_no_driver_w1_cohort_exists_yet(self, admin_client):
+        data = self._call(admin_client, payload={"riders": [self.RIDER_ROW_W1], "drivers": []}).json()
+        assert data["kpis"] == []
+
+    def test_only_w1_rows_considered_for_the_kpi_not_w4_or_w12(self, admin_client):
+        w4_only = {
+            "cohort_week": "2026-07-01",
+            "horizon_weeks": 4,
+            "cohort_size": 20,
+            "retained": 5,
+            "retained_pct": 25.0,
+        }
+        data = self._call(admin_client, payload={"riders": [], "drivers": [w4_only]}).json()
+        assert data["kpis"] == []
+
+    def test_empty_cohorts_returns_empty_lists_not_an_error(self, admin_client):
+        data = self._call(admin_client, payload={"riders": [], "drivers": []}).json()
+        assert data["riders"] == []
+        assert data["drivers"] == []
+        assert data["kpis"] == []
+
+    def test_wider_default_window_than_other_analytics_endpoints(self, admin_client):
+        """A cohort needs up to 12 weeks to elapse before it has a W12 row —
+        the 30d default used elsewhere would exclude most eligible cohorts."""
+        from datetime import datetime
+
+        rpc = AsyncMock(return_value=[self.COHORTS])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/retention-cohorts")
+        args = rpc.await_args.args[1]
+        start = datetime.fromisoformat(args["p_cohort_start"])
+        end = datetime.fromisoformat(args["p_cohort_end"])
+        assert (end - start).days >= 89  # ~90d default, not 30d
+
+    def test_service_area_filter_is_forwarded_to_the_rpc(self, admin_client):
+        rpc = AsyncMock(return_value=[self.COHORTS])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/retention-cohorts", params={"service_area_id": "regina"})
+        assert rpc.await_args.args[1]["p_service_area_id"] == "regina"
+
+    def test_rpc_error_returns_503(self, admin_client):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/retention-cohorts").status_code == 503
+
+    def test_cache_hit_skips_the_rpc(self, admin_client):
+        import json
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=json.dumps({"cached": True}))),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=AssertionError("should not run"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/retention-cohorts").json() == {"cached": True}
+
+
+class TestRetentionCohortsMigration421:
+    """Static checks on migration 421 — no database is available to run it."""
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "421_retention_cohorts.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_excludes_legacy_imports(self):
+        assert "legacy_import_metadata = '{}'::jsonb" in self._body()
+
+    def test_only_counts_completed_rides(self):
+        assert "r.status = 'completed'" in self._body()
+
+    def test_never_reports_a_horizon_that_has_not_elapsed_yet(self):
+        """A cohort 2 weeks old cannot have a W12 answer — must be omitted, not fabricated."""
+        body = self._body()
+        assert "current_week" in body
+        assert "< (SELECT d FROM current_week)" in body
+
+    def test_riders_bucketed_by_is_rider_drivers_by_becoming_a_driver(self):
+        """Must use is_rider, not the stale role column (migration 101 retired
+        role for this purpose — a driver-first dual-role user keeps
+        role='driver' forever even while actively riding)."""
+        body = self._body()
+        assert "u.is_rider" in body
+        assert "u.role = 'rider'" not in body
+        assert "FROM drivers d" in body
+
+    def test_horizon_elapsed_check_is_strict_less_than(self):
+        """<= would report the current, still-in-progress week as elapsed,
+        using only its partial data — must be strict < instead."""
+        body = self._body()
+        assert body.count("::interval < (SELECT d FROM current_week)") == 2
+        assert "::interval <= (SELECT d FROM current_week)" not in body
+
+    def test_active_weeks_guard_against_null_ride_completed_at(self):
+        body = self._body()
+        assert body.count("r.ride_completed_at IS NOT NULL") == 2
+
+    def test_is_locked_down(self):
+        body = self._body()
+        assert "REVOKE EXECUTE" in body
+        assert "FROM PUBLIC, anon, authenticated" in body
+        assert "GRANT  EXECUTE" in body
+        assert "SECURITY DEFINER" in body
+        assert "SET search_path = public, pg_catalog" in body
+
+    def test_ships_indexes_for_its_own_new_query_pattern(self):
+        """Neither users nor drivers had a created_at index before this."""
+        body = self._body()
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_rider_created_at" in body
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_drivers_created_at" in body
+
+
 class TestMarketplaceMigration351:
     """Static checks on migration 351 — no database is available to run it."""
 

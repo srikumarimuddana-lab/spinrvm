@@ -523,6 +523,7 @@ export {
     getMarketplaceFunnel,
     getSupplyUtilization,
     getDispatchLatency,
+    getRetentionCohorts,
     getEfficiencyMetrics,
     getFinancialMetrics,
     getDemandForecast,

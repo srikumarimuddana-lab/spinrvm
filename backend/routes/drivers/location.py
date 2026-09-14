@@ -70,6 +70,46 @@ async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id
         await db_supabase.update_one("drivers", driver_filter, update_data)
 
 
+_MARKER_ORDER_CACHE_TTL = 120  # seconds; matches location_integrity's teleport-cache TTL
+
+
+async def _newer_than_last_written_marker(driver_id: str, captured_at: datetime) -> bool:
+    """True iff no later point has already updated this driver's live marker.
+
+    Deferring the marker write via BackgroundTasks (see
+    ``_apply_v2_live_marker_update``) removed an ordering guarantee that used
+    to come for free: previously the marker write was awaited before the
+    response returned, so a client that waits for one batch's ack before
+    sending the next could never have two marker writes for the same driver
+    in flight at once. Now the ack returns before the deferred write even
+    starts, so two successive batches' background tasks are independent,
+    unordered asyncio tasks -- an older batch's task finishing after a newer
+    one's would overwrite fresher coordinates with stale ones. This Redis
+    high-water mark (shared across replicas, unlike an in-process lock)
+    makes the write itself order-safe regardless of task scheduling.
+
+    Fails open (returns True) on a Redis error, matching
+    ``check_location_integrity``'s existing degraded-mode precedent -- a
+    transient cache outage must not block real marker writes.
+    """
+    try:
+        from ...utils.redis_client import redis_get, redis_set
+    except ImportError:
+        from utils.redis_client import redis_get, redis_set  # type: ignore
+
+    cache_key = f"loc:marker_hwm:{driver_id}"
+    try:
+        prev_raw = await redis_get(cache_key)
+        if prev_raw:
+            prev_captured_at = datetime.fromisoformat(prev_raw)
+            if prev_captured_at >= captured_at:
+                return False
+        await redis_set(cache_key, captured_at.isoformat(), ttl=_MARKER_ORDER_CACHE_TTL)
+    except Exception:
+        logger.debug("[location] marker order cache check failed for driver_id=%s", driver_id, exc_info=True)
+    return True
+
+
 async def _apply_v2_live_marker_update(
     driver_id: str,
     ride_id: str,
@@ -80,6 +120,7 @@ async def _apply_v2_live_marker_update(
     accuracy: float | None,
     mocked: bool,
     is_online: bool,
+    captured_at: datetime,
 ) -> None:
     """Background task: GPS-integrity-gated live marker write + presence refresh.
 
@@ -113,6 +154,10 @@ async def _apply_v2_live_marker_update(
             driver_id,
             ride_id,
             reason,
+        )
+    elif not await _newer_than_last_written_marker(driver_id, captured_at):
+        logger.info(
+            "location-batch v2: skipped out-of-order marker write for driver_id=%s ride_id=%s", driver_id, ride_id
         )
     else:
         update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
@@ -380,7 +425,10 @@ async def _persist_v2_location_batch(
         # (see _apply_v2_live_marker_update) since the ack below never
         # depends on its outcome; that task also does the is_online-gated
         # presence refresh the synchronous path used to do here, so it is
-        # not scheduled a second time below.
+        # not scheduled a second time below. `latest.captured_at` is passed
+        # through so the deferred write can detect and skip a stale overwrite
+        # if a later batch's task happens to run first (see
+        # _newer_than_last_written_marker).
         background_tasks.add_task(
             _apply_v2_live_marker_update,
             driver["id"],
@@ -392,6 +440,7 @@ async def _persist_v2_location_batch(
             latest.accuracy,
             latest.mocked,
             bool(driver.get("is_online")),
+            latest.captured_at,
         )
     elif driver.get("is_online"):
         background_tasks.add_task(_deps.mark_present, driver["id"])

@@ -107,6 +107,10 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
 
     update_one.side_effect = update
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+    # This test is about persist-then-marker sequencing, not the ordering
+    # guard (covered separately) -- avoid cross-test Redis-fallback pollution
+    # from other tests reusing the same driver_id/captured_at.
+    monkeypatch.setattr(location, "_newer_than_last_written_marker", AsyncMock(return_value=True))
 
     bg = BackgroundTasks()
     response = _run(location.update_location_batch(_payload(), background_tasks=bg, current_user={"id": "user_1"}))
@@ -205,6 +209,38 @@ def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypa
     # filter own that job); only the real-time marker write is skipped, even
     # after the deferred task runs.
     assert events == ["persist"]
+
+
+def test_deferred_marker_write_skips_a_stale_out_of_order_point(monkeypatch: pytest.MonkeyPatch):
+    """Deferring the marker write via BackgroundTasks removed the ordering
+    that used to come for free from a sequential client's request/response
+    cycle. If an older batch's deferred task happens to run after a newer
+    batch's, it must not overwrite the fresher coordinates."""
+    from datetime import datetime, timezone
+
+    from routes.drivers import location as loc
+
+    cache: dict[str, str] = {}
+
+    async def fake_redis_get(key):
+        return cache.get(key)
+
+    async def fake_redis_set(key, value, ttl=None):
+        cache[key] = value
+
+    monkeypatch.setattr("utils.redis_client.redis_get", fake_redis_get)
+    monkeypatch.setattr("utils.redis_client.redis_set", fake_redis_set)
+
+    older = datetime(2026, 6, 1, 23, 6, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 6, 1, 23, 6, 30, tzinfo=timezone.utc)
+
+    # Newer batch's task runs first (as if it raced ahead of the older one).
+    assert _run(loc._newer_than_last_written_marker("driver_1", newer)) is True
+    # Older batch's task runs after -- must be recognized as stale.
+    assert _run(loc._newer_than_last_written_marker("driver_1", older)) is False
+    # A genuinely newer point after that is still accepted.
+    even_newer = datetime(2026, 6, 1, 23, 7, 0, tzinfo=timezone.utc)
+    assert _run(loc._newer_than_last_written_marker("driver_1", even_newer)) is True
 
 
 @pytest.mark.parametrize("payload", [_payload([_point(1), _point(3)]), _payload([_point(i) for i in range(501)])])

@@ -26763,11 +26763,22 @@ how much they de-risk a public launch._
   `ride_read_limit` definition, for reference), `backend/utils/rate_limiter.py`.
 
 ### C115. `admin-dashboard`'s Live Monitoring service-area jump buttons and Follow toggle silently no-op when the map can't render
-- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
-  reviewing the WebGL-stub-guard fix for `monitoring-map.tsx` (this same
-  session, see `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`)
-  — a non-blocking WARNING on that review, deliberately not fixed there
-  since closing it needs a separate design change to a different file.
+- [x] **Status:** CLOSED (2026-09-14). Fixed: `MonitoringMap` gained an
+  optional `onCanRenderChange` callback (fires once on mount with the same
+  `webglOk` value its own render branch uses); `page.tsx` threads that into
+  a new `mapCanRender` state and disables+explains the service-area jump
+  buttons (with a `title` + nearby text, and correctly scoped to only show
+  when a button would actually be present) and, via a new `mapCanRender`
+  prop on `MonitoringToolbar`, the Follow toggle. Regression-tested in
+  `monitoring-map.render.test.tsx`, `monitoring-toolbar-availability.render.test.tsx`,
+  and `monitoring-jump-buttons-availability.render.test.tsx`. See
+  `docs/change-log/2026-09-14-monitoring-map-controls-disabled-state.md`
+  for the full Change Impact Log and PR (filled in on PR creation).
+  Originally found by `spinr-design-consistency-reviewer` while reviewing
+  the WebGL-stub-guard fix for `monitoring-map.tsx` (this same session, see
+  `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`) — a
+  non-blocking WARNING on that review, deliberately not fixed there since
+  closing it needed a separate design change to a different file.
 - **Issue/gap:** `MonitoringMap`'s `onReady` callback (`page.tsx:784`)
   only ever fires from inside `map.on("load", ...)`, which is unreachable
   whenever the new WebGL-capability guard bails out (stubbed/broken WebGL

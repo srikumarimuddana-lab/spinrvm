@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Modal, Pressable,
 } from 'react-native';
 import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -65,6 +65,11 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  // Notifications whose `type` (or a mapped type missing its ride/case id)
+  // has no destination screen previously did nothing at all when tapped
+  // beyond marking as read, with no way to read past the row's own
+  // 2-line-truncated body. This shows the full title/body in place instead.
+  const [selectedNotification, setSelectedNotification] = useState<AppNotification | null>(null);
   const loadNotifications = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -117,20 +122,23 @@ export default function NotificationsScreen() {
       case 'lost_and_found_message':
         if (caseId) router.push({ pathname: '/lost-and-found-chat', params: { caseId } } as any);
         else router.push('/lost-and-found' as any);
-        break;
+        return;
       case 'chat_message':
-        if (rideId) router.push({ pathname: '/chat-driver', params: { rideId } } as any);
+        if (rideId) { router.push({ pathname: '/chat-driver', params: { rideId } } as any); return; }
         break;
       case 'ride_completed':
-        if (rideId) router.push({ pathname: '/ride-completed', params: { rideId } } as any);
+        if (rideId) { router.push({ pathname: '/ride-completed', params: { rideId } } as any); return; }
         break;
       case 'driver_accepted':
       case 'driver_arrived':
-        if (rideId) router.push({ pathname: '/driver-arriving', params: { rideId } } as any);
+        if (rideId) { router.push({ pathname: '/driver-arriving', params: { rideId } } as any); return; }
         break;
       default:
         break;
     }
+    // No destination reached (unmapped type, or a mapped type missing its
+    // required id) — show the full text in place instead of doing nothing.
+    setSelectedNotification(item);
   };
 
   const handleMarkAllRead = async () => {
@@ -238,6 +246,55 @@ export default function NotificationsScreen() {
         />
       )}
 
+      <Modal
+        visible={!!selectedNotification}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedNotification(null)}
+        testID="notification-detail-modal"
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedNotification(null)} />
+          <View style={styles.modalCard}>
+            {selectedNotification && (() => {
+              const typeInfo = getTypeIcon(selectedNotification.type);
+              const iconColor = typeInfo.color || (() => {
+                switch (typeInfo.name) {
+                  case 'car': return colors.primary;
+                  case 'gift': return colors.orange;
+                  case 'shield-checkmark': return colors.danger;
+                  case 'bag-handle': return colors.orange;
+                  case 'chatbubble': return colors.primary;
+                  default: return colors.textDim;
+                }
+              })();
+              return (
+                <>
+                  <View
+                    accessible={false}
+                    importantForAccessibility="no-hide-descendants"
+                    style={[styles.iconWrap, { backgroundColor: `${iconColor}18`, marginBottom: SPACING.sm, marginLeft: 0 }]}
+                  >
+                    <Ionicons name={typeInfo.name as any} size={22} color={iconColor} />
+                  </View>
+                  <Text style={styles.modalTitle}>{selectedNotification.title}</Text>
+                  <Text style={styles.modalTime}>{getRelativeTime(selectedNotification.created_at)}</Text>
+                  <Text style={styles.modalBody} testID="notification-detail-body">{selectedNotification.body}</Text>
+                </>
+              );
+            })()}
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setSelectedNotification(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -293,5 +350,33 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.primary,
     },
     retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: SPACING.lg,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 420,
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: SPACING.lg,
+    },
+    modalTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 4 },
+    modalTime: { color: colors.textDim, fontSize: FONT.label, marginBottom: SPACING.sm },
+    modalBody: { color: colors.text, fontSize: FONT.bodySm, lineHeight: 21, marginBottom: SPACING.lg },
+    modalCloseBtn: {
+      alignSelf: 'flex-end',
+      paddingHorizontal: 20,
+      // 14 (not the row-level retryBtn's 10) since the backdrop tap is the
+      // only other dismiss path and this needs to clear a ~44pt touch target
+      // on its own.
+      paddingVertical: 14,
+      borderRadius: 20,
+      backgroundColor: colors.primary,
+    },
+    modalCloseText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   });
 }

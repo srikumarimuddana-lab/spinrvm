@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
     View,
     StyleSheet,
@@ -6,6 +6,8 @@ import {
     FlatList,
     Alert,
     ActivityIndicator,
+    Modal,
+    Pressable,
 } from 'react-native';
 import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
@@ -78,6 +80,13 @@ function NotificationsScreen() {
     const markReadMutation = useMarkNotificationRead();
     const markAllReadMutation = useMarkAllNotificationsRead();
 
+    // Notifications whose `type` has no destination screen (e.g. auto_offline,
+    // quota_exhausted, ride_cancelled, ride_noshow, safety, general, system)
+    // previously did nothing at all when tapped beyond marking as read — with
+    // no way to read past the row's own 2-line-truncated body. This shows the
+    // full title/body in place instead of silently swallowing the tap.
+    const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
+
     const iconMap: Record<string, { name: string; color: string }> = {
         ride_update: { name: 'car', color: colors.primary },
         ride: { name: 'car', color: colors.primary },
@@ -92,8 +101,9 @@ function NotificationsScreen() {
     };
 
     const markAsRead = (id: string) => {
-        // Mutation invalidates the list cache on success; the screen
-        // re-renders with the row's is_read=true once the server confirms.
+        // Mutation writes is_read=true into the cache optimistically (see
+        // useMarkNotificationRead) — the row updates on tap, not after a
+        // round trip.
         markReadMutation.mutate(id, {
             onError: () => {
                 Alert.alert(t('notifications.markReadError'), t('notifications.markReadErrorBody'));
@@ -114,14 +124,17 @@ function NotificationsScreen() {
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);
         const caseId = item.data?.case_id;
-        if (item.type === 'document_expiry') router.push('/driver/documents' as any);
-        else if (item.type === 'payout_processed') router.push('/driver/activity' as any);
-        else if (item.type === 'ride_offer') router.push('/driver/' as any);
-        else if (item.type === 'quest_earned') router.push('/driver/quests' as any);
-        else if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
+        if (item.type === 'document_expiry') { router.push('/driver/documents' as any); return; }
+        if (item.type === 'payout_processed') { router.push('/driver/activity' as any); return; }
+        if (item.type === 'ride_offer') { router.push('/driver/' as any); return; }
+        if (item.type === 'quest_earned') { router.push('/driver/quests' as any); return; }
+        if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
             if (caseId) router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId } } as any);
             else router.push('/driver/lost-and-found' as any);
+            return;
         }
+        // No destination screen for this type — show the full text in place.
+        setSelectedNotification(item);
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {
@@ -148,6 +161,9 @@ function NotificationsScreen() {
     };
 
     return (
+        // The screen returns a Fragment (FlatList + the fallback detail Modal
+        // below) instead of a bare FlatList; the comment below still applies
+        // to the FlatList itself as the scroll root.
         // FlatList IS the screen's root, with the header as its
         // ListHeaderComponent (stickied via stickyHeaderIndices), rather than
         // a separate View+FlatList sibling pair. The previous sibling layout
@@ -163,6 +179,7 @@ function NotificationsScreen() {
         // this ListHeaderComponent shape instead of a sibling header — this
         // change adopts that proven-working pattern rather than patching the
         // sibling layout further.
+        <>
         <FlatList
             style={styles.container}
             data={notifications}
@@ -227,6 +244,45 @@ function NotificationsScreen() {
                 )
             }
         />
+        <Modal
+            visible={!!selectedNotification}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setSelectedNotification(null)}
+            testID="notification-detail-modal"
+        >
+            <View style={styles.modalBackdrop}>
+                <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedNotification(null)} />
+                <View style={styles.modalCard}>
+                    {selectedNotification && (() => {
+                        const icon = iconMap[selectedNotification.type] || iconMap.system;
+                        return (
+                            <>
+                                <View
+                                    accessible={false}
+                                    importantForAccessibility="no-hide-descendants"
+                                    style={[styles.notifIcon, { backgroundColor: `${icon.color}12`, marginBottom: SPACING.sm }]}
+                                >
+                                    <Ionicons name={icon.name as any} size={22} color={icon.color} />
+                                </View>
+                                <Text style={styles.modalTitle}>{selectedNotification.title}</Text>
+                                <Text style={styles.modalTime}>{formatTime(selectedNotification.created_at)}</Text>
+                                <Text style={styles.modalBody} testID="notification-detail-body">{selectedNotification.body}</Text>
+                            </>
+                        );
+                    })()}
+                    <TouchableOpacity
+                        style={styles.modalCloseBtn}
+                        onPress={() => setSelectedNotification(null)}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('common.close')}
+                    >
+                        <Text style={styles.modalCloseText}>{t('common.close')}</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+        </>
     );
 }
 
@@ -319,6 +375,34 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.primary,
         },
         retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+        modalBackdrop: {
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: SPACING.lg,
+        },
+        modalCard: {
+            width: '100%',
+            maxWidth: 420,
+            backgroundColor: colors.surface,
+            borderRadius: 20,
+            padding: SPACING.lg,
+        },
+        modalTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 4 },
+        modalTime: { color: colors.textDim, fontSize: FONT.label, marginBottom: SPACING.sm },
+        modalBody: { color: colors.text, fontSize: FONT.bodySm, lineHeight: 21, marginBottom: SPACING.lg },
+        modalCloseBtn: {
+            alignSelf: 'flex-end',
+            paddingHorizontal: 20,
+            // 14 (not the row-level retryBtn's 10) since the backdrop tap
+            // is the only other dismiss path and this needs to clear a
+            // ~44pt touch target on its own.
+            paddingVertical: 14,
+            borderRadius: 20,
+            backgroundColor: colors.primary,
+        },
+        modalCloseText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
 }
 

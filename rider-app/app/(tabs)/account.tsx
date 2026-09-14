@@ -22,12 +22,16 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { useWorkProfileStore } from '../../store/workProfileStore';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 
 const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 
 export default function AccountScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // #1231 finding 17: account screens carry name/email/phone — must never
+  // enter session replay.
+  useLogRocketPrivacyScreen();
   const { user, logout } = useAuthStore();
   // `email_verified` isn't declared on the shared `User` type yet (see the
   // cast note beside the Email row below) — read it defensively.

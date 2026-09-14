@@ -60,18 +60,32 @@ ARG AREA=saskatchewan
 ARG JAVA_OPTS="-Xmx4g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
-# Planetiler images have moved the jar between versions (/planetiler.jar →
-# /app/planetiler.jar). Find it dynamically so a tag bump doesn't break the
-# build for a path change.
-RUN JAR=$(find / -maxdepth 3 -name 'planetiler*.jar' -print -quit 2>/dev/null) \
- && test -n "$JAR" || { echo "planetiler jar not found in image — check PLANETILER_TAG" >&2; exit 1; } \
- && echo "using $JAR" \
- && java -jar "$JAR" \
+# The image is built by Jib (planetiler-dist/pom.xml), not by a Dockerfile, so
+# it contains no executable jar and no launcher script — only Jib's exploded
+# layout (/app/resources, /app/classes, /app/libs/*.jar) plus an ENTRYPOINT that
+# a build-time RUN cannot invoke. Reconstruct that entrypoint by hand.
+# `/app/libs/*` is a Java classpath wildcard and must stay quoted so the shell
+# does not glob it. Older images shipped a real executable jar; keep that path
+# as a fallback so an older PLANETILER_TAG still builds.
+RUN set -eux; \
+    MAIN=com.onthegomap.planetiler.Main; \
+    if [ -d /app/libs ]; then \
+      set -- java -cp '/app/resources:/app/classes:/app/libs/*' "$MAIN"; \
+    elif [ -f /planetiler.jar ]; then \
+      set -- java -jar /planetiler.jar; \
+    elif [ -f /app/planetiler.jar ]; then \
+      set -- java -jar /app/planetiler.jar; \
+    else \
+      echo "no planetiler distribution found — check PLANETILER_TAG. /app contains:" >&2; \
+      ls -la /app / >&2 || true; \
+      exit 1; \
+    fi; \
+    "$@" \
       --download \
       --area="${AREA}" \
       --output=/planetiler/tiles.mbtiles \
-      --force \
- && ls -lh /planetiler/tiles.mbtiles
+      --force; \
+    ls -lh /planetiler/tiles.mbtiles
 
 # ── Stage 2: fetch the style + glyphs ─────────────────────────────────────────
 # Kept separate from the runtime image so curl/jq/unzip never ship to production.

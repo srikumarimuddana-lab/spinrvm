@@ -26462,7 +26462,7 @@ how much they de-risk a public launch._
   `ruff check`/`ruff format --check` clean. See
   `docs/change-log/2026-09-14-admin-assign-fcm-pii-filter.md` for the full Change Impact Log.
 - **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
-- **PR:** claude/c112-admin-assign-fcm-pii-filter (see PR description for the number/link).
+- **PR:** #5388.
 
 ### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
 - [ ] **Status:** OPEN, informational — no real PII leaks today.

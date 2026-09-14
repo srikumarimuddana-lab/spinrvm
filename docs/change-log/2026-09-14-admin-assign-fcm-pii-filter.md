@@ -8,7 +8,7 @@
 | Author | Claude Code (spinr session) |
 | Surface(s) | backend |
 | Domain (Sentry tag) | dispatch |
-| PR / commit link | branch `claude/c112-admin-assign-fcm-pii-filter` (see PR) |
+| PR / commit link | #5388 |
 | Related issue or gap ID | ACTION_ITEMS.md C112 |
 
 ## 1. Issue / gap identified

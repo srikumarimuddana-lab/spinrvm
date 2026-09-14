@@ -16,7 +16,7 @@ TodoWrite is unavailable; this is the tracker. Each batch is at most three track
 
 - [x] Driver maps patch + this log: schema, Android Java/C++ generated props, Android-only JS forwarding.
 - [x] Rider sibling maps patch + this log: identical seven-file native addition; driver commit `b3d856443`.
-- [ ] Two app configs + this log: Android-only runtime fencing for native compatibility.
+- [x] Two app configs + this log: driver Android runtime 2.8.0, rider Android 2.2.0; inherited iOS runtimes remain 2.7.0 / 2.1.0. Rider patch commit `30e4ae894`.
 - [ ] Static regression guard + this log: check the full property chain and patch parity.
 
 ## Fix, before / after, and blast radius

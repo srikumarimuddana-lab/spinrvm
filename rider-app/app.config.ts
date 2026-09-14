@@ -106,6 +106,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     },
     android: {
+        // Matches the Android-only native marker patch; iOS runtime is unchanged.
+        runtimeVersion: '2.2.0',
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'

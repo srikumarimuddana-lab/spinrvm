@@ -454,7 +454,22 @@ function RootLayout() {
         // first_name/last_name/email, so a stale `profile_complete=false`
         // flag can't push a user with existing profile data back into
         // onboarding.
-        await Promise.all([initializeAuth(), initializeLocation()]);
+        // authStore.initialize() re-throws a SecureStore failure on purpose,
+        // after settling isInitialized/isLoading, so the error stays visible
+        // (shared/store/authStore.ts, the `throw e` added in eaa90b29c).
+        // Catch it HERE: Promise.all short-circuits on the first rejection,
+        // which would skip everything below — Firebase init, notification
+        // permission, the cold-start relaunch marker this app relies on as its
+        // only relaunch counter, and the Notifee ride-offer channel setup.
+        // A driver would go online and never be rung for a ride offer.
+        // The session state is already settled by initialize(); this only
+        // stops one failure from aborting the rest of cold-start.
+        await Promise.all([
+          initializeAuth().catch((e) => {
+            console.error('[Auth] initialize failed; continuing app init:', e);
+          }),
+          initializeLocation(),
+        ]);
 
         // Device-local alert prefs (sound/vibration) must be hydrated
         // before the first ride offer can ring, not on first Settings

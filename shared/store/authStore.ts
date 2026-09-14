@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
+import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
 // their photo, name, phone, and vehicle after a long idle period or when the
@@ -96,16 +97,15 @@ async function clearAuthStorage(): Promise<void> {
 // Web relies entirely on HttpOnly cookies set by the backend — no client-side
 // token storage, so XSS cannot exfiltrate session tokens. Native uses SecureStore.
 const storage = {
-  async getItem(key: string): Promise<string | null> {
+  // undefined means unavailable; null means a successful read found no value.
+  async getItem(key: string): Promise<string | null | undefined> {
     try {
       if (Platform.OS === 'web') return null;
       return await SecureStore.getItemAsync(key);
     } catch (e) {
-      if (__DEV__) {
-        console.warn('[Storage] SecureStore.getItemAsync failed — tokens will not persist across restarts:',
-          e instanceof Error ? e.message : e);
-      }
-      return null;
+      console.error('[Auth] Secure storage read failed');
+      captureMessage('Secure storage read failed', 'error', { tags: { domain: 'auth' } });
+      return undefined;
     }
   },
   async setItem(key: string, value: string): Promise<void> {
@@ -113,10 +113,9 @@ const storage = {
       if (Platform.OS === 'web') return;
       return await SecureStore.setItemAsync(key, value);
     } catch (e) {
-      if (__DEV__) {
-        console.warn('[Storage] SecureStore.setItemAsync failed — tokens will not persist across restarts:',
-          e instanceof Error ? e.message : e);
-      }
+      console.error('[Auth] Secure storage write failed');
+      captureMessage('Secure storage write failed', 'error', { tags: { domain: 'auth' } });
+      throw new Error('Unable to save your session securely. Please try again.');
     }
   },
   async deleteItem(key: string): Promise<void> {
@@ -263,8 +262,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
     const expiresAt = Date.now() + expiresIn * 1000;
-    setInMemoryToken(token);
-    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     // A live session exists again — clear the end-of-session marker before
     // writing tokens, so a headless task that fires mid-write can never see
     // fresh tokens alongside a stale "signed out" marker and tear itself down.
@@ -277,6 +274,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await storage.setItem('fg_access_token', token);
     // Remove any previously-persisted access token from older app versions.
     await storage.deleteItem('auth_token');
+    // Publish the session only after its credentials have been persisted.
+    // A failed Keychain write must not look like a successful sign-in.
+    setInMemoryToken(token);
+    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     set({ token, refreshToken, tokenExpiresAt: expiresAt });
   },
 
@@ -287,7 +288,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // reading storage first lets the foreground pick up a rotation the
     // background already performed instead of replaying a stale in-memory
     // token (which the backend then 401s as a benign rotation race).
-    let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
+    const storedCandidate = await storage.getItem('refresh_token');
+    // Never replay a potentially stale in-memory token when the shared
+    // credential could not be read (the headless context may have rotated it).
+    if (storedCandidate === undefined) return false;
+    let candidate = storedCandidate ?? get().refreshToken ?? null;
     if (!candidate) {
       // No refresh token but an active session: the session cannot be
       // recovered, so tear it down here — the interceptor's G2 backstop no
@@ -356,6 +361,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             for (const waitMs of [0, 250, 500, 1000, 2000]) {
               if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
               const v = await storage.getItem('refresh_token');
+              if (v === undefined) return false;
               if (v && v !== candidate) { latest = v; break; }
             }
             if (latest !== candidate) {
@@ -394,6 +400,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // refresh token. On cold start (memory wiped), this is the normal path
     // to restore a session without forcing the user back to the OTP screen.
     const storedRefresh = await storage.getItem('refresh_token');
+    if (storedRefresh === undefined) {
+      // A locked/unavailable keychain is not evidence of sign-out. Preserve
+      // all credentials and let the existing recovery flow retry the read.
+      set({ isInitialized: true, isLoading: false, sessionRecoverable: true });
+      return;
+    }
     if (storedRefresh) {
       // Optimistic hydration: paint the last-known profile from cache before
       // the network round-trips below resolve, so the first frame after the
@@ -410,7 +422,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Cache read is best-effort — never block init on it.
       }
 
-      const refreshed = await get().refreshTokens();
+      let refreshed: boolean;
+      try {
+        refreshed = await get().refreshTokens();
+      } catch (e) {
+        // Defensive guard for unexpected refresh/teardown rejections, such as
+        // cache cleanup failure. Token write errors normally resolve false in
+        // refreshTokens; logout reports marker write errors without rejecting.
+        // Settle loading flags while keeping unexpected errors visible.
+        set({ isInitialized: true, isLoading: false });
+        throw e;
+      }
       if (refreshed) {
         const newToken = get().token;
         try {
@@ -490,7 +512,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // B. Transient error (5xx, timeout, "Network request failed") →
       //    refresh token is still valid and still in SecureStore. Do NOT
       //    delete it — the next app launch should retry.
-      if (get().refreshToken || await storage.getItem('refresh_token')) {
+      if (get().refreshToken || (await storage.getItem('refresh_token')) !== null) {
         if (__DEV__) console.log('[Auth] Refresh failed transiently — session recoverable on resume');
         setInMemoryToken(null);
         setCsrfToken(null);
@@ -502,7 +524,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // ── No valid stored token → logged out ──
     if (__DEV__) console.log('[Auth] No stored token → logged out');
     await clearAuthStorage();
-    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
+    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false, sessionRecoverable: false });
   },
 
   createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {
@@ -701,13 +723,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // cannot read this store (see shared/auth/sessionMarker.ts). Written before
     // the logout callbacks below so the driver-app teardown — and any headless
     // task that fires while it runs — both observe it.
-    await storage.setItem(SESSION_ENDED_KEY, '1');
-    // Clear user cache on logout
-    await appCache.clearUserCache();
-    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
-    // Reset all registered per-session stores (rideStore, driverStore) so a
-    // subsequent login never sees ghost data from the previous user.
-    await _runLogoutCallbacks();
+    try {
+      await storage.setItem(SESSION_ENDED_KEY, '1');
+    } catch (e) {
+      // storage.setItem() has already logged and captureMessage'd the raw
+      // write failure (see the wrapper above). Report the logout-specific
+      // CONSEQUENCE separately, because it differs from a generic write
+      // failure: headless contexts that cannot read this store rely on this
+      // marker to know the session ended, so a missing marker can leave
+      // background location tracking armed after sign-out. See
+      // shared/auth/sessionMarker.ts.
+      //
+      // Deliberately does NOT rethrow. Rejecting here protected nothing — the
+      // teardown below and _runLogoutCallbacks() (which tears down driver
+      // location) run either way via the finally — while ~7 callers do
+      // `await logout(); router.replace('/login')` with no catch, so a throw
+      // skipped the navigation and stranded the user on a screen whose store
+      // had just been nulled. The failure stays visible in logs and Sentry,
+      // which is where it is actionable; it is not visible by breaking
+      // sign-out.
+      console.error('[Auth] session-ended marker write failed; headless tracking may remain armed:', e);
+      captureMessage('session-ended marker write failed', 'error', { tags: { domain: 'auth' } });
+    } finally {
+      // A failed marker write must surface, but cannot skip local teardown.
+      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
+      try {
+        await appCache.clearUserCache();
+      } finally {
+        // Reset all registered per-session stores even if cache clearing fails.
+        await _runLogoutCallbacks();
+      }
+    }
   },
 
   // "Sign out of all devices" — closes B-P1-13. Backend bumps

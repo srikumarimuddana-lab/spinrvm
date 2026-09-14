@@ -405,7 +405,13 @@ function RootLayout() {
         } catch { /* non-fatal */ }
 
         await Promise.all([
-          initializeAuth(),
+          // Keep an unexpected auth rejection from skipping active-ride
+          // hydration and notification/Firebase setup. SecureStore failures
+          // normally settle inside the store; this isolates other failures.
+          // Hydration still requires a usable session and backend response.
+          initializeAuth().catch((e) => {
+            console.error('[Auth] initialize failed; continuing app init:', e);
+          }),
           initializeLocation(),
           hydrateWorkProfile(),
         ]);

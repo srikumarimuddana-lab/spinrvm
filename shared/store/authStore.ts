@@ -725,6 +725,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // task that fires while it runs — both observe it.
     try {
       await storage.setItem(SESSION_ENDED_KEY, '1');
+    } catch (e) {
+      // storage.setItem() has already logged and captureMessage'd the raw
+      // write failure (see the wrapper above). Report the logout-specific
+      // CONSEQUENCE separately, because it differs from a generic write
+      // failure: headless contexts that cannot read this store rely on this
+      // marker to know the session ended, so a missing marker can leave
+      // background location tracking armed after sign-out. See
+      // shared/auth/sessionMarker.ts.
+      //
+      // Deliberately does NOT rethrow. Rejecting here protected nothing — the
+      // teardown below and _runLogoutCallbacks() (which tears down driver
+      // location) run either way via the finally — while ~7 callers do
+      // `await logout(); router.replace('/login')` with no catch, so a throw
+      // skipped the navigation and stranded the user on a screen whose store
+      // had just been nulled. The failure stays visible in logs and Sentry,
+      // which is where it is actionable; it is not visible by breaking
+      // sign-out.
+      console.error('[Auth] session-ended marker write failed; headless tracking may remain armed:', e);
+      captureMessage('session-ended marker write failed', 'error', { tags: { domain: 'auth' } });
     } finally {
       // A failed marker write must surface, but cannot skip local teardown.
       set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });

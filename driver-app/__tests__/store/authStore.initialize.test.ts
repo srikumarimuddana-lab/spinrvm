@@ -284,7 +284,17 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
     (SecureStore.setItemAsync as jest.Mock).mockRejectedValueOnce(new Error('Keychain unavailable'));
     const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(useAuthStore.getState().initialize()).rejects.toThrow('Unable to save your session securely');
+    // Previously asserted `.rejects.toThrow('Unable to save your session
+    // securely')`. That rejection originated in logout()'s marker write and
+    // propagated out through refreshTokens() -> initialize(). logout() now
+    // reports instead of rejecting, so this path settles cleanly. The
+    // assertions below are this test's real subject and are unchanged:
+    // initialization is settled, the session is fully wiped, and the failure
+    // is still surfaced.
+    //
+    // initialize() can still reject via setTokens() (a refresh-token write
+    // failure), which is a different path and remains covered below.
+    await expect(useAuthStore.getState().initialize()).resolves.toBeUndefined();
 
     expect(useAuthStore.getState()).toMatchObject({
       token: null,
@@ -301,12 +311,27 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
 });
 
 describe('session-ended marker + full token wipe', () => {
-  it('still clears in-memory identity when persisting the logout marker fails', async () => {
+  it('resolves and reports — never rejects — when persisting the logout marker fails', async () => {
+    // Contract: a failed marker write must stay VISIBLE (console.error +
+    // captureMessage) but must not reject.
+    //
+    // This previously asserted `.rejects.toThrow()`. Rejecting protected
+    // nothing — the local teardown and _runLogoutCallbacks() (which tears down
+    // driver location) run either way via the finally — while ~7 callers do
+    // `await logout(); router.replace('/login')` with no catch, so the throw
+    // skipped the navigation and stranded the user on a screen whose store had
+    // just been nulled. See docs/change-log/2026-09-13-logout-must-not-reject.md.
     useAuthStore.setState({ token: 'access', refreshToken: 'refresh', user: { id: 'user' } as any });
     (SecureStore.setItemAsync as jest.Mock).mockRejectedValueOnce(new Error('Keychain unavailable'));
     const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(useAuthStore.getState().logout({ revokeServerSession: false })).rejects.toThrow();
+
+    await expect(
+      useAuthStore.getState().logout({ revokeServerSession: false }),
+    ).resolves.toBeUndefined();
+
     expect(useAuthStore.getState()).toMatchObject({ token: null, refreshToken: null, user: null });
+    // The failure is still surfaced — silence here would be the real defect.
+    expect(errorLog).toHaveBeenCalled();
     errorLog.mockRestore();
   });
 

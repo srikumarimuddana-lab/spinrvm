@@ -94,6 +94,8 @@ export function snapToRoute(
   route: readonly TrackingLatLng[] | null | undefined,
   maxSnapMeters = 35,
   preferredFromIndex?: number | null,
+  /** Opt-in movement constraint for navigation; never infer it from route order. */
+  travelBearing?: number | null,
 ): RouteSnapResult | null {
   if (!route || route.length < 2) return null;
 
@@ -126,6 +128,12 @@ export function snapToRoute(
       const abx = bx - ax;
       const aby = by - ay;
       const lenSq = abx * abx + aby * aby;
+      if (travelBearing != null && Number.isFinite(travelBearing)) {
+        if (lenSq === 0) continue;
+        const direction = bearingDegrees(a.latitude, a.longitude, b.latitude, b.longitude);
+        const error = Math.abs(((direction - travelBearing + 540) % 360) - 180);
+        if (error > 60) continue;
+      }
       // Zero-length segment (duplicate vertex) — treat as the point itself.
       const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
       const cx = ax + t * abx;

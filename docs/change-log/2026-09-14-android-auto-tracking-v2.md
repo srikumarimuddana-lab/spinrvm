@@ -11,7 +11,7 @@ User reports east/west sideways motion and northbound travel with the vehicle fa
 The user requested coding only and will perform device testing to conserve usage. No broad test suites or native builds are run during this implementation. Local static validation and focused review remain necessary. Each code batch is committed before the next starts; this checklist is the task tracker because TodoWrite is unavailable.
 
 - [x] Foreground measurement metadata and chronological acceptance (`a6835daa9`).
-- [ ] Background producer metadata.
+- [x] Background producer metadata (`8b7d589ea`).
 - [ ] Direction-aware matching and route animation geometry.
 - [ ] Marker integration on both tracked forks.
 - [ ] Android Auto camera and playback route continuity.
@@ -23,6 +23,7 @@ The user requested coding only and will perform device testing to conserve usage
 |---|---|---|
 | `driver-app/lib/androidAuto/carFixChannel.ts`, `useCarLocation.ts` | Retain native capture time, accuracy and speed; reject stale/older/invalid display updates; bound watchdog concurrency | All car display producers share the channel. `register.ts` also reads its last fix for SOS; rejected display fixes leave the last valid position available. Timestamped cache entries retain capture time. |
 | `driver-app/lib/androidAuto/carLocationTask.ts`, `driver-app/utils/backgroundLocation.ts` | Preserve capture metadata for headless fixes; choose latest car-task sample by timestamp | Prevents old trip batches from reversing the car display; raw recording still happens before the display gate. |
+| `shared/utils/vehicleTracking.ts`, `shared/utils/markerRouteTracking.ts` | Optional travel-direction constraint and bounded road-vertex animation steps | Existing `snapToRoute` callers (both markers, shared RouteLine, dashboard deviation checks) keep prior behavior unless a movement constraint is supplied. |
 
 Trip recorder persistence, billing, ride state transitions, and backend writes are unchanged. Display-only filtering is downstream of raw trip recording. Heading/route changes will be scoped to Android Auto through opt-in marker props; common metadata plumbing also affects phone marker inputs. Check both marker forks listed in `docs/known-forks.md`.
 

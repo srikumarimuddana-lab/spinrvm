@@ -26444,6 +26444,51 @@ how much they de-risk a public launch._
   independent of the function body:** the trigger-level conflict itself —
   `audit_logs_no_mutate` (57) unconditionally blocks DELETE regardless of
   the flag, for *any* caller, function-body history aside.
+- **Correction (2026-09-14, same day, per `spinr-regulatory-compliance-checker`'s
+  adversarial review of this PR): the "Blast radius if migration 57 is live
+  in production" section above is wrong about how the bug currently
+  manifests — the trigger conflict itself is still real, but today's actual
+  effect is a silent no-op, not a crashing rollback.** Traced which
+  `purge_pii_retention()` body is actually live: `335_purge_pii_retention_step_a_planned_route_polyline.sql`
+  is the highest-numbered `CREATE OR REPLACE FUNCTION purge_pii_retention`
+  in the repo (confirmed: `grep -rl "CREATE OR REPLACE FUNCTION
+  purge_pii_retention" backend/migrations/*.sql | sort -V` puts it last;
+  nothing after it, nothing in `NEVER_APPLY`), so it is the current body,
+  not 56/57's original version this entry's blast-radius section assumed.
+  Read Step G directly (335, lines ~175-184): unlike 56/57's original
+  flag-set/DELETE/flag-clear-with-exception-handler shape, **335's Step G
+  never calls `set_config('spinr.audit_logs.allow_delete', 'true', true)`
+  at all** — it's a bare `IF ... THEN DELETE ... ELSE SELECT COUNT(*) ...
+  END IF` with no `PERFORM set_config` and no `BEGIN/EXCEPTION WHEN
+  OTHERS/RAISE` wrapper, unlike every sibling step in the same function
+  (compare Step M / `compliance_export_events`, lines ~332-343, and the
+  DSAR `financial_events` delete, lines ~216-223, both of which correctly
+  set the flag, wrap the delete, and reset the flag in an exception
+  handler). Independently re-verified by direct read of 335's SQL, not
+  just accepted from the review. Since the flag is never set,
+  `current_setting(..., true) = 'true'` evaluates false every time, so the
+  DELETE branch is **dead code today** — the ELSE branch's `SELECT
+  COUNT(*)` always runs instead, silently misreporting a *count* as a
+  *deleted* count in the function's JSON result. No exception is raised,
+  nothing rolls back, and no other step (A–F, H–N) is affected. Since
+  `audit_logs` was only created in migration 06 (comparatively recent), no
+  row is anywhere near the 7-year retention threshold yet either way, so
+  this is a **dormant, zero-observable-impact bug today, not an active
+  silently-failing retention violation** — correcting the "every retention
+  step... could be silently failing on every scheduled run" claim above,
+  which does not hold against the actually-live function body.
+  **Why this matters more than the original framing, not less:** because
+  335's Step G has no exception handler, a future fix that "restores" the
+  intended behavior by literally adding back `PERFORM set_config(...,
+  'true', true)` — without *also* either fixing/narrowing migration 57's
+  trigger or wrapping the DELETE in the same `BEGIN/EXCEPTION WHEN
+  OTHERS/RAISE` pattern every sibling step uses — would convert today's
+  silent no-op into exactly the crashing, whole-function-rollback failure
+  mode this entry originally described, the first time the retention job
+  runs after that change. The fix options in "Not fixed here" below remain
+  correct, but **must be paired with adding Step G's missing exception
+  handler** (matching Steps H and M's shape) before any flag-restoring fix
+  ships, or the "fix" itself becomes the regression.
 - **Adjacent, already-tracked context found while investigating:** migration
   317's `check_disabled_guard_triggers()` (a 6-hourly `utils/
   retention_guard_monitor.py` scan for *disabled* append-only guard triggers,
@@ -26465,7 +26510,14 @@ how much they de-risk a public launch._
   only (it would then be fully redundant with 51's, which migration 317's own
   comment already treats as acceptable) and leave DELETE gating exclusively
   to 56's trigger — decide which after confirming what's actually live in
-  production per the point above.
+  production per the point above. **Per the 2026-09-14 correction below:
+  whichever trigger fix is chosen, it must ship together with adding the
+  missing `PERFORM set_config(...)` / `BEGIN...EXCEPTION WHEN OTHERS...RAISE...END`
+  wrapper to 335's Step G** (currently absent, unlike every sibling delete
+  step in the same function) — restoring the flag-set call alone, without
+  either the trigger fix or Step G's exception handler, would turn today's
+  silent no-op into an unhandled-exception rollback of the entire
+  `purge_pii_retention()` call.
 - **Files (reference only, nothing changed by this entry beyond the new
   regression test):** `backend/migrations/50_audit_logs_append_only.sql`,
   `51_audit_logs_lockdown.sql`, `56_audit_logs_delete_lockdown.sql`,

@@ -265,3 +265,35 @@ def test_ride_without_a_ride_code_does_not_use_an_unencodable_placeholder():
     ride["id"] = ""
     pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
     assert bytes(pdf).startswith(b"%PDF")
+
+
+# ── Tax-gap fallback + discount interaction (follow-up, found resolving a
+# merge conflict against another session's C102 fix) ─────────────────────
+#
+# The other session's fix (see the "Promo/discount line item (C102)" block
+# above) deliberately left one residual documented as out of scope in
+# ACTION_ITEMS.md: the "no tax_breakdown persisted" gap fallback below
+# inferred tax as (persisted_grand - subtotal), which is wrong once a
+# discount is also present, since grand_total = subtotal + tax - discount.
+# Fixed as part of resolving the merge; this is the one test that isn't
+# already covered by the block above.
+
+
+def test_tax_gap_fallback_correctly_separates_tax_from_discount():
+    """Regression for a latent bug this fix also closes: on a legacy ride with
+    no tax_breakdown, the old gap formula (persisted_grand - subtotal) treated
+    the WHOLE gap as tax — silently wrong (or a dropped Tax line entirely,
+    since a negative gap failed the `> 0.005` guard) whenever a discount was
+    also present, since grand_total = subtotal + tax - discount."""
+    ride = {
+        **_RIDE,
+        "tax_breakdown": {},
+        "discount_amount": "2.00",
+        # True tax is 1.21 (as in _RIDE's GST+PST); grand_total reflects
+        # subtotal(11.00) + tax(1.21) - discount(2.00) = 10.21.
+        "grand_total": "10.21",
+    }
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Tax", "$1.21") in rows
+    assert ("Promo discount", "-$2.00") in rows
+    assert grand == Decimal("10.21")

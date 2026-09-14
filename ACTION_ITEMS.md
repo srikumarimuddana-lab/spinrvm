@@ -25555,13 +25555,20 @@ how much they de-risk a public launch._
   amount in that fallback case — fixed in the same commit. Full detail, before/after, and blast
   radius: `docs/change-log/2026-09-13-c102-receipt-discount-line.md`.
 - **Not fixed, deliberately out of scope (two pre-existing issues surfaced by the same review):**
-  1. the "gap"-based tax fallback in both files (used only when `tax_breakdown` is empty) can
-     silently omit the Tax line entirely when a large discount pushes the gap negative —
-     legacy-row-only.
+  1. ~~the "gap"-based tax fallback (used only when `tax_breakdown` is empty) can silently omit
+     the Tax line entirely when a large discount pushes the gap negative — legacy-row-only.~~
+     **Fixed 2026-09-13, same day, in a follow-up commit** — another session had independently
+     fixed the same C102 disclosure gap (including this exact residual) in parallel; resolving
+     the merge conflict between the two branches surfaced the difference and kept the more
+     complete fix rather than re-deferring it. Correction to this note's own claim: the gap-based
+     fallback only exists in `receipt_pdf.py::_fare_lines` — `email_receipt.py::_build_fare_rows`'s
+     legacy branch reads `ride.get("tax_amount")` directly, no gap inference, so "in both files"
+     above was wrong; nothing needed fixing there. Full detail:
+     `docs/change-log/2026-09-13-c102-tax-gap-fallback-discount-followup.md`.
   2. `routes/rides/_shared.py`'s stop-edit re-estimate path already has a documented residual
      (comment marked "N3") where its discount subtraction is uncapped, unlike every render-side
-     cap. Neither is introduced or worsened by this fix; both are candidates for their own
-     ACTION_ITEMS entries if picked up later.
+     cap. Not introduced or worsened by this fix; still a candidate for its own ACTION_ITEMS
+     entry if picked up later.
 - **Shared-line-builder refactor** (a future fare-line type shouldn't have to be added in three
   places) remains a separate, larger change from this one-line-item fix, out of scope here as
   originally noted.
@@ -25908,7 +25915,30 @@ how much they de-risk a public launch._
   directly and so do not, by themselves, demonstrate reachability against the real current schema).
 
 ### C110. `test_settings_column_parity.py`'s regression check only covers migration 313's original 24 fields, not any `SettingsUpdateRequest` field added since
-- [ ] **Status:** OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
+- [x] **Status:** CLOSED 2026-09-13 — `test_every_api_field_has_a_column` now cross-references
+  every field on `SettingsUpdateRequest` (not just the pinned 313 set) against
+  `_declared_settings_columns() | _baseline_settings_columns()`.
+  **Revised after `spinr-test-coverage-reviewer`'s adversarial pass on the first draft**, which
+  found the first draft's `_baseline_settings_columns()` (a hand-typed 22-field allowlist) had a
+  real problem: 7 of those 22 fields (`company_app_download_url`, `safety_team_email`,
+  `safety_team_phone`, `sos_show_share_trip`, `sos_show_report_issue`,
+  `new_ride_requests_enabled`, `dispute_stripe_evidence_submission_enabled`) had **zero** schema
+  evidence anywhere in the repo, and two are kill switches whose own Change Impact Logs
+  (`docs/change-log/2026-08-22-g5-new-ride-requests-kill-switch.md` §10,
+  `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`) explicitly say they
+  were never exercised against a real Supabase row — "reviewed against production usage" was not
+  a safe claim for those 7. Final fix: (1) `_baseline_settings_columns()` now mechanically parses
+  `backend/supabase_schema.sql`'s bootstrap `CREATE TABLE settings (...)` block instead of a
+  hand-typed guess, which independently confirms 15 of the original 22 (including the 3 that were
+  a genuine open question — see C111, closed below); (2) the remaining 7 got migration
+  **419_settings_missing_columns_round2.sql** (reviewed by `spinr-migration-reviewer`) rather than
+  a baseline guess — the direct fix for a genuinely missing column, matching migration 313/415/418's
+  own precedent. Added two regression tests: one proves a field injected directly into
+  `SettingsUpdateRequest.model_fields` with neither a migration nor a baseline entry is caught by
+  the *actual* check's own field-selection code path (not just the extracted set-arithmetic
+  helper — the reviewer flagged the first draft's version of this test for only exercising the
+  helper), the other asserts the two column sources (migrations, bootstrap file) don't overlap.
+  Old status: OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
 - **Found by:** `spinr-migration-reviewer`'s pre-merge review of PR #5312 (`driver_turn_by_turn_enabled`
   settings-write fix, migration 418 — originally drafted as 416, renumbered to 417 when PR #5307
   merged its own, unrelated migration 416 first, then renumbered again to 418 when a second,
@@ -25933,7 +25963,36 @@ how much they de-risk a public launch._
   specific protection (a flag-specific test is still good practice for its own default-value/behavior
   assertions, just not required to catch a missing-migration regression).
 - **Files:** `backend/tests/test_settings_column_parity.py` (`_EXPECTED_313_COLUMNS`,
-  `test_every_api_field_has_a_column`), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`).
+  `test_every_api_field_has_a_column`, `_regressed_settings_fields` — new,
+  `_baseline_settings_columns` — rewritten to parse `supabase_schema.sql`,
+  `_fields_missing_columns` — new), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`),
+  `backend/migrations/419_settings_missing_columns_round2.sql` (new).
+
+### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110
+- [x] **Status:** CLOSED 2026-09-13, same session — resolved without a live schema connection.
+  `backend/supabase_schema.sql` (the bootstrap "run this in the Supabase SQL Editor" DDL) has an
+  explicit `CREATE TABLE settings (...)` block that lists all three columns verbatim
+  (`driver_matching_algorithm TEXT DEFAULT 'nearest'`, `min_driver_rating FLOAT DEFAULT 4.0`,
+  `search_radius_km FLOAT DEFAULT 10.0`), alongside 12 of the other original-22 baseline entries —
+  found by `spinr-test-coverage-reviewer`'s pass on C110, which had not been checked before this
+  was filed. `test_settings_column_parity.py`'s `_baseline_settings_columns()` now parses this
+  file mechanically instead of asserting a reviewed-by-hand claim, so this is a structural fix,
+  not just a one-off confirmation. No migration or code change needed for these 3 specifically —
+  they coexist by design with the per-service-area override columns
+  `10b_service_area_driver_matching.sql` adds to `service_areas` (global default vs. per-area
+  override, per `dispatch_service.py::resolve_matching_config`'s own precedence comment).
+  Old status: OPEN — needs a live schema check, not code.
+- **What was suspicious:** these 3 fields are declared on `SettingsUpdateRequest`
+  (`backend/routes/admin/settings.py`) and read as a *global* default in
+  `services/dispatch_service.py::resolve_matching_config` (`app_settings.get("driver_matching_algorithm")`
+  etc., falling back to a per-area override in `service_areas` first). No migration in
+  `backend/migrations/` adds any of the three to `settings` — the only migration that adds
+  columns with these exact names is `10b_service_area_driver_matching.sql`, and it targets
+  `service_areas`, not `settings`.
+- **Files:** `backend/tests/test_settings_column_parity.py` (`_baseline_settings_columns` now
+  parses `backend/supabase_schema.sql`), `backend/services/dispatch_service.py`
+  (`resolve_matching_config`), `backend/schemas.py` (`AppSettings`), `backend/routes/admin/settings.py`
+  (`SettingsUpdateRequest`), `backend/migrations/10b_service_area_driver_matching.sql`.
 
 ### C108. `auth.users` is completely empty in production — every `auth.uid()`-based RLS policy in the schema (not just C107's 10 tables) is currently unreachable for the same reason
 - [ ] **Status:** OPEN, informational/documentation-debt — no live incident, no action required

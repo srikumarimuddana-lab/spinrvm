@@ -254,4 +254,12 @@ EXPOSE 8080
 # breaks behind a proxy that rewrites Host — the style loads and every tile
 # 404s, which looks exactly like a dead basemap. Set PUBLIC_URL on Railway to
 # https://<your-domain>/ (trailing slash required).
-CMD ["sh", "-c", "exec /usr/src/app/run.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}"]
+#
+# There is no run.sh in this image — the ENTRYPOINT is docker-entrypoint.sh, and
+# re-entering it here is deliberate: it starts Xvfb only when its first argument
+# is NOT an executable, and the raster /styles/<id>/{z}/{x}/{y}.png endpoint is
+# headless GL and dies without that display. Point this at node directly and the
+# container boots fine, serves vector tiles fine, and every raster tile fails.
+# The sh -c wrapper is what expands ${PORT}/${PUBLIC_URL}; the exec replaces the
+# shell so signals reach node.
+CMD ["sh", "-c", "exec /usr/src/app/docker-entrypoint.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}"]

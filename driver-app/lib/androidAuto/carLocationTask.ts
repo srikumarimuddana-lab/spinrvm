@@ -178,7 +178,10 @@ export async function handleCarLocationTask({
   // Only the newest sample matters. This drives a map marker, not a route
   // history — replaying a deferred batch would rewind the marker across
   // positions the driver has already left.
-  const latest = locations[locations.length - 1];
+  const latest = locations.reduce<(typeof locations)[number] | undefined>(
+    (best, fix) => !Number.isFinite(fix.timestamp) ? best :
+      (!best || fix.timestamp > best.timestamp ? fix : best), undefined,
+  );
   if (!latest?.coords) return;
 
   // Display trust gate: a mock-location app must not be able to drive where
@@ -195,6 +198,9 @@ export async function handleCarLocationTask({
     latitude: latest.coords.latitude,
     longitude: latest.coords.longitude,
     heading: latest.coords.heading ?? null,
+    timestampMs: latest.timestamp,
+    accuracyM: latest.coords.accuracy,
+    speedMps: latest.coords.speed,
   });
 }
 

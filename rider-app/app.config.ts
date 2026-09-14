@@ -4,12 +4,11 @@ const APP_NAME = 'Spinr';
 const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spinr.driver (no clash)
 const SCHEME = 'spinr-user';
 
-// R8 minification for Android release builds. OFF unless the EAS build profile
-// exports SPINR_ANDROID_MINIFY=1 (see eas.json). Staged deliberately: the first
-// minified binaries are internal test/preview builds, never a store release —
-// R8 breakage in this stack surfaces only in release builds. Flip production on
-// by adding the var to eas.json's production env once a preview build is
-// device-validated. See docs/android-build-strategy.md § R8 minification.
+// R8 is opt-in for Android release builds via SPINR_ANDROID_MINIFY=1.
+// Use preview for validation; test/development are debug clients.
+// Production stays explicitly off in eas.json until device validation and
+// Sentry mapping upload are complete.
+// See docs/android-build-strategy.md for the rollout and rebuild-only rollback.
 const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
@@ -239,7 +238,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 // reachable only by name — a real hazard for the sibling driver
                 // app (its Notifee ride-offer channel names res/raw). Keeping
                 // both apps on code-only minification keeps them comparable.
-                enableProguardInReleaseBuilds: ANDROID_MINIFY,
+                enableMinifyInReleaseBuilds: ANDROID_MINIFY,
+                enableShrinkResourcesInReleaseBuilds: false,
             },
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).
             ios: {

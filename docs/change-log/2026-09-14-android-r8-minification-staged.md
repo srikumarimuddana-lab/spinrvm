@@ -248,3 +248,33 @@ State plainly, because the boundary here is unusually wide:
 - [x] No silent behavior change to an already-shipped flow — production is untouched by
       design, and §5 says so explicitly rather than implying "no user impact" from the
       diff's size
+
+
+## PR #5418 review corrections — 2026-09-14
+
+### Config correction
+
+- Issue/root cause: the rollout instructions name the legacy ProGuard Gradle key.
+  Expo normalizes the deprecated config alias to `enableMinifyInReleaseBuilds`;
+  the generated property is `android.enableMinifyInReleaseBuilds`. The alias is
+  backward-compatible, so this is not evidence that the original build was broken.
+- Fix: use the current config key in both apps and explicitly set resource shrinking
+  to false. Retain the driver's existing Nitro keep rule.
+- Files: `rider-app/app.config.ts`, `driver-app/app.config.ts`, and this impact log.
+- Before: `enableProguardInReleaseBuilds: ANDROID_MINIFY`; after:
+  `enableMinifyInReleaseBuilds: ANDROID_MINIFY` and
+  `enableShrinkResourcesInReleaseBuilds: false`.
+- Blast radius: both native Android release builds and their bundled native modules;
+  no backend, ride-state, wallet, or API mutation. No iOS configuration change.
+- UX: no mid-session change or new copy; only subsequently built Android binaries.
+- Alternative: retain the alias and correct only the docs. Using the current key
+  avoids depending on the compatibility shim and matches the generated Gradle key.
+- Rollback: set the affected profile flag to `0`, rebuild and reinstall/distribute
+  a new binary. Neither an env change nor an OTA update alters an installed APK.
+- Verification: a one-off Node 24 script strips TypeScript and evaluates both real
+  config functions for unset, `0`, `1`, `true`, `false`, and empty flag values;
+  checks the current key, explicit resource setting, and retained Nitro rule.
+  The current-key assertion fails on the original configuration and passes after
+  the edit (12 cases). This does not execute Expo config plugins or Gradle.
+- Not verified: no native build, prebuild, device/head-unit test, Sentry mapping
+  upload, or visual test. These apps have no active visual regression tooling.

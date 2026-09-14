@@ -6,7 +6,7 @@ import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Pencil, Check, Trash2, X } from "lucide-react";
 import {
-    MAP_STYLE_URL,
+    primaryMapStyle,
     addStandardControls,
     fitBoundsToPoints,
     polygonPointsToGeoJSON,
@@ -126,7 +126,7 @@ export default function GeofenceMap({
 
         const map = new maplibregl.Map({
             container: containerRef.current,
-            style: MAP_STYLE_URL,
+            style: primaryMapStyle(),
             center: [effectiveCenter.lng, effectiveCenter.lat],
             zoom,
         });

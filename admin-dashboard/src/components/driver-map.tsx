@@ -6,7 +6,7 @@ import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
     DEFAULT_CENTER,
-    MAP_STYLE_URL,
+    primaryMapStyle,
     addStandardControls,
     fitBoundsToPoints,
     makeCircleMarkerEl,
@@ -58,7 +58,7 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
 
         const map = new maplibregl.Map({
             container: containerRef.current,
-            style: MAP_STYLE_URL,
+            style: primaryMapStyle(),
             center: DEFAULT_CENTER,
             zoom: 11,
         });

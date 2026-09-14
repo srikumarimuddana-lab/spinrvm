@@ -33,19 +33,34 @@ When `NEXT_PUBLIC_MAP_STYLE_URL` is set, the chain is now exactly
 `[self-hosted]`. The third-party chain is retained **only** for the
 unconfigured case.
 
-Applied in two places, because the three admin maps do not share one chain:
+Applied in three places, because the seven admin maps do not share one code
+path:
 
 - `basemapChain()` in `maplibre-base.ts` — used by `monitoring-map.tsx` and
   `ride-route-map.tsx`.
 - `heat-map.tsx`, which builds its chain inline (its fallbacks are
   grayscale-preferring so heat layers pop against a muted basemap). Changing
   only the shared function would have left the heat map still hopping to Carto.
+- **New `primaryMapStyle()`**, for the four maps that hand MapLibre a single
+  `style` and never retry, so they cannot use a chain at all:
+  `driver-map.tsx`, `geofence-map.tsx`, `venue-map.tsx` and
+  `rides/live/[id]/live-map.tsx`. All four hard-coded `MAP_STYLE_URL`
+  (OpenFreeMap). Without this they would have kept loading a third-party
+  basemap with our tile server configured — the chain maps switch over and
+  these four silently do not, which is precisely the bug this change is meant
+  to eliminate.
 
 ## 4. Risk & impact on existing functionality
 
-- **Consumers of the changed code** (grepped, all three named): `basemapChain()`
-  → `monitoring-map.tsx:444`, `ride-route-map.tsx:368`. `selfHostedStyleUrl()`
-  → those two plus `heat-map.tsx:108`. No other importer exists.
+- **Consumers of the changed code** (grepped; all seven admin maps named):
+  - via `basemapChain()` — `monitoring-map.tsx:444`, `ride-route-map.tsx:368`
+  - inline chain — `heat-map.tsx:108`
+  - via new `primaryMapStyle()` — `driver-map.tsx:61`, `geofence-map.tsx:129`,
+    `venue-map.tsx:122`, `rides/live/[id]/live-map.tsx:69`
+  A repo-wide sweep for `style:` on every `maplibregl.Map` in
+  `admin-dashboard/src` confirms no eighth map exists, and no third-party style
+  constant is referenced outside `maplibre-base.ts` except inside `heat-map`'s
+  unconfigured fallback branch.
 - **What regresses**: resilience. Our tile server going down now blanks the
   admin maps rather than degrading to a third party. This is the accepted cost
   of the request, not an oversight.
@@ -73,7 +88,8 @@ Applied in two places, because the three admin maps do not share one chain:
 
 ## 5. User-experience effect
 
-- **Internal admin**: on the monitoring map, heat map and ride route map, the
+- **Internal admin**: on all seven admin maps (monitoring, heat, ride route,
+  driver, geofence, venue, live ride), the
   "Basemap slow to load — trying another provider…" banner disappears and the
   map paints from our own tiles. If the tile server is unavailable, monitoring
   and heat maps show the failed state instead of a third-party basemap.
@@ -88,7 +104,11 @@ Applied in two places, because the three admin maps do not share one chain:
 
 | File path | What changed | Why |
 |---|---|---|
-| `admin-dashboard/src/lib/map/maplibre-base.ts` | `basemapChain()` returns `[selfHosted]` when configured | The requested behaviour, for monitoring + ride route maps |
+| `admin-dashboard/src/lib/map/maplibre-base.ts` | `basemapChain()` returns `[selfHosted]` when configured; new `primaryMapStyle()` | The requested behaviour, plus a single-style equivalent for maps with no chain |
+| `admin-dashboard/src/components/driver-map.tsx` | `MAP_STYLE_URL` → `primaryMapStyle()` | Hard-coded OpenFreeMap; would not have switched over |
+| `admin-dashboard/src/components/geofence-map.tsx` | `MAP_STYLE_URL` → `primaryMapStyle()` | Same |
+| `admin-dashboard/src/components/venue-map.tsx` | `MAP_STYLE_URL` → `primaryMapStyle()` | Same |
+| `admin-dashboard/src/app/dashboard/rides/live/[id]/live-map.tsx` | `MAP_STYLE_URL` → `primaryMapStyle()` | Same |
 | `admin-dashboard/src/components/heat-map.tsx` | Same conditional on its inline chain | It does not call `basemapChain()`; would otherwise still hop to Carto |
 | `admin-dashboard/src/lib/__tests__/maplibre-basemap-chain.test.ts` | Two tests re-pinned to the new behaviour | They asserted the third parties stayed behind the self-hosted hop |
 
@@ -124,9 +144,12 @@ change), but it needs a deploy either way, so the variable is the faster lever.
 ## 9. Verification performed
 
 - [x] Blast-radius grep performed — `basemapChain`, `selfHostedStyleUrl`,
-      `MAP_STYLE_CARTO_LIGHT`, `protomapsStyleUrl`, `themedMapStyle` across
-      `admin-dashboard/src`. Three consumers found and all three handled; the
-      heat map's inline chain was found this way.
+      `MAP_STYLE_URL`, `MAP_STYLE_POSITRON`, `MAP_STYLE_CARTO*`,
+      `protomapsStyleUrl`, `themedMapStyle`, then a sweep of every `style:` on a
+      `maplibregl.Map` across `admin-dashboard/src`. This is how the four
+      single-style maps were found — an earlier pass looked only for
+      `basemapChain` consumers and would have shipped a change that switched
+      three maps to our tiles and silently left four on OpenFreeMap.
 - [x] Reviewed against `CLAUDE.md` gate #3 (shared component, 3+ consumers) —
       the change is gated by an environment variable that is currently unset in
       production, so it ships dark and is enabled by the same flip that enables

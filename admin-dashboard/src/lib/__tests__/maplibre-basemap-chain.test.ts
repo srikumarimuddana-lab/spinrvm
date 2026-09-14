@@ -14,6 +14,7 @@ vi.mock('maplibre-gl', () => ({
 import {
   attachBasemapFallback,
   basemapChain,
+  primaryMapStyle,
   cartoStyleUrl,
   MAP_STYLE_CARTO_DARK,
   MAP_STYLE_CARTO_LIGHT,
@@ -132,6 +133,29 @@ describe('self-hosted basemap override', () => {
     expect(chain[0]).toBe(MAP_STYLE_CARTO_LIGHT);
     expect(new Set(chain).size).toBe(chain.length);
     expect(chain.filter((u) => u === MAP_STYLE_CARTO_LIGHT)).toHaveLength(1);
+  });
+
+  // Four admin maps (driver, geofence, venue, live-ride) hand MapLibre a single
+  // style and never retry, so they cannot use basemapChain(). They hard-coded
+  // MAP_STYLE_URL, which meant they kept loading a third party even with our own
+  // tile server configured — the chain maps switched over and these silently did
+  // not. primaryMapStyle() is what closes that gap.
+  describe('primaryMapStyle (single-style maps)', () => {
+    it('is the third-party default when self-hosting is not configured', () => {
+      expect(primaryMapStyle()).toBe(MAP_STYLE_URL);
+    });
+
+    it('is the self-hosted style when configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
+      expect(primaryMapStyle()).toBe(SELF);
+    });
+
+    it('never returns a third-party style once self-hosting is on', () => {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
+      for (const theme of [undefined, 'light', 'dark']) {
+        expect(primaryMapStyle(theme)).toBe(SELF);
+      }
+    });
   });
 
   // The unconfigured chain is not dead code kept for tidiness: an empty chain

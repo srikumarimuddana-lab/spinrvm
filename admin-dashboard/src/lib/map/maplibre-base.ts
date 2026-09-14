@@ -165,6 +165,21 @@ export function selfHostedStyleUrl(resolvedTheme?: string): string | null {
  * re-requests the host that just failed and burns a whole 8s watchdog window
  * doing it.
  */
+/**
+ * The one style to use for a map that has no fallback chain of its own.
+ *
+ * Several admin maps (driver, geofence, venue, live-ride) hand MapLibre a single
+ * `style` and never retry, so they cannot use basemapChain(). They previously
+ * hard-coded MAP_STYLE_URL, which meant they kept loading a third-party basemap
+ * even with our own tile server configured — the chain-using maps switched over
+ * and these four silently did not.
+ *
+ * Self-hosted when configured, otherwise exactly the style they used before.
+ */
+export function primaryMapStyle(resolvedTheme?: string): string {
+    return selfHostedStyleUrl(resolvedTheme) ?? themedMapStyle(resolvedTheme);
+}
+
 export function basemapChain(resolvedTheme?: string): string[] {
     const selfHosted = selfHostedStyleUrl(resolvedTheme);
     if (selfHosted) return [selfHosted];

@@ -231,6 +231,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
         # downloads shared-coverage-run's single coverage.json instead.
         # continue-on-error: true so a missing artifact (shared job crashed
@@ -243,6 +244,37 @@ jobs:
         with:
           name: shared-coverage-${{ github.run_id }}
           path: backend
+
+      - name: Retry shared coverage artifact download on backend lag
+        # Confirmed on PR #5382, run 34814240460: this gate and
+        # money-path-coverage-floor-gate both failed with "Artifact not
+        # found for name: shared-coverage-<run_id>" even though
+        # shared-coverage-run's upload step had already completed --
+        # GitHub Actions' artifact backend has occasional brief
+        # read-after-write lag when several jobs download a
+        # freshly-uploaded artifact in parallel, not a logic bug in this
+        # workflow. Retries via the pre-installed `gh` CLI (no new pinned
+        # marketplace action, per this repo's preference to avoid new
+        # supply-chain surface) before giving up. If the artifact is
+        # genuinely missing -- e.g. shared-coverage-run crashed before
+        # uploading -- this loop exhausts and "Extract PR branch coverage"
+        # below still degrades exactly as it always has (its existing
+        # try/except "Coverage read failed" path); this step never masks a
+        # real failure, only a transient one.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
 
       - name: Extract PR branch coverage
         working-directory: backend
@@ -576,6 +608,7 @@ jobs:
           cat /tmp/changed_files_money.txt
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
         # downloads shared-coverage-run's single coverage.json instead.
         # continue-on-error: true so a missing artifact doesn't hard-stop
@@ -589,6 +622,36 @@ jobs:
         with:
           name: shared-coverage-${{ github.run_id }}
           path: backend
+
+      - name: Retry shared coverage artifact download on backend lag
+        # Confirmed on PR #5382, run 34814240460: this gate and
+        # coverage-regression-gate both failed with "Artifact not found for
+        # name: shared-coverage-<run_id>" even though shared-coverage-run's
+        # upload step had already completed -- GitHub Actions' artifact
+        # backend has occasional brief read-after-write lag when several
+        # jobs download a freshly-uploaded artifact in parallel, not a
+        # logic bug in this workflow. Retries via the pre-installed `gh`
+        # CLI (no new pinned marketplace action, per this repo's preference
+        # to avoid new supply-chain surface) before giving up. If the
+        # artifact is genuinely missing, this loop exhausts and "Check
+        # per-module floors" below still fails loudly exactly as it always
+        # has -- CLAUDE.md's "don't silently swallow errors" convention;
+        # this step never substitutes a fallback result for a real
+        # failure.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
 
       - name: Check per-module floors
         working-directory: backend
@@ -642,11 +705,39 @@ jobs:
           cat /tmp/changed_files_admin.txt
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: shared-coverage-${{ github.run_id }}
           path: backend
+
+      - name: Retry shared coverage artifact download on backend lag
+        # Same rationale as money-path-coverage-floor-gate above: GitHub
+        # Actions' artifact backend has occasional brief read-after-write
+        # lag when several jobs download a freshly-uploaded artifact in
+        # parallel (confirmed on PR #5382, run 34814240460), not a logic
+        # bug in this workflow. Retries via the pre-installed `gh` CLI (no
+        # new pinned marketplace action, per this repo's preference to
+        # avoid new supply-chain surface) before giving up. If the
+        # artifact is genuinely missing, this loop exhausts and "Check
+        # per-module floors" below still fails loudly exactly as it always
+        # has; this step never substitutes a fallback result for a real
+        # failure.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
 
       - name: Check per-module floors
         working-directory: backend

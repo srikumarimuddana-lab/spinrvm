@@ -52,9 +52,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // obsolete `react-native-google-maps` pod, which react-native-maps 1.x no
         // longer ships → `pod install` fails. Google Maps stays Android-only
         // (see android.config.googleMaps.apiKey below).
-        associatedDomains: [
-            'applinks:spinr.app',
-        ],
+        // No associatedDomains / App Links. Universal Links were declared for
+        // spinr.app until 2026-09-14, but the feature has
+        // never worked on any domain: no .well-known/apple-app-site-association
+        // or assetlinks.json is served anywhere, neither app has inbound URL
+        // handling, and no route file matches the prefixes that were declared.
+        // spinr.app does not resolve and is not registered to Spinr, so the
+        // declaration was inert. Removed rather than repointed at spinr.ca:
+        // pointing applinks at a host that resolves but serves no association
+        // file makes things worse, because Apple's CDN negatively caches that
+        // failure for ~24h even after it is fixed. The custom spinr-user://
+        // scheme below is unaffected and still routes via expo-router.
+        // See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
         // Purpose strings — Apple rejects uploads with ITMS-90683 if any
         // dependency calls a permission-gated API without a matching string.
         // Driver app needs camera + photo library for onboarding document
@@ -205,17 +214,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
             }
         },
-        intentFilters: [
-            {
-                action: 'VIEW',
-                autoVerify: true,
-                data: [
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/driver' },
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/join' },
-                ],
-                category: ['BROWSABLE', 'DEFAULT'],
-            },
-        ],
+        // No intentFilters / Android App Links — see the note on the iOS side
+        // above. autoVerify:true was declared for spinr.app, which does not
+        // resolve, so verification could never succeed; and with no matching
+        // route files a verified link would have opened the app into nothing.
     },
     web: {
         bundler: 'metro',

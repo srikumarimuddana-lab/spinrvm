@@ -40,10 +40,19 @@ beforeEach(() => {
         configurable: true,
         get: () => BOX.h,
     });
+    // Carto was removed as the built-in raster default on 2026-09-14, so with
+    // nothing configured this component now lays out zero tiles by design.
+    // These tests are about tile-failure behaviour, not about which host serves
+    // the bytes, so point them at a stand-in self-hosted pyramid.
+    vi.stubEnv(
+        "NEXT_PUBLIC_RASTER_TILE_URL",
+        "https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png",
+    );
 });
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
 });
 
@@ -63,6 +72,19 @@ describe("StaticRouteMap rendering", () => {
         render(<StaticRouteMap {...ROUTE} />);
         expect(tiles().length).toBeGreaterThan(0);
         // Pins are SVG injected per kind; their titles are the accessible hook.
+        expect(document.querySelector('[title="Pickup"]')).toBeTruthy();
+        expect(document.querySelector('[title="Dropoff"]')).toBeTruthy();
+    });
+
+    // Regression guard for the Carto removal: the unconfigured template is "",
+    // and an <img src=""> does NOT 404 quietly like a dead tile host — it
+    // resolves to the current page, so a missing tile source would re-request
+    // this dashboard route once per tile.
+    it("lays out no tiles at all when no tile source is configured", () => {
+        vi.unstubAllEnvs();
+        render(<StaticRouteMap {...ROUTE} />);
+        expect(tiles()).toHaveLength(0);
+        // The ride itself must still be readable without a basemap.
         expect(document.querySelector('[title="Pickup"]')).toBeTruthy();
         expect(document.querySelector('[title="Dropoff"]')).toBeTruthy();
     });

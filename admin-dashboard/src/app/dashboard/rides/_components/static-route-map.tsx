@@ -40,23 +40,43 @@ const MIN_ZOOM = 1;
  *  untouched. */
 const MAX_ZOOM = 20;
 
-/** Keyless Carto raster pyramid — the default when nothing is self-hosted.
- *  OpenFreeMap is not an option here: it serves vector only, and its one raster
- *  endpoint is low-zoom shaded relief rather than a street map. */
-export const DEFAULT_RASTER_TILE_URL =
-    "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
+/**
+ * Raster pyramid derived from the self-hosted vector style, used when
+ * NEXT_PUBLIC_RASTER_TILE_URL is not set explicitly.
+ *
+ * tileserver-gl rasterises every style it serves at `<style dir>/{z}/{x}/{y}.png`,
+ * so NEXT_PUBLIC_MAP_STYLE_URL (…/styles/basemap/style.json) already implies
+ * …/styles/basemap/{z}/{x}/{y}.png — deriving it means standing up deploy/tiles
+ * needs one variable, not two. Any query string belongs to the style document,
+ * not the pyramid, so it is dropped.
+ *
+ * Returns "" when nothing is configured. That is deliberate: a keyless Carto
+ * pyramid used to be the default here, and it was removed on 2026-09-14 along
+ * with the rest of the third-party basemaps. An unconfigured deployment now
+ * draws the route and pins over an empty grid instead of over somebody else's
+ * tiles — each <img> just fails its own onError, which this component already
+ * hides (see the file header).
+ */
+export function selfHostedRasterTemplate(): string {
+    const style = process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim();
+    if (!style) return "";
+    const base = style.split("?")[0].replace(/\/style\.json$/i, "").replace(/\/+$/, "");
+    return `${base}/{z}/{x}/{y}.png`;
+}
 
 /**
- * Raster tile URL template, overridable with NEXT_PUBLIC_RASTER_TILE_URL so a
- * self-hosted tile server (deploy/tiles) can feed this renderer too. Vector
- * self-hosting alone cannot: this component deliberately uses no WebGL and no
- * vector tiles, so it needs real rasterised PNGs.
+ * Raster tile URL template. NEXT_PUBLIC_RASTER_TILE_URL still wins when set —
+ * a deployment whose rasters live somewhere other than the vector style's own
+ * directory needs that escape hatch. Otherwise it is derived from the
+ * self-hosted style. Vector self-hosting alone cannot feed this renderer: it
+ * deliberately uses no WebGL and no vector tiles, so it needs real rasterised
+ * PNGs.
  *
  * Read at call time rather than module scope so tests can drive it with
  * vi.stubEnv; Next.js still inlines the literal at build time.
  */
 export function rasterTileUrlTemplate(): string {
-    return process.env.NEXT_PUBLIC_RASTER_TILE_URL?.trim() || DEFAULT_RASTER_TILE_URL;
+    return process.env.NEXT_PUBLIC_RASTER_TILE_URL?.trim() || selfHostedRasterTemplate();
 }
 
 /** Substitute {z}/{x}/{y} in the configured template. Exported for the test:
@@ -230,7 +250,13 @@ export default function StaticRouteMap({
         const x1 = Math.floor((originX + size.w) / TILE_SIZE);
         const y0 = Math.floor(originY / TILE_SIZE);
         const y1 = Math.floor((originY + size.h) / TILE_SIZE);
-        for (let ty = y0; ty <= y1; ty++) {
+        // `tileTemplate` is "" when nothing is configured (no
+        // NEXT_PUBLIC_RASTER_TILE_URL and no self-hosted style to derive one
+        // from). Emit no tiles at all in that case: an <img src=""> does not
+        // 404 quietly like a dead tile host, it resolves to the *current page*,
+        // so every tile would re-request this dashboard route. The route and
+        // pins still draw over the empty grid.
+        for (let ty = y0; tileTemplate && ty <= y1; ty++) {
             // Past the poles there is no tile to ask for; x wraps instead.
             if (ty < 0 || ty >= worldTiles) continue;
             for (let tx = x0; tx <= x1; tx++) {

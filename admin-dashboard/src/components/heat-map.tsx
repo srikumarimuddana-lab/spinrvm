@@ -6,7 +6,6 @@ import * as maplibregl from "maplibre-gl";
 import type { ExpressionSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-    MAP_STYLE_CARTO_LIGHT,
     MAP_STYLE_POSITRON,
     addStandardControls,
     attachBasemapFallback,
@@ -119,7 +118,6 @@ export default function HeatMap({
             : [...new Set([
                 MAP_STYLE_POSITRON,
                 ...(pm ? [pm] : []),
-                MAP_STYLE_CARTO_LIGHT,
             ])];
 
         const buildMap = (attempt: number) => {

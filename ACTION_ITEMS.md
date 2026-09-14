@@ -21784,6 +21784,82 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-14, later same day): 3 more tables, still not
+  closed.** Checked for concurrent work first (`git fetch origin main` +
+  open-PR search for any PR touching `backend/tests/rls/` or
+  `ACTION_ITEMS.md`) — none found, clear to proceed. Picked the admin
+  PII-export audit trail as this round's themed slice, deliberately: all
+  three tables back the same dual-approval/export-audit hardening already
+  done at the app layer earlier this session (B1 — gated the SIN/DOB
+  backfill router to super_admin; W2a-c — added per-handler super_admin
+  rechecks to the data_transfer export/import/search, data_transfer_jobs,
+  sgi_forms, export_approvals, and migration_status handlers). This round
+  adds the DB-level RLS/constraint backstop under that same surface:
+  `data_transfer_export_jobs` (migration 262 + 264's additive `reason`
+  column), `compliance_export_events` (263, + an extracted slice of 285's
+  DELETE-gating trigger redefinition), and `admin_export_approval_requests`
+  (268), plus each table's FK-removal fix (270/274/278 — a real,
+  already-shipped bug class where an admin caller's id, which lives in
+  `admin_staff` or an env-var-creds sentinel, could never satisfy a
+  `REFERENCES users(id)` FK; confirmed live in each migration's own header
+  that zero rows were ever written to any of the three tables before its
+  fix). New file `backend/tests/rls/test_admin_export_audit_rls.py`, 31
+  tests. Full `tests/rls` suite: **326 passed, 0 failed**, against the same
+  real local Postgres 16 this session's earlier C49 round stood up.
+  - **Review used:** `spinr-security-auditor` via the Agent tool (available
+    in this session, unlike an earlier session this same day whose
+    isolated-worktree environment lacked it) — independently re-derived
+    every asserted policy/GRANT/trigger from the actual migration SQL, ran
+    the suite itself, and confirmed all 3 tables' real production
+    read/write paths go through the service-role client only (grepped
+    `routes/admin/`, `services/`, `db_supabase.py`), matching this round's
+    "service-role only" assumption.
+  - **One real finding, fixed before merge:** the file's own docstring
+    claimed `data_transfer_export_jobs` and `admin_export_approval_requests`
+    are "identical shape," but only the former had a DELETE-denial test —
+    `admin_export_approval_requests`' `service_delete` policy (migration
+    268) went unexercised by any negative case. Fixed by adding
+    `test_authenticated_cannot_delete_approval_request` for parity. No
+    other findings — verdict was "safe to merge."
+  - **Noted, not a bug:** neither table's `FOR DELETE TO service_role`
+    policy is exercised by a *positive* test either, because no production
+    code path issues a hard DELETE on any of the 3 tables today
+    (`data_transfer_export_jobs` only ever soft-deletes via a `deleted_at`
+    UPDATE in `utils/data_export_purge.py`; no `.delete(`/`delete_many`
+    call exists anywhere for the other two) — genuinely dead DB-layer
+    capability today, not a test gap.
+  - **Running total after this round:** 39 of ~70 distinct policy-bearing
+    tables (36 + these 3), by a corrected version of the same sweep method
+    prior rounds used — a repo-wide `CREATE POLICY ... ON <table>` regex
+    sweep, run multiline/dotall this time (a plain single-line regex, as
+    used by at least one earlier round, misses every multi-line
+    `CREATE POLICY "name"\n  ON table\n  ...` statement, which is most of
+    them — confirmed by comparing 31 single-line matches against 64
+    multiline matches over the identical file set). 64 static matches + the
+    6 already-known FOREACH-loop-generated corporate tables (migration 27)
+    = 70 total distinct policy-bearing tables, 36 covered before this round
+    (including those 6 dynamic ones). Still not closed: ~31 tables remain,
+    grouped by rough theme for whoever picks up the next slice — AI
+    (`ai_conversations`/`ai_messages`), notifications
+    (`cloud_messages`/`push_retry_queue`/`push_tokens`), corporate
+    (`corporate_section_spend`/`corporate_sections`/
+    `corporate_subscription_plans`/`corporate_subscriptions`), disputes
+    (`disputes`, distinct from the already-covered `stripe_disputes`),
+    driver ops (`driver_bonuses`/`driver_onboarding_reminder_log`/
+    `document_requirements`), reference/static data
+    (`faqs`/`fare_configs`/`provinces`/`service_areas`/
+    `service_area_tax_history`/`vehicle_types`), financial
+    (`financial_event_entries`/`reconciliation_discrepancies`/
+    `subscription_payments`), ride tracking/integrity
+    (`ride_distance_integrity_events`/`ride_distance_recomputes`/
+    `ride_live_activities`/`ride_location_gap_events`/`ride_messages`/
+    `ride_offers`), and singletons (`meta_capi_deliveries`,
+    `support_tickets`, `surge_pricing`). This is the first time this backlog
+    item has published an actual remaining-table list rather than just a
+    fraction — future rounds should correct it rather than re-deriving from
+    scratch, since the sweep method itself has already been wrong once
+    (see above).
+  Change log: `docs/change-log/2026-09-14-c49-admin-export-audit-rls-coverage.md`.
 - [ ] **Status (2026-09-14): 3 more tables, still not closed.** Checked for
   concurrent work first (`git fetch origin main` + open-PR search) — no PR
   currently touches `backend/tests/rls/`, clear to proceed. Picked

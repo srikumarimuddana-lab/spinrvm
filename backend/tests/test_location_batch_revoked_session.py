@@ -21,7 +21,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
 os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from routes.drivers import location
 from utils import session_revocation
@@ -168,6 +168,7 @@ async def test_guard_runs_before_either_persistence_path(mock_redis, flag_on, mo
                     {"sequence_number": 0, "captured_at": "2026-07-29T10:00:00Z", "lat": 50.4, "lng": -104.6},
                 ],
             },
+            background_tasks=BackgroundTasks(),
             current_user={"id": "user-1"},
             token_session_id="sess-dead",
         )

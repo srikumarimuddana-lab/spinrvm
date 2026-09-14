@@ -15,7 +15,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
 os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from routes.drivers import location
 from routes.drivers.location import LocationBatchRequest
@@ -84,6 +84,11 @@ def _result(accepted_count: int = 2) -> LocationBatchPersistResult:
 
 
 def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.MonkeyPatch):
+    """The marker write is deferred via BackgroundTasks (< 150 ms SLA path —
+    the ack never depends on its outcome), so "persists before updating"
+    now means: the durable persist has already completed by the time the
+    marker-update task is *scheduled*, and running that scheduled task is
+    what actually performs the marker write."""
     events = []
     update_one = _install_driver_and_ride(monkeypatch, _ride())
 
@@ -103,9 +108,15 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     update_one.side_effect = update
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
 
-    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+    bg = BackgroundTasks()
+    response = _run(location.update_location_batch(_payload(), background_tasks=bg, current_user={"id": "user_1"}))
 
     assert response == _result().ack.to_dict()
+    assert events == ["persist"]
+    assert len(bg.tasks) == 1
+    assert bg.tasks[0].func.__name__ == "_apply_v2_live_marker_update"
+
+    _run(bg())
     assert events == ["persist", "marker"]
 
 
@@ -119,7 +130,7 @@ def test_v2_batch_rejects_a_ride_assigned_to_another_driver_as_not_found(monkeyp
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
 
     with pytest.raises(HTTPException) as excinfo:
-        _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+        _run(location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}))
 
     assert excinfo.value.status_code == 404
     persist.assert_not_called()
@@ -155,7 +166,9 @@ def test_v2_batch_reads_driver_and_ride_concurrently(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
 
-    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+    response = _run(
+        location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"})
+    )
 
     assert response == _result().ack.to_dict()
     assert sorted(started) == ["drivers", "rides"]
@@ -181,18 +194,23 @@ def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypa
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
     monkeypatch.setattr("utils.location_integrity.check_location_integrity", untrusted)
 
-    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+    bg = BackgroundTasks()
+    response = _run(location.update_location_batch(_payload(), background_tasks=bg, current_user={"id": "user_1"}))
 
     assert response == _result().ack.to_dict()
+    assert events == ["persist"]
+
+    _run(bg())
     # Breadcrumbs/ack still land (regulatory GPS trace + settlement anomaly
-    # filter own that job); only the real-time marker write is skipped.
+    # filter own that job); only the real-time marker write is skipped, even
+    # after the deferred task runs.
     assert events == ["persist"]
 
 
 @pytest.mark.parametrize("payload", [_payload([_point(1), _point(3)]), _payload([_point(i) for i in range(501)])])
 def test_v2_batch_rejects_non_contiguous_or_oversized_input(payload):
     with pytest.raises(HTTPException) as exc_info:
-        _run(location.update_location_batch(payload, current_user={"id": "user_1"}))
+        _run(location.update_location_batch(payload, background_tasks=BackgroundTasks(), current_user={"id": "user_1"}))
 
     assert exc_info.value.status_code == 422
 
@@ -206,7 +224,7 @@ def test_v2_batch_returns_503_when_durable_persistence_fails(monkeypatch: pytest
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", fail_persist)
 
     with pytest.raises(HTTPException) as exc_info:
-        _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+        _run(location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}))
 
     assert exc_info.value.status_code == 503
 
@@ -223,7 +241,9 @@ def test_completed_ride_accepts_delayed_points_inside_lifecycle_and_retention(mo
 
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
 
-    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+    response = _run(
+        location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"})
+    )
 
     assert response["acked_through"] == 2
     assert captured["ride"]["status"] == "completed"
@@ -290,6 +310,7 @@ def test_legacy_points_remain_compatible(monkeypatch: pytest.MonkeyPatch):
     response = _run(
         location.update_location_batch(
             {"points": [{"lat": 50.42, "lng": -104.62, "captured_at": "2026-06-01T23:06:00Z"}]},
+            background_tasks=BackgroundTasks(),
             current_user={"id": "user_1"},
         )
     )

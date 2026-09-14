@@ -5,6 +5,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 
 pytestmark = pytest.mark.unit
 
@@ -47,7 +48,9 @@ def _call(batch, *, flag, active_ride, driver):
         ),
         patch("backend.utils.breadcrumbs.resolve_active_ride", AsyncMock(return_value=active_ride)),
     ):
-        asyncio.run(drv.update_location_batch(batch=batch, current_user={"id": USER_ID}))
+        asyncio.run(
+            drv.update_location_batch(batch=batch, background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+        )
     return captured
 
 

@@ -803,6 +803,91 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       file — it necessarily touches real driver bank/identity data;
       available on request to whoever owns this follow-up, re-run
       directly against Stripe rather than copied here.
+    - **2026-09-14, same day — #4109's implementation-plan step 5 (the
+      §0.3 7-item Stripe-side checklist) executed as far as this session's
+      access allows: items 4/6/7 answered for real, items 1/2/3 confirmed
+      still structurally blocked, item 5 reconfirmed unchanged.**
+      `mcp__Stripe__list_available_accounts_or_orgs` in this session
+      resolves to exactly one account — `acct_1SSk2XFXFgLO2LdO` (the same
+      one above) — and no old-app platform-account ID or key is recorded
+      anywhere in this repo (`docs/runbooks/stripe-legacy-migration.md`'s
+      Step 1 only has a placeholder variable name, never a real value;
+      confirmed by grep across `docs/`, PR #3946, and
+      `stripe_mapping_import_service.py`).
+      - **Items 1–3 (old-account transfers/payouts post-cut; Connect-set
+        diff; in-flight old-platform transfers at cutover): still blocked,
+        unchanged.** All three need the *old* app's Stripe key, which
+        remains unavailable and unrecorded. Current-state note for when it
+        does become available: live `drivers.stripe_account_id` count is
+        now **149 distinct accounts** (was 104 in the 2026-08-15 audit;
+        driver population grew 211→927 over the month), so item 2's diff
+        will need re-pulling, not reusing, the old 104-ID list.
+      - **Item 4 (shared-account vs. migration-mapping scenario): still
+        open, one new fact.** Of the 149 driver rows with a
+        `stripe_account_id`, only 111 carry
+        `legacy_import_metadata.stripe_migration` (one batch, "Driver
+        Stripe 202060808" — i.e. went through the CSV mapping importer);
+        the other 38 are native Stripe onboardings, definitely new-app-only.
+        Of those 111, **0 have `old_stripe_account_id` populated** — the
+        importer's optional old-ID provenance column was never filled in
+        for this batch. So even with old-app access, there is nothing
+        already in Supabase to join against; a live old-app export would
+        be needed from scratch. Successful commit through the importer
+        (which validates live against Stripe before writing) only proves
+        these 111 `acct_…` IDs are valid on the connected new-platform
+        key — expected under either Scenario A or B, so it doesn't itself
+        distinguish them.
+      - **Item 5 (108 unresolved PR #3946 rows + the resolvable 35):
+        108 rows still unresolved** — legacy Mongo ObjectIDs (Nov 2025–Jan
+        2026) predate every export file on hand; no progress possible
+        without an old-app export covering that window, and the source
+        CSVs themselves aren't in this repo (PII). For the resolvable
+        35/20-bucket side: live-reconfirmed today that **zero
+        `legacy_outstanding_correction` payout rows exist in production**
+        — the write path built 2026-08-17
+        (`docs/change-log/2026-08-17-legacy-payout-correction-writepath.md`)
+        has never been executed against real Stripe. The $185.31
+        "genuinely owed" 12-driver split is unchanged a month later: 10
+        still have no Stripe account, 2 still do.
+      - **Item 6 (Connect status for the 15 payable drivers): resolved for
+        real.** Re-queried all 15 driver buckets directly — 10/15 still
+        have `stripe_account_id IS NULL` (unchanged). Of the 5 with an
+        account, called `GET /v1/accounts/{id}` live for all 5: none are
+        closed/`resource_missing`. 3/5 are fully healthy
+        (`payouts_enabled`/`charges_enabled`/`details_submitted` all
+        true, no `disabled_reason`) — these are the same 3 buckets
+        ($9.45/$22.43/$33.32) the 08-16 and 09-10 cross-checks flagged as
+        likely-already-paid, so their accounts being in good standing is
+        just confirmation, not new payment-history evidence either way.
+        2/5 (the $19.34 and $10.63 buckets) have `payouts_enabled: false`,
+        `disabled_reason: "requirements.past_due"` — real, open accounts
+        (not closed) but Stripe is currently blocking any payout to them
+        pending the driver's own outstanding identity-verification
+        requirements; a correction transfer to either would fail today
+        even if approved.
+      - **Item 7 (`stripe_orphan_refunds` vs. old-app charge IDs):
+        confirmed still 0 rows** in production today, same as 2026-08-15.
+        Closing as "nothing to reconcile" on the new-app side — this says
+        nothing about old-app-side orphan refunds, which stay invisible
+        without old-app access.
+      - **Operational bonus finding**: `driver_stripe_ledger` synced again
+        today (`MAX(synced_at)` = 2026-09-14, 377 rows / 54 distinct
+        accounts) — no longer the "synced exactly once, 2+ weeks stale"
+        state the same-day entry above found a few hours earlier.
+      - **No double-payment signal found or ruled out.** Nothing in this
+        pass shows an actual old-app-vs-new-app double payout — the
+        "likely already paid" buckets above are Spinr's own new-app
+        Stripe Transfers matching Spinr's own old-app CSV-recorded debt,
+        not evidence of a second, external payer. The only checks that
+        could surface a real cross-app double-payment (items 1–3) remain
+        blocked. This does not raise or lower the priority of the
+        companion double-dispatch/double-payout CR (**#4104, already
+        closed 2026-08-18**) — flagging for whoever revisits it, not
+        acting on it here.
+      - PII handling identical to the entry above: only account IDs,
+        status values, counts, and dollar totals recorded here; no driver
+        name, address, phone, bank, or identity-document data appears in
+        this file or in #4109's comment thread.
     - **2026-09-07, same interview — the 2 ambiguous buckets ($42.77):
       product owner wants this investigated now, but it can't be done
       from this session.** Resolving `350b5267…` ($33.32, a payment row

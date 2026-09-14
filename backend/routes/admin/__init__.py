@@ -95,6 +95,7 @@ from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
+from .legacy_duration_estimated_backfill import router as legacy_duration_estimated_backfill_router
 from .legacy_id_crosswalk import router as legacy_id_crosswalk_router
 from .legacy_saved_address_backfill import router as legacy_saved_address_backfill_router
 from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
@@ -277,6 +278,12 @@ admin_router.include_router(legacy_id_crosswalk_router, dependencies=[Depends(re
 # write across the core drivers table, same require_super_admin boundary
 # as the importers above. Never touches go-online eligibility.
 admin_router.include_router(driver_dormancy_router, dependencies=[Depends(require_super_admin)])
+# Legacy duration-estimated marker backfill (2026-09-14, ACTION_ITEMS.md A41
+# residual gap) -- additive-only, stamps legacy_import_metadata.duration_estimated
+# onto already-imported legacy rides that predate the importer itself writing
+# that key. Bulk write across the core rides table, same require_super_admin
+# boundary as the importers above. Never touches duration_minutes.
+admin_router.include_router(legacy_duration_estimated_backfill_router, dependencies=[Depends(require_super_admin)])
 # Migration checklist status panel (2026-08-31) -- read-only, no writes.
 # Same require_super_admin boundary as every other Bulk Operations tool it
 # summarizes, even though it can't itself change any of the tables it reads.

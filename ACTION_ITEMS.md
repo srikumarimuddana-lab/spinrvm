@@ -20976,16 +20976,28 @@ how much they de-risk a public launch._
   past where this entry left off, none of which A41 itself was ever
   updated to reflect:
   - **The "CLI-only, product owner must run it themselves" framing is now
-    wrong for 2 of the 4 capabilities.** Admin-dashboard validate→review→commit
+    wrong for all 4 capabilities.** Admin-dashboard validate→review→commit
     UIs were built for the SIN/DOB backfill and the vehicle-history backfill
     (`docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md`,
     `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`)
     — same pattern as the pre-existing Legacy Driver Import page. The
-    **Duration-Estimated Marker Backfill is the one capability still
+    **Duration-Estimated Marker Backfill — the one capability that was still
     genuinely CLI-only** (confirmed current as of `docs/runbooks/
-    migration-tool-order.md`, 2026-08-31 — it explicitly lists this as the
+    migration-tool-order.md`, 2026-08-31 — it explicitly listed this as the
     still-unwired exception, "has a commit path and a CLI script... but no
-    admin route/UI").
+    admin route/UI") — **closed 2026-09-14**: `POST /api/admin/legacy/
+    duration-estimated-backfill/{preview,commit}`
+    (`backend/routes/admin/legacy_duration_estimated_backfill.py`) plus a
+    new Bulk Operations page card
+    (`admin-dashboard/.../bulk-operations/_components/DurationEstimatedBackfill.tsx`),
+    both thin wrappers over the pre-existing, unmodified
+    `plan_duration_estimated_backfill`/`apply_duration_estimated_backfill`
+    pair. Unlike the SIN/DOB and vehicle-history routes above, this one
+    takes no CSV upload (the service reads `rides` directly), so it follows
+    the no-file preview/commit shape already established by
+    `migration_data_quality.py`/`driver_dormancy.py`, not the
+    file-upload/signed-token shape. See
+    `docs/change-log/2026-09-14-legacy-duration-estimated-backfill-admin-route.md`.
   - **The cancelled/failed booking import was actually attempted against
     real production** (the 2026-08-22 export, 980 rides) and hit a real
     bug: a PostgREST bulk-insert NULL-override when a batch mixed

@@ -60,6 +60,7 @@ import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
 import { DriverDormancyFlag } from "./_components/DriverDormancyFlag";
 import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
+import { DurationEstimatedBackfill } from "./_components/DurationEstimatedBackfill";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
 import {
@@ -908,7 +909,7 @@ export default function BulkOperationsPage() {
             <PhaseSection
                 phase={5}
                 title="Finish the ride records"
-                overview="Generate map images and road-following routes for the rides Phase 4 just imported — both require rides to already carry legacy import metadata, so they run after Phase 4, not before."
+                overview="Generate map images and road-following routes for the rides Phase 4 just imported, and mark which of them have an estimated (vs. measured) trip duration — all three require rides to already carry legacy import metadata, so they run after Phase 4, not before."
             >
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <MapPin className="h-4 w-4" />
@@ -935,6 +936,8 @@ export default function BulkOperationsPage() {
                     safetyNote="Preview first shows how many rides are eligible with zero writes made. With &ldquo;Re-generate all&rdquo; off, this only touches rides that don't already have a real route — it never overwrites one that's already been backfilled."
                 />
                 <RouteRegenerateSection />
+
+                <DurationEstimatedBackfill />
             </PhaseSection>
 
             <PhaseSection

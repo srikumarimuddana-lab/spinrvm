@@ -4,6 +4,7 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import asyncio
 import hashlib
 import json
 
@@ -171,6 +172,18 @@ def navigation_steps_cache_key(ride_id: str, destination: str) -> str:
     return f"{NAV_STEPS_CACHE_PREFIX}{ride_id}:{destination}"
 
 
+# compute_navigation_steps's own httpx client already bounds the Directions
+# call to route_distance._TIMEOUT_S (2.0s), but that value applies
+# independently to each httpx phase (connect/read/write/pool), so a slow
+# upstream can in principle exceed 2.0s end-to-end. Same margin-over-the-
+# underlying-timeout pattern as routes/rides/estimates.py's
+# `_PRICING_ROUTE_WAIT_S = DIRECTIONS_TIMEOUT_S + 0.5` for the unrelated
+# fare-distance Directions call: a hard backstop that should essentially
+# never fire ahead of the httpx timeout in the normal case, so this endpoint
+# has a single, provable worst-case bound instead of an open-ended await.
+NAV_STEPS_COMPUTE_TIMEOUT_S = 2.5
+
+
 @router.get("/{ride_id}/navigation-steps")
 async def get_navigation_steps(
     ride_id: str,
@@ -256,7 +269,17 @@ async def get_navigation_steps(
             except ValueError:
                 pass  # unreadable entry — fall through and recompute
 
-    steps = await compute_navigation_steps(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng))
+    try:
+        steps = await asyncio.wait_for(
+            compute_navigation_steps(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng)),
+            timeout=NAV_STEPS_COMPUTE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _deps.logger.warning(
+            f"navigation-steps compute exceeded {NAV_STEPS_COMPUTE_TIMEOUT_S}s for ride_id={ride_id} — "
+            "returning empty steps this call, same as any other Directions failure"
+        )
+        steps = None
     result = {"steps": steps or [], "destination": destination}
 
     if steps:  # only cache a real result — a failed fetch is retried next call

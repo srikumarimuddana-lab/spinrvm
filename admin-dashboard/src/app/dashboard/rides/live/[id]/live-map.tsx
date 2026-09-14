@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-    MAP_STYLE_URL,
+    primaryMapStyle,
     addStandardControls,
     fitBoundsToPoints,
     makeCircleMarkerEl,
@@ -66,7 +66,7 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
 
         const map = new maplibregl.Map({
             container: containerRef.current,
-            style: MAP_STYLE_URL,
+            style: primaryMapStyle(),
             center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
             zoom: 13,
         });

@@ -136,31 +136,57 @@ export function selfHostedStyleUrl(resolvedTheme?: string): string | null {
 }
 
 /**
- * Ordered basemap providers for an admin map, most-preferred first:
- *   0. Self-hosted — only when NEXT_PUBLIC_MAP_STYLE_URL is configured
- *   1. OpenFreeMap — keyless
- *   2. Protomaps   — only when NEXT_PUBLIC_PROTOMAPS_API_KEY is configured
- *   3. Carto       — keyless, always present, independent host + CDN
+ * Basemap providers for an admin map. Two distinct shapes:
  *
- * The third-party hops stay behind a configured self-hosted style on purpose:
- * our own tile server going down should degrade the map to somebody else's,
- * not to nothing.
+ *   Self-hosted configured  → [self-hosted]                    (nothing else)
+ *   Self-hosted unconfigured → OpenFreeMap → Protomaps? → Carto
  *
- * Passing no theme yields the light styles, which is byte-for-byte the style a
- * caller that hardcoded MAP_STYLE_URL was already using — adopting this chain
- * is not a visual change for those callers, only a resilience one.
+ * Once we serve our own basemap it is the *only* basemap. That is a deliberate
+ * trade, made by the product owner on 2026-09-14, and it costs something real:
+ * our tile server going down now blanks the admin maps instead of quietly
+ * degrading to somebody else's. What it buys is that the first hop is ours, so
+ * admins stop paying an 8s timeout on a donation-funded CDN before every map
+ * paints — the banner that timeout produces was the original reason
+ * deploy/tiles exists at all.
+ *
+ * The third-party chain is kept for the unconfigured case rather than deleted,
+ * for two reasons that are not stylistic:
+ *   - An empty chain paints nothing. If NEXT_PUBLIC_MAP_STYLE_URL is missing or
+ *     scoped to the wrong Vercel environment, deleting the third parties turns
+ *     a misconfiguration into blank maps with no fallback at all.
+ *   - CI does not set NEXT_PUBLIC_MAP_STYLE_URL, and
+ *     e2e/visual-regression.spec.ts stubs tiles.openfreemap.org. Removing
+ *     OpenFreeMap as the unconfigured first hop would blank the seeded
+ *     dashboard-monitoring baseline and fail a merge-blocking gate.
+ *
+ * Passing no theme yields the light styles.
  *
  * Deduplicated because a hop that repeats an earlier URL is not a fallback: it
  * re-requests the host that just failed and burns a whole 8s watchdog window
- * doing it. Reachable in practice by pointing NEXT_PUBLIC_MAP_STYLE_URL at a
- * provider already in the chain.
+ * doing it.
  */
+/**
+ * The one style to use for a map that has no fallback chain of its own.
+ *
+ * Several admin maps (driver, geofence, venue, live-ride) hand MapLibre a single
+ * `style` and never retry, so they cannot use basemapChain(). They previously
+ * hard-coded MAP_STYLE_URL, which meant they kept loading a third-party basemap
+ * even with our own tile server configured — the chain-using maps switched over
+ * and these four silently did not.
+ *
+ * Self-hosted when configured, otherwise exactly the style they used before.
+ */
+export function primaryMapStyle(resolvedTheme?: string): string {
+    return selfHostedStyleUrl(resolvedTheme) ?? themedMapStyle(resolvedTheme);
+}
+
 export function basemapChain(resolvedTheme?: string): string[] {
+    const selfHosted = selfHostedStyleUrl(resolvedTheme);
+    if (selfHosted) return [selfHosted];
+
     const protomaps =
         resolvedTheme === "dark" ? protomapsStyleUrl("dark") : protomapsStyleUrl();
-    const selfHosted = selfHostedStyleUrl(resolvedTheme);
     const ordered = [
-        ...(selfHosted ? [selfHosted] : []),
         themedMapStyle(resolvedTheme),
         ...(protomaps ? [protomaps] : []),
         cartoStyleUrl(resolvedTheme),

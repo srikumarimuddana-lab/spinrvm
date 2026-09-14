@@ -111,23 +111,61 @@ export function cartoStyleUrl(resolvedTheme?: string): string {
 }
 
 /**
+ * Our own tile server, when one is configured (see deploy/tiles).
+ *
+ * `NEXT_PUBLIC_MAP_STYLE_URL` was already the highest-priority source for the
+ * public tracking page (trackBaseMapStyle above) but was NOT read by the admin
+ * chain, so setting it did nothing for the dashboard's maps. It is read here
+ * too now, which is what makes standing up deploy/tiles a config change rather
+ * than a code change.
+ *
+ * `_DARK` is optional: an operator who only builds a light style still gets it
+ * in dark mode, which beats silently dropping back to a third party.
+ *
+ * Read inside the function rather than at module scope (unlike PROTOMAPS_KEY
+ * above) so tests can drive it with vi.stubEnv. Next.js inlines
+ * `process.env.NEXT_PUBLIC_*` wherever the literal appears, so this is still a
+ * build-time constant in a real build — the two spellings differ only in
+ * testability.
+ */
+export function selfHostedStyleUrl(resolvedTheme?: string): string | null {
+    const light = process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim() || "";
+    const dark = process.env.NEXT_PUBLIC_MAP_STYLE_URL_DARK?.trim() || "";
+    if (resolvedTheme === "dark") return dark || light || null;
+    return light || null;
+}
+
+/**
  * Ordered basemap providers for an admin map, most-preferred first:
- *   1. OpenFreeMap — today's default, keyless
+ *   0. Self-hosted — only when NEXT_PUBLIC_MAP_STYLE_URL is configured
+ *   1. OpenFreeMap — keyless
  *   2. Protomaps   — only when NEXT_PUBLIC_PROTOMAPS_API_KEY is configured
  *   3. Carto       — keyless, always present, independent host + CDN
+ *
+ * The third-party hops stay behind a configured self-hosted style on purpose:
+ * our own tile server going down should degrade the map to somebody else's,
+ * not to nothing.
  *
  * Passing no theme yields the light styles, which is byte-for-byte the style a
  * caller that hardcoded MAP_STYLE_URL was already using — adopting this chain
  * is not a visual change for those callers, only a resilience one.
+ *
+ * Deduplicated because a hop that repeats an earlier URL is not a fallback: it
+ * re-requests the host that just failed and burns a whole 8s watchdog window
+ * doing it. Reachable in practice by pointing NEXT_PUBLIC_MAP_STYLE_URL at a
+ * provider already in the chain.
  */
 export function basemapChain(resolvedTheme?: string): string[] {
     const protomaps =
         resolvedTheme === "dark" ? protomapsStyleUrl("dark") : protomapsStyleUrl();
-    return [
+    const selfHosted = selfHostedStyleUrl(resolvedTheme);
+    const ordered = [
+        ...(selfHosted ? [selfHosted] : []),
         themedMapStyle(resolvedTheme),
         ...(protomaps ? [protomaps] : []),
         cartoStyleUrl(resolvedTheme),
     ];
+    return [...new Set(ordered)];
 }
 
 /** How long a basemap gets to fire `load` before it is treated as failed. */
@@ -138,6 +176,14 @@ export interface BasemapFallbackHandlers {
     onRetry: (nextStyleUrl: string, nextAttempt: number) => void;
     /** Every provider in the chain is exhausted. `reason` is safe to show an admin. */
     onExhausted: (reason: string) => void;
+    /**
+     * This attempt's basemap loaded. Optional, but a caller that shows a
+     * "retrying…" affordance MUST implement it: onRetry is the only signal that
+     * a hop happened, and without a matching success signal that banner has
+     * nothing to clear it and stays on screen over a perfectly good map for the
+     * life of the mount.
+     */
+    onLoaded?: (attempt: number) => void;
 }
 
 /**
@@ -190,6 +236,7 @@ export function attachBasemapFallback(
     const onLoad = () => {
         if (settled) return;
         settle();
+        handlers.onLoaded?.(attempt);
     };
 
     // MapLibre's ErrorEvent carries an `ErrorLike`, not a full `Error` (no

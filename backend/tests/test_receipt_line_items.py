@@ -25,7 +25,7 @@ from decimal import Decimal
 
 import pytest
 
-from backend.utils.email_receipt import _receipt_total, generate_receipt_html
+from backend.utils.email_receipt import _build_fare_rows, _receipt_total, generate_receipt_html
 
 
 def _ride(**overrides) -> dict:
@@ -110,6 +110,57 @@ class TestTaxLineItems:
         )
         assert "GST" not in html
         assert "PST" not in html
+
+
+# ── Promo/discount line item (C102) ──────────────────────────────────────
+#
+# ACTION_ITEMS.md C102: the emailed/PDF receipt never disclosed a discount
+# line, unlike the JSON receipt's `_build_fare_breakdown`
+# (routes/rides/_shared.py) — a line-item-transparency gap, not a
+# money-correctness bug, since the persisted grand_total already reconciled
+# to what was actually charged. These pin that the line now appears, is
+# capped the same way `_build_fare_breakdown` caps it, and — for the rare
+# fallback path with no persisted grand_total — that the computed total
+# still reconciles once the discount becomes a visible line.
+
+
+class TestPromoDiscountLineItem:
+    def test_promo_line_appears_with_code_and_is_pure_disclosure(self):
+        """persisted grand_total is already net of the discount — the new
+        line must not change it, only disclose it."""
+        ride = _ride(discount_amount=5.00, promo_code="SAVE10")
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "Promo (SAVE10)" in html
+        assert "-$5.00" in html
+        assert _receipt_total(ride, tip=0) == Decimal("14.21")  # unchanged
+
+    def test_promo_line_without_code_uses_generic_label(self):
+        html = generate_receipt_html(_ride(discount_amount=3.00, promo_code=None), _RIDER, _DRIVER)
+        assert "Promo discount" in html
+        assert "-$3.00" in html
+
+    def test_no_promo_line_when_discount_is_zero(self):
+        html = generate_receipt_html(_ride(discount_amount=0, promo_code=None), _RIDER, _DRIVER)
+        assert "Promo" not in html
+
+    def test_promo_discount_capped_at_ride_fare_not_raw_amount(self):
+        # ride fare portion = base 3.50 + distance 6.30 + time 2.50 = 12.30;
+        # a $50 promo must render capped at $12.30, never the raw $50.
+        ride = _ride(discount_amount=50.00, promo_code="HUGE")
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "-$12.30" in html
+        assert "-$50.00" not in html
+
+    def test_fallback_total_without_persisted_grand_total_subtracts_discount(self):
+        """When grand_total isn't persisted, the reconstructed total must
+        still subtract the discount or the visible rows no longer sum to the
+        printed total now that the discount is a real line item."""
+        ride = _ride(grand_total=None, discount_amount=2.00, promo_code=None)
+        html, grand_total_d = _build_fare_rows(ride, Decimal("0"))
+        assert "Promo discount" in html
+        assert "-$2.00" in html
+        # 3.50 + 6.30 + 2.50 + 0.50 (fees) + 1.41 (GST+PST) - 2.00 (discount)
+        assert grand_total_d == Decimal("12.21")
 
 
 # ── Area fees ───────────────────────────────────────────────────────────
@@ -267,6 +318,18 @@ class TestReceiptTotal:
         )
         assert _receipt_total(ride, tip=tip) == Decimal(expected)
 
+    def test_receipt_total_fallback_subtracts_discount(self):
+        """The subject-line total (_receipt_total) must not overstate the
+        actual charge by the discount amount when grand_total isn't
+        persisted — found by adversarial review of C102: _build_fare_rows's
+        own fallback was fixed to subtract the discount, but this sibling
+        helper (used for the email subject line) computes its total
+        independently and was initially missed, breaking its documented
+        "subject matches body" contract for this one fallback case."""
+        ride = _ride(grand_total=None, discount_amount=2.00, promo_code=None)
+        # 12.80 (total_fare) + 0 (fees) + 0.69 (tax_amount) - 2.00 (discount)
+        assert _receipt_total(ride, tip=0) == Decimal("11.49")
+
 
 # ── Reconciliation: visible rows sum to header total ───────────────────
 
@@ -334,9 +397,7 @@ class TestPickupLegContextLine:
     CONTEXT — never as a fare row, always explicitly 'not charged'."""
 
     def test_off_by_default_renders_nothing(self):
-        html = generate_receipt_html(
-            _ride(phase_distances={"navigating_to_pickup": 2.4}), _RIDER, _DRIVER
-        )
+        html = generate_receipt_html(_ride(phase_distances={"navigating_to_pickup": 2.4}), _RIDER, _DRIVER)
         assert "approach to pickup" not in html
 
     def test_on_renders_outside_fare_rows_and_marked_not_charged(self):

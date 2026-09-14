@@ -441,6 +441,15 @@ export default function RideRouteMap({
             drawWhenReady();
 
             detach = attachBasemapFallback(map, chain, attempt, {
+                // Clears the "trying another provider…" banner once a later hop
+                // actually renders. Without this the banner is write-only:
+                // onRetry sets it and nothing ever unsets it, so a successful
+                // fallback still leaves "Basemap slow to load" pinned over a
+                // working map until the modal is closed.
+                onLoaded: () => {
+                    if (disposed) return;
+                    setBasemapStatus("ok");
+                },
                 onRetry: (_next, nextAttempt) => {
                     if (disposed) return;
                     detach?.();

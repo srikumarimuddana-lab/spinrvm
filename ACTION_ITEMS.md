@@ -13456,6 +13456,63 @@ record of what was assumed vs. what was actually true</summary>
   field-name bug in the monitor script itself, fixed same-day in PR #5038.
   Fly, the primary, was never actually missing secrets; only the
   Railway-token half of #5034 reflects this still-deferred item.)
+- **Update (2026-09-14) — root cause has CHANGED since 2026-09-05; `RAILWAY_TOKEN`
+  is no longer the blocker.** Picked this item up fresh and re-verified against
+  live `deploy-backend.yml` run history rather than trusting the 2026-09-05 entry
+  above — it is now stale. Findings, from the actual job logs (not assumed):
+  - **`RAILWAY_TOKEN` is valid as of at least 2026-09-05T20:48Z** (run #4208) and
+    every run since, through today's run #4275 (`railway status` succeeds,
+    resolves to project `name=cooperative-harmony`, `environment=production`).
+    Someone rotated it after the earlier same-day 2026-09-05 update above was
+    written; this was never recorded, so the file kept saying "not valid" for 9
+    days after it stopped being true. Sampled ~15 runs across 2026-09-05 through
+    2026-09-14 (every one on `main`, every one a push-triggered deploy attempt) —
+    100% valid-token, 100% failure, no exceptions found.
+  - **New, different blocker: the Railway project has no service named
+    `spinr-backend`.** Every run since fails at the "Verify required Railway
+    variables are set" step with `Service 'spinr-backend' not found` (from
+    `railway variables --service spinr-backend --json`). `RAILWAY_SERVICE:
+    spinr-backend` is hardcoded in both `.github/workflows/deploy-backend.yml`
+    and `.github/workflows/standby-parity-monitor.yml`. Either the service was
+    never created under that exact name in the `cooperative-harmony` project, or
+    it exists under a different name/casing.
+  - **Genuinely ambiguous, not resolved here — did not guess-fix.** Grepped the
+    repo for any other recorded Railway service name: `docs/ENVIRONMENT_VARIABLES.md`
+    implies `spinr-backend` (`RAILWAY_PUBLIC_URL` example:
+    `https://spinr-backend.up.railway.app`), but a much older doc
+    (`docs/claude-audit-2026-04-22.md`, 2026-04-22) references
+    `spinr-backend-production.up.railway.app` — a different name. Neither is
+    current, verified evidence of what the service is named *today* in the
+    Railway dashboard, and this session has no Railway CLI/API/MCP access to
+    check directly (confirmed: no `railway`-named tool available, and
+    `.claude/context/connector-scoping.md` has no Railway row at all — Railway
+    is not a connector any session currently has). Per CLAUDE.md's "escalate,
+    don't silently ship" gate, did not rename `RAILWAY_SERVICE` on a guess —
+    picking the wrong name would just trade one silent-failure mode for
+    another, on the pipeline that is supposed to keep the failover standby from
+    drifting further.
+  - **Also noted, not chased:** `railway service list` (in the "verify token"
+    step) prints `Service "list" not found` — `service list` does not appear to
+    be a valid Railway CLI v4 subcommand, so that diagnostic line has never
+    actually listed anything, on any run. Cosmetic (guarded by `|| true`,
+    doesn't fail the job), but worth fixing in the same pass as the real
+    service-name issue since a correct `railway service` listing would have
+    surfaced the real service name immediately instead of requiring this log
+    archaeology.
+  - **Net effect: unchanged from the reader's perspective (Railway standby
+    still deploys 0% of pushes, still drifting from `main`, still a stale
+    fail-over target), but the actual fix is now different and human-only:**
+    someone with Railway dashboard access to the `cooperative-harmony` project
+    needs to open it, find the real service name under the `production`
+    environment, and either (a) rename it to `spinr-backend` to match the
+    workflows as-is, or (b) report the actual name back so `RAILWAY_SERVICE` can
+    be corrected in both workflow files in one small PR. Token rotation (the
+    prior blocker) is done and should not be re-attempted.
+  - **Still consciously deferred** per the 2026-09-02/09-04 decisions above —
+    this update only corrects the record on *why* it's still broken, it does
+    not re-open the go-live-vs-fix-now tradeoff. Re-surface with whoever owns
+    Railway dashboard access once device testing/go-live winds down, per the
+    existing plan.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here
@@ -18718,16 +18775,37 @@ mechanical follow-up work, prioritizable independently.
     `docs/change-log/2026-09-11-ux1-rider-app-text-wrapper-rollout-round3.md`.
     A post-migration fresh sweep found **zero remaining files** matching
     the criterion — rider-app is fully migrated (15 + 8 + 10 = 33 files).
-  - **Remaining follow-up scope:** none for this item's acceptance bar —
-    both apps are fully migrated. Two related-but-separate gaps remain
-    open as their own future work, not blocking this item's closure: (1)
-    6 rider-app files with partial/manual `fontFamily` coverage found in
-    round 2 (`app/(tabs)/index.tsx`, `app/become-driver.tsx`,
-    `app/driver-arriving.tsx`, `app/ride-details.tsx`, `app/ride-status.tsx`,
-    `app/ride-tracking-webview.tsx`) — hand-written literals instead of the
-    wrapper; (2) the wrapper isn't yet lint-enforced in either app, so a
-    new screen could still ship without adopting it. `components/VoltraRideActivity.tsx`
-    is out of scope permanently (doesn't use RN's `Text`).
+  - **Remaining follow-up scope — CLOSED 2026-09-14:** both follow-up
+    gaps below are now done. (1) A fresh, independent grep (not trusting
+    the prior "6 files" estimate, per this item's own "don't trust the
+    prior count" warning) found the true count was larger: 19 rider-app
+    files and 9 driver-app files still imported `Text` directly from
+    `react-native` — the original migration's "has `fontWeight`, zero
+    `fontFamily`" criterion only ever caught a subset of files that
+    actually render `Text` off-brand, not literally every one. All 28
+    (19 + 9) are now migrated to `@shared/components/Text`. (2) Added a
+    `warn`-level
+    `no-restricted-imports` rule to both `rider-app/eslint.config.js` and
+    `driver-app/eslint.config.js` banning `Text` from `react-native`, so a
+    new screen can no longer silently opt out — matches this file's own
+    established `warn`-for-pre-existing-violations posture (hex-color/
+    SPACING rules). One test (`test_paymentConfirmScreen`) needed a fix:
+    the wrapper's `style={[{fontFamily}, style]}` composition nests the
+    caller's own style array one level deeper, which broke a
+    top-level-only `arrayContaining` assertion (real rendering was
+    unaffected — RN flattens nested style arrays; this was a
+    test-introspection gap, fixed by asserting on
+    `StyleSheet.flatten(style)` instead). `spinr-design-consistency-reviewer`
+    (run before push, per CLAUDE.md gate #10) also caught a pre-existing bug
+    in both apps' `become-driver.tsx`: a stray `fontFamily: 'PlusJakartaSans'`
+    (no weight suffix — not one of the 4 registered families) on the header
+    `title` style overrode the wrapper's correct `fontWeight: 'bold'` →
+    `PlusJakartaSans_700Bold` mapping, and the same bare literal appeared on
+    the `input` `TextInput` style too — both fixed in the same PR. Full
+    Change Impact Log:
+    `docs/change-log/2026-09-14-ux1-text-wrapper-lint-and-remaining-migrations.md`.
+    `components/VoltraRideActivity.tsx` remains out of scope permanently
+    (doesn't use RN's `Text`).
   - **Files:** rider-app — see all three "Action taken" bullets above for
     each round's exact list (33 files total); `shared/components/Text.tsx`
     is the wrapper (unchanged since round 1). driver-app — see the
@@ -25968,7 +26046,7 @@ how much they de-risk a public launch._
   `_fields_missing_columns` — new), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`),
   `backend/migrations/419_settings_missing_columns_round2.sql` (new).
 
-### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110
+### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110 [duplicate item number — see the other C111 below at "`emergency_contacts` ... has no admin/super_admin override policy," filed by a different, parallel session the same day; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above, to avoid breaking either item's own cross-references (this entry is referenced from this file's C110 entry above; the other C111 is referenced from this file's C49 entry)]
 - [x] **Status:** CLOSED 2026-09-13, same session — resolved without a live schema connection.
   `backend/supabase_schema.sql` (the bootstrap "run this in the Supabase SQL Editor" DDL) has an
   explicit `CREATE TABLE settings (...)` block that lists all three columns verbatim
@@ -26144,7 +26222,7 @@ how much they de-risk a public launch._
   was the only ADMIT-direction, unguarded instance found.
 - **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
 
-### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger
+### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger [duplicate item number — see the other C111 above at "`driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column," filed by a different, parallel session the same day working C110; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above]
 - [ ] **Status:** OPEN, informational — not a live bug, no code path is affected today.
   Found by `spinr-security-auditor`'s adversarial review (CLAUDE.md gate #10) of this
   session's C49 RLS-coverage work while independently re-deriving `emergency_contacts`'

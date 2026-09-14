@@ -4,7 +4,6 @@ import { fetchDirectionsRoute } from '@shared/api/directions';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   Share,
@@ -17,6 +16,7 @@ import {
   Image,
   AccessibilityInfo,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';

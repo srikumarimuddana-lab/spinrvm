@@ -9,6 +9,7 @@ and test_live_route.py (endpoint-level):
      cache wrapping (1).
 """
 
+import asyncio
 import contextlib
 import json
 from contextlib import ExitStack, contextmanager
@@ -466,3 +467,41 @@ async def test_failed_fetch_is_not_cached_and_retried_next_call():
     assert first["steps"] == []
     assert len(second["steps"]) == 1
     assert cap["calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_slow_compute_times_out_and_returns_empty_steps():
+    """A `compute_navigation_steps` call that hangs past
+    tracking.NAV_STEPS_COMPUTE_TIMEOUT_S must not hang the endpoint past that
+    bound — it should degrade to the same empty-steps shape as any other
+    Directions failure, not raise or block indefinitely."""
+    from backend.routes import rides as rides_mod
+    from backend.routes.rides import tracking as tracking_mod
+
+    async def _get_ride(_rid):
+        return _ride("in_progress")
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "drivers" and filters and "id" in filters:
+            return [{"id": "drv_1", "lat": 50.44, "lng": -104.63}]
+        return []
+
+    async def _get_app_settings():
+        return {"driver_turn_by_turn_enabled": True}
+
+    async def _hanging_compute_navigation_steps(flat, flng, tlat, tlng):
+        await asyncio.sleep(10)  # far longer than the patched-down timeout below
+        return [{"instruction": "should never be reached", "maneuver": None, "distanceMeters": 1}]
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("backend.routes.rides._deps.db_supabase.get_ride", _get_ride))
+        stack.enter_context(patch("backend.routes.rides._deps.db_supabase.get_rows", _get_rows))
+        stack.enter_context(patch("backend.settings_loader.get_app_settings", _get_app_settings))
+        with contextlib.suppress(ModuleNotFoundError, AttributeError):
+            stack.enter_context(patch("settings_loader.get_app_settings", _get_app_settings))
+        stack.enter_context(patch("utils.route_distance.compute_navigation_steps", _hanging_compute_navigation_steps))
+        stack.enter_context(patch.object(tracking_mod, "NAV_STEPS_COMPUTE_TIMEOUT_S", 0.05))
+
+        result = await asyncio.wait_for(rides_mod.get_navigation_steps(ride_id="r1", current_user=RIDER), timeout=2.0)
+
+    assert result == {"steps": [], "destination": "dropoff"}

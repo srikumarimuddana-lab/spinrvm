@@ -40,7 +40,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, ActivityIndicator } from 'react-native';
+import { TouchableOpacity, Text, ActivityIndicator, StyleSheet } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -725,6 +725,10 @@ describe('PaymentConfirmScreen', () => {
     const label = r.root.findAllByType(Text).find((t) => {
       try { return JSON.stringify(t.props.children) === '"Peak surcharge"'; } catch { return false; }
     })!;
-    expect(label.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ color: '#EF4444' })]));
+    // @shared/components/Text (UX1) wraps the caller's style array inside its
+    // own `[{fontFamily}, style]`, so the sought object is no longer a direct
+    // top-level element — flatten first, matching how RN itself (and the
+    // wrapper's own family-resolution logic) actually merges the style tree.
+    expect(StyleSheet.flatten(label.props.style)).toEqual(expect.objectContaining({ color: '#EF4444' }));
   });
 });

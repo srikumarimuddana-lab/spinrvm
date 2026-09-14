@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { computeTipOptions, isTipLadderReady, reconcileSelectedTip } from '../components/tipPresets';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal,
+  View, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal,
   Platform, ActivityIndicator, BackHandler, KeyboardAvoidingView, Animated, Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';

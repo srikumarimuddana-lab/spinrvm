@@ -599,6 +599,7 @@ async def persist_ride_breadcrumbs(
     *,
     persist_idle: bool = False,
     active_ride: Optional[Dict[str, Any]] | object = _ACTIVE_RIDE_NOT_PROVIDED,
+    driver_last_known: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Persist GPS points as ``driver_location_history`` breadcrumbs.
 
@@ -608,6 +609,17 @@ async def persist_ride_breadcrumbs(
     the batch is capped at ``MAX_BREADCRUMB_BATCH``. Single live WebSocket
     pings can pass ``persist_idle=True`` to keep the historical online-idle
     breadcrumb behavior when no active ride exists. Returns inserted rows.
+
+    Each surviving point is run through ``evaluate_gps_plausibility`` (mock
+    flag / impossible speed / accuracy sanity / teleportation), chained
+    across the batch exactly like ``persist_trip_location_batch``'s v2 path —
+    every point is checked against the last point that actually *passed*
+    before it, not just once for the whole batch (#1231 finding 11: this
+    legacy v1 REST path previously only dropped points flagged ``mocked``,
+    with no speed/teleport check at all). ``driver_last_known`` (the
+    caller's already-fetched ``drivers`` row) seeds the chain so the
+    boundary pair — driver's last DB position -> this batch's first point —
+    is covered too, at no extra DB read.
     """
     if not isinstance(points, list):
         logger.warning("breadcrumb persist received non-list points for driver_id=%s", driver_id)
@@ -663,16 +675,28 @@ async def persist_ride_breadcrumbs(
 
     rows: List[Dict[str, Any]] = []
     no_capture_time_rejected = 0
+    gps_implausible_rejected = 0
+
+    # Seed the chain with the driver's last known DB position (if the caller
+    # has one), same as persist_trip_location_batch, so the boundary pair —
+    # pre-batch position -> this batch's first point — is checked too.
+    prev_lat: Optional[float] = None
+    prev_lng: Optional[float] = None
+    prev_captured_at: Optional[datetime] = None
+    if driver_last_known:
+        _last_lat = _coord(driver_last_known, "lat", "latitude")
+        _last_lng = _coord(driver_last_known, "lng", "longitude")
+        _last_ts = parse_iso_utc(driver_last_known.get("updated_at"))
+        if _last_lat is not None and _last_lng is not None and _valid_lat_lng(_last_lat, _last_lng) and _last_ts:
+            prev_lat, prev_lng, prev_captured_at = _last_lat, _last_lng, _last_ts
+
     for p in points:
         lat = _coord(p, "lat", "latitude")
         lng = _coord(p, "lng", "longitude")
         if lat is None or lng is None or not _valid_lat_lng(lat, lng):
             continue
-        # Drop obviously spoofed fixes; the heavy anomaly filter (speed /
-        # distance / gap caps) runs once at settlement in routes/drivers.py.
-        if p.get("mocked") is True:
-            continue
-        # Discard points that belong to a different ride (stale buffer / prior trip).
+        # Discard points that belong to a different ride (stale buffer / prior trip)
+        # before they can affect the plausibility chain below.
         point_ride = p.get("ride_id")
         if point_ride and point_ride != ride_id:
             continue
@@ -695,6 +719,41 @@ async def persist_ride_breadcrumbs(
         # Discard points captured before this ride's window (pre-ride / stale).
         if captured_at is not None and window_start is not None and bounded_captured_at < window_start:
             continue
+
+        # #1231 finding 11: chained across the batch (and seeded from the
+        # driver's last DB position via driver_last_known above) instead of
+        # only trusting the client's own `mocked` flag — mirrors
+        # persist_trip_location_batch's v2 chain exactly. A rejected point
+        # does not become the new baseline, same reasoning as the v2 path.
+        elapsed_seconds = (
+            (captured_at - prev_captured_at).total_seconds()
+            if captured_at is not None and prev_captured_at is not None
+            else None
+        )
+        trusted, integrity_reason = evaluate_gps_plausibility(
+            lat,
+            lng,
+            prev_lat=prev_lat,
+            prev_lng=prev_lng,
+            elapsed_seconds=elapsed_seconds,
+            speed=p.get("speed"),
+            accuracy=p.get("accuracy"),
+            mocked=p.get("mocked"),
+        )
+        if not trusted:
+            # No raw lat/lng in the log — integrity_reason is one of a fixed
+            # set of short codes (mock_location / zero_accuracy / low_accuracy
+            # / impossible_speed / teleport), never a coordinate.
+            gps_implausible_rejected += 1
+            logger.warning(
+                "breadcrumb point failed GPS plausibility check driver_id=%s ride_id=%s reason=%s",
+                driver_id,
+                ride_id,
+                integrity_reason,
+            )
+            continue
+        prev_lat, prev_lng, prev_captured_at = lat, lng, captured_at
+
         rows.append(
             {
                 "id": str(uuid.uuid4()),
@@ -733,6 +792,19 @@ async def persist_ride_breadcrumbs(
                 "spinr_drivers_trail_point_rejected_total",
                 {"reason": "no_capture_time"},
                 no_capture_time_rejected,
+            )
+        except Exception:
+            logger.debug("trail rejection metric unavailable", exc_info=True)
+    if gps_implausible_rejected:
+        try:
+            try:
+                from .metrics import inc as _metric_inc
+            except ImportError:
+                from utils.metrics import inc as _metric_inc  # type: ignore
+            _metric_inc(
+                "spinr_drivers_trail_point_rejected_total",
+                {"reason": "gps_implausible"},
+                gps_implausible_rejected,
             )
         except Exception:
             logger.debug("trail rejection metric unavailable", exc_info=True)

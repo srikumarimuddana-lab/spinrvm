@@ -22,6 +22,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import AiAuroraBackground from '@shared/components/AiAuroraBackground';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Role = 'rider' | 'driver';
@@ -117,6 +118,10 @@ export default function SupportScreen({
 }: Props) {
   const router = useRouter();
   const { colors } = useTheme();
+  // #1231 finding 17: support tickets can carry account/payment details in
+  // free-text issue descriptions — must never enter session replay. Shared
+  // by both rider (support.tsx) and driver (driver/help.tsx) screens.
+  useLogRocketPrivacyScreen();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);

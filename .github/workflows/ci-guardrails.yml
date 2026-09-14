@@ -873,8 +873,36 @@ jobs:
           changed = [f for f in result.stdout.strip().split('\n')
                      if f.endswith(('.ts', '.tsx', '.js', '.jsx', '.env', '.json'))]
 
+          # Two independent false-positive classes found blocking PR #5350
+          # (which touched neither an env var name nor a real secret):
+          #
+          # 1. The old `.*` between EXPO_PUBLIC_ and the sensitive suffix
+          #    matches ANY text on the line, including plain English prose in
+          #    a comment ("... EXPO_PUBLIC_* value inlined empty). Once the
+          #    key was restored ...") -- the lowercase word "key" in a
+          #    sentence, nowhere near an actual env var reference. Restricted
+          #    to `[A-Z0-9_]*` so it only spans a single contiguous
+          #    UPPER_SNAKE_CASE-shaped identifier (still case-insensitive via
+          #    re.IGNORECASE, so a stray lowercase declaration is still
+          #    caught) -- prose containing spaces/punctuation can no longer
+          #    bridge the match.
+          # 2. A handful of *_KEY/*_TOKEN-suffixed names are, by the
+          #    provider's own documented security model, meant to ship
+          #    client-side and are not secrets: GOOGLE_MAPS_API_KEY (client-
+          #    side, Google-Console-restricted; CLAUDE.md's own "Required
+          #    Environment Variables" list names it explicitly for
+          #    rider-app), FIREBASE_API_KEY (Firebase's own docs: identifies
+          #    the project only, access is enforced by Firebase Security
+          #    Rules, safe to publish), and FB_CLIENT_TOKEN (Meta's Facebook
+          #    SDK client-side init token, distinct from the app secret,
+          #    required by react-native-fbsdk-next's Expo config plugin).
+          # This is a whole-file text scan (not diff-hunk-scoped), so any of
+          # these matching ANYWHERE in a changed file blocks the PR
+          # regardless of what that file's diff actually touches -- these
+          # three names alone already appear in ~25 files repo-wide.
           PRIVATE_PATTERNS = [
-              r'EXPO_PUBLIC_.*(?:SECRET|PRIVATE|PASSWORD|KEY|TOKEN)',
+              r'EXPO_PUBLIC_(?!GOOGLE_MAPS_API_KEY\b|FIREBASE_API_KEY\b|FB_CLIENT_TOKEN\b)'
+              r'[A-Z0-9_]*(?:SECRET|PRIVATE|PASSWORD|KEY|TOKEN)',
               r'EXPO_PUBLIC_SUPABASE_SERVICE',
               r'EXPO_PUBLIC_JWT',
               r'EXPO_PUBLIC_ADMIN',

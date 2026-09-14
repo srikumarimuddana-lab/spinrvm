@@ -170,8 +170,12 @@ against. What the bump changes, all in the library's own native layer:
 - **ProGuard requirement (0.5.3):** Nitro resolves hybrid objects by class name, so
   minified release builds need
   `-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }`. Wired into
-  `app.config.ts` (`expo-build-properties` → `android.extraProguardRules`); inert today
-  because minification is off, present so flipping it on later can't break car-only builds.
+  `app.config.ts` (`expo-build-properties` → `android.extraProguardRules`). **Live since
+  2026-09-14** on release EAS profiles that set `SPINR_ANDROID_MINIFY=1` (`preview` and
+  `android-auto`); the development-client `test` profile does not exercise R8; before that it was inert, because minification was off everywhere. It has
+  still never been exercised by a real build, so the first minified `android-auto` build
+  needs checking on an actual head unit, not just a phone. See
+  `docs/android-build-strategy.md` § R8 minification.
 - **`runtimeVersion` 2.6.0 → 2.7.0:** the bump adds new native hybrid objects
   (`HybridVoice`, `AndroidWindowInformation`), so 0.5.13 JS must never OTA onto a 0.4.7
   binary — the `register.ts` guard would degrade that to silently losing car support.

@@ -33,6 +33,7 @@ from ._deps import (  # noqa: F401
     reset_miss_streak,
     send_live_activity_update,
     spawn,
+    timedelta,
     timezone,
 )
 from ._shared import (  # noqa: F401
@@ -766,6 +767,90 @@ async def decline_ride(
     return {"success": True}
 
 
+# #1231 finding 12 (soft-rollout signal only -- see
+# docs/change-log/2026-09-14-arrival-corroboration-signal.md; the hard-block
+# and rider-side-confirmation variants were explicitly declined for a later
+# phase). The geofence check below trusts
+# the single live `drivers.lat/lng` value, which is itself only as
+# trustworthy as whatever last wrote it (utils/location_integrity.py /
+# utils/breadcrumbs.py -- #1231 finding 11). A crude spoof (unset mock flag,
+# impossible speed/teleport) can no longer move that marker at all -- both
+# the v1 and v2 location-write paths already gate it through
+# check_location_integrity()/evaluate_gps_plausibility() before the write.
+# What still gets through: a moderately sophisticated spoof that fabricates
+# a smooth, physically-plausible path with a normal reported speed/accuracy
+# and no mock flag. This does NOT close that remaining gap -- it adds a
+# non-blocking corroboration signal so the real-world false-positive rate
+# (GPS noise in parking garages / downtown canyons) can be measured before
+# ever rejecting a real arrival.
+_ARRIVAL_CORROBORATION_WINDOW = timedelta(minutes=5)
+# Bounds the query -- a driver_accepted -> driver_arrived leg is a few
+# minutes of breadcrumbs at most, never hundreds.
+_ARRIVAL_CORROBORATION_LOOKBACK_LIMIT = 200
+
+
+async def _flag_uncorroborated_arrival_if_needed(
+    driver_id: str, ride_id: str, targets: list, arrival_radius_km: float
+) -> None:
+    """Non-blocking corroboration signal for an already-committed arrival.
+
+    Every row in ``driver_location_history`` was already run through
+    ``evaluate_gps_plausibility``/``check_location_integrity`` at write time
+    (utils/breadcrumbs.py) -- a point that fails that check is logged and
+    never inserted -- so a hit here means an independently-verified fix
+    corroborates the live marker ``arrive_at_pickup`` just accepted, not
+    just that one value. A miss doesn't prove fraud (the app may simply
+    have been backgrounded with no breadcrumb outbox flush yet); it's a
+    rate signal to watch. Log + metric only, never a block, and never
+    touches ``rides.status`` -- already committed by the time this runs
+    (see the ``spawn()`` call site in ``arrive_at_pickup``).
+    """
+    window_start = datetime.now(timezone.utc) - _ARRIVAL_CORROBORATION_WINDOW
+    try:
+        breadcrumbs = await db_supabase.get_rows(
+            "driver_location_history",
+            {
+                "driver_id": driver_id,
+                "ride_id": ride_id,
+                "timestamp": {"$gte": window_start},
+            },
+            order="timestamp",
+            desc=True,
+            limit=_ARRIVAL_CORROBORATION_LOOKBACK_LIMIT,
+        )
+    except Exception:
+        # Best-effort telemetry read on a detached background task -- must
+        # never raise here, and this failure is not the arrival transition
+        # itself (already committed). Still surfaced loudly per CLAUDE.md's
+        # DB-error rule rather than swallowed at debug level.
+        logger.error(
+            "arrival-corroboration breadcrumb read failed driver_id=%s ride_id=%s",
+            driver_id,
+            ride_id,
+            exc_info=True,
+        )
+        return
+
+    corroborated = any(
+        b.get("lat") is not None
+        and b.get("lng") is not None
+        and any(calculate_distance(b["lat"], b["lng"], t[0], t[1]) <= arrival_radius_km for t in targets)
+        for b in breadcrumbs
+    )
+    if corroborated:
+        return
+
+    # Degraded-but-recovered (CLAUDE.md's log/metric/Sentry table): the
+    # arrival already succeeded, so warning + metric -- never Sentry
+    # (noise) -- and ids only, never raw lat/lng (PIPEDA).
+    logger.warning(
+        "arrival accepted with no corroborating breadcrumb driver_id=%s ride_id=%s",
+        driver_id,
+        ride_id,
+    )
+    _metric_inc("spinr_dispatch_arrival_uncorroborated_total")
+
+
 @router.post("/rides/{ride_id}/arrive")
 async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
@@ -828,6 +913,14 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     # hand. One counter, one label per transition, matching the existing
     # spinr_payment_settlement_total{outcome=...} convention.
     _metric_inc("spinr_rides_state_transition_total", {"to_status": "driver_arrived"})
+
+    if targets:
+        # #1231 finding 12 (soft-rollout signal only): fire-and-forget, must
+        # not add latency to a response the rider is actively waiting on.
+        # The transition above has already committed; this can only log +
+        # increment a metric, never affect it. See
+        # _flag_uncorroborated_arrival_if_needed's docstring.
+        spawn(_flag_uncorroborated_arrival_if_needed(driver["id"], ride_id, targets, ARRIVAL_RADIUS_KM))
 
     if ride.get("rider_id"):
         await _deps.manager.send_personal_message(

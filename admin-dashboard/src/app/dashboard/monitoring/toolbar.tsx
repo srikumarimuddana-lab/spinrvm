@@ -33,6 +33,13 @@ interface ToolbarProps {
     serviceAreas: ServiceArea[];
     vehicleTypes: VehicleType[];
     wsStatus: "connecting" | "connected" | "disconnected" | "error";
+    /** Whether the centre map can actually render in this browser (see
+     *  MonitoringMap's onCanRenderChange / webglOk guard). Defaults to
+     *  true — Follow mode's entire purpose is a map-visual effect
+     *  (panning to the followed driver), so it's disabled + explained
+     *  rather than left silently no-op'ing when the map is inert.
+     *  ACTION_ITEMS.md C115. */
+    mapCanRender?: boolean;
 }
 
 export function MonitoringToolbar({
@@ -46,6 +53,7 @@ export function MonitoringToolbar({
     serviceAreas,
     vehicleTypes,
     wsStatus,
+    mapCanRender = true,
 }: ToolbarProps) {
     return (
         <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2">
@@ -196,16 +204,29 @@ export function MonitoringToolbar({
                     {wsStatus === "connected" ? "Live" : wsStatus}
                 </span>
 
-                {/* Follow mode */}
+                {/* Follow mode — disabled + explained (not just dimmed) when the
+                    map can't render: Follow's entire purpose is a map-visual
+                    effect (panning to the followed driver), so flipping it on
+                    would otherwise silently do nothing. ACTION_ITEMS.md C115. */}
                 <Button
                     size="sm"
                     variant={followMode ? "default" : "outline"}
                     onClick={onFollowToggle}
+                    disabled={!mapCanRender}
+                    title={mapCanRender ? undefined : "Map can't render in this browser, so Follow mode has no visible effect."}
                     className="h-8 gap-1.5 text-xs"
                 >
                     <Navigation className="h-3.5 w-3.5" />
                     Follow {followMode ? "ON" : "OFF"}
                 </Button>
+                {!mapCanRender && (
+                    <span
+                        className="text-[10px] text-muted-foreground"
+                        title="Map can't render in this browser (often an ad or privacy blocker) — Follow mode has no visible effect."
+                    >
+                        map unavailable
+                    </span>
+                )}
             </div>
         </div>
     );

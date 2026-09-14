@@ -48,8 +48,23 @@ docker build \
 ```
 
 On Railway, set `EXTRA_REGION_URLS` as a **build-time variable** on the OSRM
-service and redeploy. Nothing in the backend changes — same `OSRM_URL`, same
-endpoints; the graph simply covers more ground.
+service, then force a **fresh build** — not a redeploy. Nothing in the backend
+changes — same `OSRM_URL`, same endpoints; the graph simply covers more ground.
+
+> **"Redeploy" does not work here, and fails silently.** Railway's redeploy
+> reuses the previous deployment's *existing build*, so a changed build arg
+> never reaches `docker build`: the service comes back up green, on the same
+> SK-only graph, with no error anywhere. Setting the variable on its own is not
+> enough either — this service has a `/deploy/osrm/**` watch pattern, so
+> commits that touch only other directories are SKIPPED and never rebuild it. A
+> build-arg change needs a commit matching that path. Verify with
+> `EXPECT_ALBERTA=1 deploy/osrm/smoke-test.sh` rather than assuming, and see
+> `docs/change-log/2026-09-14-osrm-alberta-coverage.md`.
+
+**Currently enabled in production:** `EXTRA_REGION_URLS` is set to the Geofabrik
+Alberta extract on the `osrm-backend` Railway service, so the live graph covers
+Saskatchewan **and** Alberta. Rolling back is unsetting that variable and
+rebuilding — no code change.
 
 Three options, cheapest first:
 

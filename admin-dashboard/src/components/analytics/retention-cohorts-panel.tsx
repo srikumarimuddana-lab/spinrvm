@@ -3,7 +3,7 @@
 // Rider/driver retention by signup cohort week — W1/W4/W12. CLAUDE.md lists
 // "weekly active driver retention >= 80%" as a KPI target, but nothing
 // computed any cohort/retention concept anywhere before this panel (backend
-// migration 421). "Retained" = completed >= 1 ride in that later week, same
+// migration 423). "Retained" = completed >= 1 ride in that later week, same
 // rule for riders and drivers — an explicit product decision, not the only
 // possible definition (see the endpoint's own docstring).
 

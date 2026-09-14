@@ -1,4 +1,4 @@
--- 421_retention_cohorts.sql
+-- 423_retention_cohorts.sql
 --
 -- Purpose:
 --   admin_retention_cohorts(p_cohort_start, p_cohort_end, p_service_area_id)
@@ -30,7 +30,7 @@
 --   a W4 or W12 answer, and reporting one would either have to fabricate a
 --   number from an incomplete window or silently coerce "not yet knowable"
 --   into "0% retained", both worse than omitting the row. Rows are dropped,
---   not zero-filled, matching 351/420's precedent for "no data" cases.
+--   not zero-filled, matching 351/422's precedent for "no data" cases.
 --
 -- Population:
 --   Riders: users.is_rider = TRUE, bucketed by users.created_at (signup).
@@ -52,7 +52,7 @@
 --   is the useful question when an operator is looking at one zone; signup
 --   itself has no service-area column on users/drivers to filter by.
 --
--- Same conventions as 351/420: read-only, STABLE, SECURITY DEFINER, pinned
+-- Same conventions as 351/422: read-only, STABLE, SECURITY DEFINER, pinned
 -- search_path, EXECUTE revoked from PUBLIC/anon/authenticated, granted to
 -- service_role only. Regina business weeks (extends 350's day-bucketing
 -- precedent to week granularity). Excludes legacy-imported rides

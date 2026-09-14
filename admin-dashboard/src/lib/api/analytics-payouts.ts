@@ -100,7 +100,7 @@ export const getSupplyUtilization = (dateRange = "30d", serviceAreaId?: string) 
     request<any>(`/api/admin/analytics/supply-utilization?${marketplaceQuery(dateRange, serviceAreaId)}`);
 
 /** P50/P95 dispatch offer->accept latency, overall and per service area,
- *  from ride_offers.offered_at/responded_at (migration 420). The durable-
+ *  from ride_offers.offered_at/responded_at (migration 422). The durable-
  *  storage equivalent of the spinr_dispatch_offer_to_accept_duration_ms
  *  Prometheus histogram, which never reaches this dashboard on its own. */
 export const getDispatchLatency = (dateRange = "30d", serviceAreaId?: string) =>

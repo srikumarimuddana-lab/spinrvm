@@ -96,7 +96,7 @@ export default function HeatMapPage() {
     const [demandFetchedAt, setDemandFetchedAt] = useState<Date | null>(null);
     const [forecast, setForecast] = useState<ForecastSlot[]>([]);
 
-    // Dispatch latency (P95 offer->accept per zone, migration 420). Fetched
+    // Dispatch latency (P95 offer->accept per zone, migration 422). Fetched
     // over a rolling "today" window rather than instantaneously like demand/
     // supply — a percentile needs enough accepted offers in the window to
     // mean anything, unlike a live snapshot count.

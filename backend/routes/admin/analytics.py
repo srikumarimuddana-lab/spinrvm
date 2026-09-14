@@ -1168,7 +1168,7 @@ async def get_dispatch_latency(
     dispatch speed sits next to the heatmap page's existing per-zone demand
     pressure panel rather than in a separate ops-only tool.
 
-    Aggregated in Postgres (admin_dispatch_latency_by_zone, migration 420).
+    Aggregated in Postgres (admin_dispatch_latency_by_zone, migration 422).
     Cached 5 min, per range + area.
     """
     import json as _json
@@ -1262,7 +1262,7 @@ async def get_retention_cohorts(
     12 weeks to elapse before its W12 row can appear at all -- a 30d window
     would exclude most cohorts old enough to have one).
 
-    Aggregated in Postgres (admin_retention_cohorts, migration 421).
+    Aggregated in Postgres (admin_retention_cohorts, migration 423).
     Cached 5 min, per range + area.
     """
     import json as _json

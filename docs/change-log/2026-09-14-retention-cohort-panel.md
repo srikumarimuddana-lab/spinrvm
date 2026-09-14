@@ -21,11 +21,11 @@ No cohort-retention concept was ever built — this is genuinely new ground, not
 
 ## 3. Fix / remediation
 
-- **Migration 421**: new read-only SQL function `admin_retention_cohorts(p_cohort_start, p_cohort_end, p_service_area_id)` computing W1/W4/W12 rider and driver retention, bucketed by signup week. "Retained" = ≥1 completed ride in that later week (explicit, user-confirmed product decision). Two new supporting indexes (`idx_users_rider_created_at`, `idx_drivers_created_at`, both CONCURRENTLY) since neither `users` nor `drivers` had a `created_at` index before.
+- **Migration 423**: new read-only SQL function `admin_retention_cohorts(p_cohort_start, p_cohort_end, p_service_area_id)` computing W1/W4/W12 rider and driver retention, bucketed by signup week. "Retained" = ≥1 completed ride in that later week (explicit, user-confirmed product decision). Two new supporting indexes (`idx_users_rider_created_at`, `idx_drivers_created_at`, both CONCURRENTLY) since neither `users` nor `drivers` had a `created_at` index before.
 - **Two real correctness bugs were found and fixed before this was ever committed**, by an adversarial migration-reviewer pass followed by a targeted re-verification pass:
   1. **Off-by-one on "has this horizon elapsed"**: the original `<=` comparison would report the *current, still-in-progress* week as a completed horizon, using only its partial data — the number would then visibly change day-to-day for what should be a stable, closed data point. Fixed to strict `<`.
   2. **Wrong rider-population filter**: originally filtered `users.role = 'rider'`, but migration 101 explicitly retired `role` for rider/driver discrimination in favor of `is_rider`/`is_driver` — `role` is written once at signup and never resynced, so a driver-first dual-role user keeps `role='driver'` forever even while actively riding. This would have silently undercounted the rider cohort. Fixed to `users.is_rider`, with the supporting index predicate updated to match.
-  - Two smaller issues were also fixed: a wrong index citation in the migration's own header comment (pointed at an unrelated index), and a missing `ride_completed_at IS NOT NULL` defensive guard (matching the pattern already used in migration 420).
+  - Two smaller issues were also fixed: a wrong index citation in the migration's own header comment (pointed at an unrelated index), and a missing `ride_completed_at IS NOT NULL` defensive guard (matching the pattern already used in migration 422).
 - **New endpoint** `GET /api/admin/analytics/retention-cohorts`, following the same pattern as `/marketplace-funnel`/`/supply-utilization`/`/dispatch-latency`. Default window is 90d (wider than other endpoints' 30d) since a cohort needs up to 12 weeks to elapse before a W12 reading can exist.
 - **New KPI** `driver_retention_w1_pct` — explicitly documented as a *different* metric from CLAUDE.md's "week-over-week active" phrasing (signup-cohort retention vs. rolling active-user retention). Not claimed as satisfying that KPI literally; the doc-correction follow-up commit addresses this distinction directly.
 - **New "Retention" tab** on the admin analytics page, with a per-cohort-week table (rows = signup week, columns = W1/W4/W12) for riders and drivers separately. A horizon with no reading yet renders as an em-dash, never a misleading 0%.
@@ -34,8 +34,8 @@ No cohort-retention concept was ever built — this is genuinely new ground, not
 
 - **Blast radius: single-surface, additive.** `admin_retention_cohorts` has exactly one caller (the new endpoint). No existing table, column, or function is altered.
 - **Read-only** against `users`, `drivers`, `rides` — no write path touched.
-- **Two new CONCURRENTLY index builds on high-write tables** (`users`: OTP/profile writes; `drivers`: location pings, online-status toggles — very high frequency). `CREATE INDEX CONCURRENTLY` takes a `SHARE UPDATE EXCLUSIVE` lock, which blocks other DDL but not normal INSERT/UPDATE/DELETE — confirmed against the same reasoning used for migration 420's index build.
-- **Deploy-ordering note** (same as migration 420, learned on migration 419 earlier this session): merging does not auto-apply the migration to production; `run_migrations.py` must be run separately or the new endpoint 500s until it is.
+- **Two new CONCURRENTLY index builds on high-write tables** (`users`: OTP/profile writes; `drivers`: location pings, online-status toggles — very high frequency). `CREATE INDEX CONCURRENTLY` takes a `SHARE UPDATE EXCLUSIVE` lock, which blocks other DDL but not normal INSERT/UPDATE/DELETE — confirmed against the same reasoning used for migration 422's index build.
+- **Deploy-ordering note** (same as migration 422, learned on migration 419 earlier this session): merging does not auto-apply the migration to production; `run_migrations.py` must be run separately or the new endpoint 500s until it is.
 - **No interaction** with fare calculation, wallet/allowance deltas, dispatch, or the ride state machine.
 
 ## 5. User-experience effect
@@ -47,9 +47,9 @@ No cohort-retention concept was ever built — this is genuinely new ground, not
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/421_retention_cohorts.sql` | New SQL function + 2 supporting indexes | Durable-storage source for the KPI |
+| `backend/migrations/423_retention_cohorts.sql` | New SQL function + 2 supporting indexes | Durable-storage source for the KPI |
 | `backend/routes/admin/analytics.py` | New `/retention-cohorts` endpoint, new `driver_retention_w1_pct` KPI target | HTTP surface |
-| `backend/tests/test_admin_analytics_coverage.py` | New `TestRetentionCohorts` (9 tests) + `TestRetentionCohortsMigration421` (7 static tests, including regression tests for both fixed bugs) | Coverage, including the two bugs caught during review |
+| `backend/tests/test_admin_analytics_coverage.py` | New `TestRetentionCohorts` (9 tests) + `TestRetentionCohortsMigration423` (7 static tests, including regression tests for both fixed bugs) | Coverage, including the two bugs caught during review |
 | `admin-dashboard/src/lib/api/analytics-payouts.ts` | New `getRetentionCohorts()` API call | Frontend API surface |
 | `admin-dashboard/src/lib/api.ts` | Re-exported the new function | Existing barrel-file convention |
 | `admin-dashboard/src/components/analytics/retention-cohorts-panel.tsx` | New panel component (cohort tables for riders/drivers) | UI |
@@ -58,7 +58,7 @@ No cohort-retention concept was ever built — this is genuinely new ground, not
 ## 7. Before / after
 
 ```
--- Before (migration 421, first draft — two real bugs)
+-- Before (migration 423, first draft — two real bugs)
 FROM users u
 WHERE u.role = 'rider'
   AND u.created_at >= p_cohort_start ...

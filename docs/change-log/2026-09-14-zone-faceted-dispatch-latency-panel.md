@@ -21,7 +21,7 @@ The metric was built as an in-process Prometheus observation only, at the one ca
 
 ## 3. Fix / remediation
 
-- **Migration 420**: new read-only SQL function `admin_dispatch_latency_by_zone(p_start, p_end, p_service_area_id)` computing P50/P95 offer→accept latency (ms) from `ride_offers.offered_at`/`responded_at` (already durably stored — no new metrics pipeline needed), overall and per service area. Same conventions as migration 351 (STABLE, SECURITY DEFINER, pinned search_path, EXECUTE revoked from PUBLIC/anon/authenticated, granted to service_role only). Adds one supporting partial index (`idx_ride_offers_accepted_responded`, CONCURRENTLY) since no existing index covered a `(status='accepted', responded_at range)` scan.
+- **Migration 422**: new read-only SQL function `admin_dispatch_latency_by_zone(p_start, p_end, p_service_area_id)` computing P50/P95 offer→accept latency (ms) from `ride_offers.offered_at`/`responded_at` (already durably stored — no new metrics pipeline needed), overall and per service area. Same conventions as migration 351 (STABLE, SECURITY DEFINER, pinned search_path, EXECUTE revoked from PUBLIC/anon/authenticated, granted to service_role only). Adds one supporting partial index (`idx_ride_offers_accepted_responded`, CONCURRENTLY) since no existing index covered a `(status='accepted', responded_at range)` scan.
 - **New endpoint** `GET /api/admin/analytics/dispatch-latency` (same file/pattern as the existing `/marketplace-funnel`, `/supply-utilization` endpoints), Redis-cached 5 min.
 - **New KPI target** `dispatch_p95_ms` (2000ms ceiling) added to the existing `_KPI_TARGETS` dict.
 - **New admin-dashboard panel**: a 5th summary card ("Dispatch P95") on the heatmap page's existing Live Demand Pressure section, plus a per-zone "Dispatch P95 (offer→accept)" row inside each area's existing demand card — extends what's already there rather than building a new page.
@@ -43,9 +43,9 @@ The metric was built as an in-process Prometheus observation only, at the one ca
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/420_dispatch_latency_by_zone.sql` | New SQL function + supporting index | Durable-storage source for the KPI |
+| `backend/migrations/422_dispatch_latency_by_zone.sql` | New SQL function + supporting index | Durable-storage source for the KPI |
 | `backend/routes/admin/analytics.py` | New `/dispatch-latency` endpoint, new `dispatch_p95_ms` KPI target | HTTP surface |
-| `backend/tests/test_admin_analytics_coverage.py` | New `TestDispatchLatency` (9 tests) + `TestDispatchLatencyMigration420` (4 static tests) | Coverage for the new endpoint and migration, including the null-vs-zero case |
+| `backend/tests/test_admin_analytics_coverage.py` | New `TestDispatchLatency` (9 tests) + `TestDispatchLatencyMigration422` (4 static tests) | Coverage for the new endpoint and migration, including the null-vs-zero case |
 | `admin-dashboard/src/lib/api/analytics-payouts.ts` | New `getDispatchLatency()` API call | Frontend API surface |
 | `admin-dashboard/src/lib/api.ts` | Re-exported the new function | Existing barrel-file convention |
 | `admin-dashboard/src/app/dashboard/heatmap/page.tsx` | New summary card + per-zone row, fetched independently alongside the existing demand/forecast calls | UI |
@@ -74,7 +74,7 @@ p95_ms = float(dl.get("p95_ms") or 0)
 ## 9. Verification performed
 
 - [x] Unit tests: `pytest tests/test_admin_analytics_coverage.py` — 133/133 passed (13 new). `ruff check`/`ruff format --check` clean.
-- [x] `spinr-migration-reviewer` subagent audit on migration 420: **SAFE TO APPLY**, no blockers. One real warning (the null-vs-zero percentile issue) was found and fixed before this commit, not after.
+- [x] `spinr-migration-reviewer` subagent audit on migration 422: **SAFE TO APPLY**, no blockers. One real warning (the null-vs-zero percentile issue) was found and fixed before this commit, not after.
 - [x] Frontend: real `npm run build` (exit 0) and `tsc --noEmit` (clean), not just the dev server. `eslint` on all three touched files: 0 errors, 0 new warnings (5 pre-existing warnings on lines this diff didn't touch).
 - [ ] Not verified against a real Postgres instance — the SQL function's correctness was verified by the reviewer subagent by inspection against migration 351's known-working pattern and by checking actual production schema (columns/indexes confirmed to exist via direct query), not by executing it.
 - [ ] Not manually verified in a running admin-dashboard browser session — no staging environment exists (see the 2026-09-13 corporate-billing change logs for the fuller context on that gap).

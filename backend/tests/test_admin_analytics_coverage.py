@@ -1009,14 +1009,14 @@ class TestDispatchLatency:
             assert admin_client.get("/api/admin/analytics/dispatch-latency").json() == {"cached": True}
 
 
-class TestDispatchLatencyMigration420:
-    """Static checks on migration 420 — no database is available to run it."""
+class TestDispatchLatencyMigration422:
+    """Static checks on migration 422 — no database is available to run it."""
 
     @staticmethod
     def _body() -> str:
         from pathlib import Path
 
-        p = Path(__file__).resolve().parents[1] / "migrations" / "420_dispatch_latency_by_zone.sql"
+        p = Path(__file__).resolve().parents[1] / "migrations" / "422_dispatch_latency_by_zone.sql"
         return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
 
     def test_excludes_legacy_imports(self):
@@ -1152,14 +1152,14 @@ class TestRetentionCohorts:
             assert admin_client.get("/api/admin/analytics/retention-cohorts").json() == {"cached": True}
 
 
-class TestRetentionCohortsMigration421:
-    """Static checks on migration 421 — no database is available to run it."""
+class TestRetentionCohortsMigration423:
+    """Static checks on migration 423 — no database is available to run it."""
 
     @staticmethod
     def _body() -> str:
         from pathlib import Path
 
-        p = Path(__file__).resolve().parents[1] / "migrations" / "421_retention_cohorts.sql"
+        p = Path(__file__).resolve().parents[1] / "migrations" / "423_retention_cohorts.sql"
         return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
 
     def test_excludes_legacy_imports(self):

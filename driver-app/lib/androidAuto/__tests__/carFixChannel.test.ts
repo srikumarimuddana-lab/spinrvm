@@ -155,7 +155,11 @@ describe('heading resolution', () => {
   it('a seeded previous fix is never a baseline (its age clock is Infinity)', () => {
     seedCarFix(SASKATOON);
     const merged = adoptCarFix(north(500));
-    expect(merged.heading).toBeNull();
+    // adoptCarFix returns null for a REJECTED fix, so acceptance is asserted
+    // separately — otherwise a regression that started rejecting this fix would
+    // read as "heading is null", which is what the test wants to see anyway.
+    expect(merged).not.toBeNull();
+    expect(merged?.heading).toBeNull();
   });
 
   it('a derived course beats a stale carried one', () => {
@@ -207,13 +211,14 @@ describe('heading resolution', () => {
   it('adoptCarFix returns the merged fix so callers render the true bearing', () => {
     adoptCarFix(at(271));
     const merged = adoptCarFix(at(null));
-    expect(merged.heading).toBe(271);
+    expect(merged).not.toBeNull();
+    expect(merged?.heading).toBe(271);
     expect(getLastCarFix()?.heading).toBe(271);
   });
 
   it('a real turn replaces the carried bearing', () => {
     adoptCarFix(at(271));
-    expect(adoptCarFix(at(15)).heading).toBe(15);
+    expect(adoptCarFix(at(15))?.heading).toBe(15);
   });
 
   it('a carried bearing does not renew its own clock on every watchdog fix', () => {

@@ -104,3 +104,23 @@ a pointer/rationale log, not a narrative.
   first, not new production instrumentation. If a real incident later
   ties back to this threshold, re-open the telemetry question then rather
   than building it speculatively now.
+
+- **2026-09-14 — car-marker/turn-by-turn latency audit, item #3:
+  `PLAYBACK_DELAY_MS = 5000` (marker smoothness/staleness buffer) kept
+  as-is.** The same audit flagged this Lyft-style playback-buffer delay
+  (`shared/utils/markerPlayback.ts`) as the single largest deliberate
+  contributor to perceived car-marker "lag" — the icon always renders
+  5 seconds behind the driver's real GPS fix, by design, to keep motion
+  smooth between pings. This is a genuine smoothness-vs-staleness product
+  tradeoff, not a bug, so it was explicitly not touched without the
+  user's own call. Asked the user directly; they chose **leave it at
+  5000ms**. Rationale discussed: the two code fixes landed in the same
+  audit (Android Auto route-snap, PR #5369's WS/location-batch latency
+  fixes) likely address most of what read as "car not straight on the
+  route / lag" — this buffer is unrelated to either. 5s also matches the
+  Uber/Lyft precedent this technique is modeled on. If a future session
+  is tempted to shrink this value, this was already asked and answered —
+  re-ask only if riders report staleness specifically (e.g. "shows
+  arrived" while the driver is still visibly a block away) after the
+  other two fixes have had time to be felt in production, not as a
+  speculative tuning pass.

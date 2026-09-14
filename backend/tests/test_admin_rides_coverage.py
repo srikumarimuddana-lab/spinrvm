@@ -360,6 +360,99 @@ class TestAdminCreateRide:
         assert push_mock.await_args.args[0] == _DRIVER["user_id"]
         assert push_mock.await_args.kwargs.get("target_app") == "driver"
 
+    def test_create_ride_dispatch_push_excludes_rider_name(self, client, as_super_admin):
+        """C112: admin_create_ride's FCM push must never carry rider_name —
+        it transits Google/Apple push infra in cleartext. The WS message to
+        the driver (send_personal_message) is a different transport and must
+        keep it, matching routes/rides/matching.py's existing behavior for
+        the normal auto-dispatch path."""
+        body = {**_CREATE_BODY, "driver_id": "drv-1"}
+        push_mock = AsyncMock()
+        ws_mock = AsyncMock()
+        rider = {"id": "usr-1", "first_name": "Nighil", "last_name": "Kumar", "rating": 4.8}
+        with (
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("db_supabase.set_driver_available", AsyncMock()),
+            patch("utils.insurance_periods.record_period_transition", AsyncMock()),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"ride_offer_timeout_seconds": 15})),
+            patch("socket_manager.manager.send_personal_message", ws_mock),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push_mock),
+            patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+
+        push_data = push_mock.await_args.args[3]
+        assert "rider_name" not in push_data
+
+        # The WS payload (a different transport, no third-party transit)
+        # still carries the rider's name for the driver's in-app offer panel.
+        ws_payload = ws_mock.await_args.args[0]
+        assert ws_payload["rider_name"] == "Nighil Kumar"
+
+    def test_create_ride_dispatch_push_excludes_rider_name_email_fallback(self, client, as_super_admin):
+        """_user_display_name falls back to a raw email/phone when both name
+        fields are blank — that fallback must be excluded from the FCM push
+        exactly like a real name, not just when a name is present."""
+        body = {**_CREATE_BODY, "driver_id": "drv-1"}
+        push_mock = AsyncMock()
+        rider = {"id": "usr-1", "first_name": "", "last_name": "", "email": "nighil.kumar@example.com", "rating": 4.8}
+        with (
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("db_supabase.set_driver_available", AsyncMock()),
+            patch("utils.insurance_periods.record_period_transition", AsyncMock()),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"ride_offer_timeout_seconds": 15})),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push_mock),
+            patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+
+        push_data = push_mock.await_args.args[3]
+        assert "rider_name" not in push_data
+        assert "nighil.kumar@example.com" not in push_data.values()
+
+    def test_create_ride_dispatch_push_still_includes_coordinates_and_rating(self, client, as_super_admin):
+        """Documents today's unchanged behavior: unlike rider_name, precise
+        pickup/dropoff coordinates and rider_rating are NOT currently gated
+        behind any flag here — because routes/rides/matching.py's own
+        _FCM_EXCLUDE doesn't gate them either (no such flag exists in this
+        codebase). If a future change adds real flag-gated stripping of
+        these fields to matching.py, this admin path should be updated to
+        match at the same time — see C112's note in ACTION_ITEMS.md."""
+        body = {**_CREATE_BODY, "driver_id": "drv-1"}
+        push_mock = AsyncMock()
+        rider = {"id": "usr-1", "first_name": "R", "rating": 4.8}
+        with (
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("db_supabase.set_driver_available", AsyncMock()),
+            patch("utils.insurance_periods.record_period_transition", AsyncMock()),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"ride_offer_timeout_seconds": 15})),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push_mock),
+            patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+
+        push_data = push_mock.await_args.args[3]
+        assert push_data["rider_rating"] == "4.8"
+        assert push_data["pickup_lat"] == str(_CREATE_BODY["pickup_lat"])
+        assert push_data["dropoff_lat"] == str(_CREATE_BODY["dropoff_lat"])
+
     def test_create_ride_insert_failure_returns_500(self, client, as_super_admin):
         with patch("db_supabase.insert_one", AsyncMock(side_effect=RuntimeError("db down"))):
             resp = client.post("/api/admin/rides/create", json=_CREATE_BODY)

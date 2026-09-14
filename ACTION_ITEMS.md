@@ -803,6 +803,91 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       file — it necessarily touches real driver bank/identity data;
       available on request to whoever owns this follow-up, re-run
       directly against Stripe rather than copied here.
+    - **2026-09-14, same day — #4109's implementation-plan step 5 (the
+      §0.3 7-item Stripe-side checklist) executed as far as this session's
+      access allows: items 4/6/7 answered for real, items 1/2/3 confirmed
+      still structurally blocked, item 5 reconfirmed unchanged.**
+      `mcp__Stripe__list_available_accounts_or_orgs` in this session
+      resolves to exactly one account — `acct_1SSk2XFXFgLO2LdO` (the same
+      one above) — and no old-app platform-account ID or key is recorded
+      anywhere in this repo (`docs/runbooks/stripe-legacy-migration.md`'s
+      Step 1 only has a placeholder variable name, never a real value;
+      confirmed by grep across `docs/`, PR #3946, and
+      `stripe_mapping_import_service.py`).
+      - **Items 1–3 (old-account transfers/payouts post-cut; Connect-set
+        diff; in-flight old-platform transfers at cutover): still blocked,
+        unchanged.** All three need the *old* app's Stripe key, which
+        remains unavailable and unrecorded. Current-state note for when it
+        does become available: live `drivers.stripe_account_id` count is
+        now **149 distinct accounts** (was 104 in the 2026-08-15 audit;
+        driver population grew 211→927 over the month), so item 2's diff
+        will need re-pulling, not reusing, the old 104-ID list.
+      - **Item 4 (shared-account vs. migration-mapping scenario): still
+        open, one new fact.** Of the 149 driver rows with a
+        `stripe_account_id`, only 111 carry
+        `legacy_import_metadata.stripe_migration` (one batch, "Driver
+        Stripe 202060808" — i.e. went through the CSV mapping importer);
+        the other 38 are native Stripe onboardings, definitely new-app-only.
+        Of those 111, **0 have `old_stripe_account_id` populated** — the
+        importer's optional old-ID provenance column was never filled in
+        for this batch. So even with old-app access, there is nothing
+        already in Supabase to join against; a live old-app export would
+        be needed from scratch. Successful commit through the importer
+        (which validates live against Stripe before writing) only proves
+        these 111 `acct_…` IDs are valid on the connected new-platform
+        key — expected under either Scenario A or B, so it doesn't itself
+        distinguish them.
+      - **Item 5 (108 unresolved PR #3946 rows + the resolvable 35):
+        108 rows still unresolved** — legacy Mongo ObjectIDs (Nov 2025–Jan
+        2026) predate every export file on hand; no progress possible
+        without an old-app export covering that window, and the source
+        CSVs themselves aren't in this repo (PII). For the resolvable
+        35/20-bucket side: live-reconfirmed today that **zero
+        `legacy_outstanding_correction` payout rows exist in production**
+        — the write path built 2026-08-17
+        (`docs/change-log/2026-08-17-legacy-payout-correction-writepath.md`)
+        has never been executed against real Stripe. The $185.31
+        "genuinely owed" 12-driver split is unchanged a month later: 10
+        still have no Stripe account, 2 still do.
+      - **Item 6 (Connect status for the 15 payable drivers): resolved for
+        real.** Re-queried all 15 driver buckets directly — 10/15 still
+        have `stripe_account_id IS NULL` (unchanged). Of the 5 with an
+        account, called `GET /v1/accounts/{id}` live for all 5: none are
+        closed/`resource_missing`. 3/5 are fully healthy
+        (`payouts_enabled`/`charges_enabled`/`details_submitted` all
+        true, no `disabled_reason`) — these are the same 3 buckets
+        ($9.45/$22.43/$33.32) the 08-16 and 09-10 cross-checks flagged as
+        likely-already-paid, so their accounts being in good standing is
+        just confirmation, not new payment-history evidence either way.
+        2/5 (the $19.34 and $10.63 buckets) have `payouts_enabled: false`,
+        `disabled_reason: "requirements.past_due"` — real, open accounts
+        (not closed) but Stripe is currently blocking any payout to them
+        pending the driver's own outstanding identity-verification
+        requirements; a correction transfer to either would fail today
+        even if approved.
+      - **Item 7 (`stripe_orphan_refunds` vs. old-app charge IDs):
+        confirmed still 0 rows** in production today, same as 2026-08-15.
+        Closing as "nothing to reconcile" on the new-app side — this says
+        nothing about old-app-side orphan refunds, which stay invisible
+        without old-app access.
+      - **Operational bonus finding**: `driver_stripe_ledger` synced again
+        today (`MAX(synced_at)` = 2026-09-14, 377 rows / 54 distinct
+        accounts) — no longer the "synced exactly once, 2+ weeks stale"
+        state the same-day entry above found a few hours earlier.
+      - **No double-payment signal found or ruled out.** Nothing in this
+        pass shows an actual old-app-vs-new-app double payout — the
+        "likely already paid" buckets above are Spinr's own new-app
+        Stripe Transfers matching Spinr's own old-app CSV-recorded debt,
+        not evidence of a second, external payer. The only checks that
+        could surface a real cross-app double-payment (items 1–3) remain
+        blocked. This does not raise or lower the priority of the
+        companion double-dispatch/double-payout CR (**#4104, already
+        closed 2026-08-18**) — flagging for whoever revisits it, not
+        acting on it here.
+      - PII handling identical to the entry above: only account IDs,
+        status values, counts, and dollar totals recorded here; no driver
+        name, address, phone, bank, or identity-document data appears in
+        this file or in #4109's comment thread.
     - **2026-09-07, same interview — the 2 ambiguous buckets ($42.77):
       product owner wants this investigated now, but it can't be done
       from this session.** Resolving `350b5267…` ($33.32, a payment row
@@ -26382,7 +26467,7 @@ how much they de-risk a public launch._
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
-### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here
+### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
 - [ ] **Status:** OPEN, real (not informational) — reproduced by direct execution
   against a real Postgres running the actual shipped migration SQL, not inferred
   from reading the files. Found by `/code-review` (high effort, CLAUDE.md gate
@@ -26524,6 +26609,82 @@ how much they de-risk a public launch._
   `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`;
   `backend/tests/rls/test_audit_and_insurance_correction_rls.py` (new
   regression test, does not fix the bug).
+
+### C112. `admin_create_ride`'s FCM push sent `rider_name` (full name, or raw email/phone fallback) with zero PII filtering — parity gap with `routes/rides/matching.py`'s existing `_FCM_EXCLUDE` [duplicate item number — see the other C112 above ("`audit_logs`' migration-57 trigger..."), filed by a different, parallel session the same day working C49. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
+- [x] **Status:** CLOSED (2026-09-14) — fixed the same session it was found.
+- **Issue/gap:** `backend/routes/admin/rides.py`'s `admin_create_ride` (the admin-direct-assignment
+  path — an admin manually assigns a ride to a specific driver, distinct from the normal
+  auto-dispatch path) built its own `dispatch_payload`/FCM push independently of
+  `routes/rides/matching.py`'s batch-dispatch path and sent it to the driver's device with zero
+  PII filtering: `rider_name = _user_display_name(rider)` (full first+last name, falling back to
+  the rider's raw email or phone if both name fields are blank) rode in the FCM `data` payload in
+  cleartext, via Google/Apple push infra, for every admin-direct-assigned ride, live in production.
+- **Root cause:** `matching.py`'s batch-dispatch path already excludes `rider_name` from its FCM
+  `data` payload via a local `_FCM_EXCLUDE` set (added for C5). `admin_create_ride` builds its own,
+  independent `dispatch_payload`/push and was never updated to apply the same exclusion when that
+  fix landed on the sibling path.
+- **Correction to this item's own originally-assumed premise:** the task that found and closed
+  this item was framed around a claim that `matching.py`'s `_FCM_EXCLUDE` also gates
+  `pickup_lat`/`pickup_lng`/`dropoff_lat`/`dropoff_lng`/`rider_rating` behind a
+  `minimal_fcm_offer_payload_enabled` flag from "a just-shipped PR #5382," and that this exact
+  `### C112` entry already existed as OPEN before the task started. **Neither claim is true.** A
+  full-repo grep (`backend/`, `docs/`, migrations, and `git log` for `matching.py`) found zero
+  references to `minimal_fcm_offer_payload_enabled` or PR #5382 anywhere, and this file had no
+  C112 entry at all before this one (the highest existing item was C111, duplicate-numbered by two
+  parallel sessions the same day). `matching.py`'s actual, current `_FCM_EXCLUDE` unconditionally
+  excludes only 4 fields — `service_area_polygon`, `planned_route_polyline`, `rider_profile_image`,
+  `rider_name` — precise coordinates and `rider_rating` are sent **unfiltered** by `matching.py`
+  today too, same as `admin_create_ride` was. This item's fix therefore only brings
+  `admin_create_ride` to *real* parity with `matching.py` (the `rider_name` exclusion); it does
+  NOT add any new flag-gated coordinate/rating stripping to either path, since no such flag or
+  mechanism exists to reuse, and inventing one unilaterally for only one of the two call sites
+  would leave them out of parity with each other rather than closing the gap. If flag-gated
+  coordinate/rating stripping is still wanted across both dispatch paths, that's a new, separate
+  feature decision requiring its own design — not this item.
+- **Fix:** excluded `rider_name` from the FCM push `data` dict built in `admin_create_ride` (a
+  local `_ADMIN_FCM_EXCLUDE = {"rider_name"}` set, mirroring `matching.py`'s own pattern — a local
+  exclusion set, not a module constant, matching that file's style). The WebSocket message to the
+  driver (`manager.send_personal_message`, a different transport with no third-party transit) is
+  unchanged and still carries `rider_name` for the in-app offer panel, exactly as `matching.py`'s
+  WS message does for the auto-dispatch path.
+- **Also noted, not fixed here (filed separately as C113):** `routes/notifications.py`'s
+  `admin_debug_ride_offer` (an admin-only diagnostic endpoint) builds a third, independent
+  `new_ride_assignment` FCM payload with a hardcoded `"rider_name": "Debug Rider"` literal and no
+  exclusion filter — not a live PII leak today (it's a literal, not real rider data), but its
+  comment falsely claims parity with the live dispatch path's exclusions. Found by this item's own
+  adversarial `/code-review` pass (CLAUDE.md gate #10); kept out of this fix to stay one logical
+  change.
+- **Verification:** `pytest backend/tests/test_admin_rides_coverage.py` (179 passed, incl. 3 new
+  tests), plus `test_admin_rides_cancel_state.py`, `test_admin_rides_read_endpoints_coverage.py`,
+  `test_dispatch_notify_loop_branches.py`, `test_loguru_call_conventions.py` (no regressions).
+  `ruff check`/`ruff format --check` clean. See
+  `docs/change-log/2026-09-14-admin-assign-fcm-pii-filter.md` for the full Change Impact Log.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+- **PR:** #5388.
+
+### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
+- [ ] **Status:** OPEN, informational — no real PII leaks today.
+  Found during C112's adversarial `/code-review` pass (blast-radius grep for other
+  `new_ride_assignment` FCM payload builders turned up a third site beyond `matching.py` and
+  `admin/rides.py`).
+- **What's true today:** `admin_debug_ride_offer` (admin-only, `Depends(get_admin_user)`) sends a
+  synthetic test push to a real driver device to diagnose "no offer push / no sound" reports. Its
+  `offer_payload` dict hardcodes `"rider_name": "Debug Rider"` — a literal, not any real rider's
+  data — so no PII actually leaks through this endpoint today.
+- **Why it's worth a future decision anyway:** the dict is built with a comment claiming "same
+  shape/keys the live offer uses in routes/rides.py (spatial fields are excluded there too)" —
+  both halves of that claim are inaccurate (spatial fields are NOT excluded in the live path
+  either — see C112's correction above — and `rider_name` IS excluded in the live path but not
+  here). If this debug endpoint is ever changed to accept a caller-supplied rider name (a natural
+  "more realistic debug payload" enhancement), the misleading comment would make it easy to
+  silently reintroduce a real PII leak — the exact un-swept-sibling-copy failure mode CLAUDE.md's
+  adversarial-review gate (#10) exists to catch.
+- **Recommendation:** when next touching this endpoint, (1) fix the comment to state the true
+  current exclusion set (or lack thereof), and (2) add the same `rider_name` exclusion as a
+  defensive measure even though the value is currently hardcoded, so a future edit can't
+  reintroduce the leak silently.
+- **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
+  (`admin_debug_ride_offer`, `_stringify_fcm`).
 
 ## Recently completed (do not redo)
 

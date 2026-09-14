@@ -81,8 +81,13 @@ const fgsRefusal = () =>
     { code: 'ERR_FOREGROUND_SERVICE_START_NOT_ALLOWED' },
   );
 
+// Every real expo-location sample carries a capture time, and the task selects
+// the newest by it — fixtures without one exercise a shape no device produces
+// (and the undated path has its own explicit test below).
+let fixClock = 1_800_000_000_000;
 const fix = (lat: number, heading: number | null = 90) => ({
   coords: { latitude: lat, longitude: -106.67, heading },
+  timestamp: (fixClock += 2_000),
 });
 
 beforeEach(() => {
@@ -119,13 +124,22 @@ describe('handler', () => {
   it('publishes the newest sample only', async () => {
     // A deferred batch replayed in order would rewind the marker through
     // positions the driver has already left.
-    await handleCarLocationTask({ data: { locations: [fix(1), fix(2), fix(3)] as never } });
+    const [a, b, newest] = [fix(1), fix(2), fix(3)];
+    await handleCarLocationTask({ data: { locations: [a, b, newest] as never } });
     expect(mockPublishCarFix).toHaveBeenCalledTimes(1);
-    expect(mockPublishCarFix).toHaveBeenCalledWith({
-      latitude: 3,
-      longitude: -106.67,
-      heading: 90,
-    });
+    // The capture time must survive alongside the coordinates: the channel
+    // arbitrates every producer chronologically, and a fix that arrives
+    // undated is refused there. Asserted explicitly because this used to pass
+    // only by accident — every metadata field was undefined, and
+    // toHaveBeenCalledWith treats an undefined property as absent.
+    expect(mockPublishCarFix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latitude: 3,
+        longitude: -106.67,
+        heading: 90,
+        timestampMs: newest.timestamp,
+      }),
+    );
   });
 
   it('makes NO network call — this must never transmit an offline driver', async () => {
@@ -315,6 +329,47 @@ describe('sign-out', () => {
 
     expect(mockIsSessionEnded).toHaveBeenCalledTimes(1);
     expect(mockPublishCarFix).toHaveBeenCalledTimes(3);
+  });
+
+  it('publishes the NEWEST sample of a deferred batch, not the last one', async () => {
+    // A deferred batch can arrive out of order; replaying it by array position
+    // rewinds the marker across positions the driver has already left, which
+    // reads on the head unit as the car jumping backwards and its bearing
+    // reversing. Capture time is the only ordering that is actually true.
+    const at = (lat: number, timestamp: number) => ({
+      coords: { latitude: lat, longitude: -106.67, heading: 90 },
+      timestamp,
+    });
+
+    await handleCarLocationTask({
+      data: { locations: [at(1, 1_000), at(3, 3_000), at(2, 2_000)] as never },
+    });
+
+    expect(mockPublishCarFix).toHaveBeenCalledTimes(1);
+    expect(mockPublishCarFix).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude: 3, timestampMs: 3_000 }),
+    );
+  });
+
+  it('drops an undated batch, but says so rather than going quiet', async () => {
+    // adoptCarFix refuses an undated fix once any timestamped one has landed,
+    // and locationIntegrity's elapsed-time arithmetic goes NaN on one (skipping
+    // the teleport check and poisoning the next sample's baseline), so
+    // publishing it would buy nothing and blind an anti-spoof gate. Dropping is
+    // right; dropping SILENTLY is not — a still marker is otherwise
+    // indistinguishable from a dead GPS.
+    const undated = { coords: { latitude: 1, longitude: -106.67, heading: 90 } };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await handleCarLocationTask({ data: { locations: [undated, undated] as never } });
+
+      expect(mockPublishCarFix).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('no sample carried a capture time'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('reaps an orphaned task left by a sign-out that happened while plugged in', async () => {

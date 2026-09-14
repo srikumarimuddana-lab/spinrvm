@@ -178,8 +178,37 @@ export async function handleCarLocationTask({
   // Only the newest sample matters. This drives a map marker, not a route
   // history — replaying a deferred batch would rewind the marker across
   // positions the driver has already left.
-  const latest = locations[locations.length - 1];
-  if (!latest?.coords) return;
+  const newestTimestamped = locations.reduce<(typeof locations)[number] | undefined>(
+    // `fix?.coords` rather than `fix.coords`: this runs inside a headless
+    // TaskManager handler, where a throw on a null batch entry surfaces as an
+    // unattributable crash with no screen to show it on. The previous
+    // array-position pick tolerated one; this must too.
+    (best, fix) => !fix?.coords || !Number.isFinite(fix.timestamp) ? best :
+      (!best || fix.timestamp > best.timestamp ? fix : best), undefined,
+  );
+  // A batch in which NOTHING carries a usable capture time is dropped, but
+  // never silently: the marker going still is otherwise indistinguishable from
+  // a dead GPS, and this is the one line that would say which.
+  //
+  // Dropping (rather than falling back to array position) is deliberate on two
+  // counts. adoptCarFix already refuses an undated fix outright once any
+  // timestamped one has landed — carFixChannel.ts's `fix.timestampMs == null`
+  // arm — so a fallback would buy nothing beyond the cold-boot window anyway.
+  // And `carIntegrity.check` below reads `loc.timestamp` unguarded: an undated
+  // sample makes its elapsed-time arithmetic NaN, which skips the teleport
+  // check for that sample AND poisons the baseline for the next one. Handing
+  // an anti-spoof gate a sample it cannot reason about is not worth a marker
+  // update the channel is about to reject.
+  if (!newestTimestamped) {
+    if (locations.length > 0) {
+      console.warn(
+        `[CarLocation] dropped batch of ${locations.length}: no sample carried a capture time`,
+      );
+    }
+    return;
+  }
+  const latest = newestTimestamped;
+  if (!latest.coords) return;
 
   // Display trust gate: a mock-location app must not be able to drive where
   // Spinr says the driver is — including in the shared last-location cache
@@ -195,6 +224,9 @@ export async function handleCarLocationTask({
     latitude: latest.coords.latitude,
     longitude: latest.coords.longitude,
     heading: latest.coords.heading ?? null,
+    timestampMs: latest.timestamp,
+    accuracyM: latest.coords.accuracy,
+    speedMps: latest.coords.speed,
   });
 }
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, render, fireEvent } from '@testing-library/react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 import { RideOfferPanel, DECLINE_REASON_SERVICE_ANIMAL } from '../../components/panels/RideOfferPanel';
 
 jest.mock('../../components/AlertDialog', () => ({
@@ -183,6 +184,42 @@ describe('RideOfferPanel', () => {
     expect(declineBtn).toBeTruthy();
     expect(acceptBtn.props.disabled).toBeFalsy();
     expect(declineBtn.props.disabled).toBeFalsy();
+  });
+
+  // Regression, #5324 follow-up: the scroll-safety fix above sized that
+  // ScrollView with `flex: 1`. The card around it is auto-height with only a
+  // maxHeight cap, so `flex: 1` (flexGrow 1 / flexBasis 0) made the body
+  // measure as zero and there was no free space to grow back into — drivers
+  // got an offer card with the header and the Accept/Decline buttons and
+  // nothing in between: no earnings, no km/min, no pickup or drop-off
+  // address. jest does no layout, so this asserts the style *shape* that
+  // caused it rather than a measured height: the body must shrink-only
+  // (flexBasis auto), never flexGrow/flexBasis 0.
+  it('sizes the informational body shrink-only so it cannot collapse to zero height', () => {
+    const { UNSAFE_getByType } = render(<RideOfferPanel {...defaultProps} />);
+
+    const body = StyleSheet.flatten(UNSAFE_getByType(ScrollView).props.style) ?? {};
+
+    expect(body.flexShrink).toBe(1);
+    expect(body.flexGrow).toBeUndefined();
+    expect(body.flexBasis).toBeUndefined();
+    // `flex: N` is the shorthand that expands to the collapsing combination.
+    expect(body.flex).toBeUndefined();
+  });
+
+  // Companion to the style assertion above: the sections that vanished in
+  // #5324 must all still be rendered by an ordinary offer. Catches a future
+  // change that drops or gates one of them, which no layout-free renderer
+  // could otherwise distinguish from the collapse.
+  it('renders earnings, trip metrics and both addresses for an ordinary offer', () => {
+    const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+
+    expect(getByText('YOUR EARNINGS')).toBeTruthy();
+    expect(getByText('15.50')).toBeTruthy();
+    expect(getByText('2.5')).toBeTruthy();   // distance_km
+    expect(getByText('10')).toBeTruthy();    // duration_minutes
+    expect(getByText('123 Main St')).toBeTruthy();
+    expect(getByText('456 Elm Ave')).toBeTruthy();
   });
 
   // Gap #13: a pre-accept decline had no reason at all, so trust & safety

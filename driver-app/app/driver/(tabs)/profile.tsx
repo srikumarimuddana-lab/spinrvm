@@ -34,6 +34,7 @@ import { showToast } from '../../../hooks/useToast';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -67,6 +68,9 @@ function ProfileScreenInner() {
   const insets = useSafeAreaInsets();
   const { user, driver: driverData, logout, logoutAll, updateProfileImage } = useAuthStore();
   const { colors } = useTheme();
+  // #1231 finding 17: account screens carry name/email/phone — must never
+  // enter session replay.
+  useLogRocketPrivacyScreen();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
 

@@ -19,6 +19,7 @@ import { showToast } from '../../hooks/useToast';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { getEmergencyContactFormError } from '../../utils/emergencyContactSchema';
 
@@ -57,6 +58,8 @@ export default function EmergencyContactsScreen() {
   const router = useRouter();
   const { t } = useLanguageStore();
   const { colors } = useTheme();
+  // #1231 finding 17: safety/SOS screens must never enter session replay.
+  useLogRocketPrivacyScreen();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [loading, setLoading] = useState(true);

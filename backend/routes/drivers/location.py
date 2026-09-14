@@ -743,7 +743,10 @@ async def update_location_batch(
         except ImportError:
             from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
         try:
-            await persist_ride_breadcrumbs(driver_id, points)
+            # #1231 finding 11: pass the driver row already fetched above (no
+            # extra DB read) so the chained plausibility check has a real
+            # boundary point instead of starting cold on every batch.
+            await persist_ride_breadcrumbs(driver_id, points, driver_last_known=driver_row)
         except Exception:
             logger.error("location-batch breadcrumb persist failed", exc_info=True)
 

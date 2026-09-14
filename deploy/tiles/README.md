@@ -152,11 +152,13 @@ needs a public domain — `*.railway.internal` will not work.
 ## 4. Wire the admin dashboard
 
 Set on the Vercel project (both are optional and independent — set one, both, or
-neither, and anything unset keeps today's third-party default):
+neither, and anything unset keeps today's third-party default). `maps.spinr.ca`
+below is illustrative; the service's live host is whatever domain is attached to
+it on Railway — currently `tilesserver-production-14c2.up.railway.app`:
 
 ```
-NEXT_PUBLIC_MAP_STYLE_URL=https://maps.spinr.ca/styles/basemap/style.json
-NEXT_PUBLIC_RASTER_TILE_URL=https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png
+NEXT_PUBLIC_MAP_STYLE_URL=https://<tile-host>/styles/basemap/style.json
+NEXT_PUBLIC_RASTER_TILE_URL=https://<tile-host>/styles/basemap/{z}/{x}/{y}.png
 ```
 
 - `NEXT_PUBLIC_MAP_STYLE_URL` becomes the **first hop** of `basemapChain()`. The
@@ -164,11 +166,30 @@ NEXT_PUBLIC_RASTER_TILE_URL=https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png
   the maps degrade to OpenFreeMap/Carto rather than going blank.
 - `NEXT_PUBLIC_RASTER_TILE_URL` retargets the no-WebGL renderer. `{z}`/`{x}`/`{y}`
   are substituted; anything else in the string is left alone.
+  **This one has no fallback chain** — `rasterTileUrlTemplate()` is a plain
+  `env || Carto` either/or, so setting it makes `static-route-map.tsx` wholly
+  dependent on this service. That is a strictly bigger commitment than the
+  vector variable above; set it second, once the server has proven stable.
 - Optional `NEXT_PUBLIC_MAP_STYLE_URL_DARK` for a dark style, if you build one.
   Unset, the dark theme falls back to the light self-hosted style.
 
-These are `NEXT_PUBLIC_*`, so they are **inlined at build time** — changing them
-in Vercel requires a redeploy, not just a restart.
+### These do nothing until a production build succeeds
+
+`NEXT_PUBLIC_*` values are **inlined into the bundle at build time**, so:
+
+- Saving the variable in Vercel does **not** redeploy. You must trigger a
+  deployment yourself.
+- Scope it to the **Production** environment. A variable set only for
+  Preview/Development is correct-looking and inert in production.
+- Redeploy with the build cache **off**, so the new value is actually re-inlined.
+- Vercel **auto-cancels a production build that a newer commit supersedes.** On
+  2026-09-14 eight consecutive production deployments were CANCELED this way
+  during a run of back-to-back merges, leaving production pinned to a bundle
+  built over an hour earlier — with the dashboard still on OpenFreeMap and an
+  admin-visible "Basemap slow to load" banner, while the tile server itself was
+  healthy and serving in 10-124 ms. If the banner persists after setting the
+  variable, check that a production deployment actually reached **READY** before
+  looking anywhere else.
 
 ## 5. Troubleshooting
 

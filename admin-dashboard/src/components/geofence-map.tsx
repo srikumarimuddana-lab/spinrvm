@@ -11,6 +11,7 @@ import {
     fitBoundsToPoints,
     polygonPointsToGeoJSON,
 } from "@/lib/map/maplibre-base";
+import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 
 interface PolygonPoint {
     lat: number;
@@ -87,6 +88,15 @@ export default function GeofenceMap({
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
     const isLoadedRef = useRef(false);
+    // Lazy initializer, computed once — same idiom ride-route-map.tsx,
+    // monitoring-map.tsx, live-map.tsx and driver-map.tsx already use for
+    // this probe. Without it, a browser whose WebGL context is a non-drawing
+    // stub (common with privacy/ad-blocking extensions) still gets a
+    // MapLibre map built here: MapLibre's own "load" event only reflects
+    // style/tile JSON reaching the page, not the GPU actually painting, so
+    // the canvas would sit blank with nothing on screen explaining why. See
+    // src/lib/map/webgl-support.ts.
+    const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
 
     const [committed, setCommitted] = useState<PolygonPoint[]>(polygon ?? []);
     const [drawing, setDrawing] = useState(false);
@@ -123,6 +133,7 @@ export default function GeofenceMap({
     // ── Map init ─────────────────────────────────────────────────────
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
+        if (!webglOk) return;
 
         const map = new maplibregl.Map({
             container: containerRef.current,
@@ -365,6 +376,22 @@ export default function GeofenceMap({
             fitBoundsToPoints(map, committed, 40);
         }
     }, [committed.length]);
+
+    if (!webglOk) {
+        return (
+            <div
+                role="status"
+                className="flex items-center justify-center bg-muted px-6 text-center"
+                style={{ height, width: "100%", borderRadius: "8px" }}
+            >
+                <p className="text-sm text-muted-foreground">
+                    Geofence map can&apos;t render in this browser — often an
+                    ad or privacy blocker. Try disabling it for this site, or
+                    use a different browser.
+                </p>
+            </div>
+        );
+    }
 
     return (
         <div style={{ position: "relative", height, width: "100%" }}>

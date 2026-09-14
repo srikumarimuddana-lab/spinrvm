@@ -1,7 +1,7 @@
 # `spinr.app` — phantom-domain audit and disposition proposal
 
 **Date:** 2026-09-14
-**Status:** Awaiting decision — no code changed yet.
+**Status:** Decided and implemented — see §12 for what shipped and what is still open.
 **Scope:** every reference to `spinr.app` / `spinr-track.app` / `api.spinr.app` in the repo.
 
 ---
@@ -17,6 +17,14 @@ By contrast `spinr.ca` resolves (`216.198.79.1`), `api-spinr.spinr.ca` resolves 
 resolves to Vercel. **`spinr.ca` is the operationally canonical domain.**
 
 Every `spinr.app` URL in the codebase is therefore dead today.
+
+### Updated 2026-09-14, after the decision
+The product owner confirmed: **neither `spinr.app` nor `spinr-track.app` is owned.**
+They also supplied the real published legal pages — `https://www.spinr.ca/legal/privacy`
+and `https://www.spinr.ca/legal/terms`. That corrects §5 below, which was written on
+the assumption (inherited from LGL-11) that no public page existed: the legal pages
+**do** exist, but nothing in the apps was pointing at them correctly. The signup
+consent links were missing both the `www.` host and the `/legal/` path prefix.
 
 ### Not proven here
 Whether `spinr.app` is **registered but unconfigured** versus **never registered**

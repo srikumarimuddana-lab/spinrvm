@@ -17,7 +17,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   BarChart3, TrendingDown, XCircle, CheckCircle,
   RefreshCw, Activity, Car, DollarSign, Target, Search, AlertTriangle,
-  MapPin, Send, TrendingUp, Users, Timer, LayoutDashboard,
+  MapPin, Send, TrendingUp, Users, Timer, LayoutDashboard, Repeat,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ import { CHART_PALETTE_DARK, CHART_PALETTE_LIGHT, chartColors } from "@/componen
 import { DriverOffersPanel } from "@/components/analytics/driver-offers-panel";
 import { MarketplaceOverviewPanel } from "@/components/analytics/marketplace-overview-panel";
 import { SupplyPanel } from "@/components/analytics/supply-panel";
+import { RetentionCohortsPanel } from "@/components/analytics/retention-cohorts-panel";
 import { EfficiencyPanel } from "@/components/analytics/efficiency-panel";
 import { FinancialPanel } from "@/components/analytics/financial-panel";
 import { DemandForecastPanel } from "@/components/analytics/demand-forecast-panel";
@@ -46,7 +47,7 @@ const ALL_AREAS = "__all__";
  *  /dashboard/forecast redirect to ?tab=offers / ?tab=forecast, so renaming
  *  one of these breaks those redirects and any bookmark. */
 const TAB_IDS = [
-  "overview", "supply", "efficiency", "financial",
+  "overview", "supply", "retention", "efficiency", "financial",
   "cancellations", "acceptance", "offers", "forecast",
 ] as const;
 const DEFAULT_TAB = "overview";
@@ -471,6 +472,9 @@ function AnalyticsPageInner() {
             <TabsTrigger value="supply" className="gap-1.5">
               <Users className="h-3.5 w-3.5" /> Supply
             </TabsTrigger>
+            <TabsTrigger value="retention" className="gap-1.5">
+              <Repeat className="h-3.5 w-3.5" /> Retention
+            </TabsTrigger>
             <TabsTrigger value="efficiency" className="gap-1.5">
               <Timer className="h-3.5 w-3.5" /> Efficiency
             </TabsTrigger>
@@ -499,6 +503,10 @@ function AnalyticsPageInner() {
 
         <TabsContent value="supply" className="space-y-4">
           <SupplyPanel dateRange={dateRange} serviceAreaId={svcArea} refreshToken={refreshToken} />
+        </TabsContent>
+
+        <TabsContent value="retention" className="space-y-4">
+          <RetentionCohortsPanel dateRange={dateRange} serviceAreaId={svcArea} refreshToken={refreshToken} />
         </TabsContent>
 
         <TabsContent value="efficiency" className="space-y-4">

@@ -510,7 +510,7 @@ Guardrails against accidentally turning Spinr into a generic Uber clone. Suggest
 
 ## KPI Targets
 
-Production health is measured against these targets. Code that risks breaching them should be flagged in review. Pull current values via `/kpi`.
+Production health is measured against these targets. Code that risks breaching them should be flagged in review. Pull current values via `GET /api/admin/analytics/overview` (headline KPI cards; supports `date_range` and `service_area_id`) and `GET /api/admin/analytics/dispatch-latency` (per-zone P95 dispatch latency, migration 422). **Correction (2026-09-14):** this section previously said "Pull current values via `/kpi`" — no such endpoint exists anywhere in the codebase (confirmed by grep across `backend/routes/`); that was always wrong, not a removed feature.
 
 | Metric | Target | Below-target signal |
 |---|---|---|
@@ -524,6 +524,8 @@ Production health is measured against these targets. Code that risks breaching t
 | Weekly active driver retention (week-over-week) | ≥ 80% | Earnings, UX, or support issue |
 | Safety incident rate | < 1 / 10k rides | Investigate every incident individually |
 | Support ticket response (P1) | < 2 h | Staffing or playbook gap |
+
+**Known gap — driver retention row above is currently unmeasured.** Nothing in the codebase computes a *rolling, week-over-week active* retention number as this row's literal phrasing describes (confirmed by grep: zero hits for retention/cohort/weekly_active in an analytics sense before 2026-09-14). Migration 423 / `GET /api/admin/analytics/retention-cohorts` added a **different, related** metric — `driver_retention_w1_pct` — that is signup-**cohort** retention (of drivers who signed up in week W, what % completed ≥1 ride in week W+1/W+4/W+12), not rolling active-user retention. Do not treat the new endpoint as satisfying this row literally: a cohort measure and a rolling-active measure can diverge (e.g. steady rolling retention can coexist with a newest cohort retaining poorly). Whether 80% is even the right bar for the cohort definition is an open, undecided question (flagged in the migration's own code comment). Building the literal rolling week-over-week metric this row describes remains open backlog, not done.
 
 ## Deployment
 

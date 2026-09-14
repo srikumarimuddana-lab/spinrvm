@@ -17,7 +17,7 @@ TodoWrite is unavailable; this is the tracker. Each batch is at most three track
 - [x] Driver maps patch + this log: schema, Android Java/C++ generated props, Android-only JS forwarding.
 - [x] Rider sibling maps patch + this log: identical seven-file native addition; driver commit `b3d856443`.
 - [x] Two app configs + this log: driver Android runtime 2.8.0, rider Android 2.2.0; inherited iOS runtimes remain 2.7.0 / 2.1.0. Rider patch commit `30e4ae894`.
-- [ ] Static regression guard + this log: check the full property chain and patch parity.
+- [x] `scripts/check-android-marker-patch.cjs`: static full-chain/patch-parity check; optional --installed validates dependency-install output. Runtime fence commit `c2008518c`.
 
 ## Fix, before / after, and blast radius
 
@@ -29,6 +29,8 @@ Both existing patch-package files retain their MapView detach/reattach patch unc
 This repairs all Android markers using the public rotation/flat API, not just one trip phase. Default rotation remains zero and default flat remains false. It does not claim to fix independent GPS drift, delayed playback, or every road-snapping issue listed in the earlier change log.
 
 ## Delivery, rollback, and verification
+
+Final static checks: contract/parity script passes; patch-package parses both patch files; native added hunks apply cleanly to both installed 1.27.2 copies. Expo config resolution confirms Android 2.8.0 / 2.2.0, iOS 2.7.0 / 2.1.0. Final senior review of the native patches, runtime fences and guard found no blockers. Local node_modules are intentionally not rewritten; --installed is a post-install check for the rebuilt artifact's dependency tree. Unrelated admin middleware/map-test work was preserved and excluded from commits.
 
 Static evidence: added native hunks pass git apply --check against installed 1.27.2; the RN codegen TypeScript parser accepts Float markerRotation/default 0 and Boolean flat/default false. Senior native reviewer inspected all seven patched files and found no blockers. Causality caveat: missing rotation in C++ getDiffProps causes loss when RN's Android prop-reconciliation path is enabled; raw-props transport also exists. The explicit property works across both paths, but installed-device runtime flags were not observed. No claim of on-device success is made.
 

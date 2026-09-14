@@ -25968,7 +25968,7 @@ how much they de-risk a public launch._
   `_fields_missing_columns` — new), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`),
   `backend/migrations/419_settings_missing_columns_round2.sql` (new).
 
-### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110
+### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110 [duplicate item number — see the other C111 below at "`emergency_contacts` ... has no admin/super_admin override policy," filed by a different, parallel session the same day; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above, to avoid breaking either item's own cross-references (this entry is referenced from this file's C110 entry above; the other C111 is referenced from this file's C49 entry)]
 - [x] **Status:** CLOSED 2026-09-13, same session — resolved without a live schema connection.
   `backend/supabase_schema.sql` (the bootstrap "run this in the Supabase SQL Editor" DDL) has an
   explicit `CREATE TABLE settings (...)` block that lists all three columns verbatim
@@ -26144,7 +26144,7 @@ how much they de-risk a public launch._
   was the only ADMIT-direction, unguarded instance found.
 - **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
 
-### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger
+### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger [duplicate item number — see the other C111 above at "`driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column," filed by a different, parallel session the same day working C110; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above]
 - [ ] **Status:** OPEN, informational — not a live bug, no code path is affected today.
   Found by `spinr-security-auditor`'s adversarial review (CLAUDE.md gate #10) of this
   session's C49 RLS-coverage work while independently re-deriving `emergency_contacts`'

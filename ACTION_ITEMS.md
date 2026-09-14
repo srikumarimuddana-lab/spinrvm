@@ -26816,9 +26816,7 @@ how much they de-risk a public launch._
   (wiring it into a real route was judged out of scope for a bug-fix-shaped
   task). Re-confirmed zero importers with a fresh repo-wide grep before
   deleting; see `docs/change-log/2026-09-14-c116-remove-unreachable-driver-map.md`
-  for the full Change Impact Log. Branch
-  `chore/c116-remove-unreachable-driver-map`, PR: see that change-log's PR
-  link field (filled in once opened).
+  for the full Change Impact Log. See PR #5424.
 - **Original finding (superseded, kept for history):** Found by `spinr-design-consistency-reviewer` while
   reviewing the WebGL-stub-guard port to `live-map.tsx`/`driver-map.tsx`
   (this same session — see

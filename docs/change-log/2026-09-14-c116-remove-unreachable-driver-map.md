@@ -8,7 +8,7 @@
 | Author | Claude Code (session) |
 | Surface(s) | admin-dashboard |
 | Domain (Sentry tag) | admin |
-| PR / commit link | <filled in on PR open> |
+| PR / commit link | https://github.com/srikumarimuddana-lab/spinrvm/pull/5424 |
 | Related issue or gap ID | ACTION_ITEMS.md C116 |
 
 ## 1. Issue / gap identified

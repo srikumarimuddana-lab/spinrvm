@@ -1048,7 +1048,6 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     referee_earned = await paid_referee_earnings(user["id"], "rider") or Decimal("0")
     summary = {
         "referral_code": code,
-        "referral_link": f"https://spinr.app/r/{code}",
         "total_referrals": total,
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,

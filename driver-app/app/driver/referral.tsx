@@ -31,7 +31,6 @@ interface ReferralInfo {
     referee_reward?: string | number;
     referred_by?: { name: string; code: string } | null;
     rides_required?: number;
-    referral_link: string;
     terms: string;
 }
 

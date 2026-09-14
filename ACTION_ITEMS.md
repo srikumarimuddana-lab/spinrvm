@@ -26856,7 +26856,39 @@ how much they de-risk a public launch._
   `admin-dashboard/src/app/dashboard/monitoring/page.tsx` +
   `monitoring-map.tsx` (confirmed to use a different, separate component).
 
-### C117. `spinr.app` was referenced in 96 places but has never been a registered or resolving domain — allowlists, store metadata, and operator docs all trusted it
+### C117. Claude Code marketplace plugins (`feature-dev`, `pyright-lsp`, `typescript-lsp`, `mcp-server-dev`) have no confirmed-working evidence in this session's environment kind, going back to session start
+- [ ] **Status:** OPEN. Found while verifying PR #5358
+  (`pyright-lsp`/`typescript-lsp`/`mcp-server-dev` enablement) at a fresh session boot — see
+  `docs/audit/2026-09-14-plugin-activation-never-worked.md` for full evidence and analysis.
+- **Issue/gap:** `/tmp/claude-code.log`'s `Found 0 plugins (0 enabled, 0 disabled)` /
+  `refreshActivePlugins: 0 enabled, 0 commands, 0 skills, ..., 0 MCP, 0 LSP` lines appear at
+  every checked point across this session's full multi-day history (2026-09-07 through
+  2026-09-14), regardless of which plugins `.claude/settings.json` declared at the time —
+  `feature-dev` alone, `feature-dev`+`karpathy-skills`, `feature-dev`+`Understand-Anything`, or
+  the current four-plugin set. Confirmed even in a case where the marketplace clone itself
+  definitely succeeded (plugin directories present on disk under
+  `/root/.claude/plugins/marketplaces/claude-plugins-official/plugins/`), ruling out "the clone
+  failed" as the sole explanation.
+- **Why this matters:** two prior audit docs (the `karpathy-skills` removal in PR #5176, and
+  `docs/audit/2026-09-11-understand-anything-plugin-pilot.md`) diagnosed third-party-marketplace-
+  specific bootstrap-sync failures and used `feature-dev` as the "control group that still
+  works" to justify that framing. That control group was never actually verified against the
+  log. If plugins genuinely never activate in this environment kind, every plugin-enablement PR
+  this session (feature-dev, the three LSP/mcp-server-dev plugins) has shipped config that is
+  inert here, even though harmless to merge.
+- **Recommendation:** someone with access to a Claude Code session of a different
+  `environment_kind`/`origin` (a local CLI or IDE session against this repo, not
+  `anthropic_cloud`/`web_claude_ai`) should check whether `refreshActivePlugins` shows a non-zero
+  count there. If it does, this is a cloud/remote-session-specific limitation worth documenting
+  plainly (e.g., in `CLAUDE.md` or `.claude/README.md`) so future cloud sessions don't repeat the
+  same plugin-pilot cycle expecting it to work. If it doesn't, this is a broader platform issue
+  worth escalating beyond this repo.
+- **Files (reference only, nothing changed by this entry):**
+  `docs/audit/2026-09-14-plugin-activation-never-worked.md` (full evidence),
+  `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
+  `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
+
+### C118. `spinr.app` was referenced in 96 places but has never been a registered or resolving domain — allowlists, store metadata, and operator docs all trusted it
 
 Found 2026-09-14 by tracing `https://{target}.spinr.app` in `agents/deployer.py`.
 `spinr.app` and `spinr-track.app` both return `NXDOMAIN` (no A, no NS) and the
@@ -26865,7 +26897,7 @@ per-class disposition and reasoning:
 `docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md`. Change Impact Log:
 `docs/change-log/2026-09-14-spinr-app-phantom-domain-removal.md`.
 
-Done on branch `claude/inspiring-cerf-1s4ela` (8 commits): removed the four
+Done on branch `claude/inspiring-cerf-1s4ela` (9 commits): removed the four
 unregistered origins from `middleware.py`'s CORS `always_allowed`; narrowed
 `ride-tracking-webview.tsx`'s `ALLOWED_TRACKING_HOSTS` to `track.spinr.ca`;
 deleted the dead `referral_link` field from both referral endpoints and

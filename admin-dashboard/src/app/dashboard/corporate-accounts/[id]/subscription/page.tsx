@@ -12,6 +12,7 @@ import {
     cancelCompanySubscription,
     getCompanySubscription,
     getCorporateSubscriptionPlans,
+    setCompanySubscriptionPilot,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -58,6 +59,7 @@ export default function CompanySubscriptionPage() {
     const [assigning, setAssigning] = useState(false);
     const [cancelling, setCancelling] = useState(false);
     const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(true);
+    const [togglingPilot, setTogglingPilot] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -98,6 +100,21 @@ export default function CompanySubscriptionPage() {
             });
         } finally {
             setAssigning(false);
+        }
+    }
+
+    async function handleTogglePilot(next: boolean) {
+        setTogglingPilot(true);
+        try {
+            await setCompanySubscriptionPilot(companyId, next);
+            toast({
+                title: next ? "Company added to billing pilot" : "Company removed from billing pilot",
+            });
+            await load();
+        } catch (e: any) {
+            toast({ title: "Failed to update pilot status", description: e?.message, variant: "destructive" });
+        } finally {
+            setTogglingPilot(false);
         }
     }
 
@@ -148,6 +165,30 @@ export default function CompanySubscriptionPage() {
                 Flat recurring platform fee, billed to the company via Stripe. This is separate from
                 ride fares — riders and drivers are never affected by this billing.
             </p>
+
+            <Card>
+                <CardContent className="p-4 space-y-1">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-medium">Billing pilot</p>
+                            <p className="text-xs text-muted-foreground">
+                                A company must be added to the pilot before a plan can be assigned, even
+                                if billing is enabled platform-wide.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Switch
+                                checked={data?.pilot_enabled ?? false}
+                                onCheckedChange={handleTogglePilot}
+                                disabled={togglingPilot}
+                            />
+                            <Label className="text-xs">
+                                {data?.pilot_enabled ? "In pilot" : "Not in pilot"}
+                            </Label>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
 
             <Card>
                 <CardContent className="p-4 space-y-3">
@@ -207,10 +248,18 @@ export default function CompanySubscriptionPage() {
                                         ))}
                                     </SelectContent>
                                 </Select>
-                                <Button onClick={handleAssign} disabled={!selectedPlan || assigning}>
+                                <Button
+                                    onClick={handleAssign}
+                                    disabled={!selectedPlan || assigning || !data?.pilot_enabled}
+                                >
                                     {assigning ? "Assigning…" : "Assign plan"}
                                 </Button>
                             </div>
+                            {!data?.pilot_enabled && (
+                                <p className="text-xs text-warning">
+                                    Add this company to the billing pilot above before assigning a plan.
+                                </p>
+                            )}
                             {plans.length === 0 && (
                                 <p className="text-xs text-muted-foreground">
                                     No subscription plans configured.

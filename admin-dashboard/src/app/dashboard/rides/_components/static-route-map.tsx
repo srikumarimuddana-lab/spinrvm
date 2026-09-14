@@ -20,7 +20,8 @@ import {
  * draw over the empty background.
  *
  * Used as RideRouteMap's fallback, not its default: MapLibre is still better
- * when it works (smooth zoom, crisp labels at any scale). See hasWebGL() and
+ * when it works (smooth zoom, crisp labels at any scale). See hasRenderingWebGL()
+ * in src/lib/map/webgl-support.ts and
  * the basemapStatus === "failed" branch in ride-route-map.tsx.
  *
  * Raster tiles come from Carto rather than OpenFreeMap because OpenFreeMap
@@ -166,6 +167,12 @@ export default function StaticRouteMap({
 }: Props) {
     const boxRef = useRef<HTMLDivElement>(null);
     const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+    // Which tiles failed to load. A Set keyed by tile id rather than a counter
+    // so a re-render that re-fires onError for an already-failed tile cannot
+    // inflate the total and trip the "all blocked" notice early.
+    const [failedTiles, setFailedTiles] = useState<ReadonlySet<string>>(
+        () => new Set<string>(),
+    );
 
     useEffect(() => {
         const el = boxRef.current;
@@ -265,6 +272,27 @@ export default function StaticRouteMap({
         };
     }, [size, pickupLat, pickupLng, dropoffLat, dropoffLng, paths, topPadding]);
 
+    // Identity of the current tile set. When the viewport or route changes we
+    // are requesting different URLs, so previous failures say nothing about
+    // them and the record has to start clean.
+    const tileSignature = view?.tiles.map((t) => t.key).join("|") ?? "";
+    useEffect(() => {
+        // Returning the same reference when already empty lets React bail out,
+        // so a first mount (or any pan that happens to re-request identical
+        // tiles) does not cost an extra render.
+        setFailedTiles((prev) => (prev.size === 0 ? prev : new Set<string>()));
+    }, [tileSignature]);
+
+    // Every tile failing is a different condition from one tile 404ing at the
+    // edge of coverage: it means the whole source is unreachable — an ad or
+    // privacy blocker, an offline admin, a dead tile host, a bad
+    // NEXT_PUBLIC_RASTER_TILE_URL. Until now that rendered as an empty box with
+    // no explanation anywhere, which is precisely how a blocked basemap went
+    // undiagnosed across two sessions. The route and pins are still accurate,
+    // so this is a notice, not an error.
+    const allTilesBlocked =
+        !!view && view.tiles.length > 0 && view.tiles.every((t) => failedTiles.has(t.key));
+
     return (
         <div ref={boxRef} className="absolute inset-0 overflow-hidden bg-muted">
             {view?.tiles.map((t) => (
@@ -290,6 +318,9 @@ export default function StaticRouteMap({
                     }}
                     onError={(e) => {
                         e.currentTarget.style.visibility = "hidden";
+                        setFailedTiles((prev) =>
+                            prev.has(t.key) ? prev : new Set(prev).add(t.key),
+                        );
                     }}
                 />
             ))}
@@ -333,6 +364,21 @@ export default function StaticRouteMap({
                     dangerouslySetInnerHTML={{ __html: routePinSvg(p.kind, 22) }}
                 />
             ))}
+
+            {/* Sits in the strip topPadding already reserves, so it cannot
+                cover a pin. Neutral rather than destructive styling, and opaque
+                rather than translucent, matching ride-route-map's own status
+                band: the forensic content — route and pins — is still correct
+                and on screen, so only the backdrop is missing. */}
+            {allTilesBlocked && (
+                <div
+                    role="status"
+                    className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
+                >
+                    Basemap tiles blocked — often an ad or privacy blocker. The route and
+                    pins below are accurate.
+                </div>
+            )}
 
             {/* Required by OSM's terms — and by Carto's when Carto served the
                 tiles — a licensing condition of the free tiles, not decoration.

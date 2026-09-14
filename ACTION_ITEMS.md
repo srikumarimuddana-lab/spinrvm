@@ -21577,6 +21577,79 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-13): more progress, still not closed.** Two rounds of
+  undocumented progress from other sessions surfaced while picking this item
+  up, plus new work this session:
+  - **Undocumented (found on disk, not previously reflected here):** three
+    test files — `test_corporate_accounts_super_admin_fix.py`,
+    `test_corporate_billing_rls.py`, `test_stripe_admin_tables_rls.py` — add
+    real DB-role-level coverage for `corporate_accounts` (migrations 05/17/
+    416), `corporate_wallets`, `corporate_wallet_transactions`,
+    `corporate_members`, `corporate_member_allowances`,
+    `corporate_allowance_requests` (migrations 05/27/142), and
+    `stripe_disputes`/`stripe_orphan_refunds` (migrations 88/254) — 8 more
+    tables, dated 2026-09-12/13 in `conftest.py`'s own history.
+  - **This session:** added `otp_records`, `rider_email_verification_otp`,
+    `emergency_contacts`, `safety_incidents`, `safety_incident_photos` — the
+    5 highest-consequence (auth/OTP + safety/SOS) tables from the
+    ~41-table remaining gap, picked deliberately over a broader sweep to
+    keep the diff reviewable (CLAUDE.md's task-decomposition rule). New
+    file `backend/tests/rls/test_otp_and_safety_rls.py`, 36 new tests. Full
+    `tests/rls` suite: 230 passed, 0 failed, against a real local Postgres
+    16. Adversarial review (`spinr-security-auditor`, CLAUDE.md gate #10)
+    independently re-derived every asserted policy from the actual
+    migration SQL (not the test file's own docstring claims) before commit
+    — found zero bugs in the diff, but surfaced one real, pre-existing
+    production gap: see C111.
+  - **Running total:** roughly 28 of ~64 distinct policy-bearing tables
+    (a fresh count this session, via a repo-wide `CREATE POLICY ... ON
+    <table>` sweep — see the change log for the exact method and why this
+    doesn't reconcile cleanly to the audit's original "207 policy
+    statements" figure, same caveat as every prior round). Still not
+    closed: this entry has still never attempted a full inventory of
+    which ~36 tables remain outside this set with a plan to close them —
+    only a repo-wide table list exists now, not a table-by-table backlog.
+  Change log: `docs/change-log/2026-09-13-c49-otp-and-safety-rls-coverage.md`.
+- [ ] **Status (2026-09-13, same day, round 2): 4 more tables, on the same PR.**
+  `test_corporate_billing_rls.py`'s own docstring explicitly earmarked
+  `corporate_policies`, `corporate_allowed_domains`, `ride_payment_sources`,
+  `corporate_policy_evaluations` (the remaining 4 of migration 27's 9
+  corporate tables) as "left for a future round" — all 4 were already
+  created and access-granted in the test harness, just never tested. Closed
+  that gap: extended `_ADMIN_ONLY_MONEY_TABLES` to cover the 3 that share
+  the existing table's generic `id`-keyed shape (reusing all 8 existing
+  parametrized tests unchanged), and added a dedicated 9-test block for
+  `ride_payment_sources` (keyed by `ride_id`, not `id`, so it can't share
+  the generic SQL). 92 tests in the file total (was already-passing before
+  this round; +32 net new/re-parametrized); full `tests/rls` suite: 266
+  passed, 0 failed. Kept on the *same* branch/PR as the round above
+  (`mvapps/dreamy-faraday-2wz914-c49-rls-coverage`, PR #5343) rather than a
+  new one, specifically because a separate PR would have guaranteed a merge
+  conflict on `conftest.py`'s `pg_cur` TRUNCATE list with the already-open
+  PR — same file, same insertion point.
+  - **Adversarial review** (`spinr-money-auditor`, CLAUDE.md gate #10,
+    money-touching surface): independently re-derived migration 142's
+    policy treatment of all 4 tables from the SQL itself (confirmed
+    identical DROP/CREATE-SELECT-admin/REVOKE/GRANT shape, no member-read-
+    own wrinkle on any of the 4); found one real-but-harmless subtlety —
+    `corporate_policies.company_id` is `UNIQUE`, and the insert-denial test
+    was reusing an already-seeded `company_id`, which would raise
+    `UniqueViolation` instead of the intended `InsufficientPrivilege` *if*
+    Postgres ever evaluated constraints before privilege grants (it
+    doesn't — confirmed by direct reproduction outside the suite, so the
+    test was passing for the right reason, not by accident); fixed anyway
+    as a diagnostic-clarity improvement (seed a fresh company for that one
+    insert instead) so a real future regression fails unambiguously rather
+    than looking like a broken test. Cross-checked all 4 tables' real
+    production write paths (`repositories/corporate_repo.py`,
+    `services/payment_service.py`, `routes/corporate_company.py`,
+    `routes/corporate_rider.py`, `services/corporate_membership_service.py`)
+    — every one goes through the service-role client; the tests' "no
+    authenticated write" assertion matches reality. **Verdict: safe to
+    merge, zero bugs found.**
+  - **Running total after this round:** 32 of ~64 distinct policy-bearing
+    tables (28 + these 4). Still not closed — same caveat as above.
+  Change log: `docs/change-log/2026-09-13-c49-corporate-remaining-round2.md`.
 - [ ] **Status (2026-09-11): more progress, still not closed.** Since
   2026-08-31, other sessions independently added `saved_addresses`
   (migration 378, `test_saved_addresses_rls.py`) and the transactional
@@ -21703,8 +21776,10 @@ how much they de-risk a public launch._
   larger fraction of the 207/127 policies has DB-role-level coverage.
   **(a) is now confirmed met** (since 2026-09-08, per the correction
   above) — `ci.yml` runs the suite on every backend-touching PR. That
-  still leaves (b): only ~29 distinct policies across ~10 tables have
-  DB-role-level coverage against a ~127–207 estimate. Whether "CI runs it"
+  still leaves (b): as of 2026-09-13, roughly 28 of ~64 distinct
+  policy-bearing tables have DB-role-level coverage (see the 2026-09-13
+  status entry above for the current table list and method) — up from
+  ~10 tables, but still well under half. Whether "CI runs it"
   alone is enough to close ranked blocker #29, or whether the team wants
   (b)'s coverage fraction materially higher first, is a call for whoever
   owns that audit finding — not decided by this entry. Do not mark #29
@@ -25114,8 +25189,57 @@ how much they de-risk a public launch._
   "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
   and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
   #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
-  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — needs a real compiled iOS build not
-  available here.
+  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below,
+  which resolves this without needing a compiled build.
+- **Addendum (2026-09-13) — #5 resolved via exhaustive config-plugin source trace, not a compiled
+  build, and rescoped to a much narrower (currently inert) impact than finding #10 implied:**
+  `driver-app` has no checked-in `ios/` directory (confirmed: pure managed Expo workflow), so the
+  generated `Info.plist`'s `UIBackgroundModes` array can only be populated by a config plugin
+  listed in `driver-app/app.config.ts`'s `plugins` array — there is no other path (no hand-edited
+  native project) for this key to be set. Read every plugin in that array that touches
+  `UIBackgroundModes`:
+  - `expo-location` (`isIosBackgroundLocationEnabled: true`, `app.config.ts:233`) —
+    `node_modules/expo-location/plugin/build/withLocation.js:26-36` unconditionally pushes
+    `'location'` into the array. **Confirmed present.**
+  - `'expo-notifications'` is **not listed** in `app.config.ts`'s `plugins` array at all, so its
+    plugin (`node_modules/expo-notifications/plugin/build/withNotificationsIOS.js`) never runs.
+    Even if it were added bare, `withBackgroundRemoteNotifications` (lines 21-29) only pushes
+    `'remote-notification'` when `enableBackgroundRemoteNotifications` is explicitly `true` — the
+    default is `undefined` (falsy), so a bare `'expo-notifications'` entry would still be a no-op
+    here.
+  - `@react-native-firebase/messaging`'s config plugin was grepped along with every other
+    `@react-native-firebase/*` plugin file for `UIBackgroundModes` — zero hits. It does not touch
+    this key on iOS at all (only Android FCM-icon setup).
+  - **Conclusion: `UIBackgroundModes` will contain `['location']` but not `'remote-notification'`**
+    — upgrading finding #10 from SUSPECTED to confirmed, short only of physically inspecting a
+    compiled `Info.plist` from a real EAS build (the one remaining gap, but a static trace of
+    every plugin that could set this key leaves no other candidate).
+  - **Rescoped impact — this does NOT explain the ride-offer or general-notification complaints.**
+    Read the actual APNs payload construction in `backend/features.py:1376-1421`:
+    `new_ride_assignment` (`is_dispatch`) is sent with a real `aps.alert` block (`messaging.Aps(
+    alert=messaging.ApsAlert(title=title, body=body), ...)`, `apns-push-type: "alert"`) — a
+    normal visible push, not a silent one, so iOS delivers/displays it regardless of
+    `UIBackgroundModes`. Every non-data-only type gets a real `messaging.Notification(title, body)`
+    block for the same reason. **Only `is_live_activity` is sent as a genuinely silent push**
+    (`messaging.Aps(content_available=True)`, `apns-push-type: "background"`,
+    `backend/features.py:1403-1405`) — that is the one case `UIBackgroundModes: remote-notification`
+    would actually matter for on iOS.
+  - **And that one case has no live user impact today:** grepped `driver-app` for
+    `ActivityKit`/`widget`/`LiveActivity` and found no native Live Activity extension target, no
+    config plugin for one, and no dedicated `live_activity` display branch in
+    `useDriverDashboard.ts` or `backgroundMessaging.ts` beyond the log-only fallback comment
+    already covered by recommendation #4's 2026-09-11 fix. iOS Live Activities are not a shipped
+    feature in this codebase yet, so the missing background mode currently has zero observable
+    effect on any real driver.
+  - **Recommendation: no code change now** (simplicity-first — fixing a config gap for a feature
+    that isn't built yet is speculative work with no bug behind it today). If/when a native iOS
+    Live Activity feature is actually implemented, add `'expo-notifications'` to
+    `app.config.ts`'s `plugins` array with `{ enableBackgroundRemoteNotifications: true }` (or a
+    small custom config plugin matching the existing `driver-app/plugins/` pattern) at that time,
+    and re-verify with a real EAS build before shipping.
+  - **What was NOT verified:** an actual compiled `Info.plist` from a real EAS iOS build (this
+    session has no such artifact) — the conclusion above is a static trace of every plugin that
+    could write this key, not a physical read of the generated file.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -26019,6 +26143,40 @@ how much they de-risk a public launch._
   reject-if-role-matches), the safe direction for an over-broad `role` check. This WebSocket gate
   was the only ADMIT-direction, unguarded instance found.
 - **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
+
+### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger
+- [ ] **Status:** OPEN, informational — not a live bug, no code path is affected today.
+  Found by `spinr-security-auditor`'s adversarial review (CLAUDE.md gate #10) of this
+  session's C49 RLS-coverage work while independently re-deriving `emergency_contacts`'
+  policies from migration 120 itself.
+- **What's true today, and why it's not a live gap:** migration 120 ships exactly 3
+  policies (`emergency_contacts_owner_select`/`_owner_insert`/`_owner_delete`, all
+  `auth.uid()::text = user_id`) and no UPDATE policy and no admin/super_admin carve-out
+  at all — unlike `safety_incidents` (migration 94), which deliberately grants
+  admin/super_admin SELECT+UPDATE alongside the owner's own read. The actual SOS
+  pipeline (Twilio notification to a rider's emergency contacts, `routes/safety.py`)
+  reads this table via the backend's service-role Supabase client, which bypasses RLS
+  entirely — so today's only real read path is unaffected by the missing override.
+- **Why it's worth a future decision anyway:** grepped every `routes/admin/*.py` file —
+  none reads `emergency_contacts` today. But if a future feature lets a support/safety
+  agent look up a rider's emergency contact by name during a live incident via a
+  direct-Supabase-role read (an admin-authenticated endpoint using the `authenticated`
+  role rather than the service-role client), it would be silently denied with no
+  override, with no test or error message explaining why — the same class of choice
+  migration 94 already made explicitly for `safety_incidents`, just never made here.
+- **Recommendation:** not urgent, no fix required now. When/if an admin-facing
+  emergency-contact lookup is ever built, decide then whether it should read via
+  service-role (bypassing RLS, current pattern) or via an explicit admin-override
+  policy mirroring migration 94's shape — and write that decision down, rather than
+  discovering the silent deny in production.
+- **Also noted, not a defect:** migration 94's `"Admin read/update safety_incidents"`
+  policy is declared `FOR SELECT` only despite its name implying both read and update —
+  the actual UPDATE grant lives in a separately-named `"Admin update safety_incidents"`
+  policy in the same file. Cosmetic naming inconsistency in already-shipped SQL, not
+  something to fix retroactively (append-only migrations).
+- **Files (reference only, nothing changed by this entry):**
+  `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
+  `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
 ## Recently completed (do not redo)
 

@@ -49,10 +49,14 @@ consequence (`users`, `drivers`, `rides` from `backend/supabase_rls.sql`,
 safety audit trail migration 64); extended since across several rounds
 (`saved_addresses`, the transactional outbox, `lost_and_found`(_messages),
 `referral_payouts`, `auto_payout_batches`, `complaints`, the migration-26
-deny-all tables, and -- this round -- the `corporate_*` money/PII tables
-(migrations 05/17/27/142) plus `stripe_disputes`/`stripe_orphan_refunds`
-(88/254)). See each test file's own docstring for what it covers, and
-ACTION_ITEMS.md C49 for the current fraction covered.
+deny-all tables, the `corporate_*` money/PII tables (migrations 05/17/27/142)
+plus `stripe_disputes`/`stripe_orphan_refunds` (88/254), `otp_records`/
+`rider_email_verification_otp`/`emergency_contacts`/`safety_incidents`/
+`safety_incident_photos`, and -- this round -- the remaining four of the
+nine migration-27 corporate tables (`corporate_policies`,
+`corporate_allowed_domains`, `ride_payment_sources`,
+`corporate_policy_evaluations`)). See each test file's own docstring for
+what it covers, and ACTION_ITEMS.md C49 for the current fraction covered.
 
 Running these tests
 --------------------
@@ -516,6 +520,60 @@ def pg_conn(pg_test_dbname):
         "TO anon, authenticated, service_role"
     )
 
+    # --- emergency_contacts (migration 120): owner-only SELECT/INSERT/DELETE,
+    # no UPDATE policy at all and no admin override (this migration's own
+    # comment says so; migration 378 explicitly mirrors that no-admin-override
+    # shape for saved_addresses). Applied verbatim -- it also ALTERs `rides`
+    # to add gps_anonymized_at, a harmless additive column on the table
+    # already created above. ---
+    cur.execute((migrations_dir / "120_ensure_emergency_contacts_and_gps_column.sql").read_text())
+
+    # --- rider_email_verification_otp: migration 299 declares user_id UUID,
+    # which errors against this schema's TEXT users.id (same drift class as
+    # complaints/lost_and_found -- see their own comments above) and was
+    # never actually applied in production for that reason. Migration 362 is
+    # the real, corrected source: its DO block creates the table itself (with
+    # user_id TEXT) when 299 never ran, so 299 is skipped entirely rather
+    # than patched -- there is nothing to extract from it that 362 doesn't
+    # already redo correctly. ---
+    cur.execute((migrations_dir / "362_fix_rider_email_verification_otp_user_id_type.sql").read_text())
+
+    # --- safety_incidents (migration 94): service_role bypass, admin/
+    # super_admin SELECT+UPDATE via a `users.role` lookup, reporter-only
+    # SELECT of their own reports, no INSERT/DELETE policy for anyone but
+    # service_role. Migrations 280/315 only add nullable columns (a merge
+    # pointer, an idempotency key) with no RLS effect and no CHECK
+    # constraint this harness's tests need -- deliberately not applied, to
+    # keep this section to the migration that actually defines the
+    # policies. ---
+    cur.execute((migrations_dir / "94_safety_incidents.sql").read_text())
+
+    # --- safety_incident_photos (migration 340): service_role-only, zero
+    # policy for anon/authenticated by design (evidence photos can name a
+    # third party). Extracted up to its storage-bucket INSERT -- this
+    # harness has no `storage` schema stub, and that INSERT is irrelevant to
+    # the table's own RLS behavior under test. ---
+    migration_340_sql = (migrations_dir / "340_safety_incident_photos.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_340_sql,
+            "-- 340_safety_incident_photos.sql",
+            "-- Private bucket.",
+        )
+    )
+
+    # New tables need the same baseline grant as every other batch above --
+    # granted by name so it doesn't re-open any earlier REVOKE (see the
+    # comment on the corporate-tables grant above for why "ALL TABLES in
+    # schema" isn't used past this point). otp_records needs no such grant
+    # here: its stub table (_STUB_TABLES_SQL) already existed when the
+    # earlier blanket "ALL TABLES in schema" grant ran, so it's covered.
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON emergency_contacts, "
+        "rider_email_verification_otp, safety_incidents, safety_incident_photos "
+        "TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -556,8 +614,17 @@ def pg_cur(pg_conn):
         "corporate_members",
         "corporate_member_allowances",
         "corporate_allowance_requests",
+        "corporate_policies",
+        "corporate_allowed_domains",
+        "corporate_policy_evaluations",
+        "ride_payment_sources",
         "stripe_disputes",
         "stripe_orphan_refunds",
+        "otp_records",
+        "emergency_contacts",
+        "rider_email_verification_otp",
+        "safety_incident_photos",
+        "safety_incidents",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

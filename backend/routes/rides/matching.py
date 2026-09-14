@@ -1445,6 +1445,32 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             "rider_profile_image",
                             "rider_name",
                         }
+                        # #1231 finding 15 (remaining half), ships dark behind
+                        # minimal_fcm_offer_payload_enabled (app_settings,
+                        # default False — see migration 424): precise GPS pins
+                        # and rider_rating are far more sensitive than the
+                        # human-readable pickup/dropoff label already visible
+                        # in the OS notification body/alert below, and unlike
+                        # that label have no legitimate reason to transit
+                        # Google/Apple push infra in full precision. When
+                        # enabled, the driver-app's background handler
+                        # refetches these via the authenticated
+                        # GET /drivers/rides/{ride_id}/offer endpoint
+                        # (routes/drivers/ride_reads.get_ride_offer) instead —
+                        # the WS message (dispatch_payload) above is
+                        # unaffected either way. Default False leaves this
+                        # byte-for-byte identical to today.
+                        _minimal_offer_payload = bool(app_settings.get("minimal_fcm_offer_payload_enabled", False))
+                        if _minimal_offer_payload:
+                            _FCM_EXCLUDE = _FCM_EXCLUDE | {
+                                "pickup_lat",
+                                "pickup_lng",
+                                "pickup_nav_lat",
+                                "pickup_nav_lng",
+                                "dropoff_lat",
+                                "dropoff_lng",
+                                "rider_rating",
+                            }
                         fcm_data = {
                             k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                             for k, v in dispatch_payload.items()
@@ -1452,6 +1478,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         }
                         fcm_data["deeplink"] = "/driver/"
                         fcm_data["booking_id"] = str(ride_id)
+                        if _minimal_offer_payload:
+                            # Marker so the client can tell which payload shape it
+                            # got (rather than inferring it from field absence,
+                            # which a future field addition could make ambiguous).
+                            fcm_data["offer_minimal"] = "true"
 
                         pickup_label = ride.get("pickup_address") or "Nearby pickup"
                         dropoff_label = ride.get("dropoff_address") or "destination"

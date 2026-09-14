@@ -735,6 +735,15 @@ class AppSettings(BaseModel):
     # rollback switch at all and becomes a boot-time setting — do not make
     # that change without replacing the rollback procedure documented here.
     dispatch_direct_pool_enabled: bool = False
+    # #1231 finding 15 (remaining half) kill switch: when True, matching.py's
+    # `_FCM_EXCLUDE` also drops precise pickup/dropoff coordinates and
+    # rider_rating from the ride-offer FCM `data` payload (WS `dispatch_payload`
+    # is unaffected either way) and the driver-app background handler refetches
+    # them via the new authenticated GET /drivers/rides/{ride_id}/offer
+    # endpoint. Default False = today's full-payload behaviour, unchanged.
+    # See migration 424. Ships dark -- requires human device verification
+    # (physical iOS + Android, staging) before enabling in production.
+    minimal_fcm_offer_payload_enabled: bool = False
     # ── Dispatch geo provider / candidate pool ───────────────────────────
     # Global default provider (migration 397, settings.dispatch_geo_provider
     # TEXT NOT NULL). A service area's own dispatch_geo_provider is a

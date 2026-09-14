@@ -26442,7 +26442,12 @@ how much they de-risk a public launch._
   mechanism exists to reuse, and inventing one unilaterally for only one of the two call sites
   would leave them out of parity with each other rather than closing the gap. If flag-gated
   coordinate/rating stripping is still wanted across both dispatch paths, that's a new, separate
-  feature decision requiring its own design — not this item.
+  feature decision requiring its own design — not this item. **Update (same day, merge of PR #5382):**
+  PR #5382 landed separately and *did* add exactly that flag (`minimal_fcm_offer_payload_enabled`,
+  migration 424 — renumbered from 422 during merge-forward, see that PR's own change-log for why)
+  — but scoped to the batch-dispatch path in `matching.py` only, shipped dark
+  (default off). `admin_create_ride`'s direct-assignment path still has no equivalent flag/filtering
+  for coordinates/`rider_rating` — tracked as C114 below rather than reopening this closed item.
 - **Fix:** excluded `rider_name` from the FCM push `data` dict built in `admin_create_ride` (a
   local `_ADMIN_FCM_EXCLUDE = {"rider_name"}` set, mirroring `matching.py`'s own pattern — a local
   exclusion set, not a module constant, matching that file's style). The WebSocket message to the
@@ -26487,6 +26492,33 @@ how much they de-risk a public launch._
   reintroduce the leak silently.
 - **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
   (`admin_debug_ride_offer`, `_stringify_fcm`).
+
+### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
+- [ ] **Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382,
+  while auditing the new `GET /rides/{ride_id}/offer` endpoint added there.
+- **Issue/gap:** none of `get_active_ride`, `get_ride_history`, or the new `get_ride_offer`
+  (all in `backend/routes/drivers/ride_reads.py`) carry a rate-limit decorator, unlike
+  `routes/rides/queries.py`'s read endpoints (`@ride_read_limit`) or
+  `routes/rides/safety.py`/`lifecycle.py` (`@ride_action_limit`). Confirmed no
+  `SlowAPIMiddleware` is mounted anywhere in `backend/server.py`/`backend/core/middleware.py`
+  that would auto-enforce `utils/rate_limiter.py`'s `default_limiter` (`default_limits=
+  ["100/minute","1000/hour"]`) on an undecorated route — so this file family currently has
+  **zero** rate limiting, not a lower implicit one.
+- **Why PR #5382 surfaced it, not just a pre-existing curiosity:** the new `get_ride_offer`
+  endpoint is a pure, side-effect-free GET that returns richer PII (precise GPS, rider name
+  + rating) than its siblings, and is cheaper to hammer repeatedly than a mutating
+  accept/decline call — the exact shape of endpoint this class of protection exists for.
+  `ride_id` is a UUID (not guessable/enumerable), which keeps this from being a practical
+  IDOR-by-brute-force risk today, but it's still an unprotected, PII-bearing read endpoint.
+- **Recommendation:** add `ride_read_limit`-equivalent protection to this file family — the
+  decorator itself lives in `routes/rides/_deps.py`, not `routes/drivers/_deps.py`, so this
+  needs either importing/re-exporting it or defining an equivalent in the drivers module;
+  apply consistently across all three endpoints in the file (`get_active_ride`,
+  `get_ride_history`, `get_ride_offer`) in one pass rather than only the newest one, to
+  avoid leaving an arbitrary-looking inconsistency behind.
+- **Files (reference only, nothing changed by this entry):**
+  `backend/routes/drivers/ride_reads.py`, `backend/routes/rides/_deps.py` (existing
+  `ride_read_limit` definition, for reference), `backend/utils/rate_limiter.py`.
 
 ## Recently completed (do not redo)
 

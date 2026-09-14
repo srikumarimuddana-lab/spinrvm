@@ -60,7 +60,13 @@ ARG AREA=saskatchewan
 ARG JAVA_OPTS="-Xmx4g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
-RUN java -jar /planetiler.jar \
+# Planetiler images have moved the jar between versions (/planetiler.jar →
+# /app/planetiler.jar). Find it dynamically so a tag bump doesn't break the
+# build for a path change.
+RUN JAR=$(find / -maxdepth 3 -name 'planetiler*.jar' -print -quit 2>/dev/null) \
+ && test -n "$JAR" || { echo "planetiler jar not found in image — check PLANETILER_TAG" >&2; exit 1; } \
+ && echo "using $JAR" \
+ && java -jar "$JAR" \
       --download \
       --area="${AREA}" \
       --output=/planetiler/tiles.mbtiles \

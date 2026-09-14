@@ -7,6 +7,7 @@
 | Date | 2026-09-14 |
 | Author | Claude Code (session) |
 | Surface(s) | driver-app (store assets only — no app code) |
+| Scope | Google Play phone set, then extended to the iOS + iPad sizes |
 | Domain (Sentry tag) | n/a (no runtime code) |
 | PR / commit link | branch `claude/gifted-bohr-oq2pe7` |
 | Related issue or gap ID | `driver-app/store-assets/metadata.json` → `screenshots.screens_to_capture` (previously unfilled) |
@@ -25,7 +26,12 @@ but nothing in the repo could render them, so the listing had copy and no imager
 ## 3. Fix / remediation
 
 Added `driver-app/store-assets/generate_screenshots.py`, a dependency-free generator that renders
-8 marketing artboards at 1080×1920 with headless Chromium, and committed the resulting PNGs.
+the 8 marketing artboards with headless Chromium at every store size (1080×1920 Play Store phone,
+1320×2868 / 1290×2796 / 1242×2208 iPhone, 2048×2732 iPad Pro), and committed the resulting 40 PNGs.
+Layout is derived from one reference artboard so all sizes share a composition: the header block is
+centred in the space above the device frame, and the frame is sized to run off the bottom edge. iOS
+artboards draw an iPhone frame (correctly proportioned Dynamic Island, Wi-Fi glyph in the status
+bar); the Android artboard keeps a punch-hole camera.
 Phone mock-ups reproduce the real driver-app screens: copy is taken from `driver-app/i18n/en.json`
 (`home.go`/`home.stop`, `dashboard.youreOnline`, `activeRide.*`, `rideOffer.*`, `earnings.*`) and
 layout from `components/dashboard/*`, `components/panels/RideOfferPanel.tsx` and
@@ -62,8 +68,8 @@ Play Store listing. No app copy, notification text, or validation rule changed.
 | File path | What changed | Why |
 |---|---|---|
 | `driver-app/store-assets/generate_screenshots.py` | New — artboard generator | Makes the screenshots reproducible and editable in-repo |
-| `driver-app/store-assets/screenshots/*.png` | New — 8 × 1080×1920 PNGs | The deliverable for the Play Store listing |
-| `driver-app/store-assets/README.md` | New — how to regenerate, font caveat, remaining gaps | The generator is useless if nobody knows it exists |
+| `driver-app/store-assets/screenshots/*.png` | New — 40 PNGs (8 screens × 5 store sizes) | The deliverable for both listings |
+| `driver-app/store-assets/README.md` | New — how to regenerate, size table, font and iPad caveats, remaining gaps | The generator is useless if nobody knows it exists |
 | `driver-app/store-assets/metadata.json` | `screenshots` block: replaced the aspirational `screens_to_capture` list with the 8 generated names + a note that iOS/tablet sizes are still missing | Leaving the old list would misdescribe what was actually produced |
 
 ## 7. Before / after
@@ -89,7 +95,8 @@ there is a console action independent of this repo.
 ## 9. Verification performed
 
 - Ran the generator; all 8 PNGs re-render deterministically from a clean `screenshots/` directory.
-- Asserted every output is exactly 1080×1920 (the generator now fails loudly if not).
+- Asserted every output matches its artboard's exact pixel size (the generator fails loudly if not).
+- Re-rendered the Android set after the multi-size refactor and confirmed no visual regression.
 - Inspected all 8 rendered PNGs visually, plus pixel-level checks (a small PNG decoder) on the
   bottom edge of each artboard to confirm no content is cut.
 - Found and fixed a real rendering bug this exposed: headless Chromium reserves 87px of window
@@ -114,6 +121,11 @@ there is a console action independent of this repo.
 - **No visual-regression tooling exists for driver-app** (admin-dashboard's Playwright job covers
   only its own 6 pages), so these renders were reasoned about and eyeballed, not diffed against a
   baseline.
-- iOS and tablet artboard sizes were not produced — only the Android phone set.
+- **The iPad set shows the phone UI in a device frame.** driver-app has no dedicated tablet
+  layout, so there is no real iPad UI to render. `app.config.ts` sets `ios.supportsTablet: true`, so
+  App Store Connect will ask for iPad screenshots; if Apple review wants genuine iPad captures they
+  must come from a build running on an iPad. Flagged rather than faked.
+- No screenshot was tested against App Store Connect or the Play Console upload validators — pixel
+  dimensions were verified locally against Apple's and Google's published sizes, not by uploading.
 - Screenshot content is a designed mock-up, not a device capture of a running build; it was matched
   against the app's source, not against a screen recording.

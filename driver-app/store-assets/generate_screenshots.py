@@ -22,13 +22,24 @@ import zlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 APP = HERE.parent
 OUT = HERE / "screenshots"
-BUILD = HERE / ".build"
 
-W, H = 1080, 1920
+REF_W, REF_H = 1080, 1920          # the artboard every proportion is derived from
+
+# Store artboards. Apple wants the largest iPhone size plus an iPad size when the
+# app ships with supportsTablet (driver-app/app.config.ts sets it true); Google Play
+# takes the 1080x1920 phone set.
+ARTBOARDS = [
+    ("android-phone", 1080, 1920, "punch"),    # Google Play phone
+    ("ios-6.9", 1320, 2868, "island"),         # iPhone 16 Pro Max class
+    ("ios-6.7", 1290, 2796, "island"),         # iPhone 15/14 Pro Max class
+    ("ios-5.5", 1242, 2208, "island"),         # legacy iPhone 8 Plus slot
+    ("ipad-12.9", 2048, 2732, "island"),       # iPad Pro 12.9"
+]
 
 # Brand tokens -- shared/theme/index.ts via .claude/context/brand-spinr.md.
 RED = "#FF3B30"          # primary / brand red
@@ -87,18 +98,51 @@ def font_face_css():
     return "\n".join(faces)
 
 
-# --- phone geometry -------------------------------------------------------
-# Screen UI is authored in a 390x868 logical space (a real tall phone) and
-# scaled into the mock-up frame, so the in-phone UI can use natural sizes.
-PH_W, PH_H = 670, 1524
-BEZEL = 13
-SCR_W, SCR_H = PH_W - 2 * BEZEL, PH_H - 2 * BEZEL
+# --- artboard geometry ----------------------------------------------------
+# Screen UI is authored in a 390-wide logical space (a real phone) and scaled
+# into the mock-up frame, so the in-phone UI can use natural sizes. Every
+# artboard derives from the same proportions, so one layout serves all sizes.
 UI_W = 390
-SCALE = SCR_W / UI_W
-UI_H = round(SCR_H / SCALE)
+FRAME_ASPECT = 670 / 1524          # phone frame width / height, fixed everywhere
+PHONE_TOP = 447 / 1920             # frame top as a fraction of artboard height
+BLEED = 51 / 1920                  # how far the frame runs past the bottom edge
 
 
-def css():
+class Board:
+    """Geometry for one artboard size."""
+
+    def __init__(self, key, w, h, notch):
+        self.key, self.w, self.h, self.notch = key, w, h, notch
+        # Scale content by whichever axis is tighter, so a wide canvas (iPad)
+        # doesn't blow the type up past the space above the phone.
+        self.s = min(w / float(REF_W), h / float(REF_H))
+        self.ph_top = round(PHONE_TOP * h)
+        self.ph_h = round(h + BLEED * h - self.ph_top)
+        self.ph_w = round(self.ph_h * FRAME_ASPECT)
+        self.ph_left = (w - self.ph_w) // 2
+        f = self.ph_w / 670.0          # frame-local scale (bezel, radius, notch)
+        self.bezel = max(6, round(13 * f))
+        self.scr_w = self.ph_w - 2 * self.bezel
+        self.scr_h = self.ph_h - 2 * self.bezel
+        self.scale = self.scr_w / float(UI_W)
+        self.ui_h = round(self.scr_h / self.scale)
+        self.radius = round(58 * f)
+        self.sradius = round(46 * f)
+        if notch == "island":
+            self.notch_w = round(0.26 * self.scr_w)
+            self.notch_h = round(self.notch_w / 3.3)
+            self.notch_top = round(0.012 * self.scr_h)
+        else:                                   # Android punch-hole camera
+            self.notch_w = self.notch_h = round(13 * f)
+            self.notch_top = round(15 * f)
+        self.notch_r = self.notch_h // 2
+
+    def px(self, v):
+        """Scale a reference-artboard measurement to this board."""
+        return round(v * self.s)
+
+
+def css(b):
     return """
 %(fonts)s
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -109,38 +153,51 @@ body{font-family:'Plus Jakarta Sans','Liberation Sans','DejaVu Sans',sans-serif;
 
 /* ---------- light marketing card ---------- */
 .card.light{background:%(CREAM)s;}
-.blob-r{position:absolute;width:430px;height:430px;border-radius:50%%;
-  background:%(PINK)s;right:-165px;top:415px;}
-.blob-l{position:absolute;width:560px;height:560px;border-radius:50%%;
-  border:5px solid %(PINK_LINE)s;left:-355px;bottom:-165px;}
-.logo{position:absolute;top:62px;left:50%%;transform:translateX(-50%%);width:172px;}
-h1{position:absolute;top:140px;left:0;right:0;text-align:center;
-  font-size:82px;line-height:0.99;font-weight:800;letter-spacing:-0.035em;color:%(INK)s;}
+.blob-r{position:absolute;width:%(blob)dpx;height:%(blob)dpx;border-radius:50%%;
+  background:%(PINK)s;right:-%(blobX)dpx;top:%(blobY)dpx;}
+.blob-l{position:absolute;width:%(blobl)dpx;height:%(blobl)dpx;border-radius:50%%;
+  border:%(blobB)dpx solid %(PINK_LINE)s;left:-%(bloblX)dpx;bottom:-%(bloblY)dpx;}
+/* header block is centred in the space above the frame, so one layout serves
+   every artboard aspect instead of hard-coded tops per size */
+.head{position:absolute;left:0;right:0;top:0;height:%(headH)dpx;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;}
+.logo{width:%(logoW)dpx;margin-bottom:%(logoGap)dpx;}
+h1{text-align:center;font-size:%(h1)dpx;line-height:0.99;font-weight:800;
+  letter-spacing:-0.035em;color:%(INK)s;margin-bottom:%(h1Gap)dpx;}
 h1 em{font-style:normal;color:%(RED)s;}
-.sub{position:absolute;top:322px;left:120px;right:120px;text-align:center;
-  font-size:26px;line-height:1.42;font-weight:500;color:%(MUTED)s;letter-spacing:-0.005em;}
+.sub{text-align:center;font-size:%(sub)dpx;line-height:1.42;font-weight:500;
+  color:%(MUTED)s;letter-spacing:-0.005em;padding:0 %(subPad)dpx;}
 
 /* ---------- phone frame ---------- */
 .phone{position:absolute;width:%(PH_W)dpx;height:%(PH_H)dpx;background:#0B0B0C;
-  border-radius:58px;padding:%(BEZEL)dpx;
-  box-shadow:0 38px 80px rgba(30,10,8,.22),0 6px 18px rgba(30,10,8,.10);}
-.phone.center{left:%(PH_LEFT)dpx;top:447px;}
+  border-radius:%(radius)dpx;padding:%(BEZEL)dpx;
+  box-shadow:0 %(shadY)dpx %(shadB)dpx rgba(30,10,8,.22),0 %(shad2)dpx %(shad3)dpx rgba(30,10,8,.10);}
+.phone.center{left:%(PH_LEFT)dpx;top:%(PH_TOP)dpx;}
 .screen{position:relative;width:%(SCR_W)dpx;height:%(SCR_H)dpx;background:#fff;
-  border-radius:46px;overflow:hidden;}
+  border-radius:%(sradius)dpx;overflow:hidden;}
 .ui{position:absolute;top:0;left:0;width:%(UI_W)dpx;height:%(UI_H)dpx;
   transform:scale(%(SCALE)f);transform-origin:top left;background:#fff;}
-.punch{position:absolute;top:15px;left:50%%;transform:translateX(-50%%);
-  width:13px;height:13px;border-radius:50%%;background:#0B0B0C;z-index:60;}
+.punch{position:absolute;top:%(notchT)dpx;left:50%%;transform:translateX(-50%%);
+  width:%(notchW)dpx;height:%(notchH)dpx;border-radius:%(notchR)dpx;background:#0B0B0C;z-index:60;}
 
 /* ---------- red brand card ---------- */
 .card.red{background:%(RED)s;}
 .card.red .ring{position:absolute;border-radius:50%%;background:rgba(0,0,0,.055);}
-.logo-w{position:absolute;width:186px;filter:brightness(0) invert(1);}
-.red h1{position:static;text-align:left;color:#fff;letter-spacing:-0.04em;}
+.logo-w{position:absolute;width:%(logoWr)dpx;filter:brightness(0) invert(1);}
+.red h1{text-align:left;color:#fff;letter-spacing:-0.04em;margin:0;}
 .red h1 b{color:#101012;font-weight:800;}
-""" % dict(fonts=font_face_css(), W=W, H=H, CREAM=CREAM, PINK=PINK, PINK_LINE=PINK_LINE,
-           INK=INK, RED=RED, MUTED=MUTED, PH_W=PH_W, PH_H=PH_H, BEZEL=BEZEL,
-           PH_LEFT=(W - PH_W) // 2, SCR_W=SCR_W, SCR_H=SCR_H, UI_W=UI_W, UI_H=UI_H, SCALE=SCALE)
+""" % dict(fonts=font_face_css(), W=b.w, H=b.h, CREAM=CREAM, PINK=PINK, PINK_LINE=PINK_LINE,
+           INK=INK, RED=RED, MUTED=MUTED,
+           blob=b.px(430), blobX=b.px(165), blobY=b.px(415),
+           blobl=b.px(560), blobB=max(2, b.px(5)), bloblX=b.px(355), bloblY=b.px(165),
+           headH=b.ph_top, logoW=b.px(172), logoGap=b.px(18),
+           h1=b.px(82), h1Gap=b.px(26), sub=b.px(26), subPad=b.px(120),
+           PH_W=b.ph_w, PH_H=b.ph_h, BEZEL=b.bezel, radius=b.radius, sradius=b.sradius,
+           PH_LEFT=b.ph_left, PH_TOP=b.ph_top, SCR_W=b.scr_w, SCR_H=b.scr_h,
+           UI_W=UI_W, UI_H=b.ui_h, SCALE=b.scale,
+           notchT=b.notch_top, notchW=b.notch_w, notchH=b.notch_h, notchR=b.notch_r,
+           shadY=b.px(38), shadB=b.px(80), shad2=b.px(6), shad3=b.px(18),
+           logoWr=b.px(186))
 
 
 def ui_css():
@@ -202,10 +259,22 @@ def ui_css():
 """ % dict(TEXT=TEXT, MUTED=MUTED, RED=RED, SUCCESS=SUCCESS)
 
 
+# Set per artboard by build_cards(); decides which platform chrome the mock-up
+# status bar draws. Module-level so the scr_* builders stay parameter-free.
+IOS_CHROME = False
+
+
 def statusbar():
     bars = "".join('<div class="bar" style="height:%dpx"></div>' % h for h in (5, 8, 11, 14))
-    return ('<div class="statusbar"><div>9:41</div><div class="icons">%s'
-            '<div class="batt"><i></i></div></div></div>' % bars)
+    wifi = ""
+    if IOS_CHROME:
+        wifi = ('<svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="%s" '
+                'stroke-width="1.7" stroke-linecap="round">'
+                '<path d="M1.3 4.2a10 10 0 0 1 13.4 0"/>'
+                '<path d="M3.7 6.8a6.4 6.4 0 0 1 8.6 0"/>'
+                '<path d="M6.2 9.4a3 3 0 0 1 3.6 0"/></svg>' % TEXT)
+    return ('<div class="statusbar"><div>9:41</div><div class="icons">%s%s'
+            '<div class="batt"><i></i></div></div></div>' % (bars, wifi))
 
 
 def map_svg(route=False, demand=False):
@@ -697,45 +766,56 @@ ICONS["leaf"] = ("M12 2.5l1.9 3.6c.2.4.6.3.9.1l1.4-.7-.9 4.3c-.2.8.3 1 .8.5l2.5-
                  "1.4.7c.3.2.7.3.9-.1L12 2.5z")
 
 
-def phone(ui, cls="center", style=""):
+def phone(b, ui, cls="center", style=""):
     return ('<div class="phone %s" style="%s"><div class="screen"><div class="punch"></div>'
             '<div class="ui">%s</div></div></div>' % (cls, style, ui))
 
 
-def light_card(headline, sub, ui, logo):
+def light_card(b, headline, sub, ui, logo):
     return ('<div class="card light"><div class="blob-r"></div><div class="blob-l"></div>'
-            '<img class="logo" src="%s"><h1>%s</h1><div class="sub">%s</div>%s</div>'
-            % (logo, headline, sub, phone(ui)))
+            '<div class="head"><img class="logo" src="%s"><h1>%s</h1>'
+            '<div class="sub">%s</div></div>%s</div>'
+            % (logo, headline, sub, phone(b, ui)))
 
 
-def red_hero_card(ui, logo):
+def red_hero_card(b, ui, logo):
     """Opening brand card: the 0%% commission promise + an angled driver phone."""
     return """
 <div class="card red">
-  <div class="ring" style="width:600px;height:600px;right:-200px;top:-120px"></div>
-  <div class="ring" style="width:420px;height:420px;left:-150px;bottom:-140px"></div>
-  <img class="logo-w" src="%(logo)s" style="left:74px;top:74px;width:168px">
-  <div style="position:absolute;left:74px;top:196px;">
-    <h1 style="font-size:96px;line-height:0.97">Drive<br><b>Canadian.</b><br>Keep 100%%.</h1>
-    <div style="display:flex;align-items:center;gap:12px;margin-top:34px">
-      %(leaf)s<span style="color:#fff;font-size:30px;font-weight:800;letter-spacing:-0.01em">
-      Your fare stays yours.</span></div>
+  <div class="ring" style="width:%(ring1)dpx;height:%(ring1)dpx;right:-%(ring1X)dpx;
+       top:-%(ring1Y)dpx"></div>
+  <div class="ring" style="width:%(ring2)dpx;height:%(ring2)dpx;left:-%(ring2X)dpx;
+       bottom:-%(ring2Y)dpx"></div>
+  <img class="logo-w" src="%(logo)s" style="left:%(padX)dpx;top:%(padY)dpx;width:%(logoW)dpx">
+  <div style="position:absolute;left:%(padX)dpx;top:%(h1Top)dpx;">
+    <h1 style="font-size:%(h1)dpx;line-height:0.97">Drive<br><b>Canadian.</b><br>Keep 100%%.</h1>
+    <div style="display:flex;align-items:center;gap:%(leafGap)dpx;margin-top:%(leafTop)dpx">
+      %(leaf)s<span style="color:#fff;font-size:%(leafTx)dpx;font-weight:800;
+      letter-spacing:-0.01em">Your fare stays yours.</span></div>
   </div>
-  <div style="position:absolute;left:74px;bottom:96px">
-    <div style="color:#fff;font-size:46px;font-weight:800;letter-spacing:-0.035em">0%% commission.</div>
-    <div style="color:rgba(255,255,255,.92);font-size:26px;font-weight:500;margin-top:8px">
-      You keep 100%% of every fare you drive.</div>
+  <div style="position:absolute;left:%(padX)dpx;bottom:%(claimY)dpx">
+    <div style="color:#fff;font-size:%(claim)dpx;font-weight:800;letter-spacing:-0.035em">
+      0%% commission.</div>
+    <div style="color:rgba(255,255,255,.92);font-size:%(claimSub)dpx;font-weight:500;
+         margin-top:%(claimGap)dpx">You keep 100%% of every fare you drive.</div>
   </div>
   %(phone)s
 </div>
-""" % dict(logo=logo, leaf=icon("leaf", 30, "#fff", fill=True),
-           phone=phone(ui, "", "left:706px;top:470px;transform:rotate(-12deg);"))
+""" % dict(logo=logo, leaf=icon("leaf", b.px(30), "#fff", fill=True),
+           ring1=b.px(600), ring1X=b.px(200), ring1Y=b.px(120),
+           ring2=b.px(420), ring2X=b.px(150), ring2Y=b.px(140),
+           padX=b.px(74), padY=b.px(74), logoW=b.px(168),
+           h1Top=b.px(196), h1=b.px(96), leafGap=b.px(12), leafTop=b.px(34),
+           leafTx=b.px(30), claimY=b.px(96), claim=b.px(46), claimSub=b.px(26),
+           claimGap=b.px(8),
+           phone=phone(b, ui, "", "left:%dpx;top:%dpx;transform:rotate(-12deg);"
+                       % (round(0.6537 * b.w), round(0.2448 * b.h))))
 
 
-def page(card, body_bg):
+def page(b, card, body_bg):
     return ("<!doctype html><html><head><meta charset='utf-8'><style>%s\n%s\n"
             "html,body{background:%s;}</style></head><body>%s</body></html>"
-            % (css(), ui_css(), body_bg, card))
+            % (css(b), ui_css(), body_bg, card))
 
 
 def viewport_inset(chrome, build_dir):
@@ -748,7 +828,7 @@ def viewport_inset(chrome, build_dir):
                      "document.title='VH'+innerHeight;});</script></head><body></body></html>")
     out = subprocess.run([chrome, "--headless", "--no-sandbox", "--disable-gpu",
                           "--hide-scrollbars", "--force-device-scale-factor=1",
-                          "--virtual-time-budget=800", "--window-size=%d,%d" % (W, H),
+                          "--virtual-time-budget=800", "--window-size=%d,%d" % (REF_W, REF_H),
                           "--dump-dom", str(probe)], capture_output=True, text=True).stdout
     probe.unlink(missing_ok=True)
     # match the rendered <title>, not the "VH" literal inside the probe script
@@ -760,7 +840,7 @@ def viewport_inset(chrome, build_dir):
         if not ch.isdigit():
             break
         digits += ch
-    inset = H - int(digits) if digits else 0
+    inset = REF_H - int(digits) if digits else 0
     if inset:
         print("  viewport inset: %dpx (compensating)" % inset)
     return max(0, inset)
@@ -806,12 +886,12 @@ def _png_decode(path):
         elif f == 4:                                 # Paeth
             for x in range(stride):
                 a = line[x - nch] if x >= nch else 0
-                b = prev[x]
+                bb = prev[x]
                 c = prev[x - nch] if x >= nch else 0
-                pp = a + b - c
-                pa, pb, pc = abs(pp - a), abs(pp - b), abs(pp - c)
+                pp = a + bb - c
+                pa, pb, pc = abs(pp - a), abs(pp - bb), abs(pp - c)
                 line[x] = (line[x] + (a if (pa <= pb and pa <= pc) else
-                                      (b if pb <= pc else c))) & 255
+                                      (bb if pb <= pc else c))) & 255
         rows.append(bytes(line))
         prev = line
     return w, h, nch, rows
@@ -836,68 +916,87 @@ def crop_to(path, w, h):
     _png_encode(path, w, h, nch, rows[:h])
 
 
-def main():
-    chrome = find_chrome()
-    OUT.mkdir(parents=True, exist_ok=True)
-    BUILD.mkdir(parents=True, exist_ok=True)
-    logo = data_uri(APP / "assets" / "images" / "spinr-logo.png", "image/png")
-    inset = viewport_inset(chrome, BUILD)
-
-    cards = [
-        ("01-drive-canadian", red_hero_card(scr_earnings(), logo), RED),
+def build_cards(b, logo):
+    """The listing set, in running order. 01-06 are the core six; 07-08 are
+    optional extras (Play Store allows 8 phone screenshots)."""
+    global IOS_CHROME
+    IOS_CHROME = b.notch == "island"
+    return [
+        ("01-drive-canadian", red_hero_card(b, scr_earnings(), logo), RED),
         ("02-go-online", light_card(
-            "Go online.<br>Earn on your <em>terms</em>",
+            b, "Go online.<br>Earn on your <em>terms</em>",
             "One tap to go live &mdash; and today's earnings and trip count stay in view "
             "the whole time you drive.",
             scr_dashboard(online=False), logo), CREAM),
         ("03-know-your-earnings", light_card(
-            "Know what<br>you'll <em>earn</em>",
+            b, "Know what<br>you'll <em>earn</em>",
             "Every offer shows the full payout, both stops and the distance before you accept "
             "&mdash; and all of it is yours.",
             scr_offer(), logo), CREAM),
         ("04-demand", light_card(
-            "Drive where<br>the <em>demand</em> is",
+            b, "Drive where<br>the <em>demand</em> is",
             "A live map of the busy zones, what each one is paying per trip, "
             "and when the next rush lands.",
             scr_demand(), logo), CREAM),
         ("05-guided-live", light_card(
-            "Every trip,<br>guided <em>live</em>",
+            b, "Every trip,<br>guided <em>live</em>",
             "Turn-by-turn to the pickup, the rider one tap away, "
             "and safety controls on the same screen.",
             scr_nav(), logo), CREAM),
         ("06-earnings", light_card(
-            "Your earnings.<br><em>Clearly.</em>",
+            b, "Your earnings.<br><em>Clearly.</em>",
             "Today, this week, this month &mdash; total earned, trips and your next payout, "
             "with T4A-ready tax documents at year end.",
             scr_earnings(), logo), CREAM),
-        # Optional extras -- Play Store allows 8 phone screenshots.
         ("07-rider-pin", light_card(
-            "The right rider,<br>every <em>time</em>",
+            b, "The right rider,<br>every <em>time</em>",
             "A 4-digit PIN handshake confirms who's getting in before the trip starts.",
             scr_pin(), logo), CREAM),
         ("08-quests", light_card(
-            "Hit targets,<br>keep the <em>bonus</em>",
+            b, "Hit targets,<br>keep the <em>bonus</em>",
             "Quest challenges pay out on top of your fares, and land straight in your wallet.",
             scr_quests(), logo), CREAM),
     ]
 
-    print("Rendering %d artboards at %dx%d ..." % (len(cards), W, H))
-    for i, (name, html, bg) in enumerate(cards, 1):
-        src = BUILD / ("%s.html" % name)
-        src.write_text(page(html, bg), encoding="utf-8")
-        dest = OUT / ("android-phone-%s.png" % name)
-        subprocess.run([
-            chrome, "--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-            "--force-device-scale-factor=1", "--virtual-time-budget=2500",
-            "--window-size=%d,%d" % (W, H + inset), "--screenshot=%s" % dest, str(src),
-        ], check=True, capture_output=True)
-        crop_to(dest, W, H)
-        got = png_size(dest)
-        if got != (W, H):
-            sys.exit("%s rendered at %dx%d, expected %dx%d" % ((dest.name,) + got + (W, H)))
-        print("  [%d/%d] %s" % (i, len(cards), dest.name))
-    shutil.rmtree(BUILD, ignore_errors=True)
-    print("\nDone -> %s" % OUT)
+
+def main():
+    chrome = find_chrome()
+    only = sys.argv[1] if len(sys.argv) > 1 else None
+    OUT.mkdir(parents=True, exist_ok=True)
+    # Private scratch dir per run, so two artboard sizes can render concurrently
+    # without one deleting the other's staged HTML.
+    build = pathlib.Path(tempfile.mkdtemp(prefix="spinr-store-shots-"))
+    logo = data_uri(APP / "assets" / "images" / "spinr-logo.png", "image/png")
+    inset = viewport_inset(chrome, build)
+
+    boards = [Board(*a) for a in ARTBOARDS if only is None or a[0] == only]
+    if not boards:
+        sys.exit("No artboard named %r. Known: %s"
+                 % (only, ", ".join(a[0] for a in ARTBOARDS)))
+
+    total = 0
+    for b in boards:
+        cards = build_cards(b, logo)
+        print("%s -- %d artboards at %dx%d" % (b.key, len(cards), b.w, b.h))
+        for name, html, bg in cards:
+            src = build / ("%s-%s.html" % (b.key, name))
+            src.write_text(page(b, html, bg), encoding="utf-8")
+            dest = OUT / ("%s-%s.png" % (b.key, name))
+            subprocess.run([
+                chrome, "--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                "--force-device-scale-factor=1", "--virtual-time-budget=2500",
+                "--window-size=%d,%d" % (b.w, b.h + inset),
+                "--screenshot=%s" % dest, str(src),
+            ], check=True, capture_output=True)
+            crop_to(dest, b.w, b.h)
+            got = png_size(dest)
+            if got != (b.w, b.h):
+                sys.exit("%s rendered at %dx%d, expected %dx%d"
+                         % ((dest.name,) + got + (b.w, b.h)))
+            print("  %s" % dest.name)
+            total += 1
+    shutil.rmtree(build, ignore_errors=True)
+    print("\n%d screenshots -> %s" % (total, OUT))
 
 
 if __name__ == "__main__":

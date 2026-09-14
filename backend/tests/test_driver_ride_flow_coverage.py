@@ -991,6 +991,186 @@ class TestArriveAtPickupGuards:
         guest_notify.assert_called_once()
 
 
+class TestArriveAtPickupCorroborationSignal:
+    """#1231 finding 12 (soft-rollout signal only): a non-blocking
+    corroboration check spawned after the arrival transition already
+    committed. Uses a spawn() capture (instead of `_spawn_close`, which just
+    discards the coroutine) so these tests can actually await the spawned
+    check and assert on its outcome -- the metric counter and the log line,
+    never `result` or `rides.status`, which the earlier guard tests already
+    cover and which this signal must never touch.
+
+    Patched at `backend.routes.drivers.ride_flow.spawn`, not
+    `..._deps.spawn`: unlike `db_supabase` (a shared module object, so
+    patching an attribute on it is visible everywhere it's imported),
+    `spawn` is a plain function that `ride_flow.py` pulled into its own
+    namespace via `from ._deps import (..., spawn, ...)` -- rebinding
+    `_deps.spawn` afterwards doesn't touch that already-bound copy. (The
+    other tests in this file that patch `_deps.spawn` don't actually
+    intercept it either -- harmless there since they don't assert on spawn
+    behavior and the real spawn() just schedules the already-mocked
+    coroutine it's given, but this class needs the interception to work.)
+    """
+
+    def _spawn_capture(self, sink):
+        def _capture(coro):
+            sink.append(coro)
+
+        return _capture
+
+    def _assert_scoped_corroboration_query(self, filters, kwargs):
+        """Shape assertions for the `driver_location_history` query itself.
+
+        Without this, a fake that branches only on `table` gives zero
+        protection against a future silent regression here (wrong column,
+        dropped driver_id/ride_id scope, an inverted comparison) -- the
+        suite would still show "3 passed" even if the query stopped
+        matching anything real. Also locks in the `$or(captured_at,
+        timestamp)` shape from the column-choice reasoning in
+        `_flag_uncorroborated_arrival_if_needed`'s docstring: `captured_at`
+        alone would silently exclude every legacy/WS-single-ping breadcrumb
+        (NULL fails `>=`), so both branches must be present.
+        """
+        assert filters["driver_id"] == _DRIVER_ID
+        assert filters["ride_id"] == _RIDE_ID
+        or_clause = filters["$or"]
+        assert isinstance(or_clause, list) and len(or_clause) == 2
+        or_cols = {next(iter(leaf)) for leaf in or_clause}
+        assert or_cols == {"captured_at", "timestamp"}, or_cols
+        for leaf in or_clause:
+            ((col, predicate),) = leaf.items()
+            assert set(predicate) == {"$gte"}, (col, predicate)
+            bound = predicate["$gte"]
+            # isoformat string, matching this repo's established convention
+            # for $gte datetime filters (driver_daily_rollup.py, profile.py,
+            # earnings.py) -- not a raw datetime object.
+            assert isinstance(bound, str)
+            bound_dt = datetime.fromisoformat(bound)
+            # ~5 minutes back -- tolerate scheduling jitter, not a
+            # different window entirely.
+            age = datetime.now(timezone.utc) - bound_dt
+            assert timedelta(minutes=4) < age < timedelta(minutes=6), age
+        assert kwargs.get("order") == "timestamp"
+        assert kwargs.get("desc") is True
+        assert kwargs.get("limit") == 200
+
+    async def test_arrival_succeeds_and_no_signal_when_breadcrumb_corroborates(self):
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+        from backend.utils import metrics
+
+        ride = _ride(status="driver_accepted")
+        # Within ARRIVAL_RADIUS_KM (200m) of the pickup pin at (52.1, -106.6).
+        corroborating_point = {"lat": 52.1005, "lng": -106.6005}
+        dlh_calls: list = []
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
+                return [corroborating_point]
+            return []
+
+        before = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            # Arrival itself is unaffected either way -- assert it here,
+            # before running the captured background task below.
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro
+
+        after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        assert after == before
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
+
+    async def test_arrival_still_succeeds_but_signal_fires_with_no_corroborating_breadcrumb(self):
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+        from backend.utils import metrics
+
+        ride = _ride(status="driver_accepted")
+        dlh_calls: list = []
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
+                return []  # no corroborating breadcrumb at all
+            return []
+
+        before = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            # Proves this is genuinely non-blocking: the transition already
+            # succeeded before the (still-unrun) signal check below fires.
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro
+
+        after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        assert after == before + 1
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
+
+    async def test_breadcrumb_read_failure_is_swallowed_not_raised(self):
+        """A DB error on this best-effort read must never surface into the
+        (already detached) background task -- it's telemetry, not the
+        arrival transition, which has already committed."""
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+
+        ride = _ride(status="driver_accepted")
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                raise RuntimeError("db unavailable")
+            return []
+
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro  # must not raise
+
+
 # ============================================================
 # verify_pickup_otp
 # ============================================================
@@ -1448,7 +1628,6 @@ class TestMarkRiderNoshowGuards:
 
 class TestMarkRiderNoshowSuccess:
     def _base_patches(self, ride, *, area=None, settings=None):
-        arrived_dt = ride["driver_arrived_at"]
         return (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
@@ -1838,9 +2017,7 @@ class TestGetActiveRideEnrichment:
             }
         ]
         fake_supabase = MagicMock()
-        fake_supabase.table.side_effect = lambda name: (
-            _chain(rows) if name == "ride_incentives" else _chain([])
-        )
+        fake_supabase.table.side_effect = lambda name: _chain(rows) if name == "ride_incentives" else _chain([])
 
         with _Patches(
             *self._base_patches(ride),
@@ -1853,9 +2030,7 @@ class TestGetActiveRideEnrichment:
             result = await get_active_ride(current_user={"id": _USER_ID})
 
         assert result["total_bonus"] == 5.0
-        assert result["incentives"] == [
-            {"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}
-        ]
+        assert result["incentives"] == [{"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}]
         # Quest hint stays offer-only — it is a dispatch nudge, not earnings.
         assert result["quest_hint"] is None
 

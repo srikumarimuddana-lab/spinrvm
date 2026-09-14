@@ -22,7 +22,8 @@
       "env": {
         "EXPO_PUBLIC_ENV": "preview",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
-        "SENTRY_ALLOW_FAILURE": "true"
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SPINR_ANDROID_MINIFY": "1"
       }
     },
     "preview": {
@@ -36,7 +37,8 @@
       "env": {
         "EXPO_PUBLIC_ENV": "preview",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
-        "SENTRY_ALLOW_FAILURE": "true"
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SPINR_ANDROID_MINIFY": "1"
       }
     },
     "android-auto": {
@@ -47,7 +49,8 @@
       "env": {
         "EXPO_PUBLIC_ENV": "preview",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
-        "SENTRY_ALLOW_FAILURE": "true"
+        "SENTRY_ALLOW_FAILURE": "true",
+        "SPINR_ANDROID_MINIFY": "1"
       },
       "android": {
         "resourceClass": "large"

@@ -99,6 +99,20 @@ export const getMarketplaceFunnel = (dateRange = "30d", serviceAreaId?: string) 
 export const getSupplyUtilization = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/supply-utilization?${marketplaceQuery(dateRange, serviceAreaId)}`);
 
+/** P50/P95 dispatch offer->accept latency, overall and per service area,
+ *  from ride_offers.offered_at/responded_at (migration 422). The durable-
+ *  storage equivalent of the spinr_dispatch_offer_to_accept_duration_ms
+ *  Prometheus histogram, which never reaches this dashboard on its own. */
+export const getDispatchLatency = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/dispatch-latency?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** W1/W4/W12 rider and driver retention by signup cohort week (migration
+ *  421) — "retained" means >=1 completed ride in that later week. Default
+ *  window is wider (90d) than the other analytics calls: a cohort needs up
+ *  to 12 weeks to elapse before its W12 reading can exist at all. */
+export const getRetentionCohorts = (dateRange = "90d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/retention-cohorts?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
 /** Time-to-match, assignment→trip-start, pickup ETA error, deadhead ratio.
  *  Every percentile arrives with its sample size. */
 export const getEfficiencyMetrics = (dateRange = "30d", serviceAreaId?: string) =>

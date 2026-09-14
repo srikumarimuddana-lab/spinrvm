@@ -528,6 +528,8 @@ export {
     getDriverOfferTrends,
     getMarketplaceFunnel,
     getSupplyUtilization,
+    getDispatchLatency,
+    getRetentionCohorts,
     getEfficiencyMetrics,
     getFinancialMetrics,
     getDemandForecast,

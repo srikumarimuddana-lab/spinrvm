@@ -94,6 +94,8 @@ export function snapToRoute(
   route: readonly TrackingLatLng[] | null | undefined,
   maxSnapMeters = 35,
   preferredFromIndex?: number | null,
+  /** Opt-in movement constraint for navigation; never infer it from route order. */
+  travelBearing?: number | null,
 ): RouteSnapResult | null {
   if (!route || route.length < 2) return null;
 
@@ -126,6 +128,12 @@ export function snapToRoute(
       const abx = bx - ax;
       const aby = by - ay;
       const lenSq = abx * abx + aby * aby;
+      if (travelBearing != null && Number.isFinite(travelBearing)) {
+        if (lenSq === 0) continue;
+        const direction = bearingDegrees(a.latitude, a.longitude, b.latitude, b.longitude);
+        const error = Math.abs(((direction - travelBearing + 540) % 360) - 180);
+        if (error > 60) continue;
+      }
       // Zero-length segment (duplicate vertex) — treat as the point itself.
       const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
       const cx = ax + t * abx;
@@ -213,8 +221,17 @@ export function destinationPoint(
   return { latitude: (φ2 * 180) / Math.PI, longitude: (λ2 * 180) / Math.PI };
 }
 
-/** Where a chosen bearing came from. `route`/`travel` are movement-derived. */
-export type BearingSource = 'route' | 'travel' | 'heading' | 'none';
+/**
+ * Where a chosen bearing came from. `route`/`travel` are movement-derived.
+ *
+ * `reference` is a course the CALLER has already vouched for (see
+ * `courseReference` on selectBearing) and is deliberately distinct from
+ * `heading`: the latter is the raw, untrusted platform value this module
+ * demotes on purpose, while the former only ever appears when the caller
+ * opted in. Keeping them apart is what lets coalescePlaybackBearing leave a
+ * vouched-for course alone while still overriding a raw one.
+ */
+export type BearingSource = 'route' | 'travel' | 'heading' | 'reference' | 'none';
 
 export interface BearingSelection {
   /** Compass bearing 0–359, or null when nothing trustworthy is available. */
@@ -259,17 +276,94 @@ export function selectBearing(params: {
   heading: number | null | undefined;
   hasMovementBearing: boolean;
   minMoveMeters: number;
+  /**
+   * Opt-in. A course the caller has independently established as reliable —
+   * NOT the raw `heading` above, which this module demotes for the documented
+   * Android placeholder-0 reason. Pass it only when something corroborates it
+   * (Android Auto passes the car channel's resolved course, and only while
+   * `getHeadingSource()` says `gps`/`derived`).
+   *
+   * It never promotes itself over movement; it is a VETO. A route segment that
+   * disagrees with a vouched-for course by more than `maxCourseErrorDeg` is
+   * describing a different piece of road than the one being driven, so it is
+   * refused rather than rendered. This is the reversed-icon case: route
+   * geometry running the opposite way from the driver (a stale leg, an
+   * out-and-back street, an opposing carriageway) used to win unconditionally
+   * and point the car backwards on a course-up map — reported from a head unit
+   * 2026-09-14 as northbound travel drawn facing south, with east/west drawn
+   * sideways and southbound (which happened to agree) looking correct.
+   *
+   * Omit it and every branch below behaves exactly as it did before.
+   */
+  courseReference?: number | null;
+  /**
+   * How far a movement-derived bearing may disagree with `courseReference`
+   * before it is refused, in degrees.
+   *
+   * 135, not 90, and the margin is the whole point. The reference describes
+   * roughly NOW, while the marker deliberately renders ~5 s in the past
+   * (markerPlayback's PLAYBACK_DELAY_MS), so through a turn the two legitimately
+   * describe different pieces of road: a correct route bearing for the segment
+   * being drawn can sit up to a right angle away from the course the car is
+   * already on. At 90 every sharp corner would veto a correct bearing and snap
+   * the icon onto the post-turn course seconds before the marker reaches the
+   * corner — trading a permanent fault for a frequent one.
+   *
+   * This veto exists to catch geometry pointing BACKWARDS (~180°), not merely
+   * sideways, so 135 separates the two cleanly: a reversed route still fails it,
+   * ordinary cornering does not. A U-turn completed inside the playback window
+   * can still misfire; that is rare and self-correcting, where the reversed icon
+   * it replaces was neither.
+   */
+  maxCourseErrorDeg?: number;
 }): BearingSelection {
-  const { snap, movedMeters, from, to, heading, hasMovementBearing, minMoveMeters } = params;
+  const {
+    snap, movedMeters, from, to, heading, hasMovementBearing, minMoveMeters,
+    courseReference = null, maxCourseErrorDeg = 135,
+  } = params;
+
+  // Same normalization the reported-heading branch below applies: a negative
+  // value is the documented "no course" sentinel, not a bearing.
+  const reference =
+    courseReference != null && Number.isFinite(courseReference) && courseReference >= 0
+      ? ((courseReference % 360) + 360) % 360
+      : null;
+  /** True when `candidate` points too far from a vouched-for course to be real. */
+  const contradictsReference = (candidate: number): boolean =>
+    reference !== null &&
+    Math.abs(((candidate - reference + 540) % 360) - 180) > maxCourseErrorDeg;
+
+  // Whether a movement-derived candidate was actually REFUSED above. The
+  // reference stands in only for something it rejected — never for the
+  // absence of movement, which stays the hold/none case below. Without this
+  // distinction a supplied reference would repaint the icon every tick at a
+  // red light, which is the placeholder-heading spin `hasMovementBearing`
+  // exists to prevent, reintroduced through a different door.
+  let refusedMovementBearing = false;
 
   if (snap && movedMeters >= minMoveMeters) {
-    return { bearing: snap.bearing, source: 'route' };
+    if (!contradictsReference(snap.bearing)) {
+      return { bearing: snap.bearing, source: 'route' };
+    }
+    refusedMovementBearing = true;
   }
   if (movedMeters >= minMoveMeters) {
-    return {
-      bearing: bearingDegrees(from.latitude, from.longitude, to.latitude, to.longitude),
-      source: 'travel',
-    };
+    const travelBearing = bearingDegrees(
+      from.latitude, from.longitude, to.latitude, to.longitude,
+    );
+    // `from`/`to` are the SNAPPED render positions, so a bad snap corrupts the
+    // travel bearing too — it gets the same veto rather than being treated as
+    // independent corroboration.
+    if (!contradictsReference(travelBearing)) {
+      return { bearing: travelBearing, source: 'travel' };
+    }
+    refusedMovementBearing = true;
+  }
+  // The car demonstrably moved, and every bearing that movement produced
+  // contradicted a course we were told to trust. Render the trusted course
+  // rather than a known-wrong one.
+  if (refusedMovementBearing && reference !== null) {
+    return { bearing: reference, source: 'reference' };
   }
   // Under the movement threshold (stopped, or GPS jitter). A reported heading
   // is the best evidence available only while movement has never produced one.
@@ -300,6 +394,12 @@ export function coalescePlaybackBearing(
   },
 ): BearingSelection {
   if (selected.source === 'route') return selected;
+  // A vouched-for course (selectBearing's `courseReference`) is only ever
+  // selected BECAUSE every movement-derived candidate contradicted it. The
+  // playback tangent is one more movement-derived candidate computed from the
+  // same buffer, so letting it win here would hand the bearing straight back to
+  // the evidence the veto just rejected.
+  if (selected.source === 'reference') return selected;
   if (selected.source === 'travel') {
     return playback.bearing != null
       ? { bearing: playback.bearing, source: 'travel' }

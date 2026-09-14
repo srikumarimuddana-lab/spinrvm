@@ -26412,43 +26412,87 @@ how much they de-risk a public launch._
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
-### C112. `admin_create_ride`'s direct-assignment FCM push sends full name/email/phone, precise GPS, and rider rating unfiltered — worse than the batch-dispatch path it sits next to
-- [ ] **Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382
-  (#1231 finding 15's remaining half — minimizing precise GPS + `rider_rating` out of the
-  *batch-dispatch* FCM payload in `routes/rides/matching.py`). That PR's own Change Impact
-  Log disclosed this sibling gap in prose but did not open a tracked item for it, which the
-  review correctly called out as insufficient — a paragraph in a change-log is not a
-  follow-up someone will find later.
-- **Issue/gap:** `backend/routes/admin/rides.py`'s `admin_create_ride` (direct-assignment
-  path, lines ~1284-1330) builds its own FCM `data` payload independently of
-  `matching.py`'s dispatch path and sends it via `send_push_notification` with **no
-  `_FCM_EXCLUDE` filtering at all** — not even the `rider_name`/`rider_profile_image`
-  exclusion `matching.py` already had *before* PR #5382 (the "PIPEDA C5" fix). It includes:
-  `rider_rating` (line 1314), precise `pickup_lat`/`pickup_lng`/`dropoff_lat`/`dropoff_lng`
-  (lines 1302-1305), and `rider_name = _user_display_name(rider)` (line 1288) — which per
-  `backend/routes/admin/drivers.py:105-110` returns the rider's **full first+last name**,
-  falling back to their **raw email address or phone number** if both name fields are
-  blank. All of this transits Google/Apple push infrastructure in cleartext today, for
-  every admin-direct-assigned ride, regardless of whether `minimal_fcm_offer_payload_enabled`
-  (PR #5382's flag) is ever turned on — that flag only touches the batch-dispatch path in
-  `matching.py`, never this one.
-- **Why it's worse than the pre-#5382 baseline it sits next to:** the batch-dispatch path
-  in `matching.py` has excluded `rider_name`/`rider_profile_image` from its FCM payload
-  since an earlier fix; this sibling path never got the same treatment and was never
-  caught until this review, despite being a structurally identical push (same
-  `new_ride_assignment` FCM type, same driver-app consumer).
-- **Recommendation:** apply the same `_FCM_EXCLUDE`-style filtering `matching.py` uses
-  (at minimum `rider_name`, and once resourced, the same precise-coordinate/`rider_rating`
-  minimization PR #5382 added to the batch-dispatch path) to `admin_create_ride`'s push
-  payload. Scope this as its own PR — bundling it into #5382 would have blurred that PR's
-  own Change Impact Log (different code path, different risk profile: admin-only, lower
-  volume, but same PII class).
-- **Files (reference only, nothing changed by this entry):** `backend/routes/admin/rides.py`
-  (`admin_create_ride`, ~lines 1284-1330), `backend/routes/admin/drivers.py`
-  (`_user_display_name`, ~lines 105-110), `backend/routes/rides/matching.py` (the already-filtered
-  sibling, for comparison).
+### C112. `admin_create_ride`'s FCM push sent `rider_name` (full name, or raw email/phone fallback) with zero PII filtering — parity gap with `routes/rides/matching.py`'s existing `_FCM_EXCLUDE`
+- [x] **Status:** CLOSED (2026-09-14) — fixed the same session it was found.
+- **Issue/gap:** `backend/routes/admin/rides.py`'s `admin_create_ride` (the admin-direct-assignment
+  path — an admin manually assigns a ride to a specific driver, distinct from the normal
+  auto-dispatch path) built its own `dispatch_payload`/FCM push independently of
+  `routes/rides/matching.py`'s batch-dispatch path and sent it to the driver's device with zero
+  PII filtering: `rider_name = _user_display_name(rider)` (full first+last name, falling back to
+  the rider's raw email or phone if both name fields are blank) rode in the FCM `data` payload in
+  cleartext, via Google/Apple push infra, for every admin-direct-assigned ride, live in production.
+- **Root cause:** `matching.py`'s batch-dispatch path already excludes `rider_name` from its FCM
+  `data` payload via a local `_FCM_EXCLUDE` set (added for C5). `admin_create_ride` builds its own,
+  independent `dispatch_payload`/push and was never updated to apply the same exclusion when that
+  fix landed on the sibling path.
+- **Correction to this item's own originally-assumed premise:** the task that found and closed
+  this item was framed around a claim that `matching.py`'s `_FCM_EXCLUDE` also gates
+  `pickup_lat`/`pickup_lng`/`dropoff_lat`/`dropoff_lng`/`rider_rating` behind a
+  `minimal_fcm_offer_payload_enabled` flag from "a just-shipped PR #5382," and that this exact
+  `### C112` entry already existed as OPEN before the task started. **Neither claim is true.** A
+  full-repo grep (`backend/`, `docs/`, migrations, and `git log` for `matching.py`) found zero
+  references to `minimal_fcm_offer_payload_enabled` or PR #5382 anywhere, and this file had no
+  C112 entry at all before this one (the highest existing item was C111, duplicate-numbered by two
+  parallel sessions the same day). `matching.py`'s actual, current `_FCM_EXCLUDE` unconditionally
+  excludes only 4 fields — `service_area_polygon`, `planned_route_polyline`, `rider_profile_image`,
+  `rider_name` — precise coordinates and `rider_rating` are sent **unfiltered** by `matching.py`
+  today too, same as `admin_create_ride` was. This item's fix therefore only brings
+  `admin_create_ride` to *real* parity with `matching.py` (the `rider_name` exclusion); it does
+  NOT add any new flag-gated coordinate/rating stripping to either path, since no such flag or
+  mechanism exists to reuse, and inventing one unilaterally for only one of the two call sites
+  would leave them out of parity with each other rather than closing the gap. If flag-gated
+  coordinate/rating stripping is still wanted across both dispatch paths, that's a new, separate
+  feature decision requiring its own design — not this item. **Update (same day, merge of PR #5382):**
+  PR #5382 landed separately and *did* add exactly that flag (`minimal_fcm_offer_payload_enabled`,
+  migration 422) — but scoped to the batch-dispatch path in `matching.py` only, shipped dark
+  (default off). `admin_create_ride`'s direct-assignment path still has no equivalent flag/filtering
+  for coordinates/`rider_rating` — tracked as C114 below rather than reopening this closed item.
+- **Fix:** excluded `rider_name` from the FCM push `data` dict built in `admin_create_ride` (a
+  local `_ADMIN_FCM_EXCLUDE = {"rider_name"}` set, mirroring `matching.py`'s own pattern — a local
+  exclusion set, not a module constant, matching that file's style). The WebSocket message to the
+  driver (`manager.send_personal_message`, a different transport with no third-party transit) is
+  unchanged and still carries `rider_name` for the in-app offer panel, exactly as `matching.py`'s
+  WS message does for the auto-dispatch path.
+- **Also noted, not fixed here (filed separately as C113):** `routes/notifications.py`'s
+  `admin_debug_ride_offer` (an admin-only diagnostic endpoint) builds a third, independent
+  `new_ride_assignment` FCM payload with a hardcoded `"rider_name": "Debug Rider"` literal and no
+  exclusion filter — not a live PII leak today (it's a literal, not real rider data), but its
+  comment falsely claims parity with the live dispatch path's exclusions. Found by this item's own
+  adversarial `/code-review` pass (CLAUDE.md gate #10); kept out of this fix to stay one logical
+  change.
+- **Verification:** `pytest backend/tests/test_admin_rides_coverage.py` (179 passed, incl. 3 new
+  tests), plus `test_admin_rides_cancel_state.py`, `test_admin_rides_read_endpoints_coverage.py`,
+  `test_dispatch_notify_loop_branches.py`, `test_loguru_call_conventions.py` (no regressions).
+  `ruff check`/`ruff format --check` clean. See
+  `docs/change-log/2026-09-14-admin-assign-fcm-pii-filter.md` for the full Change Impact Log.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+- **PR:** #5388.
 
-### C113. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
+### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
+- [ ] **Status:** OPEN, informational — no real PII leaks today.
+  Found during C112's adversarial `/code-review` pass (blast-radius grep for other
+  `new_ride_assignment` FCM payload builders turned up a third site beyond `matching.py` and
+  `admin/rides.py`).
+- **What's true today:** `admin_debug_ride_offer` (admin-only, `Depends(get_admin_user)`) sends a
+  synthetic test push to a real driver device to diagnose "no offer push / no sound" reports. Its
+  `offer_payload` dict hardcodes `"rider_name": "Debug Rider"` — a literal, not any real rider's
+  data — so no PII actually leaks through this endpoint today.
+- **Why it's worth a future decision anyway:** the dict is built with a comment claiming "same
+  shape/keys the live offer uses in routes/rides.py (spatial fields are excluded there too)" —
+  both halves of that claim are inaccurate (spatial fields are NOT excluded in the live path
+  either — see C112's correction above — and `rider_name` IS excluded in the live path but not
+  here). If this debug endpoint is ever changed to accept a caller-supplied rider name (a natural
+  "more realistic debug payload" enhancement), the misleading comment would make it easy to
+  silently reintroduce a real PII leak — the exact un-swept-sibling-copy failure mode CLAUDE.md's
+  adversarial-review gate (#10) exists to catch.
+- **Recommendation:** when next touching this endpoint, (1) fix the comment to state the true
+  current exclusion set (or lack thereof), and (2) add the same `rider_name` exclusion as a
+  defensive measure even though the value is currently hardcoded, so a future edit can't
+  reintroduce the leak silently.
+- **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
+  (`admin_debug_ride_offer`, `_stringify_fcm`).
+
+### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
 - [ ] **Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382,
   while auditing the new `GET /rides/{ride_id}/offer` endpoint added there.
 - **Issue/gap:** none of `get_active_ride`, `get_ride_history`, or the new `get_ride_offer`

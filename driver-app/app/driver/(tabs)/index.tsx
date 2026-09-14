@@ -977,6 +977,31 @@ function DriverDashboard() {
   const handleMarkerBearingChange = useCallback((bearing: number) => {
     camBearingRef.current = bearing;
   }, []);
+  // The heading the map camera is ACTUALLY committed to, handed back to
+  // CarMarker so its iOS rotation can subtract it.
+  //
+  // The comment directly above states the intent — the icon points "up" on a
+  // course-up map by construction. On Android that holds: Google Maps applies
+  // a flat Marker's rotation in WORLD space and subtracts the camera bearing
+  // itself. On iOS it did not, and could not: Apple Maps ignores
+  // Marker.rotation entirely, so CarMarker rotates the PNG with a SCREEN-space
+  // view transform of (worldBearing − mapHeading) — and with no mapHeadingRef
+  // supplied, mapHeading read 0 on every tick while the camera below was being
+  // rotated to the very same bearing. The icon was rotated by the course on a
+  // map already rotated by the course: correct only when heading due north,
+  // horizontal due east/west, and upside-down due south.
+  //
+  // Mirrors `mapHeading` at the camera call site rather than `camBearingRef`,
+  // because what the transform must cancel is the value actually applied to
+  // the camera — which is 0 whenever course-up is off or no bearing exists yet.
+  const appliedMapHeadingRef = useRef<number>(0);
+  // Course-up can be toggled while parked, when no new fix will re-run the
+  // camera effect. CarMarker re-reads this ref on parked ticks precisely so a
+  // toggle retargets the icon immediately, so it has to be right at rest too.
+  useEffect(() => {
+    if (!courseUp) appliedMapHeadingRef.current = 0;
+    else if (camBearingRef.current != null) appliedMapHeadingRef.current = camBearingRef.current;
+  }, [courseUp]);
   // Camera anchor position: same story as bearing above, applied to WHERE
   // the camera centers, not just which way it points. CarMarker renders
   // PLAYBACK_DELAY_MS (5s) behind the raw `location` fix. Anchoring the
@@ -1058,6 +1083,11 @@ function DriverDashboard() {
     }
 
     const mapHeading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
+    // Publish what the camera is committed to, so CarMarker's iOS view
+    // transform can cancel it. Set here, not at the animateCamera call below,
+    // because the throttle can defer or coalesce that call while this value is
+    // already the camera's intended heading.
+    appliedMapHeadingRef.current = mapHeading;
     // Pin the car low: shift the center ahead of the car along the travel
     // bearing by ~18% of the visible map height (WebMercator meters-per-
     // pixel at this zoom/latitude), so the road ahead fills the screen.
@@ -1438,6 +1468,10 @@ function DriverDashboard() {
             ring={ownMarkerRing}
             onPositionChange={handleMarkerPositionChange}
             onBearingChange={handleMarkerBearingChange}
+            // iOS: lets the icon subtract the camera's own rotation. Without
+            // it a course-up map double-rotates the car. No-op on Android,
+            // where Google Maps does this subtraction natively.
+            mapHeadingRef={appliedMapHeadingRef}
           />
         )}
         <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />

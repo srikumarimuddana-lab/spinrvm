@@ -91,6 +91,8 @@ async def assign_subscription(
     company = await db_supabase.get_corporate_account_by_id(company_id)
     if not company:
         raise CorporateSubscriptionError("company_not_found")
+    if not company.get("subscription_billing_pilot_enabled"):
+        raise CorporateSubscriptionError("company_not_in_pilot")
 
     plan = await db_supabase.get_corporate_subscription_plan(plan_id)
     if not plan or not plan.get("is_active"):

@@ -105,15 +105,22 @@ export default function HeatMap({
         let cancelled = false;
         let detach: (() => void) | null = null;
 
-        // Grayscale-preferring chain so heat layers pop against a muted basemap.
+        // Self-hosted, when configured, is the whole chain — same trade as
+        // basemapChain(): our own tiles first and only, so admins stop paying an
+        // 8s third-party timeout before the map paints, at the cost of a blank
+        // panel if our tile server is down. This chain is built inline rather
+        // than via basemapChain() because the fallbacks are grayscale-preferring
+        // (Positron, Protomaps grayscale) so heat layers pop against a muted
+        // basemap; it must still track that function's self-hosted behaviour.
         const sh = selfHostedStyleUrl();
         const pm = protomapsStyleUrl("grayscale");
-        const chain = [...new Set([
-            ...(sh ? [sh] : []),
-            MAP_STYLE_POSITRON,
-            ...(pm ? [pm] : []),
-            MAP_STYLE_CARTO_LIGHT,
-        ])];
+        const chain = sh
+            ? [sh]
+            : [...new Set([
+                MAP_STYLE_POSITRON,
+                ...(pm ? [pm] : []),
+                MAP_STYLE_CARTO_LIGHT,
+            ])];
 
         const buildMap = (attempt: number) => {
             if (cancelled || !containerRef.current) return;

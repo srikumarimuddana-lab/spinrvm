@@ -298,13 +298,13 @@ production flip.
 
 ### Why not AGP 9 (what Play Console actually recommends)
 
-Play's panel says "Upgrade to AGP version 9.0 and use R8". The R8 half is the section
-above. **The AGP half is not reachable on this stack:** RN 0.86.3 / Expo SDK 57 pins
-AGP 8.12, AGP 9 requires Gradle 9.5+, and Expo SDK 57's `expo-gradle-plugin` blocks
-Gradle 9.5+ (expo/expo#49550). This repo additionally pins Gradle **8.13** on purpose —
-see `withGradleWrapper.js`: Gradle 9 breaks pre-2023 native-module build scripts
-(`react-native-maps-directions`, `@logrocket/react-native`). AGP 9 waits on an Expo SDK
-upgrade; it is not a config flip, and attempting it will break the build.
+Play's panel recommends AGP 9.0 as well as R8. These are separate changes.
+[Android's AGP 9.0 compatibility table](https://developer.android.com/build/releases/agp-9-0-0-release-notes#compatibility)
+specifies Gradle **9.1.0**, not 9.5+. This repository pins Gradle **8.13** via
+`withGradleWrapper.js`, so an AGP 9 migration also needs a wrapper change and
+validation of the Expo/RN/native-module build scripts, Kotlin and plugin APIs.
+This R8 PR does not upgrade that toolchain. A Gradle 9.5-specific Expo issue alone
+does not establish that every AGP 9 configuration is unsupported.
 
 ---
 

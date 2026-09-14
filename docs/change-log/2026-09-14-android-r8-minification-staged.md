@@ -31,13 +31,12 @@ making this rule a no-op today"* next to its inert Nitro keep rule.
 The reported 2% obfuscation is **not** something our build produced — it is vendor AARs
 (Play Services, Firebase) that ship pre-obfuscated and land in the DEX either way.
 
-**The AGP 9.0 half of Play's recommendation is not actionable and was not attempted.**
-RN 0.86.3 / Expo SDK 57 pins AGP 8.12; AGP 9 requires Gradle 9.5+, which Expo SDK 57's
-`expo-gradle-plugin` blocks ([expo/expo#49550](https://github.com/expo/expo/issues/49550)).
-This repo *additionally* pins Gradle 8.13 on purpose — `plugins/withGradleWrapper.js`
-records that Gradle 9 breaks `react-native-maps-directions` and `@logrocket/react-native`.
-AGP 9 therefore waits on an Expo SDK upgrade; it is not a config flip. R8 is the entire
-reachable win today, and it is what moves all three reported percentages.
+**AGP 9 migration is separate and was not attempted.**
+[Android's official compatibility table](https://developer.android.com/build/releases/agp-9-0-0-release-notes#compatibility)
+requires Gradle 9.1.0 for AGP 9.0, not 9.5+. This repo pins Gradle 8.13 via
+`plugins/withGradleWrapper.js`; changing AGP needs a coordinated toolchain and
+native-module compatibility review. An Expo issue specific to Gradle 9.5 does
+not prove every AGP 9 combination is blocked. R8 itself does not require AGP 9.
 
 ## 3. Fix / remediation
 
@@ -300,3 +299,13 @@ State plainly, because the boundary here is unusually wide:
   fields (including iOS and submission settings) are unchanged. These checks model documented profile env
   precedence; they do not run EAS or prove env forwarding on a build worker.
 - Not verified: no native APK/AAB build or installed-binary rollback/device test.
+
+
+### Toolchain documentation correction
+
+- Issue/root cause: the original PR conflated an Expo Gradle 9.5 issue with AGP 9.0's
+  minimum Gradle requirement and incorrectly declared all AGP 9 combinations blocked.
+- Fix/files: corrected this log and `docs/android-build-strategy.md` against Android's
+  official AGP 9.0 compatibility table (Gradle 9.1.0). No toolchain setting changed.
+- Risk/UX: documentation only; no native or runtime behavior change. Rollback is a
+  documentation revert. Verification: official source checked; no AGP upgrade tested.

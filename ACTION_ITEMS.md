@@ -26773,7 +26773,7 @@ how much they de-risk a public launch._
   `monitoring-map.render.test.tsx`, `monitoring-toolbar-availability.render.test.tsx`,
   and `monitoring-jump-buttons-availability.render.test.tsx`. See
   `docs/change-log/2026-09-14-monitoring-map-controls-disabled-state.md`
-  for the full Change Impact Log and PR (filled in on PR creation).
+  for the full Change Impact Log. PR: https://github.com/srikumarimuddana-lab/spinrvm/pull/5425
   Originally found by `spinr-design-consistency-reviewer` while reviewing
   the WebGL-stub-guard fix for `monitoring-map.tsx` (this same session, see
   `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`) — a

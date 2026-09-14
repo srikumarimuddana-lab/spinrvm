@@ -8,7 +8,7 @@
 | Author | Claude Code (session `session_01173usfHtfdzMMzYpWeWmVm`) |
 | Surface(s) | admin-dashboard |
 | Domain (Sentry tag) | admin |
-| PR / commit link | (filled in on PR creation) |
+| PR / commit link | https://github.com/srikumarimuddana-lab/spinrvm/pull/5425 |
 | Related issue or gap ID | ACTION_ITEMS.md C115 — filed by `spinr-design-consistency-reviewer` while reviewing `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`, deliberately not fixed there (see that entry's "Deliberately not fixed here" section). |
 
 ## 1. Issue / gap identified

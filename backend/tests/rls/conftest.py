@@ -76,11 +76,14 @@ safety audit trail migration 64); extended since across several rounds
 deny-all tables, the `corporate_*` money/PII tables (migrations 05/17/27/142)
 plus `stripe_disputes`/`stripe_orphan_refunds` (88/254), `otp_records`/
 `rider_email_verification_otp`/`emergency_contacts`/`safety_incidents`/
-`safety_incident_photos`, and -- this round -- the remaining four of the
-nine migration-27 corporate tables (`corporate_policies`,
-`corporate_allowed_domains`, `ride_payment_sources`,
-`corporate_policy_evaluations`)). See each test file's own docstring for
-what it covers, and ACTION_ITEMS.md C49 for the current fraction covered.
+`safety_incident_photos`, the remaining four of the nine migration-27
+corporate tables (`corporate_policies`, `corporate_allowed_domains`,
+`ride_payment_sources`, `corporate_policy_evaluations`), and -- this round
+-- `audit_logs` (security audit trail, migrations 06/51/57) plus its two
+insurance-period audit siblings `driver_insurance_period_corrections` (355)
+and `driver_period_distances` (249)). See each test file's own docstring
+for what it covers, and ACTION_ITEMS.md C49 for the current fraction
+covered.
 
 Running these tests
 --------------------
@@ -168,6 +171,30 @@ def _extract_section(sql_text: str, start_marker: str, end_marker: str) -> str:
     return sql_text[start:end]
 
 
+def _extract_policy(sql_text: str, marker: str) -> str:
+    """Pull one `CREATE POLICY ...;` statement out of a larger .sql file by
+    tracking paren depth from its first '(' to close, then reading to the
+    next ';' -- same paren-balanced-then-semicolon technique as
+    _extract_create_table, generalized since an individual CREATE POLICY
+    statement isn't wrapped in one outer paren group the way a CREATE TABLE
+    is. Used for migration 06, which creates audit_logs' two original
+    policies interleaved with unrelated cloud_messages/push_tokens
+    statements this harness doesn't build."""
+    start = sql_text.index(marker)
+    depth = 0
+    i = sql_text.index("(", start)
+    for j in range(i, len(sql_text)):
+        ch = sql_text[j]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = sql_text.index(";", j) + 1
+                return sql_text[start:end]
+    raise AssertionError(f"unbalanced parens extracting policy from {marker!r}")
+
+
 _AUTH_SHIM_SQL = """
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -251,18 +278,6 @@ CREATE TABLE service_areas (id text primary key);
 -- side-effect ADD COLUMN statements those migrations carry.
 CREATE TABLE admin_staff (id text primary key);
 CREATE TABLE payouts (id text primary key);
--- Minimal stub matching the 6 columns migration 399's outbox_redrive() RPC
--- writes (id/action/entity_type/entity_id/actor_id/details) -- the real
--- audit_logs table (migration 06, actor_id added migration 57) isn't part
--- of this harness's 5-table coverage scope; only outbox_redrive touches it.
-CREATE TABLE audit_logs (
-    id text primary key,
-    action text,
-    entity_type text,
-    entity_id text,
-    actor_id text,
-    details text
-);
 """
 
 
@@ -598,6 +613,66 @@ def pg_conn(pg_test_dbname):
         "TO anon, authenticated, service_role"
     )
 
+    # --- audit_logs (ACTION_ITEMS.md C49): migration 06 creates the table +
+    # its original two policies (interleaved with unrelated cloud_messages/
+    # push_tokens statements this harness doesn't build -- pulled out via
+    # _extract_create_table/_extract_policy rather than hand-copied), 51
+    # locks it down (SELECT-only admin policy, append-only UPDATE trigger,
+    # REVOKE/GRANT narrowing), 56 adds a flag-gated DELETE trigger so
+    # purge_pii_retention()'s 7y retention step can still delete old rows,
+    # 57 adds actor_id (needed by migration 399's outbox_redrive() INSERT,
+    # previously covered by a stub table here -- see the removed
+    # _STUB_TABLES_SQL comment history) plus a second, unconditional
+    # UPDATE-OR-DELETE trigger -- applied in filename-sort order (51 < 56 <
+    # 57), matching how run_migrations.py would actually apply them. Two
+    # more `57_*.sql` files besides this one exist (duplicate numeric
+    # prefix, expected per CLAUDE.md) and are deliberately not applied --
+    # both only rewrite purge_pii_retention(), unrelated to audit_logs'
+    # RLS/grant/trigger surface under test here.
+    #
+    # 56 and 57's triggers do NOT compose safely -- see
+    # test_flag_gated_delete_is_still_blocked_by_migration_57_trigger below,
+    # which reproduces (does not fix) a real, currently-live production bug:
+    # ACTION_ITEMS.md C112. ---
+    migration_06_sql = (migrations_dir / "06_cloud_messaging.sql").read_text()
+    cur.execute(_extract_create_table(migration_06_sql, "audit_logs"))
+    cur.execute("ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin full access audit_logs"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass audit_logs"'))
+    # Baseline grant before 51's REVOKE narrows it -- mirrors Supabase's own
+    # default new-table grant (same reasoning as the blanket "ALL TABLES"
+    # grant above), so 51's REVOKE has something real to revoke rather than
+    # being a no-op against a table nothing was ever granted on.
+    cur.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON audit_logs TO anon, authenticated, service_role")
+    cur.execute((migrations_dir / "51_audit_logs_lockdown.sql").read_text())
+    cur.execute((migrations_dir / "56_audit_logs_delete_lockdown.sql").read_text())
+    cur.execute((migrations_dir / "57_audit_logs_schema_standardization.sql").read_text())
+
+    # --- driver_insurance_period_corrections (migration 355) / -- 355 references
+    # driver_insurance_periods(id) (migration 64, already applied above);
+    # driver_period_distances (migration 249) -- both self-contained
+    # regulatory-audit tables (append-only, owner-or-admin SELECT, no
+    # INSERT/UPDATE/DELETE policy for anon/authenticated), applied verbatim
+    # in full like driver_insurance_periods itself. ---
+    cur.execute((migrations_dir / "355_driver_insurance_period_corrections.sql").read_text())
+    cur.execute((migrations_dir / "249_driver_period_distances.sql").read_text())
+
+    # Baseline grant for the two plain new tables, by name (same reasoning
+    # as every other by-name grant above -- doesn't touch audit_logs, which
+    # already got its own baseline grant before 51's REVOKE ran). Neither
+    # table has an INSERT/UPDATE/DELETE policy for anon/authenticated, so
+    # without this grant every write attempt from those roles would be
+    # denied at the grant layer instead of ever reaching RLS -- same
+    # baseline-grant-then-narrow shape used for every other table above.
+    # (Postgres raises the identical SQLSTATE 42501 either way, so no test
+    # here can distinguish which layer produced a given denial -- this
+    # grant is about matching Supabase's own default table permissions,
+    # not about producing an observably different error.)
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON driver_insurance_period_corrections, "
+        "driver_period_distances TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -649,6 +724,8 @@ def pg_cur(pg_conn):
         "rider_email_verification_otp",
         "safety_incident_photos",
         "safety_incidents",
+        "driver_insurance_period_corrections",
+        "driver_period_distances",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

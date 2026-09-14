@@ -21699,6 +21699,61 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-14): 3 more tables, still not closed.** Checked for
+  concurrent work first (`git fetch origin main` + open-PR search) — no PR
+  currently touches `backend/tests/rls/`, clear to proceed. Picked
+  `audit_logs` (security/admin-action audit trail, migrations 06/51/56/57)
+  plus its two insurance-period audit siblings `driver_insurance_period_corrections`
+  (355) and `driver_period_distances` (249) — a themed "audit-trail
+  integrity" slice: one security-audit table plus a direct extension of the
+  already-covered `driver_insurance_periods` (migration 64) family, both
+  high-consequence per CLAUDE.md (security-relevant events; SGI/Saskatchewan
+  Transportation Act insurance-period audit). New file
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py`, 29 tests.
+  Full `tests/rls` suite: **295 passed, 0 failed**, against a real local
+  Postgres 16 (this sandbox had none preinstalled; stood one up via a fresh,
+  isolated `pg_createcluster` cluster — not by weakening the pre-existing
+  `main` cluster's auth, which the harness's own safety classifier correctly
+  refused when first attempted).
+  - **Review used:** the Task/Agent tool needed to invoke `spinr-security-auditor`
+    as a full subagent was not available in this session's environment
+    (checked via tool search, confirmed absent) — used the CLAUDE.md-
+    sanctioned fallback, `/code-review` at high effort, against the actual
+    diff instead, per gate #10's explicit "(or `/code-review` at medium+
+    effort)" allowance.
+  - **Real findings, not a rubber stamp:** the review surfaced that this
+    round's harness silently omitted migration 56 (`audit_logs_delete_lockdown`)
+    and mischaracterized two of `audit_logs`' three tamper-evidence triggers
+    as a "harmless duplication." Verified by direct execution against a real
+    Postgres (not assumed): it is not harmless — migration 57's
+    unconditional `audit_logs_no_mutate` trigger silently defeats migration
+    56's flag-gated DELETE exception that `purge_pii_retention()`'s 7-year
+    retention step depends on. This is a real, previously-undiscovered
+    production bug, not introduced by this PR — filed as **C112** (new),
+    with a passing regression test added here that reproduces (does not
+    fix) it. The review also caught a real duplicate-entry bug in this
+    round's own `pg_cur` TRUNCATE list, and that 4 of this round's own new
+    tests asserted the wrong Postgres RLS behavior for UPDATE/DELETE with no
+    applicable policy (expected an exception; Postgres actually filters
+    silently to 0 rows for UPDATE/DELETE, unlike INSERT's WITH CHECK, which
+    does raise) — both fixed here after being caught by running the suite,
+    not just reasoning about it.
+  - **Running total after this round:** 35 of ~64 distinct policy-bearing
+    tables (32 + these 3) by the same sweep method prior rounds used
+    (`CREATE POLICY ... ON <table>` regex over `backend/migrations/*.sql` +
+    `backend/supabase_rls.sql`). Correction to that denominator: this
+    round's own repo-wide sweep found the plain-text regex misses 6 tables
+    entirely — `corporate_wallets`, `corporate_wallet_transactions`,
+    `corporate_policies`, `corporate_allowed_domains`, `ride_payment_sources`,
+    `corporate_policy_evaluations` — because migration 27 creates their
+    admin policies via a `FOREACH ... EXECUTE format('CREATE POLICY ...')`
+    loop, not a static `CREATE POLICY` statement. All 6 are already covered
+    (prior rounds, via migration 27/142 applied directly rather than
+    grepped), so the *coverage* fraction is unaffected, but the true
+    denominator is closer to ~70, not ~64 — flagging for whoever does the
+    next sweep rather than re-deriving a final canonical number here (same
+    "doesn't reconcile cleanly" caveat every prior round has carried).
+  Change log: `docs/change-log/2026-09-14-c49-audit-trail-rls-coverage.md`.
 - [ ] **Status (2026-09-13): more progress, still not closed.** Two rounds of
   undocumented progress from other sessions surfaced while picking this item
   up, plus new work this session:
@@ -26326,6 +26381,97 @@ how much they de-risk a public launch._
 - **Files (reference only, nothing changed by this entry):**
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
+
+### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here
+- [ ] **Status:** OPEN, real (not informational) — reproduced by direct execution
+  against a real Postgres running the actual shipped migration SQL, not inferred
+  from reading the files. Found by `/code-review` (high effort, CLAUDE.md gate
+  #10 — the Task/Agent tool to invoke `spinr-security-auditor` as a full
+  subagent was unavailable in this session's environment, so the CLAUDE.md-
+  sanctioned fallback was used instead) while adding RLS coverage for
+  `audit_logs` under C49.
+- **What's true today:** three migrations independently add tamper-evidence
+  triggers to `audit_logs`, and the two most recent do not compose safely:
+  - Migration 51 (`51_audit_logs_lockdown.sql`) adds `audit_logs_no_update`
+    (BEFORE UPDATE, unconditional, `check_violation`).
+  - Migration 56 (`56_audit_logs_delete_lockdown.sql`) replaces an earlier,
+    unconditional `audit_logs_no_delete` trigger (from
+    `50_audit_logs_append_only.sql`) with a **flag-gated** one: DELETE is
+    blocked unless the session-local GUC `spinr.audit_logs.allow_delete` is
+    `'true'`, which `purge_pii_retention()`'s Step G sets immediately before
+    its 7-year `audit_logs` retention DELETE and clears immediately after —
+    the sanctioned way to let the regulatory retention job (and *only* that
+    job) delete old rows.
+  - Migration 57 (`57_audit_logs_schema_standardization.sql`) separately adds
+    `audit_logs_no_mutate` (BEFORE UPDATE OR DELETE), **unconditional, with no
+    knowledge of migration 56's flag at all.**
+  - Postgres fires every applicable BEFORE ROW trigger for one statement, in
+    alphabetical order by trigger name ("audit_logs_no_delete" <
+    "audit_logs_no_mutate" < "audit_logs_no_update"). On DELETE:
+    `audit_logs_no_delete` (56) fires first and, when the flag is correctly
+    set, lets the delete through — but `audit_logs_no_mutate` (57) then fires
+    next and aborts unconditionally anyway. **The flag-gated exception
+    migration 56 built specifically for the retention job does not work once
+    migration 57 has also been applied.** Confirmed directly: with the flag
+    set exactly the way `purge_pii_retention()`'s Step G sets it, `DELETE FROM
+    audit_logs` still raises `psycopg2.errors.RaiseException` from 57's
+    trigger. See `backend/tests/rls/test_audit_and_insurance_correction_rls.py::test_flag_gated_delete_is_still_blocked_by_migration_57_trigger`
+    (new, this round) — a passing regression test that encodes today's real
+    (broken) behavior; it does not fix it.
+- **Blast radius if migration 57 is live in production:** migration 56's own
+  `purge_pii_retention()` body wraps Step G's DELETE in `EXCEPTION WHEN OTHERS
+  THEN ... RAISE;` — it clears the flag and **re-raises**, so the whole
+  function call fails. Since Steps A–F (ride GPS anonymization at 3y, ride
+  hard-delete at 7y, `driver_location_history`/`ride_messages` purge at 90d,
+  expired `refresh_tokens` cleanup, `stripe_events` purge at 90d) run in the
+  same function invocation ahead of Step G, an unhandled exception at Step G
+  would roll back the entire call — meaning **every PIPEDA/Saskatchewan
+  Transportation Act retention step this function performs could be silently
+  failing on every scheduled run**, not just the audit-log piece, in any
+  environment where migration 57 has actually been applied on top of 56.
+- **What is NOT confirmed here:** (1) whether migrations 56 and 57 have both
+  actually been applied to the live production `schema_migrations` table —
+  no production DB access from this environment, same caveat as the
+  `complaints`/`lost_and_found` UUID-vs-TEXT drift entry above. (2) The exact
+  function body currently live for `purge_pii_retention()` — at least a dozen
+  more migrations (`57_fix_retention_purge_audit_insert.sql`,
+  `57_purge_pii_retention_regression_fix.sql`, `66`, `67`, `141`, `143`,
+  `187`, `216`, `228`, `285`, `289`, `296`, `321`, `323`, `324`, `335`,
+  `350`–`352`, `366`, …) also `CREATE OR REPLACE` this function after 56/57;
+  a full audit of which version is currently live, and whether Step G's
+  flag-set/DELETE/flag-clear shape survived every rewrite, is its own
+  investigation and explicitly out of scope here. **What IS confirmed
+  independent of the function body:** the trigger-level conflict itself —
+  `audit_logs_no_mutate` (57) unconditionally blocks DELETE regardless of
+  the flag, for *any* caller, function-body history aside.
+- **Adjacent, already-tracked context found while investigating:** migration
+  317's `check_disabled_guard_triggers()` (a 6-hourly `utils/
+  retention_guard_monitor.py` scan for *disabled* append-only guard triggers,
+  A35/A37) has its own comment acknowledging `audit_logs_no_update` (51) is
+  "redundant" with `audit_logs_no_mutate` (57) **on the UPDATE side only** —
+  it does not mention (and its point-in-time-disabled-trigger monitor
+  wouldn't catch, since both triggers here are enabled and firing correctly
+  by their own individual logic) this DELETE-side conflict with migration
+  56's flag gate. This is a different, previously-unflagged failure mode:
+  not a disabled guard, but two enabled guards whose combination defeats a
+  third migration's intentional exception.
+- **Not fixed here:** correcting a live trigger's behavior on a
+  regulatory-audit table is a higher-risk, higher-blast-radius change than
+  adding RLS test coverage (this backlog item, C49) and needs its own
+  migration, its own dry run against the real retention job, and its own
+  review — not a drive-by fix bundled into a test-coverage PR. A future fix
+  should either (a) make `audit_logs_no_mutate` (57) flag-aware on its DELETE
+  branch the same way 56's trigger is, or (b) narrow 57's trigger to UPDATE
+  only (it would then be fully redundant with 51's, which migration 317's own
+  comment already treats as acceptable) and leave DELETE gating exclusively
+  to 56's trigger — decide which after confirming what's actually live in
+  production per the point above.
+- **Files (reference only, nothing changed by this entry beyond the new
+  regression test):** `backend/migrations/50_audit_logs_append_only.sql`,
+  `51_audit_logs_lockdown.sql`, `56_audit_logs_delete_lockdown.sql`,
+  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`;
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py` (new
+  regression test, does not fix the bug).
 
 ## Recently completed (do not redo)
 

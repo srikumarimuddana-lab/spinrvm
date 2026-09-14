@@ -1,4 +1,5 @@
 -- Fix F4: a new ride needs its own interval even when the period is unchanged.
+-- Renumbered before merge/application: main already contains migrations 419/420.
 -- Rollback: restore the function body from migration 253 using CREATE OR REPLACE;
 -- keep the service-role-only grants below. Do not rewrite existing audit rows.
 -- This replaces code only: no historical backfill, deletion, or ride reassignment.
@@ -78,4 +79,4 @@ GRANT EXECUTE ON FUNCTION record_insurance_period_transition(text, smallint, tex
     TO service_role;
 
 COMMENT ON FUNCTION record_insurance_period_transition(text, smallint, text) IS
-    'Atomic insurance close+open; no-op only for the same period and ride identity. Migration 419.';
+    'Atomic insurance close+open; no-op only for the same period and ride identity. Migration 421.';

@@ -5,13 +5,13 @@ Background. Migration 253's no-op check compared only `period` (253:44), so a
 driver already open on Period 2 for ride A who was then claimed for ride B got
 {"status": "noop"} and ride B never opened its own Period 2 interval. The open
 row kept ride A's ride_id -- and on 2026-09-13 ride A was a ride the rider had
-already cancelled. Migration 419 adds a NULL-safe ride-identity comparison
-(419:39-40). See docs/audit/2026-09-13-driver-app-mid-ride-process-death.md F4.
+already cancelled. Migration 421 adds a NULL-safe ride-identity comparison.
+See docs/audit/2026-09-13-driver-app-mid-ride-process-death.md F4.
 
 Why this file exists in direct_pool/ rather than as a bare .sql: pytest.ini
 sets `python_files = test_*.py`, so a .sql file is collected by nothing and can
 never fail a build. This suite already runs against a real postgres service in
-ci.yml and its conftest applies 64 + 253 + 419, so the contract is exercised
+ci.yml and its conftest applies 64 + 253 + 421, so the contract is exercised
 against the real function body on every CI run.
 
 These tests assert the *historical* row is preserved, not merely that a new row
@@ -21,6 +21,8 @@ interval would satisfy "ride B has a Period 2" while corrupting the audit trail.
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 import pytest
 
@@ -130,14 +132,14 @@ def test_prior_interval_is_closed_not_reattributed_or_reclassified(pg_cur, f4_dr
     historical = rows[0]
     assert historical[0] == 2, "prior interval's period must not be rewritten"
     assert historical[1] == "f4_ride_a", "prior interval must stay attributed to ride A"
-    assert str(historical[2]).startswith("2026-09-13 19:45:56"), (
+    assert historical[2] == datetime.fromisoformat(_SEEDED_START), (
         "prior interval's started_at must be preserved, not restamped to now()"
     )
     assert historical[3] is not None, "prior interval must be closed"
 
 
 def test_same_period_same_ride_still_no_ops(pg_cur, f4_driver):
-    """419 must not break 253's real idempotency guarantee.
+    """421 must not break 253's real idempotency guarantee.
 
     ride_flow.py:403 calls this a second time after accept as a deliberate
     safety net; it must stay a no-op or every acceptance would append a row.
@@ -220,7 +222,7 @@ def test_already_closed_intervals_are_untouched_by_later_transitions(pg_cur, f4_
 
 
 def test_period_3_still_requires_a_ride_id(pg_cur, f4_driver):
-    """419 must not weaken 253's Period 3 guard (CLAUDE.md: no P3 without a ride)."""
+    """421 must not weaken 253's Period 3 guard (CLAUDE.md: no P3 without a ride)."""
     with pytest.raises(Exception) as exc:
         pg_cur.execute(
             "SELECT record_insurance_period_transition(%s, 3::smallint, NULL)",

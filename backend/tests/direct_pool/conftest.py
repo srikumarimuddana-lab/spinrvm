@@ -221,13 +221,13 @@ _MIGRATION_FILES = (
     # 403 replaces 402's body with the #4883 review fixes (append-only rule:
     # 402 is never edited). Applied after it, exactly as the runner would.
     "403_dispatch_claim_batch_v2.sql",
-    # 419 replaces 253's record_insurance_period_transition body (append-only
+    # 421 replaces 253's record_insurance_period_transition body (append-only
     # rule: 253 is never edited). Same pattern as 402/403 above. Without this
     # line every direct_pool run installs 253's period-only no-op check — the
     # F4 bug itself — so any test asserting ride-identity behaviour would pass
     # against the broken function. Listed last because migrations apply in
-    # filename order and 419 is the highest number in this tuple.
-    "419_insurance_period_ride_identity.sql",
+    # filename order and 421 is the highest number in this tuple.
+    "421_insurance_period_ride_identity.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

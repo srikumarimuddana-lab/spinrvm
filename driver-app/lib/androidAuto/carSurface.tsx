@@ -505,6 +505,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   let CarMarker: React.ComponentType<{
     coordinate: { latitude: number; longitude: number };
     heading?: number | null;
+    routeCoordinates?: readonly { latitude: number; longitude: number }[] | null;
   }> | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -660,6 +661,15 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}
+            // Same live-route-over-stored fallback RouteLine draws two props
+            // above — without this the marker has no polyline to snap to and
+            // renders raw/smoothed-but-unsnapped, drifting off the road on
+            // the head unit even though the phone screens (which already
+            // pass this) snap correctly. See CarMarker.tsx's routeCoordinates
+            // doc comment for the snap behavior itself.
+            routeCoordinates={
+              route && (livePath ?? route.polyline).length > 1 ? (livePath ?? route.polyline) : null
+            }
             // The TRUE course, never the camera's committed bearing.
             //
             // CarMarker is `flat`, so react-native-maps applies its rotation

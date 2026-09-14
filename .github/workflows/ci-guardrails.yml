@@ -1058,6 +1058,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
@@ -1066,6 +1067,7 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
           BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
 
           # BASE_SHA/HEAD_SHA come from github.event.pull_request.*, which is
           # undefined on merge_group/workflow_dispatch runs (both empty
@@ -1074,13 +1076,26 @@ jobs:
           # silently reports zero migration files: a hard-blocking gate
           # (continue-on-error: false) reporting PASS having never actually
           # scanned anything. Mirrors coverage-regression-gate's own
-          # "Resolve merge-base SHA" step (~line 296) in this same file: BASE
-          # falls back to the workflow_dispatch `base_branch` input (default
-          # "main"); HEAD falls back to the literal HEAD ref, which
-          # actions/checkout has already set to the right commit for
-          # whichever event triggered this run. CR-2026-085 / #5381.
+          # "Resolve merge-base SHA" step (~line 296) in this same file, with
+          # one refinement: BASE prefers github.event.merge_group.base_sha
+          # (the real base commit GitHub already computed for this merge
+          # group) over reconstructing "origin/main" from the
+          # workflow_dispatch base_branch input -- this workflow's
+          # pull_request trigger covers both `main` and `staging`
+          # (github.event.pull_request.base.sha covers per-branch, but the
+          # workflow_dispatch fallback alone would always assume "main" even
+          # for a staging-targeted merge_group run once/if the merge queue is
+          # enabled there too; merge_group.base_sha sidesteps that entirely).
+          # HEAD falls back to the literal HEAD ref, which actions/checkout
+          # has already set to the right commit for whichever event
+          # triggered this run -- correct for merge_group too, since the
+          # checked-out commit there is already the temporary merge-group
+          # commit. CR-2026-085 / #5381. Adversarially reviewed by
+          # spinr-cicd-infra-reviewer, which flagged the original
+          # origin/main-only fallback as a real (if not currently exercised)
+          # gap before this refinement was added.
           if not BASE_SHA:
-              BASE_SHA = f'origin/{BASE_BRANCH_INPUT or "main"}'
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
           if not HEAD_SHA:
               HEAD_SHA = 'HEAD'
 
@@ -1216,6 +1231,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
@@ -1224,6 +1240,7 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
           BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
 
           # Empty on merge_group/workflow_dispatch (github.event.pull_request
           # doesn't exist there) -- same CR-2026-085 fix as this job's "Check
@@ -1231,7 +1248,7 @@ jobs:
           # own independent env/diff. See that step's comment for the full
           # rationale. CR-2026-085 / #5381.
           if not BASE_SHA:
-              BASE_SHA = f'origin/{BASE_BRANCH_INPUT or "main"}'
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
           if not HEAD_SHA:
               HEAD_SHA = 'HEAD'
 
@@ -1378,6 +1395,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
@@ -1386,6 +1404,7 @@ jobs:
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
           BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
 
           # Empty on merge_group/workflow_dispatch (github.event.pull_request
           # doesn't exist there) -- same CR-2026-085 fix as this job's other
@@ -1393,7 +1412,7 @@ jobs:
           # "Check for dangerous migration patterns" above for the full
           # rationale. CR-2026-085 / #5381.
           if not BASE_SHA:
-              BASE_SHA = f'origin/{BASE_BRANCH_INPUT or "main"}'
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
           if not HEAD_SHA:
               HEAD_SHA = 'HEAD'
 

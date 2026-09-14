@@ -7,6 +7,9 @@ Regression guards:
     navigation, not inflate trip_in_progress
   - stale points discarded: other-ride ride_id, or captured before this ride
   - batch capped at MAX_BREADCRUMB_BATCH (no unbounded REST insert)
+  - #1231 finding 11: a teleporting point is rejected even when `mocked` is
+    unset, chained within the batch and against a seeded `driver_last_known`
+    boundary point — not just a bare `mocked is True` check
 """
 
 import asyncio
@@ -280,6 +283,49 @@ async def test_invalid_and_mocked_points_skipped():
         )
     assert n == 1
     assert len(cap["docs"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_teleporting_point_rejected_even_when_not_flagged_mocked():
+    """#1231 finding 11: before this fix, only `mocked is True` was checked —
+    a spoofed point with `mocked` simply unset (as a naive spoofing client
+    would send) sailed through untouched as long as it wasn't the batch's
+    last point. This is the exact gap the issue named."""
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [
+                _pt(50.42, -104.62, "2026-06-01T23:06:00Z"),  # legit
+                # ~16.6 km away 5 seconds later — 300+ km/h, no `mocked` flag.
+                _pt(50.57, -104.62, "2026-06-01T23:06:05Z"),
+            ],
+        )
+    assert n == 1
+    assert len(cap["docs"]) == 1
+    assert cap["docs"][0]["lat"] == 50.42
+
+
+@pytest.mark.asyncio
+async def test_driver_last_known_seeds_teleport_check_for_single_point_batch():
+    """A single-point batch has no in-batch predecessor to chain against —
+    without `driver_last_known` seeding the boundary, a lone teleporting
+    point would trivially pass (nothing to compare it to)."""
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [_pt(50.42, -104.62, "2026-06-01T23:06:00Z")],
+            driver_last_known={
+                "lat": 50.10,  # ~35.6 km away, 2 seconds earlier per updated_at
+                "lng": -104.62,
+                "updated_at": "2026-06-01T23:05:58Z",
+            },
+        )
+    assert n == 0
+    assert "docs" not in cap
 
 
 @pytest.mark.asyncio

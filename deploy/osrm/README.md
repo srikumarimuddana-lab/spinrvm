@@ -16,7 +16,7 @@ This folder is the reproducible OSRM build + a smoke test.
 OSRM needs the SK OpenStreetMap extract preprocessed into its own binary format.
 The `Dockerfile` here does it all — downloads the [Geofabrik Saskatchewan
 extract](https://download.geofabrik.de/north-america/canada/saskatchewan.html)
-(~40 MB), runs the MLD pipeline, and bakes the result into the image (no volume
+(~112 MB as of 2026-09-14) merged with the Alberta extract, runs the MLD pipeline, and bakes the result into the image (no volume
 needed; rebuild to refresh the map):
 
 ```
@@ -47,31 +47,35 @@ docker build \
   -t spinr-osrm .
 ```
 
-On Railway, set `EXTRA_REGION_URLS` as a **build-time variable** on the OSRM
-service, then force a **fresh build** — not a redeploy. Nothing in the backend
-changes — same `OSRM_URL`, same endpoints; the graph simply covers more ground.
+Coverage is set by the `EXTRA_REGION_URLS` **ARG in the Dockerfile**, which
+defaults to the Alberta extract — so the graph covers Saskatchewan **and**
+Alberta. Nothing in the backend changes: same `OSRM_URL`, same endpoints; the
+graph simply covers more ground. Narrow it by editing that ARG.
 
-> **"Redeploy" does not work here, and fails silently.** Railway's redeploy
-> reuses the previous deployment's *existing build*, so a changed build arg
-> never reaches `docker build`: the service comes back up green, on the same
-> SK-only graph, with no error anywhere. Setting the variable on its own is not
-> enough either — this service has a `/deploy/osrm/**` watch pattern, so
-> commits that touch only other directories are SKIPPED and never rebuild it. A
-> build-arg change needs a commit matching that path. Verify with
-> `EXPECT_ALBERTA=1 deploy/osrm/smoke-test.sh` rather than assuming, and see
-> `docs/change-log/2026-09-14-osrm-alberta-coverage.md`.
-
-**Currently enabled in production:** `EXTRA_REGION_URLS` is set to the Geofabrik
-Alberta extract on the `osrm-backend` Railway service, so the live graph covers
-Saskatchewan **and** Alberta. Rolling back is unsetting that variable and
-rebuilding — no code change.
+> ### ⚠️ Coverage cannot be set from the Railway dashboard
+> An earlier version of this file said to set `EXTRA_REGION_URLS` as a
+> "build-time variable" on the service. **That does not work.** Railway does not
+> pass service variables to `docker build` as build args: the `ARG` keeps its
+> default and the extra province is silently dropped. Verified on the sibling
+> tile service on 2026-09-14 — the build log read
+> `for url in <saskatchewan only> ;` and the deploy went green.
+>
+> Two further traps in the same area, both of which also fail green:
+> - **A Railway *redeploy* never rebuilds.** It reuses the previous deployment's
+>   existing build, so no build-time change of any kind takes effect.
+> - **This service has a `/deploy/osrm/**` watch pattern**, so commits touching
+>   only other directories are SKIPPED and never rebuild it.
+>
+> Net effect: a coverage change must be a **commit under `deploy/osrm/`**.
+> Verify the result with `EXPECT_ALBERTA=1 deploy/osrm/smoke-test.sh` rather
+> than assuming — and see `docs/change-log/2026-09-14-osrm-alberta-coverage.md`.
 
 Three options, cheapest first:
 
 | Approach | Build cost | When to use |
 |---|---|---|
-| SK only (default) | Baseline | Today. Service area is Saskatchewan. |
-| `EXTRA_REGION_URLS=<alberta>` | Meaningfully larger than SK alone — Alberta's extract is several times the size of Saskatchewan's | Cross-border trips (Lloydminster straddles the SK/AB line), or launching in AB |
+| SK only | Baseline | Narrower than today — edit the ARG to `""` if you want to shrink the graph back. |
+| SK + AB (**current default**) | Meaningfully larger than SK alone — Alberta's extract is several times the size of Saskatchewan's | Cross-border trips (Lloydminster straddles the SK/AB line), or launching in AB. This is what ships. |
 | `REGION_URL=<canada-latest>` | Much larger again — whole-country extract | Only if you actually serve nationally |
 
 Verify the current sizes on
@@ -224,7 +228,7 @@ logs on a completed trip means OSRM answered.
 | Symptom | Cause / fix |
 |---|---|
 | `{"code":"NoMatch"}` on SK coords | Extract doesn't cover the area — rebuild with the SK (or wider) extract. |
-| SK coords fine, Alberta coords `NoMatch` after a merged build | `EXTRA_REGION_URLS` didn't reach the build. On Railway it must be a **build-time** variable, not a runtime one; confirm the build log shows the merge (`osmium merge`) and a `region.osm.pbf` larger than SK alone. |
+| SK coords fine, Alberta coords `NoMatch` after a merged build | `EXTRA_REGION_URLS` didn't reach the build. **Setting it on the Railway service does nothing** — Railway does not pass service variables as `docker build` args; it must be the ARG default in the Dockerfile. Confirm the build log shows two `curl` lines and an `osmium merge`, and a `region.osm.pbf` larger than SK alone. |
 | Merged build fails during `osrm-extract` with no useful error | Almost always OOM — peak RAM scales with the merged extract. Use a narrower region or a bigger builder. |
 | `osmium merge` errors about unsorted input | A non-Geofabrik extract. `osmium sort` each input first, or stick to Geofabrik, whose extracts are already sorted by (type, id). |
 | All requests time out / connection refused via `*.railway.internal` | Missing `--ip ::` (IPv6). Use the public URL or fix the bind. |

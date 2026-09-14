@@ -45,11 +45,23 @@ ARG OSRM_TAG=v5.27.1
 # needs osmium-tool, which the OSRM image does not ship, and installing it here
 # keeps it out of both the preprocessing and runtime layers.
 FROM debian:bookworm-slim AS fetch
-# Saskatchewan extract from Geofabrik (~40 MB). Override for a different region.
+# Saskatchewan extract from Geofabrik (~112 MB as of 2026-09-14; this file
+# previously said ~40 MB, which is long out of date). Override for another region.
 ARG REGION_URL=https://download.geofabrik.de/north-america/canada/saskatchewan-latest.osm.pbf
-# Space-separated additional .osm.pbf URLs to merge into REGION_URL. Empty by
-# default, so the single-region build is byte-for-byte the graph it always was.
-ARG EXTRA_REGION_URLS=""
+# Space-separated additional .osm.pbf URLs merged into REGION_URL.
+#
+# Alberta is the DEFAULT, not a deployment-time variable, and that is deliberate:
+# Railway does NOT pass service variables to `docker build` as build args. This
+# file used to tell you to set EXTRA_REGION_URLS on the Railway service — doing
+# that produces a green build whose log reads `for url in <saskatchewan only> ;`,
+# with the ARG still at its default and the extra province silently dropped
+# (observed on the sibling tile service, 2026-09-14). An OSRM graph missing a
+# province is invisible too: it still answers `code:"Ok"` for Edmonton by snapping
+# ~230 km to the border. So coverage lives here in git, where it is reviewable.
+#
+# Narrow it back to one province by editing this line (or `--build-arg` locally),
+# not by changing anything on Railway.
+ARG EXTRA_REGION_URLS="https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl osmium-tool \
  && rm -rf /var/lib/apt/lists/*

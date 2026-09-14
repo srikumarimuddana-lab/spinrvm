@@ -26,13 +26,13 @@ was simply never set.
 
 ## 3. Fix / remediation
 
-No code change. `EXTRA_REGION_URLS` is now set to the Geofabrik Alberta extract
-as a **build-time** variable on the Railway `osrm-backend` service, so the
-existing `osmium merge` path in the `fetch` stage produces one SK+AB graph.
+`EXTRA_REGION_URLS` now **defaults** to the Geofabrik Alberta extract in
+`deploy/osrm/Dockerfile`, so the existing `osmium merge` path in the `fetch`
+stage produces one SK+AB graph.
 
-This commit is the documentation half: it records that the variable is set in
-production, and corrects a genuinely misleading instruction in the README (see
-§7) that cost a cycle on the sibling tile service.
+The first attempt set it as a variable on the Railway service instead, per this
+repo's own README. **That silently did nothing** — see §7. Coverage therefore
+lives in the Dockerfile, in git, where it is reviewable.
 
 ## 4. Risk & impact on existing functionality
 
@@ -82,12 +82,18 @@ production, and corrects a genuinely misleading instruction in the README (see
 
 | File path | What changed | Why |
 |---|---|---|
-| `deploy/osrm/README.md` | Records that Alberta is enabled in production; corrects "redeploy" → a fresh build is required | The variable is build-time only; a Railway *redeploy* reuses the prior build snapshot and silently keeps the SK-only graph |
+| `deploy/osrm/Dockerfile` | `EXTRA_REGION_URLS` now defaults to the Alberta extract; corrected the stale "~40 MB" SK figure to ~112 MB | Railway cannot supply build args, so coverage has to be the ARG default |
+| `deploy/osrm/README.md` | Removed the instruction to set the variable on Railway; documents the three ways a coverage change fails green | The instruction was wrong and cost two build cycles |
 | `docs/change-log/2026-09-14-osrm-alberta-coverage.md` | This entry | Required for a change affecting recorded trip distance |
 
 No application code changed.
 
 ## 7. Before / after
+
+```diff
+-ARG EXTRA_REGION_URLS=""
++ARG EXTRA_REGION_URLS="https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"
+```
 
 The README previously said:
 
@@ -96,19 +102,29 @@ On Railway, set `EXTRA_REGION_URLS` as a **build-time** variable on the OSRM
 service and redeploy.
 ```
 
-"Redeploy" is wrong and actively misleading. Railway's redeploy reuses the
-previous deployment's **existing build**, so the new build arg never reaches
-`docker build` and the service comes back up on the same SK-only graph — with a
-green deploy and no error anywhere. This exact trap cost a cycle on the tile
-service earlier the same day. A build-arg change needs a *fresh build*, which on
-this service means a commit matching its `/deploy/osrm/**` watch pattern.
+**Every clause of that is wrong, and all three failure modes are green.**
+
+1. **Railway does not pass service variables to `docker build` as build args.**
+   Proven on the sibling tile service on 2026-09-14: with the variable set, the
+   build log read `for url in <saskatchewan only> ;` — the ARG kept its default,
+   the extra province was dropped, and the deploy succeeded.
+2. **A Railway "redeploy" never rebuilds.** It reuses the previous deployment's
+   existing build, so no build-time change of any kind takes effect. This same
+   trap replayed a stale start command on the tile service earlier the same day.
+3. **This service has a `/deploy/osrm/**` watch pattern**, so commits touching
+   only other directories are SKIPPED and never rebuild it at all.
+
+An OSRM graph missing a province is itself invisible — it still answers
+`code:"Ok"` for Edmonton by snapping ~230 km to the provincial border. Four
+green signals, one wrong graph. Hence coverage in git and
+`EXPECT_ALBERTA=1 deploy/osrm/smoke-test.sh` (which asserts the snap *distance*)
+as the check.
 
 ## 8. Rollback plan
 
-Unset `EXTRA_REGION_URLS` on the Railway `osrm-backend` service and trigger a
-fresh build. No code revert and no deploy of this repository is required —
-which is the reason Alberta is environment config rather than a changed
-Dockerfile default.
+Revert this commit (or set the `EXTRA_REGION_URLS` ARG back to `""`) and let the
+`/deploy/osrm/**` watch pattern rebuild. There is no dashboard toggle — see §7
+for why that route does not exist.
 
 No data-level remediation is needed: this writes nothing. `actual_distance_km`
 rows already written are unaffected, and rows written while it is live remain
@@ -128,7 +144,9 @@ there is no money to unwind.
 - [ ] Automated tests run — none exist for graph coverage; this is a data-build
       change, not a code change.
 - [ ] Manual repro steps followed in staging — **not done, no staging OSRM.**
-- [ ] Feature-flagged — n/a; the environment variable *is* the flag.
+- [ ] Feature-flagged — **no, and it cannot be.** The first design used the
+      Railway variable as the flag; that route does not reach the build (§7), so
+      coverage is a code default and changing it needs a commit + rebuild.
 
 **What was NOT verified:** the merged build had not completed at the time of
 writing. Specifically unproven: that `osrm-extract` survives the larger merged

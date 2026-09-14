@@ -15,7 +15,7 @@ Alternative: rotate the child image in JS or remount per heading. Rejected becau
 TodoWrite is unavailable; this is the tracker. Each batch is at most three tracked files and committed before the next:
 
 - [x] Driver maps patch + this log: schema, Android Java/C++ generated props, Android-only JS forwarding.
-- [ ] Rider sibling maps patch + this log: preserve patch parity.
+- [x] Rider sibling maps patch + this log: identical seven-file native addition; driver commit `b3d856443`.
 - [ ] Two app configs + this log: Android-only runtime fencing for native compatibility.
 - [ ] Static regression guard + this log: check the full property chain and patch parity.
 

@@ -79,3 +79,28 @@ a pointer/rationale log, not a narrative.
   was already asked and answered — re-ask only if the user raises it
   again or the product context has materially changed. See
   `ACTION_ITEMS.md` N14 for full history.
+
+- **2026-09-14 — car-marker/turn-by-turn latency audit, item #7:
+  no client-side telemetry for the `snapToRoute` 35m skip threshold.**
+  During the deep-dive into reported car-marker "not straight on route"
+  and turn-by-turn latency complaints, one candidate follow-up was
+  instrumenting how often `snapToRoute` (`shared/utils/vehicleTracking.ts`,
+  `MAX_ROUTE_SNAP_M = 35`) falls back to the unsnapped raw position, to
+  know whether the threshold itself needs tuning. Researched whether a
+  reusable client telemetry pipeline exists first: it does not.
+  `shared/analytics/index.ts` is a deliberate no-op stub (Firebase
+  Analytics removed); `shared/analytics/meta.ts` is a narrowly-scoped
+  Meta ad-attribution pipe, not a generic event bus; there is no backend
+  ingest endpoint for lightweight client metric pings; the only viable
+  primitive is Sentry via `captureMessage()` in
+  `shared/services/errorReporting.ts` (already imported as
+  `captureException` in both `CarMarker.tsx` files for an unrelated
+  failure mode). Decision: **do not build this now** — it would mean
+  standing up new per-tick sampling/aggregation infra (the ticker runs
+  every 500ms; Sentry bills per event) for a single diagnostic counter
+  with no existing rollup path, and there is no production complaint
+  driving the need. If a future session wants this signal, the cheapest
+  path is a manual/local debug-build `console.log` during a test drive
+  first, not new production instrumentation. If a real incident later
+  ties back to this threshold, re-open the telemetry question then rather
+  than building it speculatively now.

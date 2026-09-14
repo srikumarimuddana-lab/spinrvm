@@ -45,10 +45,10 @@ Enable R8 code shrinking + obfuscation + optimization for Android release builds
 apps, **gated behind an env var so it reaches internal builds only**:
 
 - `ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1'` feeds
-  `expo-build-properties.android.enableProguardInReleaseBuilds`.
-- `eas.json` sets `SPINR_ANDROID_MINIFY=1` on the non-production profiles — rider: `test`,
-  `preview`; driver: `test`, `preview`, `android-auto`.
-- **`production` deliberately does not set it.** Store builds stay unminified until a
+  `expo-build-properties.android.enableMinifyInReleaseBuilds`.
+- `eas.json` sets `SPINR_ANDROID_MINIFY=1` on the non-production profiles — rider: `preview`;
+  driver: `preview`, `android-auto`. Development/test remain debug clients with `0`.
+- **`production` explicitly sets it to `0`.** Production-profile builds stay unminified until a
   human validates a minified preview build on a real device. Flipping production on is
   then a one-line `eas.json` edit, not a code change.
 
@@ -120,12 +120,12 @@ minified or unminified binary, so the OTA fence does not move.
 
 ## 5. User-experience effect
 
-**Nobody, today.** Production store builds are unchanged — `production` does not set the
-flag, so the next store upload is byte-for-byte as unminified as the last one, and the Play
+**Nobody, today.** Production store builds are unchanged — `production` explicitly sets the
+flag to `0`, so the next store upload is byte-for-byte as unminified as the last one, and the Play
 Console rating will still read Low until someone flips it. Nothing is visible mid-session to
 a rider mid-ride or a driver online. No copy or notification changes.
 
-Whoever installs the next internal `test`/`preview`/`android-auto` build gets the first
+Whoever installs the next internal `preview`/`android-auto` build gets the first
 minified binary. Expected effect there: smaller download, slightly faster cold start. The
 risk is that a native module breaks in ways listed above.
 
@@ -133,10 +133,10 @@ risk is that a native module breaks in ways listed above.
 
 | File path | What changed | Why |
 |---|---|---|
-| `rider-app/app.config.ts` | Added `ANDROID_MINIFY` const; added `enableProguardInReleaseBuilds: ANDROID_MINIFY` to `expo-build-properties.android` | Enables R8 when the profile opts in |
-| `rider-app/eas.json` | `SPINR_ANDROID_MINIFY=1` in `test` + `preview` env | Internal builds only; production untouched |
+| `rider-app/app.config.ts` | Added `ANDROID_MINIFY` const; added `enableMinifyInReleaseBuilds: ANDROID_MINIFY` to `expo-build-properties.android` | Enables R8 when the profile opts in |
+| `rider-app/eas.json` | `1` in `preview`; `0` in development/test/production | Release-only validation; explicit production default |
 | `driver-app/app.config.ts` | Same two changes; **also corrected the now-stale comment** on the existing Nitro keep rule, which claimed minification was off and the rule a no-op | That comment would actively mislead the next reader after this change |
-| `driver-app/eas.json` | `SPINR_ANDROID_MINIFY=1` in `test` + `preview` + `android-auto` env | `android-auto` included because Android Auto is the highest-risk R8 surface and needs the head-unit check |
+| `driver-app/eas.json` | `1` in `preview` + `android-auto`; `0` in development/test/production | `android-auto` included because Android Auto is the highest-risk R8 surface and needs the head-unit check |
 
 ## 7. Before / after
 
@@ -160,22 +160,22 @@ android: {
     compileSdkVersion: 36,
     targetSdkVersion: 35,
     kotlinVersion: '2.2.21',
-    enableProguardInReleaseBuilds: ANDROID_MINIFY,   // true only on test/preview
+    enableMinifyInReleaseBuilds: ANDROID_MINIFY,   // true only on preview for rider
 },
 ```
 
 ## 8. Rollback plan
 
-**Config-only, no redeploy and no code change.** Remove `"SPINR_ANDROID_MINIFY": "1"` from
-the affected profile's `env` in `eas.json` and rebuild — the next build is unminified. No
+**A new native binary is required.** Set `"SPINR_ANDROID_MINIFY": "0"` in
+the affected profile's `env` in `eas.json`, rebuild and reinstall/distribute — the next build is unminified. No
 migration, no live data touched, no wallet/ride/insurance-period rows involved. Already-
 installed minified internal builds are replaced by the next build from that profile; there
-is nothing to reconcile.
+is nothing to reconcile. An OTA update cannot undo native minification in an installed APK.
 
-Because production was never switched on, there is no store-side rollback to plan for. If
-production is flipped on later, the rollback for *that* change is the same one-line revert
-plus a new store upload — which is why the flip should not happen until a preview build has
-been device-validated.
+For Android Auto, set the flag to `0`, rebuild with a higher versionCode, submit
+the replacement AAB to the same Play internal track, and update installed apps.
+If production is enabled later, its rollback likewise needs a replacement native
+release; validate the preview and head-unit builds before making that change.
 
 ## 9. Verification performed
 
@@ -187,8 +187,8 @@ been device-validated.
       (table in §4).
 - [x] **`eas.json` validity** — both files re-parsed with a strict JSON parser after
       editing, and asserted programmatically that the flag is set on exactly the intended
-      profiles and **absent from `production` and `development`** in both apps.
-- [x] **Config syntax** — `tsc --noEmit --noResolve` on both `app.config.ts` files: no
+      profiles and **explicitly `0` on production, development and test** in both apps.
+- [x] **Original author's config syntax check (before review fixes)** — `tsc --noEmit --noResolve` on both `app.config.ts` files: no
       syntax errors (no `TS1xxx`). Compared the error profile against the same files at
       `HEAD`: identical except exactly one additional `TS2591` per file, which is
       "cannot find name `process`" from `@types/node` being absent in this container — both
@@ -203,18 +203,14 @@ been device-validated.
 
 State plainly, because the boundary here is unusually wide:
 
-- **No Android build of any kind was run — not even a prebuild.** `node_modules` is not
-  installed in this container and npm egress is blocked by proxy policy (HTTP 403 on
-  `registry.npmjs.org`), so `yarn install`, `npx expo prebuild`, `expo config` and any
-  Gradle invocation were all impossible. **Nothing here proves R8 produces a working APK.**
-  Everything above is static reasoning over config.
-- **The Nitro keep rule has still never been exercised.** It was inert from the day it was
-  added. This change is the first thing that can make it load-bearing, and only on a
-  profile nobody has built yet.
-- **`expo-build-properties@57.0.x` was not read from disk** to confirm
-  `enableProguardInReleaseBuilds` over the newer `enableMinifyInReleaseBuilds` spelling.
-  The key was confirmed from Expo's documented plugin config and from this repo's own
-  driver-app comment naming both spellings; the package itself could not be fetched.
+- **No Android build or Expo prebuild was run in this review.** The full app dependency
+  trees and Android toolchain were not installed. No device/head-unit build evidence
+  is attached, so nothing here proves R8 produces a working APK/AAB.
+- **The Nitro keep rule was retained, not validated on a head unit.**
+- Published `expo-build-properties@57.0.17` was downloaded during review; its config
+  validator normalizes the old alias and its Android plugin writes
+  `android.enableMinifyInReleaseBuilds`. App-config evaluation passed 39 cases;
+  this does not run the complete Expo prebuild or installed app.
 - **No visual-regression coverage exists for rider-app or driver-app at all** (CLAUDE.md
   gate 6). Not that it would apply — this change renders nothing — but stating it rather
   than letting silence imply coverage.
@@ -222,15 +218,14 @@ State plainly, because the boundary here is unusually wide:
 
 ### Required before flipping `production` on
 
-0. **Confirm R8 actually ran.** The gate fails *safe*: if the profile `env` doesn't reach
-   the prebuild step (a known intermittent eas-cli behaviour —
-   [expo/eas-cli#2812](https://github.com/expo/eas-cli/issues/2812)), the build still
-   succeeds, just unminified. So a green build proves nothing. Grep the EAS build log for
-   the `:app:minifyReleaseWithR8` Gradle task, or check
-   `android/gradle.properties` in the build log for
-   `android.enableProguardInReleaseBuilds=true`. If it's absent, the flag never arrived —
-   fix the plumbing before concluding anything about steps 1-6.
-1. Build `preview` (or `android-auto` for driver) and install the minified APK on a device.
+0. **Confirm R8 actually ran.** Check the release build log for a successful
+   `:app:minifyReleaseWithR8` task and retain `app/build/outputs/mapping/release/mapping.txt`.
+   The generated `android.enableMinifyInReleaseBuilds=true` property confirms config
+   forwarding only; it does not prove the release task ran. A green debug build
+   cannot validate R8. Check the resolved profile env if the property is missing/false.
+1. Build `preview` and install its release APK. For driver's `android-auto`, build
+   the store AAB, submit using the `android-auto` submit profile, and install from
+   Play's internal track. An AAB cannot be sideloaded as an APK.
 2. Rider: launch, sign in, book a ride, and complete a **Stripe** payment sheet.
 3. Driver: go online, receive a ride offer with **audible** `ride_offer.mp3`, accept it, and
    confirm background location keeps updating with the app backgrounded.
@@ -243,7 +238,7 @@ State plainly, because the boundary here is unusually wide:
 
 ## 10. Sign-off
 
-- [x] Rollback plan is concrete and testable (delete one `eas.json` line, rebuild)
+- [x] Rollback plan is concrete and testable (set the profile flag to `0`, rebuild and reinstall; not device-tested)
 - [x] Blast radius is stated, not assumed (§4 — stated as wider than the diff)
 - [x] No silent behavior change to an already-shipped flow — production is untouched by
       design, and §5 says so explicitly rather than implying "no user impact" from the
@@ -300,6 +295,8 @@ State plainly, because the boundary here is unusually wide:
   off value. After the edit, 39 config/profile cases pass: 12 direct flag cases and
   27 profile/env cases covering all 9 profiles with ambient unset/`0`/`1` values.
   Confirmed test clients remain debug and Android Auto submission remains internal.
-  JSON parse and `git diff --check` pass. These checks model documented profile env
+  JSON parse and `git diff --check` pass. A before/after comparison also reproduced
+  ambient production `1` becoming explicit `0` and confirmed all unrelated Expo/EAS
+  fields (including iOS and submission settings) are unchanged. These checks model documented profile env
   precedence; they do not run EAS or prove env forwarding on a build worker.
 - Not verified: no native APK/AAB build or installed-binary rollback/device test.

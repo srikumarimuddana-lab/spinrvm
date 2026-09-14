@@ -223,9 +223,9 @@ eas.json  build.<profile>.env.SPINR_ANDROID_MINIFY = "1"
    ↓ (EAS exports the profile's env before evaluating app config)
 app.config.ts  const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1'
    ↓
-expo-build-properties → android.enableProguardInReleaseBuilds
+expo-build-properties → android.enableMinifyInReleaseBuilds
    ↓
-android/gradle.properties  android.enableProguardInReleaseBuilds=true
+android/gradle.properties  android.enableMinifyInReleaseBuilds=true
    ↓
 app/build.gradle  release { minifyEnabled true }
 ```
@@ -233,11 +233,14 @@ app/build.gradle  release { minifyEnabled true }
 | Profile | rider-app | driver-app |
 |---|---|---|
 | `development` | off (debug build — minification doesn't apply) | off |
-| `test` | **on** | **on** |
+| `test` | **off** (`developmentClient: true` selects debug) | **off** (debug) |
 | `preview` | **on** | **on** |
 | `android-auto` | — | **on** (highest-risk R8 surface; needs the head-unit check). `distribution: store`, so this produces a minified AAB — but it submits to Play's **internal** track, not production. |
 | `production` | **off** — deliberate | **off** — deliberate |
 
+Production explicitly sets `SPINR_ANDROID_MINIFY=0`; development and test do too.
+Profile env values override ambient/EAS environment values during normal EAS builds.
+Use `preview` for release APK validation; do not convert the Metro-based test profile.
 Production is off **on purpose**, not by oversight. R8 breakage in this stack surfaces only
 in release builds, and a store upload has no staging gate in front of it, so the first
 minified binaries are internal ones. Flipping production on is a one-line `eas.json` edit
@@ -251,8 +254,14 @@ If `SPINR_ANDROID_MINIFY` doesn't reach the prebuild step, `ANDROID_MINIFY` is `
 the build succeeds **unminified**. Nothing breaks; you just silently get the old output.
 eas-cli has a history of intermittently not forwarding profile `env` to prebuild
 (expo/eas-cli#2812), so **a green build is not evidence that R8 ran.** Confirm it by
-finding the `:app:minifyReleaseWithR8` Gradle task in the EAS build log, or
-`android.enableProguardInReleaseBuilds=true` in the generated `gradle.properties`.
+finding a successful `:app:minifyReleaseWithR8` task in the release build log and
+retaining `app/build/outputs/mapping/release/mapping.txt`. The generated property
+`android.enableMinifyInReleaseBuilds=true` verifies configuration forwarding only.
+The old config alias is normalized by Expo; the old Gradle property is not emitted.
+
+Rollback requires setting the profile flag to `0`, rebuilding and reinstalling or
+distributing a replacement binary. Deleting the flag can expose an inherited `1`;
+an OTA update cannot reverse native minification in an installed APK.
 
 ### What is deliberately NOT enabled
 

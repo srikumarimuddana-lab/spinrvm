@@ -18718,16 +18718,30 @@ mechanical follow-up work, prioritizable independently.
     `docs/change-log/2026-09-11-ux1-rider-app-text-wrapper-rollout-round3.md`.
     A post-migration fresh sweep found **zero remaining files** matching
     the criterion — rider-app is fully migrated (15 + 8 + 10 = 33 files).
-  - **Remaining follow-up scope:** none for this item's acceptance bar —
-    both apps are fully migrated. Two related-but-separate gaps remain
-    open as their own future work, not blocking this item's closure: (1)
-    6 rider-app files with partial/manual `fontFamily` coverage found in
-    round 2 (`app/(tabs)/index.tsx`, `app/become-driver.tsx`,
-    `app/driver-arriving.tsx`, `app/ride-details.tsx`, `app/ride-status.tsx`,
-    `app/ride-tracking-webview.tsx`) — hand-written literals instead of the
-    wrapper; (2) the wrapper isn't yet lint-enforced in either app, so a
-    new screen could still ship without adopting it. `components/VoltraRideActivity.tsx`
-    is out of scope permanently (doesn't use RN's `Text`).
+  - **Remaining follow-up scope — CLOSED 2026-09-14:** both follow-up
+    gaps below are now done. (1) A fresh, independent grep (not trusting
+    the prior "6 files" estimate, per this item's own "don't trust the
+    prior count" warning) found the true count was larger: 19 rider-app
+    files and 9 driver-app files still imported `Text` directly from
+    `react-native` — the original migration's "has `fontWeight`, zero
+    `fontFamily`" criterion only ever caught a subset of files that
+    actually render `Text` off-brand, not literally every one. All 28
+    (27 unique files + the eslint config addition) are now migrated to
+    `@shared/components/Text`. (2) Added a `warn`-level
+    `no-restricted-imports` rule to both `rider-app/eslint.config.js` and
+    `driver-app/eslint.config.js` banning `Text` from `react-native`, so a
+    new screen can no longer silently opt out — matches this file's own
+    established `warn`-for-pre-existing-violations posture (hex-color/
+    SPACING rules). One test (`test_paymentConfirmScreen`) needed a fix:
+    the wrapper's `style={[{fontFamily}, style]}` composition nests the
+    caller's own style array one level deeper, which broke a
+    top-level-only `arrayContaining` assertion (real rendering was
+    unaffected — RN flattens nested style arrays; this was a
+    test-introspection gap, fixed by asserting on
+    `StyleSheet.flatten(style)` instead). Full Change Impact Log:
+    `docs/change-log/2026-09-14-ux1-text-wrapper-lint-and-remaining-migrations.md`.
+    `components/VoltraRideActivity.tsx` remains out of scope permanently
+    (doesn't use RN's `Text`).
   - **Files:** rider-app — see all three "Action taken" bullets above for
     each round's exact list (33 files total); `shared/components/Text.tsx`
     is the wrapper (unchanged since round 1). driver-app — see the

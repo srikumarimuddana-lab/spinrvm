@@ -676,6 +676,61 @@ export const adminCommitIdCrosswalkBackfill = (opts?: CrosswalkBackfillOptions) 
         body: crosswalkBackfillFormData(opts),
     });
 
+/* ── Duration-Estimated Marker Backfill (no files) ───── */
+// Super-admin-only endpoints
+// (backend/routes/admin/legacy_duration_estimated_backfill.py). Same shape
+// as Migration Data Quality Scan above -- no CSV, operates entirely on
+// already-migrated production data (rides). Stamps
+// legacy_import_metadata.duration_estimated (plus this backfill's own
+// legacy_duration_estimated_backfill audit key) onto already-imported
+// legacy rides that predate the importer itself writing that key. Additive
+// only; never touches duration_minutes or rides.status.
+export interface DurationEstimatedBackfillCounts {
+    legacy_rides_scanned: number;
+    already_marked_skipped: number;
+    rows_to_stamp: number;
+    duration_estimated_true: number;
+    duration_estimated_false: number;
+}
+export interface DurationEstimatedBackfillReport {
+    batch: string;
+    counts: DurationEstimatedBackfillCounts;
+    errors: string[];
+    can_commit: boolean;
+}
+export interface DurationEstimatedBackfillCommitResult extends DurationEstimatedBackfillReport {
+    committed: boolean;
+    updated?: number;
+    conflicts?: number;
+}
+export interface DurationEstimatedBackfillOptions {
+    batch?: string;
+}
+
+function durationEstimatedBackfillFormData(opts?: DurationEstimatedBackfillOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewDurationEstimatedBackfill = (opts?: DurationEstimatedBackfillOptions) =>
+    request<DurationEstimatedBackfillReport>("/api/admin/legacy/duration-estimated-backfill/preview", {
+        method: "POST",
+        body: durationEstimatedBackfillFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to stamp, applies it.
+ * Safe to re-send: an already-stamped row is skipped, never re-stamped or
+ * double-written.
+ */
+export const adminCommitDurationEstimatedBackfill = (opts?: DurationEstimatedBackfillOptions) =>
+    request<DurationEstimatedBackfillCommitResult>("/api/admin/legacy/duration-estimated-backfill/commit", {
+        method: "POST",
+        body: durationEstimatedBackfillFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

@@ -78,10 +78,12 @@ plus `stripe_disputes`/`stripe_orphan_refunds` (88/254), `otp_records`/
 `rider_email_verification_otp`/`emergency_contacts`/`safety_incidents`/
 `safety_incident_photos`, the remaining four of the nine migration-27
 corporate tables (`corporate_policies`, `corporate_allowed_domains`,
-`ride_payment_sources`, `corporate_policy_evaluations`), and -- this round
--- `audit_logs` (security audit trail, migrations 06/51/57) plus its two
-insurance-period audit siblings `driver_insurance_period_corrections` (355)
-and `driver_period_distances` (249)). See each test file's own docstring
+`ride_payment_sources`, `corporate_policy_evaluations`), `audit_logs`
+(security audit trail, migrations 06/51/57) plus its two insurance-period
+audit siblings `driver_insurance_period_corrections` (355) and
+`driver_period_distances` (249), and -- this round -- the admin PII-export
+audit trail: `data_transfer_export_jobs` (262), `compliance_export_events`
+(263), and `admin_export_approval_requests` (268)). See each test file's own docstring
 for what it covers, and ACTION_ITEMS.md C49 for the current fraction
 covered.
 
@@ -673,6 +675,53 @@ def pg_conn(pg_test_dbname):
         "driver_period_distances TO anon, authenticated, service_role"
     )
 
+    # --- admin PII-export audit trail (ACTION_ITEMS.md C49): three tables
+    # tied to the dual-approval/export-audit hardening already done at the
+    # app layer this session (B1/W2a-c) -- this round adds the RLS/DB-
+    # constraint backstop. `data_transfer_export_jobs` (262, + 264's
+    # additive `reason` column) and `admin_export_approval_requests` (268)
+    # are both service-role-only: zero policy for anon/authenticated at
+    # all, RLS default-denies the rest. `compliance_export_events` (263) is
+    # SELECT-admin/super_admin-only, INSERT/UPDATE/DELETE service-role-
+    # only, with a tamper-evidence trigger -- 285's own DELETE-gating
+    # section (extracted below, not its much larger purge_pii_retention()
+    # redefinition, which reaches tables outside this harness's scope, e.g.
+    # driver_location_history/ride_routes/price_searches) applied on top so
+    # the retention-purge flag path can be exercised too. Applied in
+    # filename-sort order (262 < 263 < 264 < 268 < 270 < 274 < 278),
+    # matching how run_migrations.py would actually apply them.
+    #
+    # 270/274/278 drop each table's admin-identity FK to `users(id)` -- a
+    # real, already-shipped fix for a bug class where a real admin caller's
+    # id (admin_staff.id, or the "admin-001"/"break-glass" sentinel) can
+    # never satisfy that FK (confirmed live in each migration's own header:
+    # zero rows ever written to any of these three tables before its fix).
+    # Applied here so this harness doesn't silently paper over that removed
+    # constraint the way a synthetic seeded-users-row test double otherwise
+    # could -- see test_admin_export_audit_rls.py's FK-regression tests. ---
+    cur.execute((migrations_dir / "262_data_transfer_export_jobs.sql").read_text())
+    cur.execute((migrations_dir / "263_compliance_export_events.sql").read_text())
+    cur.execute((migrations_dir / "264_data_transfer_export_reason.sql").read_text())
+    cur.execute((migrations_dir / "268_admin_export_approvals.sql").read_text())
+    cur.execute((migrations_dir / "270_export_approvals_admin_id_no_fk.sql").read_text())
+    cur.execute((migrations_dir / "274_data_transfer_export_jobs_admin_id_no_fk.sql").read_text())
+    cur.execute((migrations_dir / "278_compliance_export_events_admin_id_no_fk.sql").read_text())
+
+    migration_285_sql = (migrations_dir / "285_retention_purge_compliance_export_events.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_285_sql,
+            "CREATE OR REPLACE FUNCTION _compliance_export_events_immutable()",
+            "-- Trigger definition itself is unchanged",
+        )
+    )
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON data_transfer_export_jobs, "
+        "admin_export_approval_requests, compliance_export_events "
+        "TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -726,6 +775,9 @@ def pg_cur(pg_conn):
         "safety_incidents",
         "driver_insurance_period_corrections",
         "driver_period_distances",
+        "data_transfer_export_jobs",
+        "admin_export_approval_requests",
+        "compliance_export_events",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

@@ -564,7 +564,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         }
         smoothingStateRef.current = smoothFix(smoothingStateRef.current, {
             ...rawCoord, timestampMs: ts,
-            accuracyM: fix.accuracyM ?? trackingOptionsRef.current.fixAccuracyM,
+            // GATED — see driver-app/components/CarMarker.tsx's copy of this
+            // comment for the full incident. Short version: smoothFix squares
+            // accuracyM into the Kalman measurement variance, and
+            // DEFAULT_PROCESS_NOISE_MPS is tuned against DEFAULT_ACCURACY_M, so
+            // real platform accuracy cannot be introduced without re-tuning the
+            // pair together. rider-app publishes no accuracyM today, so this was
+            // already inert here — kept identical for fork parity rather than
+            // leaving the two ingest paths subtly different.
+            ...(trackingOptionsRef.current.trackingV2
+                ? { accuracyM: fix.accuracyM ?? trackingOptionsRef.current.fixAccuracyM }
+                : {}),
         });
         const coord = { latitude: smoothingStateRef.current.latitude, longitude: smoothingStateRef.current.longitude };
         pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);

@@ -625,7 +625,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         }
         smoothingStateRef.current = smoothFix(smoothingStateRef.current, {
             ...rawCoord, timestampMs: ts,
-            accuracyM: fix.accuracyM ?? trackingOptionsRef.current.fixAccuracyM,
+            // GATED. Feeding the platform's reported accuracy in unconditionally
+            // was a live regression: this app's fixFeed really does publish
+            // `accuracyM` (useDriverDashboard's watcher), and smoothFix squares
+            // it into the Kalman measurement variance. iOS commonly reports
+            // 30-65 m, so variance jumped from DEFAULT_ACCURACY_M^2 (64) to ~900+
+            // and the filter began trusting each fix an order of magnitude less.
+            // The smoothed position then lagged the real one, and because the
+            // travel bearing is measured BETWEEN consecutive smoothed positions,
+            // a damped position chain yields a short, noisy vector whose
+            // direction is meaningless — the car rendered sideways on iOS,
+            // Android and Android Auto at once, overnight.
+            //
+            // DEFAULT_PROCESS_NOISE_MPS is tuned against DEFAULT_ACCURACY_M (see
+            // gpsSmoothing.ts); real accuracy cannot be introduced without
+            // re-tuning that pair together against device data.
+            ...(trackingOptionsRef.current.trackingV2
+                ? { accuracyM: fix.accuracyM ?? trackingOptionsRef.current.fixAccuracyM }
+                : {}),
         });
         const coord = { latitude: smoothingStateRef.current.latitude, longitude: smoothingStateRef.current.longitude };
         pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);

@@ -76,6 +76,10 @@ Alternatives considered (CLAUDE.md pre-merge gate 10):
 - Regression risk of the fix itself: if a future offer stack were tall enough to exceed the 88% cap,
   the body scrolls rather than growing — same as #5324 intended. The residual risk is the inverse of
   the bug (a body that grows too tall), which the cap still prevents.
+- **Noted, not changed:** `driver-app/components/dashboard/ActiveRidePanel.tsx` has the same structural
+  shape (auto-height sheet, `maxHeight`-only cap, no definite-height ancestor). It has never hit this
+  because its content is lean against a generous 65–90% cap and it passes its ScrollView no flex
+  sizing. Out of scope for this fix — flagged here so it gets a look rather than a silent edit.
 
 ## 5. User-experience effect
 
@@ -136,7 +140,10 @@ backend deploy — so both the fix and any rollback are gated on that channel's 
       `node_modules`, not by the diff).
 - [x] Reasoned against the in-repo precedent (`ActiveRidePanel.tsx`: `maxHeight` cap + plain
       ScrollView) and the Yoga flexBasis/flexGrow semantics that produce the collapse.
-- [x] Reviewed with `spinr-design-consistency-reviewer` against the actual diff (pre-merge gate 10).
+- [x] Reviewed with `spinr-design-consistency-reviewer` and a high-effort `/code-review` against the
+      actual diff (pre-merge gate 10). Both findings acted on: the regression test was relaxed to
+      guard the behaviour (never a flexBasis of 0; never unshrinkable) rather than one spelling of the
+      fix, and the call-site comment no longer claims `ActiveRidePanel.tsx` proves the shrink path.
 - [ ] Not feature-flagged — justification: this is a revert-shaped restoration of the pre-#5324
       appearance on a single component, and flagging it would leave drivers on the broken variant
       for longer than shipping it does.
@@ -151,6 +158,24 @@ backend deploy — so both the fix and any rollback are gated on that channel's 
   change; an EAS build is not possible here for the same reason. Not run.
 - **No device, simulator, or staging check.** The fix's actual on-screen effect is reasoned about from
   Yoga's layout rules, not observed. This is the same class of gap that let #5324 ship.
+- **The shrink half of the contract is the genuinely unproven part.** That an ordinary offer's details
+  come back is near-certain (`flexBasis: auto` reports real content height — the collapse cannot
+  recur). That a worst-case stack *shrinks* inside the 88% cap rather than clipping the action bar
+  relies on Yoga clamping `availableInnerMainDim` to `maxInnerMainDim` for a `maxHeight`-only,
+  auto-height parent. Two independent reviews of this diff split on how firmly that is established —
+  and on the related question of whether RN's own `ScrollView` base style already supplies
+  `flexShrink: 1` — and neither could run a layout engine here to settle it. Treat it as reasoned,
+  not proven.
+
+**Required device QA before merge** (the check that would have caught #5324, and the one this fix
+still needs): trigger an offer whose payload is deliberately worst-case — `is_scheduled: true`,
+`surge_multiplier > 1`, `requires_wav: true`, `quiet_mode: true`, `payment_method: 'cash'` (all five
+badges), two or more `incentives`, a `quest_hint`, and a long `rider_name` / `pickup_address` /
+`dropoff_address` — at the **largest OS accessibility font scale**. Confirm both that the details
+render and that Accept/Decline stay fully visible and tappable. If the action bar clips, the fallback
+is to measure the header and action bar via `onLayout` and give the ScrollView an explicit numeric
+`maxHeight` (`cardMaxHeight - headerHeight - actionBarHeight`), which sidesteps the Yoga corner
+entirely at the cost of a larger diff.
 - **No visual regression coverage exists for this surface at all** — driver-app has no visual or
   snapshot tooling (CLAUDE.md gate 6), so the "reasoned about, not screenshotted" disclosure applies
   in full. **This change should be eyeballed on a real offer before it is considered confirmed.**

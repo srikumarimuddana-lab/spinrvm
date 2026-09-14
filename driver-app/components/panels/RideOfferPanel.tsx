@@ -292,9 +292,17 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         only shrinks — it is the single shrinkable child, since
                         RN's flexShrink default is 0 — when the stack would
                         exceed the cap, so the action bar below never gets
-                        clipped. Same idiom as ActiveRidePanel.tsx's capped
-                        sheet. The timer/header above and the action bar below
-                        stay outside this ScrollView either way. */}
+                        clipped. ActiveRidePanel.tsx caps its own sheet the
+                        same way and passes its ScrollView no flex sizing at
+                        all: a close sibling in shape, but its content has
+                        never been tall enough to actually shrink, so read it
+                        as a second opinion and not as proof. Shrink under a
+                        maxHeight-only, auto-height parent is the one part of
+                        this no test here can cover (jest does no layout, and
+                        driver-app has no visual-regression tooling) — verify a
+                        worst-case offer on a device before trusting the cap.
+                        The timer/header above and the action bar below stay
+                        outside this ScrollView either way. */}
                     <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
 
                     {/* Earnings hero + trip metrics side by side */}

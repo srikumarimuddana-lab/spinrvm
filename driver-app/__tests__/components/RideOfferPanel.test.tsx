@@ -188,23 +188,33 @@ describe('RideOfferPanel', () => {
 
   // Regression, #5324 follow-up: the scroll-safety fix above sized that
   // ScrollView with `flex: 1`. The card around it is auto-height with only a
-  // maxHeight cap, so `flex: 1` (flexGrow 1 / flexBasis 0) made the body
-  // measure as zero and there was no free space to grow back into — drivers
-  // got an offer card with the header and the Accept/Decline buttons and
-  // nothing in between: no earnings, no km/min, no pickup or drop-off
-  // address. jest does no layout, so this asserts the style *shape* that
-  // caused it rather than a measured height: the body must shrink-only
-  // (flexBasis auto), never flexGrow/flexBasis 0.
-  it('sizes the informational body shrink-only so it cannot collapse to zero height', () => {
+  // maxHeight cap and no flexGrow of its own, so there is never free space to
+  // grow back into — `flex: 1`'s flexBasis 0 measured the body as zero and
+  // drivers got an offer card with the header and the Accept/Decline buttons
+  // and nothing in between: no earnings, no km/min, no pickup or drop-off
+  // address.
+  //
+  // jest does no layout, so this asserts the style *shape* rather than a
+  // measured height. It deliberately pins the two ingredients that decide
+  // behaviour, not the exact spelling of the fix: RN's own ScrollView base
+  // style already supplies flexGrow/flexShrink with flexBasis left at `auto`,
+  // so passing no style prop at all (ActiveRidePanel.tsx's idiom) is equally
+  // correct and must not redden this test.
+  it('never sizes the informational body with a flexBasis of 0, and leaves it shrinkable', () => {
     const { UNSAFE_getByType } = render(<RideOfferPanel {...defaultProps} />);
 
     const body = StyleSheet.flatten(UNSAFE_getByType(ScrollView).props.style) ?? {};
 
-    expect(body.flexShrink).toBe(1);
-    expect(body.flexGrow).toBeUndefined();
-    expect(body.flexBasis).toBeUndefined();
-    // `flex: N` is the shorthand that expands to the collapsing combination.
-    expect(body.flex).toBeUndefined();
+    // A positive `flex: N` shorthand expands to flexBasis 0 — the collapse.
+    expect(typeof body.flex === 'number' && body.flex > 0).toBe(false);
+    // ...as does setting flexBasis to zero directly, in either spelling.
+    expect(body.flexBasis ?? 'auto').not.toBe(0);
+    expect(body.flexBasis ?? 'auto').not.toBe('0%');
+    // The other half of #5324's contract: the body must stay shrinkable, so a
+    // worst-case stack is absorbed here instead of pushing the action bar past
+    // the card's `overflow: hidden` clip. Undefined inherits RN's own
+    // flexShrink: 1, so only an explicit 0 breaks it.
+    expect(body.flexShrink ?? 1).not.toBe(0);
   });
 
   // Companion to the style assertion above: the sections that vanished in

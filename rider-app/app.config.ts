@@ -4,6 +4,14 @@ const APP_NAME = 'Spinr';
 const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spinr.driver (no clash)
 const SCHEME = 'spinr-user';
 
+// R8 minification for Android release builds. OFF unless the EAS build profile
+// exports SPINR_ANDROID_MINIFY=1 (see eas.json). Staged deliberately: the first
+// minified binaries are internal test/preview builds, never a store release —
+// R8 breakage in this stack surfaces only in release builds. Flip production on
+// by adding the var to eas.json's production env once a preview build is
+// device-validated. See docs/android-build-strategy.md § R8 minification.
+const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
@@ -219,6 +227,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 35,
                 kotlinVersion: '2.2.21',
+                // Code shrinking + obfuscation + optimization (R8). Without it
+                // Play Console's App optimization panel reports Optimization,
+                // Shrinking and R8 configuration as "-" and rates the app Low;
+                // the ~2% obfuscation it does report is vendor AARs that ship
+                // pre-obfuscated, not anything this build did.
+                //
+                // Resource shrinking is deliberately NOT enabled alongside it.
+                // Play's three percentages are R8 *code* metrics, so it earns
+                // nothing on that panel, and shrinkResources drops resources
+                // reachable only by name — a real hazard for the sibling driver
+                // app (its Notifee ride-offer channel names res/raw). Keeping
+                // both apps on code-only minification keeps them comparable.
+                enableProguardInReleaseBuilds: ANDROID_MINIFY,
             },
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).
             ios: {

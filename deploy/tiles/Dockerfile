@@ -60,27 +60,27 @@ ARG AREA=saskatchewan
 ARG JAVA_OPTS="-Xmx4g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
-# Planetiler ≥0.8 switched from a single executable jar to a Gradle
-# application-plugin layout: /app/bin/<script> + /app/libs/*.jar.
-# Older images had /planetiler.jar or /app/planetiler.jar. Try the
-# Gradle script first (current), then fall back to the legacy jar paths.
+# The image is built by Jib (planetiler-dist/pom.xml), not by a Dockerfile, so
+# it contains no executable jar and no launcher script — only Jib's exploded
+# layout (/app/resources, /app/classes, /app/libs/*.jar) plus an ENTRYPOINT that
+# a build-time RUN cannot invoke. Reconstruct that entrypoint by hand.
+# `/app/libs/*` is a Java classpath wildcard and must stay quoted so the shell
+# does not glob it. Older images shipped a real executable jar; keep that path
+# as a fallback so an older PLANETILER_TAG still builds.
 RUN set -eux; \
-    RUNNER=""; \
-    for candidate in \
-        /app/bin/planetiler-dist \
-        /app/bin/planetiler-examples \
-        /app/bin/planetiler \
-        $(find /app/bin -maxdepth 1 -type f -name 'planetiler*' 2>/dev/null | head -1); do \
-      if [ -x "$candidate" ]; then RUNNER="$candidate"; break; fi; \
-    done; \
-    if [ -z "$RUNNER" ]; then \
-      for jar in /planetiler.jar /app/planetiler.jar; do \
-        if [ -f "$jar" ]; then RUNNER="java -jar $jar"; break; fi; \
-      done; \
+    MAIN=com.onthegomap.planetiler.Main; \
+    if [ -d /app/libs ]; then \
+      set -- java -cp '/app/resources:/app/classes:/app/libs/*' "$MAIN"; \
+    elif [ -f /planetiler.jar ]; then \
+      set -- java -jar /planetiler.jar; \
+    elif [ -f /app/planetiler.jar ]; then \
+      set -- java -jar /app/planetiler.jar; \
+    else \
+      echo "no planetiler distribution found — check PLANETILER_TAG. /app contains:" >&2; \
+      ls -la /app / >&2 || true; \
+      exit 1; \
     fi; \
-    test -n "$RUNNER" || { echo "no planetiler executable found — check PLANETILER_TAG" >&2; exit 1; }; \
-    echo "using: $RUNNER"; \
-    $RUNNER \
+    "$@" \
       --download \
       --area="${AREA}" \
       --output=/planetiler/tiles.mbtiles \

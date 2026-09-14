@@ -887,12 +887,12 @@ jobs:
           #    case-insensitive via re.IGNORECASE, so a stray lowercase
           #    declaration is still caught) -- prose containing
           #    spaces/punctuation can no longer bridge the match.
-          # 2. (CR-2026-090 / #5351) KEY is dropped from this combined
-          #    pattern's alternation entirely and handled by the separate,
-          #    suffix-based BARE_KEY_RE/SAFE_KEY_SUFFIX_RE check below
-          #    instead of a per-name exemption list -- it already covers
-          #    GOOGLE_MAPS_API_KEY and FIREBASE_API_KEY (both match the
-          #    general `_API_KEY` suffix) plus STRIPE_PUBLISHABLE_KEY and
+          # 2. (CR-2026-090 / #5351, this branch) KEY is dropped from this
+          #    combined pattern's alternation entirely and handled by the
+          #    separate, suffix-based BARE_KEY_RE/SAFE_KEY_SUFFIX_RE check
+          #    below instead of a per-name exemption list -- it already
+          #    covers GOOGLE_MAPS_API_KEY and FIREBASE_API_KEY (both match
+          #    the general `_API_KEY` suffix) plus STRIPE_PUBLISHABLE_KEY and
           #    SUPABASE_ANON_KEY (PR #5350's exact-name list didn't cover
           #    these two, documented-but-not-yet-in-code vars -- see that
           #    check's own comment). FB_CLIENT_TOKEN is a TOKEN-suffixed

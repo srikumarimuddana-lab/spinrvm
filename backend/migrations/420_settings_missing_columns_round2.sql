@@ -1,8 +1,21 @@
--- 419: 7 SettingsUpdateRequest fields with no `settings`-table column anywhere
+-- 420: 7 SettingsUpdateRequest fields with no `settings`-table column anywhere
 -- in this repo's tracked schema -- found while closing ACTION_ITEMS.md C110
 -- (generalizing test_settings_column_parity.py's regression check to every
 -- field, not just migration 313's original 24) and confirmed by
 -- spinr-test-coverage-reviewer's adversarial pass on that fix.
+--
+-- Renumbered from 419 to 420 after merge: this file and
+-- 419_corporate_subscription_billing_pilot.sql (PR #5340) both drafted
+-- against 419 as the next-free slot and both merged before either PR's CI
+-- could see the other's new file -- the exact cross-PR numbering race
+-- backend/migrations/CLAUDE.md's naming-convention note and CR #4187
+-- describe as a known residual gap in CHECK B. No SQL content changed,
+-- only the filename and this header. Renaming an already-applied migration
+-- is unsafe (the runner keys by full filename) -- this rename assumes it
+-- has not yet been applied anywhere; that was not independently verified
+-- against a live `schema_migrations` table (no DB access from this
+-- environment), only inferred from the very short time between merge and
+-- this fix.
 --
 -- Unlike the other 15 fields the C110 fix baselined as pre-migration-tracking
 -- (confirmed present in backend/supabase_schema.sql's bootstrap table-creation

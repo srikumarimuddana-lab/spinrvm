@@ -26009,13 +26009,23 @@ how much they de-risk a public launch._
   `backend/supabase_schema.sql`'s bootstrap `CREATE TABLE settings (...)` block instead of a
   hand-typed guess, which independently confirms 15 of the original 22 (including the 3 that were
   a genuine open question — see C111, closed below); (2) the remaining 7 got migration
-  **419_settings_missing_columns_round2.sql** (reviewed by `spinr-migration-reviewer`) rather than
+  **420_settings_missing_columns_round2.sql** (reviewed by `spinr-migration-reviewer`) rather than
   a baseline guess — the direct fix for a genuinely missing column, matching migration 313/415/418's
   own precedent. Added two regression tests: one proves a field injected directly into
   `SettingsUpdateRequest.model_fields` with neither a migration nor a baseline entry is caught by
   the *actual* check's own field-selection code path (not just the extracted set-arithmetic
   helper — the reviewer flagged the first draft's version of this test for only exercising the
   helper), the other asserts the two column sources (migrations, bootstrap file) don't overlap.
+  **Renumbered 419 → 420 post-merge**: PR #5340 (`corporate_subscription_billing_pilot`) also
+  drafted its new migration as 419 and merged around the same time; neither PR's CI could see the
+  other's new file (the cross-PR numbering race `backend/migrations/CLAUDE.md` and CR #4187
+  describe), so both landed on `main` as `419_*`. Fixed by renaming this file to 420, the next free
+  slot, in a follow-up PR — no SQL content changed. Reviewed by `spinr-migration-reviewer`
+  (verdict: safe to apply). **Open follow-up for a human with prod access**: run
+  `python -m backend.scripts.run_migrations --status` to confirm `419_settings_missing_columns_round2.sql`
+  was never applied under its old name before the rename — this file's SQL is fully idempotent so a
+  false positive there is harmless, but an orphaned `schema_migrations` row would otherwise go
+  undetected (see the change-log addendum for detail).
   Old status: OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
 - **Found by:** `spinr-migration-reviewer`'s pre-merge review of PR #5312 (`driver_turn_by_turn_enabled`
   settings-write fix, migration 418 — originally drafted as 416, renumbered to 417 when PR #5307
@@ -26044,7 +26054,8 @@ how much they de-risk a public launch._
   `test_every_api_field_has_a_column`, `_regressed_settings_fields` — new,
   `_baseline_settings_columns` — rewritten to parse `supabase_schema.sql`,
   `_fields_missing_columns` — new), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`),
-  `backend/migrations/419_settings_missing_columns_round2.sql` (new).
+  `backend/migrations/420_settings_missing_columns_round2.sql` (new, renamed from 419 post-merge —
+  see status note above).
 
 ### C111. `driver_matching_algorithm`, `min_driver_rating`, `search_radius_km` may lack a `settings`-table column — unconfirmed, found while closing C110 [duplicate item number — see the other C111 below at "`emergency_contacts` ... has no admin/super_admin override policy," filed by a different, parallel session the same day; kept as-is rather than renumbered, per the existing C13/C100 duplicate-ID precedent above, to avoid breaking either item's own cross-references (this entry is referenced from this file's C110 entry above; the other C111 is referenced from this file's C49 entry)]
 - [x] **Status:** CLOSED 2026-09-13, same session — resolved without a live schema connection.

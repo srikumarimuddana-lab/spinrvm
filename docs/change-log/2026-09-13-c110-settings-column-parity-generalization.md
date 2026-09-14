@@ -62,7 +62,7 @@ block listing all three verbatim, alongside 12 other baseline entries — a file
    from what the file actually says. This independently confirms 15 fields and closes C111 in the
    same pass (cited the file directly instead of filing a live-DB follow-up).
 2. The 7 fields with **no evidence anywhere** got migration
-   `419_settings_missing_columns_round2.sql` instead of a baseline guess — the direct fix for a
+   `420_settings_missing_columns_round2.sql` instead of a baseline guess — the direct fix for a
    genuinely missing column, matching migration 313/415/418's own precedent, reviewed by
    `spinr-migration-reviewer` before committing (see that migration file's header for full
    reasoning and defaults sourced from each field's existing Python-level fallback).
@@ -80,7 +80,7 @@ block listing all three verbatim, alongside 12 other baseline entries — a file
 ## 4. Risk & impact on existing functionality
 
 - **Blast radius**: `backend/tests/test_settings_column_parity.py` (test-only) plus one new,
-  additive migration (`419_settings_missing_columns_round2.sql`). No existing production code
+  additive migration (`420_settings_missing_columns_round2.sql`). No existing production code
   path was edited — the migration only adds columns with defaults matched to each field's current
   Python-level fallback (see the migration file), so no currently-running behavior changes when it
   applies.
@@ -108,7 +108,7 @@ prevents that from ever being hit, rather than changing anything a user currentl
 | File path | What changed | Why |
 |---|---|---|
 | `backend/tests/test_settings_column_parity.py` | Generalized `test_every_api_field_has_a_column` via new `_regressed_settings_fields()`; rewrote `_baseline_settings_columns()` to parse `supabase_schema.sql` instead of a hand-typed list; added `_fields_missing_columns()` helper and 2 regression tests | C110 fix |
-| `backend/migrations/419_settings_missing_columns_round2.sql` | New — adds the 7 confirmed-missing `settings` columns | C110 fix (the part a baseline entry could not safely cover) |
+| `backend/migrations/420_settings_missing_columns_round2.sql` | New — adds the 7 confirmed-missing `settings` columns | C110 fix (the part a baseline entry could not safely cover) |
 | `ACTION_ITEMS.md` | C110 closed (revised); C111 closed (resolved via `supabase_schema.sql`, no live DB check needed) | Backlog accuracy |
 
 ## 7. Before / after
@@ -136,7 +136,7 @@ def _baseline_settings_columns() -> set[str]:
     ...  # returns 15 columns, not a hand-typed guess
 
 def _regressed_settings_fields() -> list[str]:
-    declared = _declared_settings_columns()  # now includes migration 419's 7 columns
+    declared = _declared_settings_columns()  # now includes migration 420's 7 columns
     baseline = _baseline_settings_columns()
     api_fields = set(SettingsUpdateRequest.model_fields.keys())  # every field, not just 313's
     return _fields_missing_columns(api_fields, declared, baseline)
@@ -149,7 +149,7 @@ def test_every_api_field_has_a_column():
 ## 8. Rollback plan
 
 - Test file: `git revert` — no migration, no data write, no flag.
-- Migration 419: additive-only (`ADD COLUMN IF NOT EXISTS ... DEFAULT <value>`); rollback is
+- migration 420: additive-only (`ADD COLUMN IF NOT EXISTS ... DEFAULT <value>`); rollback is
   `ALTER TABLE public.settings DROP COLUMN IF EXISTS <each column>` (full statement in the
   migration's own header comment). Safe to revert without a second deploy: dropping these columns
   only removes the ability to persist a value an admin has never successfully set before (per the
@@ -168,10 +168,41 @@ def test_every_api_field_has_a_column():
 - [x] Migration syntax cross-checked against migration 313's own established
   multi-column-`ALTER TABLE` pattern (same file already in the repo) rather than invented fresh.
 - [x] `spinr-test-coverage-reviewer` reviewed the first draft (see §3) and the fixes above address
-  every finding it raised. `spinr-migration-reviewer` reviewed migration 419 before this commit,
+  every finding it raised. `spinr-migration-reviewer` reviewed migration 420 before this commit,
   per CLAUDE.md's pre-merge gate #10 and its own "use PROACTIVELY on any new migration" mandate.
 
 **Not verified**: this migration has not been applied against a real Supabase instance (no DB
 access from this environment) — verified statically (parser confirms it's the only source of
 these 7 columns; defaults cross-checked against each field's existing Python-level fallback) but
 not by running `run_migrations.py` against a live database.
+
+## 10. Addendum (post-merge): renumbered 419 → 420
+
+After this change merged (as PR #5339), restarting the designated branch from the new `main`
+surfaced that PR #5340 (`corporate_subscription_billing_pilot`) had independently drafted its own
+new migration as `419_corporate_subscription_billing_pilot.sql` — the exact numeric prefix this
+change used. Both PRs picked 419 as the next-free slot from their own branch's snapshot of
+`backend/migrations/`, and both merged to `main` before either PR's CI could see the other's new
+file, so CHECK B (the prefix-collision check) never fired for either — the cross-PR race
+`backend/migrations/CLAUDE.md`'s naming-convention note and CR #4187 describe as a known residual
+gap that the check cannot close.
+
+Fixed in a follow-up commit/PR: renamed `419_settings_missing_columns_round2.sql` to
+`420_settings_missing_columns_round2.sql` (the next free slot after the rename), updated every
+reference to the old filename (`ACTION_ITEMS.md`, this file), and updated the migration's own
+header comment to note the renumbering. No SQL content changed. This assumes the file had not yet
+been applied to any environment when renamed (renaming an already-applied migration would break
+the runner's full-filename idempotency key) — not independently verified against a live
+`schema_migrations` table, only inferred from the short time between merge and this fix.
+
+`spinr-migration-reviewer` reviewed this rename before commit (verdict: safe to apply). Its one
+flagged risk: if `419_settings_missing_columns_round2.sql` *was* already applied before this
+rename, that `schema_migrations` row becomes permanently orphaned (no file on disk will ever match
+it again) and `420_...` would then run again as "pending" on the next apply. Low real risk here
+specifically — every statement in this file is idempotent (`ADD COLUMN IF NOT EXISTS`, `COMMENT
+ON COLUMN` with an identical string), so a re-run under the new name is a harmless no-op — but that
+is a property of this file's content, not something the rename mechanism itself guarantees.
+**Follow-up for a human with prod access**: run `python -m backend.scripts.run_migrations
+--status` to confirm `419_settings_missing_columns_round2.sql` was never applied under the old
+name; if it was, reconcile the orphaned `schema_migrations` row manually rather than leave silent
+drift in the audit trail.

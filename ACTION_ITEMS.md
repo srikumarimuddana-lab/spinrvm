@@ -18726,8 +18726,8 @@ mechanical follow-up work, prioritizable independently.
     `react-native` — the original migration's "has `fontWeight`, zero
     `fontFamily`" criterion only ever caught a subset of files that
     actually render `Text` off-brand, not literally every one. All 28
-    (27 unique files + the eslint config addition) are now migrated to
-    `@shared/components/Text`. (2) Added a `warn`-level
+    (19 + 9) are now migrated to `@shared/components/Text`. (2) Added a
+    `warn`-level
     `no-restricted-imports` rule to both `rider-app/eslint.config.js` and
     `driver-app/eslint.config.js` banning `Text` from `react-native`, so a
     new screen can no longer silently opt out — matches this file's own
@@ -18738,7 +18738,14 @@ mechanical follow-up work, prioritizable independently.
     top-level-only `arrayContaining` assertion (real rendering was
     unaffected — RN flattens nested style arrays; this was a
     test-introspection gap, fixed by asserting on
-    `StyleSheet.flatten(style)` instead). Full Change Impact Log:
+    `StyleSheet.flatten(style)` instead). `spinr-design-consistency-reviewer`
+    (run before push, per CLAUDE.md gate #10) also caught a pre-existing bug
+    in both apps' `become-driver.tsx`: a stray `fontFamily: 'PlusJakartaSans'`
+    (no weight suffix — not one of the 4 registered families) on the header
+    `title` style overrode the wrapper's correct `fontWeight: 'bold'` →
+    `PlusJakartaSans_700Bold` mapping, and the same bare literal appeared on
+    the `input` `TextInput` style too — both fixed in the same PR. Full
+    Change Impact Log:
     `docs/change-log/2026-09-14-ux1-text-wrapper-lint-and-remaining-migrations.md`.
     `components/VoltraRideActivity.tsx` remains out of scope permanently
     (doesn't use RN's `Text`).

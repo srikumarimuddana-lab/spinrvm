@@ -484,7 +484,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: { padding: 20, flexDirection: 'row', alignItems: 'center' },
     backButton: { marginRight: 20 },
-    title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
+    title: { fontSize: 24, fontWeight: 'bold' },
     stepIndicator: { color: colors.textDim, fontSize: 14 },
     scrollContent: { padding: 20, paddingBottom: 50 },
     sectionTitle: { fontSize: FONT.h3, fontWeight: 'bold', marginBottom: 15, color: colors.text },
@@ -495,7 +495,7 @@ function createStyles(colors: ThemeColors) {
     subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
     input: {
       borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
-      fontSize: FONT.bodyLg, color: colors.text, fontFamily: 'PlusJakartaSans'
+      fontSize: FONT.bodyLg, color: colors.text, fontFamily: 'PlusJakartaSans_400Regular'
     },
     dateInput: {
       borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,

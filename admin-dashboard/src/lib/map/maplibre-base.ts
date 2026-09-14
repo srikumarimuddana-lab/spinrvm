@@ -89,26 +89,19 @@ export function monitoringFallbackStyle(flavor: string = "light"): string | null
     return protomapsStyleUrl(flavor);
 }
 
-// Carto's free GL basemaps — keyless, commercial use permitted with attribution,
-// and served from tiles.basemaps.cartocdn.com: a different host *and* a different
-// CDN from both tiles.openfreemap.org and api.protomaps.com. That independence is
-// the entire point of having them. MAP_STYLE_FALLBACK (same host, different style
-// path) cannot help when the host itself is the problem, and protomapsStyleUrl()
-// returns null whenever NEXT_PUBLIC_PROTOMAPS_API_KEY is unset — so without a
-// keyless third provider a chain can still end up with nowhere to go.
-export const MAP_STYLE_CARTO_LIGHT =
-    "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
-export const MAP_STYLE_CARTO_DARK =
-    "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-
-/**
- * Keyless Carto basemap for the given resolved theme. Needs no API key, so
- * unlike protomapsStyleUrl() this never returns null — it is the hop every
- * chain can always fall back to.
- */
-export function cartoStyleUrl(resolvedTheme?: string): string {
-    return resolvedTheme === "dark" ? MAP_STYLE_CARTO_DARK : MAP_STYLE_CARTO_LIGHT;
-}
+// Carto (basemaps.cartocdn.com) was removed as a basemap provider on 2026-09-14
+// at the product owner's request: Spinr serves its own tiles (deploy/tiles) and
+// should not hand admin map traffic to a third-party CDN, not even as a last
+// resort. What that costs is real and deliberate — Carto was the only keyless
+// hop, so when NEXT_PUBLIC_PROTOMAPS_API_KEY is unset the unconfigured chain is
+// now OpenFreeMap alone. Do not reintroduce it as a "safety net"; stand the tile
+// server up instead.
+//
+// One Carto reference survives on purpose, in
+// rides/_components/static-route-map.tsx's rasterAttribution(): it credits Carto
+// only if an operator points NEXT_PUBLIC_RASTER_TILE_URL at them. That is an
+// attribution-licence guard, not a provider — deleting it would under-credit
+// them if anyone ever does.
 
 /**
  * Our own tile server, when one is configured (see deploy/tiles).
@@ -139,7 +132,7 @@ export function selfHostedStyleUrl(resolvedTheme?: string): string | null {
  * Basemap providers for an admin map. Two distinct shapes:
  *
  *   Self-hosted configured  → [self-hosted]                    (nothing else)
- *   Self-hosted unconfigured → OpenFreeMap → Protomaps? → Carto
+ *   Self-hosted unconfigured → OpenFreeMap → Protomaps?
  *
  * Once we serve our own basemap it is the *only* basemap. That is a deliberate
  * trade, made by the product owner on 2026-09-14, and it costs something real:
@@ -189,7 +182,6 @@ export function basemapChain(resolvedTheme?: string): string[] {
     const ordered = [
         themedMapStyle(resolvedTheme),
         ...(protomaps ? [protomaps] : []),
-        cartoStyleUrl(resolvedTheme),
     ];
     return [...new Set(ordered)];
 }

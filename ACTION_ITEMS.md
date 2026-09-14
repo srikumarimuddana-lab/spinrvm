@@ -26888,7 +26888,12 @@ how much they de-risk a public launch._
   (`onReady`, the `webglOk` guard).
 
 ### C116. `admin-dashboard/src/components/driver-map.tsx` has no importer anywhere in the codebase — correct code, unreachable from any route
-- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
+- [x] **Status:** CLOSED (2026-09-14) — deleted per product-owner decision
+  (wiring it into a real route was judged out of scope for a bug-fix-shaped
+  task). Re-confirmed zero importers with a fresh repo-wide grep before
+  deleting; see `docs/change-log/2026-09-14-c116-remove-unreachable-driver-map.md`
+  for the full Change Impact Log. See PR #5424.
+- **Original finding (superseded, kept for history):** Found by `spinr-design-consistency-reviewer` while
   reviewing the WebGL-stub-guard port to `live-map.tsx`/`driver-map.tsx`
   (this same session — see
   `docs/change-log/2026-09-14-live-driver-map-webgl-stub-guard.md`) — asked

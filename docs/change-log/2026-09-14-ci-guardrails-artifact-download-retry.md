@@ -8,7 +8,7 @@
 | Author | Claude Code (session 011p5WHfBFz6Tschi8iYyJDt), user-authorized (ittalenthire.ca@gmail.com) |
 | Surface(s) | backend (CI infrastructure only — `.github/workflows/ci-guardrails.yml`) |
 | Domain (Sentry tag) | n/a — this is CI tooling, not an application code path |
-| PR / commit link | (filled in after PR opens) |
+| PR / commit link | #5386 |
 | Related issue or gap ID | Found while investigating CI failures on PR #5382, run [34814240460](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/34814240460) |
 
 ## 1. Issue / gap identified
@@ -49,6 +49,7 @@ None. This is internal CI infrastructure with no rider/driver/corporate-admin/in
 |---|---|---|
 | `.github/workflows/ci-guardrails.yml` | Added `id: download_shared_coverage` to the existing "Download shared coverage artifact" step, and a new "Retry shared coverage artifact download on backend lag" step immediately after it, in each of `coverage-regression-gate`, `money-path-coverage-floor-gate`, and `admin-coverage-floor-gate` | Retry a transient GitHub Actions artifact-backend read-after-write lag before letting the existing downstream check fail |
 | `docs/change-log/2026-09-14-ci-guardrails-artifact-download-retry.md` | New Change Impact Log entry (this file) | Required for any commit changing behavior on a merge-gating CI surface, per CLAUDE.md |
+| `driver-app/__tests__/components/SafeRefreshControl.test.tsx` | One-line type-cast fix (`as { props: ... }` → `as unknown as { props: ... }`) for a pre-existing `tsc --noEmit` failure on `main` itself (commit `b5f5cf0`), unrelated to the artifact-retry fix above | Ported in (separate commit `6f1bae4`) so this PR's own `driver-app-test` CI check goes green without waiting on the standalone fix PR (#5387) to merge first — a no-op once `main` carries it either way |
 
 ## 7. Before / after
 

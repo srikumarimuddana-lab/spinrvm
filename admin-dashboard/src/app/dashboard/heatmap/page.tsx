@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getHeatMapData, getHeatMapSettings, getServiceAreas, getSurgeStatus, getDemandForecast, HeatMapData, HeatMapSettings } from "@/lib/api";
+import { getHeatMapData, getHeatMapSettings, getServiceAreas, getSurgeStatus, getDemandForecast, getDispatchLatency, HeatMapData, HeatMapSettings } from "@/lib/api";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -95,6 +95,13 @@ export default function HeatMapPage() {
     const [demandError, setDemandError] = useState<string | null>(null);
     const [demandFetchedAt, setDemandFetchedAt] = useState<Date | null>(null);
     const [forecast, setForecast] = useState<ForecastSlot[]>([]);
+
+    // Dispatch latency (P95 offer->accept per zone, migration 420). Fetched
+    // over a rolling "today" window rather than instantaneously like demand/
+    // supply — a percentile needs enough accepted offers in the window to
+    // mean anything, unlike a live snapshot count.
+    const [latencyByArea, setLatencyByArea] = useState<Record<string, { p50_ms: number; p95_ms: number; sample_count: number }>>({});
+    const [overallLatency, setOverallLatency] = useState<{ p50_ms: number; p95_ms: number; sample_count: number } | null>(null);
 
     // Fetch initial data
     useEffect(() => {
@@ -240,7 +247,34 @@ export default function HeatMapPage() {
                 setForecast([]);
             });
 
-        Promise.allSettled([surgeP, forecastP]).then(() => setDemandLoading(false));
+        // Independent of the two calls above (same module-gating reasoning as
+        // the comment on this function): a permissions gap on the analytics
+        // module must not blank out the demand/forecast panels that already
+        // loaded successfully.
+        const latencyP = getDispatchLatency("today", areaIdParam)
+            .then((res: any) => {
+                setOverallLatency({
+                    p50_ms: res?.p50_ms ?? 0,
+                    p95_ms: res?.p95_ms ?? 0,
+                    sample_count: res?.sample_count ?? 0,
+                });
+                const byArea: Record<string, { p50_ms: number; p95_ms: number; sample_count: number }> = {};
+                for (const z of res?.by_zone ?? []) {
+                    byArea[z.service_area_id] = {
+                        p50_ms: z.p50_ms ?? 0,
+                        p95_ms: z.p95_ms ?? 0,
+                        sample_count: z.sample_count ?? 0,
+                    };
+                }
+                setLatencyByArea(byArea);
+            })
+            .catch((err) => {
+                console.error("dispatch latency fetch failed", err);
+                setOverallLatency(null);
+                setLatencyByArea({});
+            });
+
+        Promise.allSettled([surgeP, forecastP, latencyP]).then(() => setDemandLoading(false));
     }, [serviceAreaId]);
 
     useEffect(() => {
@@ -601,7 +635,7 @@ export default function HeatMapPage() {
 
                 {/* Summary stats */}
                 {showDemand && demandAreas.length > 0 && (
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Active Demand</CardTitle>
@@ -658,6 +692,32 @@ export default function HeatMapPage() {
                                     {demandAreas.filter(a => a.surge_active).length} / {demandAreas.length}
                                 </div>
                                 <p className="text-xs text-muted-foreground">areas with surge pricing</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Dispatch P95</CardTitle>
+                                <AlertTriangle
+                                    className={`h-4 w-4 ${overallLatency && overallLatency.p95_ms > 2000 ? "text-destructive" : "text-success"}`}
+                                />
+                            </CardHeader>
+                            <CardContent>
+                                <div
+                                    className={`text-2xl font-bold ${overallLatency && overallLatency.p95_ms > 2000 ? "text-destructive dark:text-[#ff453a]" : ""}`}
+                                >
+                                    {overallLatency && overallLatency.sample_count > 0
+                                        ? `${(overallLatency.p95_ms / 1000).toFixed(1)}s`
+                                        : "—"}
+                                </div>
+                                {/* CLAUDE.md's Performance SLA target: P95 offer->accept
+                                    < 2s. Sample count shown so a thin-traffic zone's
+                                    single-digit sample isn't mistaken for a stable read. */}
+                                <p className="text-xs text-muted-foreground">
+                                    offer→accept today
+                                    {overallLatency && overallLatency.sample_count > 0
+                                        ? ` (n=${overallLatency.sample_count}, target < 2s)`
+                                        : " — no accepted offers yet today"}
+                                </p>
                             </CardContent>
                         </Card>
                     </div>
@@ -757,6 +817,23 @@ export default function HeatMapPage() {
                                                         <span className="text-muted-foreground">Demand pressure</span>
                                                         <span className="font-mono font-medium">
                                                             +{area.pressure} over idle drivers
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {/* Zero accepted offers today is common for a
+                                                    quiet zone — omitted rather than shown as a
+                                                    misleading "0ms" (the endpoint drops it from
+                                                    by_zone entirely in that case). */}
+                                                {latencyByArea[area.area_id] && latencyByArea[area.area_id].sample_count > 0 && (
+                                                    <div className="flex items-center justify-between text-sm">
+                                                        <span className="text-muted-foreground">Dispatch P95 (offer→accept)</span>
+                                                        <span
+                                                            className={`font-mono font-medium ${latencyByArea[area.area_id].p95_ms > 2000 ? "text-destructive dark:text-[#ff453a]" : ""}`}
+                                                        >
+                                                            {(latencyByArea[area.area_id].p95_ms / 1000).toFixed(1)}s
+                                                            <span className="ml-1 font-sans text-xs font-normal text-muted-foreground">
+                                                                (n={latencyByArea[area.area_id].sample_count})
+                                                            </span>
                                                         </span>
                                                     </div>
                                                 )}

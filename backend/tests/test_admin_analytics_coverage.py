@@ -915,6 +915,133 @@ class TestSupplyUtilization:
             assert admin_client.get("/api/admin/analytics/supply-utilization").status_code == 503
 
 
+class TestDispatchLatency:
+    LATENCY = {
+        "sample_count": 340,
+        "p50_ms": 950.0,
+        "p95_ms": 2400.0,
+        "by_zone": [
+            {"service_area_id": "regina", "sample_count": 120, "p50_ms": 900.0, "p95_ms": 1800.0},
+            {"service_area_id": "saskatoon", "sample_count": 220, "p50_ms": 980.0, "p95_ms": 2700.0},
+        ],
+    }
+
+    def _call(self, admin_client, payload=_UNSET, **params):
+        body = self.LATENCY if payload is _UNSET else payload
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[body])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/dispatch-latency", params=params)
+
+    def test_overall_p50_p95_pass_through(self, admin_client):
+        data = self._call(admin_client).json()
+        assert data["p50_ms"] == 950.0
+        assert data["p95_ms"] == 2400.0
+        assert data["sample_count"] == 340
+
+    def test_by_zone_breakdown_is_forwarded(self, admin_client):
+        by_zone = self._call(admin_client).json()["by_zone"]
+        assert len(by_zone) == 2
+        assert {z["service_area_id"] for z in by_zone} == {"regina", "saskatoon"}
+
+    def test_dispatch_p95_kpi_against_the_2000ms_target(self, admin_client):
+        """Overall p95 (2400ms) breaches the <2s target — meeting_target must say so."""
+        kpi = self._call(admin_client).json()["kpis"][0]
+        assert kpi["key"] == "dispatch_p95_ms"
+        assert kpi["target"] == 2000.0
+        assert kpi["meeting_target"] is False  # 2400 > 2000
+
+    def test_kpi_meets_target_when_p95_under_threshold(self, admin_client):
+        data = self._call(admin_client, payload={**self.LATENCY, "p95_ms": 1500.0}).json()
+        assert data["kpis"][0]["meeting_target"] is True
+
+    def test_empty_zone_list_when_no_accepted_offers_in_window(self, admin_client):
+        """Postgres returns NULL (not 0) percentiles for a zero-sample window.
+
+        The KPI must be omitted, not reported as "0ms, meeting target" — that
+        would be a false positive for a zone with no dispatch signal at all.
+        """
+        data = self._call(
+            admin_client, payload={"sample_count": 0, "p50_ms": None, "p95_ms": None, "by_zone": []}
+        ).json()
+        assert data["by_zone"] == []
+        assert data["sample_count"] == 0
+        assert data["kpis"] == []
+
+    def test_window_bounds_are_forwarded_to_the_rpc(self, admin_client):
+        rpc = AsyncMock(return_value=[self.LATENCY])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/dispatch-latency")
+        args = rpc.await_args.args[1]
+        assert args["p_start"] and args["p_end"]
+        assert args["p_end"] > args["p_start"]
+
+    def test_service_area_filter_is_forwarded_to_the_rpc(self, admin_client):
+        rpc = AsyncMock(return_value=[self.LATENCY])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/dispatch-latency", params={"service_area_id": "regina"})
+        assert rpc.await_args.args[1]["p_service_area_id"] == "regina"
+
+    def test_rpc_error_returns_503(self, admin_client):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/dispatch-latency").status_code == 503
+
+    def test_cache_hit_skips_the_rpc(self, admin_client):
+        import json
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=json.dumps({"cached": True}))),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=AssertionError("should not run"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/dispatch-latency").json() == {"cached": True}
+
+
+class TestDispatchLatencyMigration420:
+    """Static checks on migration 420 — no database is available to run it."""
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "420_dispatch_latency_by_zone.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_excludes_legacy_imports(self):
+        assert "legacy_import_metadata = '{}'::jsonb" in self._body()
+
+    def test_only_counts_accepted_offers_with_a_response(self):
+        body = self._body()
+        assert "o.status = 'accepted'" in body
+        assert "o.offered_at IS NOT NULL" in body
+        assert "o.responded_at IS NOT NULL" in body
+
+    def test_is_locked_down(self):
+        body = self._body()
+        assert "REVOKE EXECUTE" in body
+        assert "FROM PUBLIC, anon, authenticated" in body
+        assert "GRANT  EXECUTE" in body
+        assert "SECURITY DEFINER" in body
+        assert "SET search_path = public, pg_catalog" in body
+
+    def test_ships_the_index_for_its_own_new_query_pattern(self):
+        """ride_offers had no index supporting an accepted+responded_at range scan."""
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ride_offers_accepted_responded" in self._body()
+        assert "WHERE status = 'accepted'" in self._body()
+
+
 class TestMarketplaceMigration351:
     """Static checks on migration 351 — no database is available to run it."""
 

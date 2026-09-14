@@ -26128,7 +26128,23 @@ how much they de-risk a public launch._
   (`SettingsUpdateRequest`), `backend/migrations/10b_service_area_driver_matching.sql`.
 
 ### C108. `auth.users` is completely empty in production — every `auth.uid()`-based RLS policy in the schema (not just C107's 10 tables) is currently unreachable for the same reason
-- [ ] **Status:** OPEN, informational/documentation-debt — no live incident, no action required
+- [x] **Status:** CLOSED 2026-09-14 — the "Suggested next step" below (reword the RLS-tier
+  documentation to say policy-logic coverage, not live-traffic coverage) is done. Added a new
+  "What this tier proves -- and doesn't" section to `backend/tests/rls/conftest.py`'s module
+  docstring (the single canonical doc every other file in that directory already points to via
+  "see conftest.py") and reworded CLAUDE.md's RLS Testing Conventions bullet, both citing the
+  corrected mechanism (no anon-key client + separate JWT secrets — not the `auth.users` row
+  count, which this entry's own 2026-09-13 correction already established was the wrong load-
+  bearing fact). Did not touch the per-file docstrings in `backend/tests/rls/test_*.py`: none of
+  them actually claim live-traffic enforcement — they already scope themselves accurately to
+  "what a real Postgres anon/authenticated role can/cannot do," which is true regardless of
+  whether such a role's JWT is ever issued to a real client — so rewording all 11 would have been
+  unnecessary duplication of the same caveat, not a fix to an actual overstatement in those files.
+  The broader product/architecture question this entry also raised (does Supabase Auth ever get
+  wired up for real end-user sessions, and the Third-Party-Auth-issuer config check) remains
+  unaddressed by this fix — it's a decision for whoever owns the auth roadmap, not a documentation
+  change, and was never in scope for the "reword the docs" next step this closes.
+  Old status: OPEN, informational/documentation-debt — no live incident, no action required
   today. Found while closing C107: querying the real production database
   (`spinrmobileapp`, `soavhtdhefowwvforzwb`) to check for a legacy `role='admin'` row also
   surfaced a much bigger fact underneath it.

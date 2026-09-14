@@ -1,5 +1,11 @@
 # Live-ride triage — driver-app mid-ride process death (2026-09-13, 13:38–13:53 Regina)
 
+> Superseded conclusions: see [the validated findings and plan](2026-09-13-last-two-test-rides-findings-and-plan.md).
+> PR #5348 review corrected the native-capture claim, confirmed the middle ride
+> was batch-offered, and distinguished fallback distance from a proven fare change.
+> The native termination cause remains unknown. The insurance fix is migration 421;
+> no production application or historical correction has occurred.
+
 **Status:** findings only — **no code changed yet.** This is a handoff for the agent picking up the fix.
 **Investigator:** Claude Code session, 2026-09-13
 **Trigger:** operator ran two live test rides and reported "iOS crashed on the second ride, I had to log in again."

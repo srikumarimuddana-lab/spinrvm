@@ -1,7 +1,8 @@
 # Last two test rides: reviewed findings and plan
 
-**PR:** [#5348](https://github.com/srikumarimuddana-lab/spinrvm/pull/5348)  
-**Date:** 2026-09-13 (Regina)  
+**PR:** [#5348](https://github.com/srikumarimuddana-lab/spinrvm/pull/5348)
+
+**Date:** 2026-09-13 (Regina)
 **Status:** code review and local verification complete; release/device follow-ups remain.
 
 ## Ride evidence

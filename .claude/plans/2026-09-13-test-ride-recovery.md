@@ -20,6 +20,6 @@ pre-initialization 401 handling, and logout marker handling. Review continues on
 
 - [x] Subtask 1 (test + impact log + this checklist): cover partial token writes, unavailable recovery rereads, and logout callbacks; focused Jest passed (31 driver + 20 shared/rider tests).
 - [x] Subtask 2 (two layouts + shared auth store): corrected comments about defensive initialization handling in d24bb9595.
-- [ ] Subtask 3 (findings report + startup impact log + original report): record independent review/test results and correct stale completion/fare-policy claims; commit.
+- [x] Subtask 3: verified findings and startup impact correction published in f93b67416; original report marked superseded in the final documentation pass.
 - [ ] Publish review commits to PR #5348, replace stale PR description with completed required fields, and verify required-fields CI. Keep PR open; no deployment or historical data changes.
 - [x] Migration sequencing follow-up: fetched main, renamed unapplied 419 to free prefix 421, corrected fixture/test references and timezone assertion, committed as 6ffb39705. Manual SQL/impact log references corrected in the subsequent documentation commit.

@@ -22,19 +22,17 @@ file on object storage. `static-route-map.tsx` — the renderer that survives an
 ad blocker stubbing WebGL — draws plain `<img>` raster tiles, and nothing that
 serves only vector can feed it.
 
-> ### ⚠️ Read this before deploying
-> **This image has never been built.** It was authored in an environment with no
-> network access to Geofabrik, Docker Hub or GitHub, so no layer here has been
-> executed and no tag or release URL below has been confirmed to still exist.
-> The build logic was simulated step-by-step against sample inputs, and the
-> Web-Mercator tile maths in `smoke-test.sh` is cross-checked against the
-> `project()` function in `static-route-map.tsx` — but that is not the same as a
-> green build.
+> ### Status: built and serving as of 2026-09-14
+> This image now builds and runs on Railway (`TilesServer`), serving vector
+> tiles, raster `.png`, glyphs and the style. It took four fixes to get there —
+> the planetiler invocation (Jib layout, not a jar), the tileserver-gl start
+> command in **two** places that had drifted apart, and the OSM extract plumbing.
+> §5 records each failure and its signature; read it before changing the build,
+> because three of the four failed **green** or looked unrelated to the cause.
 >
-> **Build it locally and run `smoke-test.sh` against it before pointing Railway
-> at it.** Every external artifact is a `--build-arg` precisely so you can fix a
-> moved URL or bumped tag without editing the Dockerfile. §5 lists what breaks
-> first.
+> Still true: every external artifact is a `--build-arg` so a moved URL or bumped
+> tag is a one-line fix, and `PLANETILER_TAG`/`TILESERVER_TAG` are still unpinned
+> `latest` — pin them (see below) before relying on reproducible rebuilds.
 
 ---
 
@@ -62,9 +60,9 @@ map is the normal failure here, and the smoke test is what distinguishes them.
 
 | Arg | Default | Notes |
 |---|---|---|
-| `REGION_URL` | Geofabrik Saskatchewan `.osm.pbf` | The extract to build tiles from. |
-| `EXTRA_REGION_URLS` | *(empty)* | Space-separated extra `.osm.pbf` URLs merged into `REGION_URL` with `osmium merge`. Planetiler accepts only one input file, so a second province is a merge — not a second `--area`. |
-| `JAVA_OPTS` | `-Xmx4g` | Planetiler heap. Raise for a bigger area; lower if your builder has less RAM. |
+| `REGION_URL` | Geofabrik Saskatchewan `.osm.pbf` | The base extract to build tiles from. |
+| `EXTRA_REGION_URLS` | Geofabrik **Alberta** `.osm.pbf` | Space-separated extra `.osm.pbf` URLs merged into `REGION_URL` with `osmium merge`. Planetiler accepts only one input file, so a second province is a merge — not a second `--area`. **Cannot be set from Railway** — see the warning below. |
+| `JAVA_OPTS` | `-Xmx8g` | Planetiler heap. Raise for a bigger area; lower if your builder has less RAM. |
 | `STYLE_TARBALL_URL` | openmaptiles/positron-gl-style `master` | Any MapLibre GL style repo tarball. Positron matches the light, low-chrome look the dashboard already gets from Carto, so self-hosting is not a visual change. |
 | `FONTS_ZIP_URL` | openmaptiles/fonts `v2.0` | Pre-generated PBF glyph ranges. |
 | `DATA_ID` | `v3` | Safe to override — `config.json` is re-keyed to match at build time, and the build asserts the style's source resolves against it. |
@@ -91,13 +89,24 @@ docker image inspect maptiler/tileserver-gl:latest      --format '{{index .RepoD
 
 and set the two ARG defaults to those versions (or digests) in the Dockerfile.
 
-**Alberta as well as Saskatchewan?** Same shape as OSRM — merge the extracts:
+**Alberta as well as Saskatchewan?** Already on — `EXTRA_REGION_URLS` **defaults**
+to the Alberta extract, so the tileset covers SK+AB out of the box. Change the
+coverage by editing that ARG in the `Dockerfile`, or locally with:
 
 ```bash
 docker build \
-  --build-arg EXTRA_REGION_URLS=https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf \
+  --build-arg EXTRA_REGION_URLS=https://download.geofabrik.de/north-america/canada/manitoba-latest.osm.pbf \
   -t spinr-tiles .
 ```
+
+> ### ⚠️ Do not try to set coverage from Railway
+> **Railway does not pass service variables to `docker build` as build args.**
+> Setting `EXTRA_REGION_URLS` on the service and rebuilding produces a **green
+> build** whose log reads `for url in <saskatchewan only> ;` — the `ARG` keeps
+> its default and the extra province is silently dropped. Verified on the
+> 2026-09-14 build of this service. That is why coverage lives in the Dockerfile,
+> in git, rather than in a dashboard field: a tileset missing a province is
+> indistinguishable from a working one until someone looks at that province.
 
 Planetiler accepts exactly one OSM input file (*"Currently only one OSM input
 file is supported"*, `Planetiler.java`), so the `osm` stage merges them with

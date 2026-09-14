@@ -62,7 +62,8 @@ map is the normal failure here, and the smoke test is what distinguishes them.
 
 | Arg | Default | Notes |
 |---|---|---|
-| `AREA` | `saskatchewan` | Geofabrik area name. Planetiler resolves it against its own index — no URL needed. |
+| `REGION_URL` | Geofabrik Saskatchewan `.osm.pbf` | The extract to build tiles from. |
+| `EXTRA_REGION_URLS` | *(empty)* | Space-separated extra `.osm.pbf` URLs merged into `REGION_URL` with `osmium merge`. Planetiler accepts only one input file, so a second province is a merge — not a second `--area`. |
 | `JAVA_OPTS` | `-Xmx4g` | Planetiler heap. Raise for a bigger area; lower if your builder has less RAM. |
 | `STYLE_TARBALL_URL` | openmaptiles/positron-gl-style `master` | Any MapLibre GL style repo tarball. Positron matches the light, low-chrome look the dashboard already gets from Carto, so self-hosting is not a visual change. |
 | `FONTS_ZIP_URL` | openmaptiles/fonts `v2.0` | Pre-generated PBF glyph ranges. |
@@ -90,12 +91,27 @@ docker image inspect maptiler/tileserver-gl:latest      --format '{{index .RepoD
 
 and set the two ARG defaults to those versions (or digests) in the Dockerfile.
 
-**Alberta as well as Saskatchewan?** Unlike OSRM, this is not a merge problem —
-planetiler takes one area per build, so either build a second service for AB, or
-use a wider single area (`--build-arg AREA=canada`, much bigger and slower). If
-you are already merging provinces for OSRM (see `deploy/osrm/README.md` §1),
-note that the two services are independent: widening one does **not** widen the
-other, and only the OSRM one affects billing.
+**Alberta as well as Saskatchewan?** Same shape as OSRM — merge the extracts:
+
+```bash
+docker build \
+  --build-arg EXTRA_REGION_URLS=https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf \
+  -t spinr-tiles .
+```
+
+Planetiler accepts exactly one OSM input file (*"Currently only one OSM input
+file is supported"*, `Planetiler.java`), so the `osm` stage merges them with
+`osmium merge` first and passes the result as `--osm_path`. That override also
+retires `--area`: the OpenMapTiles profile ignores it outright once `osm_path`
+is set, which is why the `AREA` build arg no longer exists — a knob that is
+silently ignored is worse than no knob.
+
+A second tile service for Alberta is **not** a workable alternative, unlike
+OSRM: the dashboard points at a single `NEXT_PUBLIC_MAP_STYLE_URL`, so one
+tileset has to cover everything you want drawn.
+
+The two services stay independent, though — widening one does **not** widen the
+other, and only the OSRM one affects recorded trip distance.
 
 ## 3. Deploy on Railway
 
@@ -152,12 +168,12 @@ in Vercel requires a redeploy, not just a restart.
 | Raster tile 404s, vector fine | You are on `tileserver-gl-light`, which has no renderer. Use the full `maptiler/tileserver-gl`. |
 | Style loads, every tile 404s | `PUBLIC_URL` unset behind a proxy. Set it to the public origin with a trailing slash. |
 | Map renders in curl but is blank in the browser, no failed requests | Almost always CORS. The dashboard is on a different origin; the smoke test's CORS check catches this and curl alone never will. |
-| Vector tile is ~a few hundred bytes | An empty tile — the extract does not cover that area. Check `AREA`. |
+| Vector tile is ~a few hundred bytes | An empty tile — the extract does not cover that area. Check `REGION_URL` / `EXTRA_REGION_URLS`. |
 | Labels missing everywhere, no errors | The fontstack the style names is not in the fonts zip. The build asserts this now, so a fresh build fails loudly instead; an older image may not. |
 | Build fails at the style step with "no source was rewritten" | The style's vector source is not typed `vector`, or the tarball layout changed. Adjust `rewrite-style.jq` — it is a standalone file you can run against a downloaded style to debug: `jq --arg data v3 --argjson hasSprite true -f rewrite-style.jq style.json`. |
 | Build fails with "style still reaches a third party after rewrite" | Working as intended — the rewrite missed a source, glyph or sprite URL. The message names the exact field. |
 | Build fails at the fonts step | `FONTS_ZIP_URL` moved. Point it at a current release. |
-| Build OOMs during planetiler | Raise `JAVA_OPTS` if the builder has headroom, or use a smaller `AREA`. |
+| Build OOMs during planetiler | Raise `JAVA_OPTS` if the builder has headroom, or drop back to a single province. Peak RAM scales with the merged extract, so this is the first thing to fail on a multi-province build. |
 | Container restart-loops with `exec: /usr/src/app/run.sh: not found` | There is no `run.sh` in `maptiler/tileserver-gl` — the entrypoint is `/usr/src/app/docker-entrypoint.sh`. The start command is defined in **two** places and both had to change: the `CMD` at the bottom of the `Dockerfile` (what actually runs — Railway auto-detects the Dockerfile and does not necessarily apply `railway.json`'s `startCommand`) and `railway.json`. If you change one, change both. See §3 for why it re-enters the entrypoint rather than calling node directly. |
 | Vector tiles fine, every raster `.png` 500s or hangs | Xvfb never started, so the renderer has no display. Almost always a "simplified" `startCommand` whose first argument is an executable — the entrypoint then skips its Xvfb branch. See §3. |
 | Build fails with `Unable to access jarfile /planetiler.jar` or `no main manifest attribute, in /app/libs/planetiler-*.jar` | The planetiler image is built by **Jib** (see its `planetiler-dist/pom.xml`), not from a Dockerfile, so it has no executable jar and no launcher script — only `/app/resources`, `/app/classes`, `/app/libs/*.jar` and an `ENTRYPOINT` a build-time `RUN` cannot invoke. The Dockerfile reconstructs that entrypoint (`java -cp '/app/resources:/app/classes:/app/libs/*' com.onthegomap.planetiler.Main`); the quotes are load-bearing, since `/app/libs/*` is a **Java** classpath wildcard the shell must not glob. Picking any single jar out of `/app/libs` cannot work — none of them carries a `Main-Class`. |

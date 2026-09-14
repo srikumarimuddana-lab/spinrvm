@@ -912,25 +912,6 @@ async def websocket_endpoint(
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    # B3.3: buffer per-ping points and write them as one
-                    # insert (~10 points / 10s) through the shared breadcrumb
-                    # path. That path stores the device capture timestamp
-                    # when supplied (captured_at/device_timestamp/recorded_at/
-                    # timestamp), records received_at separately, and derives
-                    # ride phase from server ride milestones instead of trusting
-                    # the client's current message timing or phase tag. The
-                    # buffer flushes early on ride-context change, and the
-                    # disconnect/completion paths flush the remainder.
-                    # The driver app persists route samples through the v2
-                    # acknowledged outbox. WebSocket messages marked ephemeral
-                    # still update/fan out the live marker, but must not create
-                    # a second breadcrumb trail or inflate billed distance.
-                    # A signed-out session must not add to the durable trail.
-                    # The live-marker fan-out above is ephemeral and harmless;
-                    # this is the write that persists coordinates.
-                    if data.get("durable", True) and not await _ws_session_revoked():
-                        await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
-
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()
                     global _maps_key_cache, _maps_key_fetched_at
@@ -1008,6 +989,36 @@ async def websocket_endpoint(
                     # throttled per driver (#3) so 1 Hz pings don't fan out
                     # N drivers x A admins every second.
                     await manager.broadcast_driver_location_to_admins(driver_id, location_update)
+
+                    # B3.3: buffer per-ping points and write them as one
+                    # insert (~10 points / 10s) through the shared breadcrumb
+                    # path. That path stores the device capture timestamp
+                    # when supplied (captured_at/device_timestamp/recorded_at/
+                    # timestamp), records received_at separately, and derives
+                    # ride phase from server ride milestones instead of trusting
+                    # the client's current message timing or phase tag. The
+                    # buffer flushes early on ride-context change, and the
+                    # disconnect/completion paths flush the remainder.
+                    # The driver app persists route samples through the v2
+                    # acknowledged outbox. WebSocket messages marked ephemeral
+                    # still update/fan out the live marker, but must not create
+                    # a second breadcrumb trail or inflate billed distance.
+                    # A signed-out session must not add to the durable trail.
+                    #
+                    # Deliberately placed AFTER the rider/admin fan-out above,
+                    # not before: this occasionally flushes to Postgres
+                    # (~every 10 points/10s) and that write was previously
+                    # sequenced before the fan-out loop, so roughly 1-in-10
+                    # ticks paid a synchronous DB round-trip inside the
+                    # <100ms WS fan-out SLA path for no reason -- nothing
+                    # below here reads a value buffer_ride_breadcrumb sets.
+                    # Still a plain `await`, not fire-and-forget: a flush
+                    # failure must still propagate to this same request's
+                    # error handling, per this module's own documented loss
+                    # semantics (breadcrumb_buffer.py's module docstring) --
+                    # only the ORDER moved, not how the call is awaited.
+                    if data.get("durable", True) and not await _ws_session_revoked():
+                        await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
 
             elif data.get("type") in ("location_batch", "driver_location_batch"):
                 # Batch upload of buffered GPS points (offline recovery).

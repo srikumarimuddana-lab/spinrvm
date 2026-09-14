@@ -31,6 +31,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 
 DRIVER_USER_ID = "driver_user_p3_20"
 
@@ -97,6 +98,7 @@ class TestUpdateLocationBatch:
         ):
             result = await update_location_batch(
                 batch=batch,
+                background_tasks=BackgroundTasks(),
                 current_user={"id": DRIVER_USER_ID},
             )
 
@@ -189,7 +191,9 @@ class TestUpdateLocationBatch:
             ),
             patch("utils.location_integrity.redis_get", AsyncMock(return_value=None)),
         ):
-            result = await update_location_batch(batch=[_point()], current_user={"id": DRIVER_USER_ID})
+            result = await update_location_batch(
+                batch=[_point()], background_tasks=BackgroundTasks(), current_user={"id": DRIVER_USER_ID}
+            )
 
         assert result["success"] is True
         assert not db_updates, "marker write must be skipped when no drivers row exists"
@@ -229,6 +233,7 @@ class TestUpdateLocationBatch:
         ):
             result = await update_location_batch(
                 batch=[_point()],
+                background_tasks=BackgroundTasks(),
                 current_user={"id": DRIVER_USER_ID},
             )
 

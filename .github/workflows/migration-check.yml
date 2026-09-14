@@ -43,6 +43,21 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
+          # On merge_group (no pull_request context), both resolve to empty
+          # strings -- `git merge-base "" ""` then aborts the step outright
+          # (`fatal: Not a valid object name`, exit 128) rather than degrading
+          # gracefully, since this job has `set -e` on by default and no
+          # existing fallback covered this case at all. This workflow has no
+          # workflow_dispatch trigger (confirmed: only pull_request/merge_group),
+          # so unlike ci-guardrails.yml's equivalent fix (CR-2026-085, PR #5399,
+          # which has a configurable base_branch input to prefer) the only
+          # applicable fallback here is the literal default branch. CR-2026-086.
+          if [ -z "$BASE" ]; then
+            BASE="origin/main"
+          fi
+          if [ -z "$HEAD" ]; then
+            HEAD="HEAD"
+          fi
           # Diff from the actual merge-base, not raw BASE. `pull_request.base.sha`
           # is the base branch's CURRENT tip, which keeps moving as main advances —
           # a PR branch that falls behind (hasn't merged/rebased main in a while)
@@ -169,6 +184,38 @@ jobs:
 
           def record(filename, check, icon, msg):
               rows.append((filename, check, icon, msg))
+
+          # ── Comment stripper (ported verbatim from ci-guardrails.yml's
+          # migration-safety-gate, CR-2026-034 Phase 1) ─────────────────────────
+          # Stricter than this file's own comment_lines helper below (which
+          # only drops whole comment-only LINES, built for CHECK D's
+          # rollback-comment detection): this one also strips a trailing
+          # `-- comment` after real code on the same line, and is
+          # string-literal-aware so a `--` inside a quoted string doesn't
+          # falsely start a comment. Used only by CHECK E (dangerous
+          # operations), which is now hard-fail and needs the lower
+          # false-positive rate ci-guardrails.yml's version already proved in
+          # production (traced to the #4791/migration 376 false-positive fix).
+          def strip_sql_comments(text):
+              text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+              out_lines = []
+              for line in text.split('\n'):
+                  result = []
+                  in_string = False
+                  i = 0
+                  while i < len(line):
+                      ch = line[i]
+                      if ch == "'":
+                          in_string = not in_string
+                          result.append(ch)
+                          i += 1
+                          continue
+                      if not in_string and ch == '-' and i + 1 < len(line) and line[i + 1] == '-':
+                          break
+                      result.append(ch)
+                      i += 1
+                  out_lines.append(''.join(result))
+              return '\n'.join(out_lines)
 
           # ── Per-file checks ──────────────────────────────────────────────────
           for rel_path in changed:
@@ -318,29 +365,144 @@ jobs:
                   record(short, "rollback-comment", STATUS_FAIL, msg)
                   errors.append(f"{short}: {msg}")
 
-              # ── CHECK E: dangerous operations (warn only) ─────────────────────
-              # Scans executable SQL only (content with comment lines removed) —
-              # was scanning raw `content`, which flagged a rollback COMMENT
-              # documenting "DROP COLUMN ... to undo this" as if the migration
-              # itself executed it. Found 2026-08-10 alongside the rollback-comment
-              # fix above, same root cause (raw-text scan, comment-blind) as the
-              # CONCURRENTLY misdetection fixed for ACTION_ITEMS B0 (originally
-              # in scripts/migrate.py, since deleted — the fix now lives in
-              # scripts/run_migrations.py's _split_sql_statements).
-              code_only = "\n".join(
-                  line for line in content.splitlines() if line not in comment_lines
-              )
+              # ── CHECK E: dangerous operations ─────────────────────────────────
+              # Hard-fail as of CR-2026-034 Phase 1 (was warn-only). Before this
+              # change, ci-guardrails.yml's separate migration-safety-gate job
+              # already hard-failed the overlapping patterns here (DROP TABLE,
+              # TRUNCATE, DROP COLUMN) while this check only warned on them —
+              # a contradictory pass/warn-here-fail-there signal on the same
+              # file. Any PR with these patterns was ALREADY blocked by that
+              # other gate; this change removes the misleading warn-only echo,
+              # it does not newly block anything that wasn't already blocked.
+              # Pattern list and code-scanning approach below are ported
+              # verbatim from ci-guardrails.yml's migration-safety-gate (not
+              # re-derived) so both scanners agree while they still run as two
+              # independent jobs — full consolidation into one job is
+              # CR-2026-034 Phase 2, deliberately deferred (see that CR: a
+              # job's `name:` is what branch-protection required-status-checks
+              # matches against, and nobody has audited main's required-checks
+              # list yet — C21 — so removing/renaming either job's name here
+              # would risk silently breaking merge-blocking for a check that
+              # can never report under its old name again).
+              #
+              # No inline-comment override for this check, matching
+              # ci-guardrails.yml's own no-override design for this pattern
+              # class: an intentional exception (e.g. CR-2026-033's DELETE FROM
+              # inside a SECURITY DEFINER function body, safe because nothing
+              # executes at migration-apply time) goes through a documented
+              # GitHub CR + admin merge-override, not a drive-by code
+              # annotation. That's a deliberately higher bar than the
+              # CREATE OR REPLACE conflict check below, since this pattern
+              # class is the actual data-loss risk.
+              code_only_strict = strip_sql_comments(content)
               dangerous = []
-              if re.search(r'\bDROP\s+TABLE\b',                    code_only, re.IGNORECASE): dangerous.append("DROP TABLE")
-              if re.search(r'\bTRUNCATE\b',                        code_only, re.IGNORECASE): dangerous.append("TRUNCATE")
-              if re.search(r'\bALTER\s+TABLE\b.*\bDROP\s+COLUMN\b', code_only, re.IGNORECASE): dangerous.append("ALTER TABLE ... DROP COLUMN")
+              if re.search(r'\bDROP\s+TABLE\b',                    code_only_strict, re.IGNORECASE): dangerous.append("DROP TABLE — data loss risk")
+              if re.search(r'\bDROP\s+COLUMN\b',                   code_only_strict, re.IGNORECASE): dangerous.append("DROP COLUMN — data loss risk")
+              # TRUNCATE is handled separately below, not in this loop — see
+              # the privilege-list masking right after it.
+              if re.search(r'\bDELETE\s+FROM\b',                   code_only_strict, re.IGNORECASE): dangerous.append("DELETE FROM in migration — unintended data loss")
+              if re.search(r'\bALTER\s+TABLE.*NOT\s+NULL\b',       code_only_strict, re.IGNORECASE): dangerous.append("Adding NOT NULL without default — locks table")
+              if re.search(r'WITHOUT\s+ROWID',                     code_only_strict, re.IGNORECASE): dangerous.append("WITHOUT ROWID — irreversible schema change")
+              if re.search(r'\bDROP\s+INDEX\b',                    code_only_strict, re.IGNORECASE): dangerous.append("DROP INDEX — query performance regression risk")
+
+              # TRUNCATE gets its own check: it's the one keyword above that is
+              # also a valid GRANT/REVOKE privilege name, e.g. this repo's own
+              # `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON x FROM authenticated;`
+              # RLS-lockdown idiom (migrations 51, 142, 151, 286, 290, 416).
+              # Masking every GRANT/REVOKE ... ON clause first — a GRANT/REVOKE
+              # statement always has exactly one ON separating its privilege
+              # list from its target, so a non-greedy match to the first ON
+              # covers the whole list regardless of TRUNCATE's position in it —
+              # then scanning what's left for a bare TRUNCATE catches only an
+              # actual TRUNCATE statement. Ported verbatim from
+              # ci-guardrails.yml's migration-safety-gate (CR-2026-036/#5309;
+              # this file's first port of CHECK E, done before that fix landed
+              # there, missed this step entirely and would have hard-blocked
+              # any future migration reusing the idiom above — caught by
+              # spinr-cicd-infra-reviewer before this reached CI).
+              code_sans_privilege_lists = re.sub(
+                  r'\b(?:GRANT|REVOKE)\b.*?\bON\b', ' ',
+                  code_only_strict, flags=re.IGNORECASE | re.DOTALL,
+              )
+              if re.search(r'\bTRUNCATE\b', code_sans_privilege_lists, re.IGNORECASE):
+                  dangerous.append("TRUNCATE — data loss risk")
 
               if dangerous:
-                  msg = f"contains destructive operation(s): {', '.join(dangerous)} — verify intent"
-                  record(short, "dangerous-ops", STATUS_WARN, msg)
-                  warnings.append(f"{short}: {msg}")
+                  msg = f"contains destructive operation(s): {'; '.join(dangerous)} — if intentional, open a Change Request (see CR-2026-033 for the precedent) rather than editing this file to dodge the pattern"
+                  record(short, "dangerous-ops", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
               else:
                   record(short, "dangerous-ops", STATUS_OK, "no destructive operations")
+
+          # ── CHECK G: CREATE OR REPLACE conflicts across migrations ────────────
+          # Ported verbatim from ci-guardrails.yml's migration-safety-gate
+          # (CR-2026-034 Phase 1), including its override mechanism — the only
+          # one of the three checks originally unique to ci-guardrails.yml that
+          # already had a built-in bypass. Only scans this PR's genuinely NEW
+          # migrations (new_files_set) against every existing migration on
+          # disk, same scope ci-guardrails.yml's version used (--diff-filter=A).
+          COR = re.compile(
+              r'CREATE\s+OR\s+REPLACE\s+(?:FUNCTION|VIEW|TRIGGER|PROCEDURE)\s+([\w.]+)',
+              re.IGNORECASE,
+          )
+          OVERRIDE = re.compile(r'--\s*migration-override-ok\s*:', re.IGNORECASE)
+
+          def target_name(raw: str) -> str:
+              # public.foo and foo are the same object when search_path
+              # includes public, so they must compare equal.
+              return raw.rsplit('.', 1)[-1].lower()
+
+          new_migration_paths = [rp for rp in changed if os.path.basename(rp) in new_files_set]
+
+          pr_targets: dict[str, list[str]] = {}    # target_name -> [pr files defining it]
+          file_targets: dict[str, list[str]] = {}  # pr file -> [target names it defines]
+          overridden: set[str] = set()
+
+          for fpath in new_migration_paths:
+              try:
+                  cor_content = open(fpath).read()
+              except OSError:
+                  continue
+              # OVERRIDE checked against raw content — the annotation itself
+              # lives in a comment.
+              if OVERRIDE.search(cor_content):
+                  overridden.add(fpath)
+                  continue
+              targets = COR.findall(strip_sql_comments(cor_content))
+              if targets:
+                  file_targets[fpath] = [target_name(t) for t in targets]
+                  for t in targets:
+                      pr_targets.setdefault(target_name(t), []).append(fpath)
+
+          conflicts_by_file: dict[str, list[str]] = {}
+          if pr_targets:
+              new_path_set = {os.path.normpath(p) for p in new_migration_paths}
+              for fname in all_migrations:
+                  epath = os.path.normpath(os.path.join(MIGRATIONS_DIR, fname))
+                  if epath in new_path_set:
+                      continue
+                  try:
+                      existing_content = open(epath).read()
+                  except OSError:
+                      continue
+                  for name in COR.findall(strip_sql_comments(existing_content)):
+                      tname = target_name(name)
+                      if tname in pr_targets:
+                          for pf in pr_targets[tname]:
+                              conflicts_by_file.setdefault(pf, []).append(f"{name} already defined in {epath}")
+
+          for fpath in new_migration_paths:
+              short = os.path.basename(fpath)
+              if fpath in overridden:
+                  record(short, "create-or-replace", STATUS_OK, "migration-override-ok annotation present — conflict check skipped")
+              elif fpath in conflicts_by_file:
+                  msg = "; ".join(conflicts_by_file[fpath]) + " — add '-- migration-override-ok: <reason>' if intentional, or rename the target"
+                  record(short, "create-or-replace", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
+              elif fpath in file_targets:
+                  record(short, "create-or-replace", STATUS_OK, f"no conflict for target(s): {', '.join(sorted(set(file_targets[fpath])))}")
+              else:
+                  record(short, "create-or-replace", STATUS_OK, "no CREATE OR REPLACE target")
 
           # ── Print summary table ───────────────────────────────────────────────
           print()

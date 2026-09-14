@@ -53,10 +53,20 @@ ARG TILESERVER_TAG=latest
 FROM debian:bookworm-slim AS osm
 # Saskatchewan extract from Geofabrik (~40 MB). Override for a different region.
 ARG REGION_URL=https://download.geofabrik.de/north-america/canada/saskatchewan-latest.osm.pbf
-# Space-separated additional .osm.pbf URLs to merge into REGION_URL. Empty by
-# default, so the single-province build is the tileset it always was. Alberta:
-#   --build-arg EXTRA_REGION_URLS=https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf
-ARG EXTRA_REGION_URLS=""
+# Space-separated additional .osm.pbf URLs merged into REGION_URL.
+#
+# Alberta is the DEFAULT, not a deployment-time variable, and that is deliberate:
+# Railway does NOT pass service variables to `docker build` as build args. Setting
+# EXTRA_REGION_URLS on the service and rebuilding produced a green build whose log
+# read `for url in <saskatchewan only> ;` — the ARG kept its default and the extra
+# province was silently dropped. A tileset missing a province looks identical to a
+# working one unless you go and look at that province, so the coverage this repo
+# intends lives here in git, where it is reviewable, rather than in a dashboard
+# field that does not reach the build.
+#
+# Narrow it back to one province by editing this line (or `--build-arg` locally),
+# not by changing anything on Railway.
+ARG EXTRA_REGION_URLS="https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl osmium-tool \
  && rm -rf /var/lib/apt/lists/*
@@ -88,10 +98,13 @@ RUN set -eux; \
 FROM ghcr.io/onthegomap/planetiler:${PLANETILER_TAG} AS tiles
 
 # Planetiler sizes its heap from the container limit, but a build box with lots
-# of RAM and a small Docker limit gets this wrong. Pin it explicitly. Raise this
-# for a merged multi-province extract if the build dies without a clear error —
-# that is almost always OOM here.
-ARG JAVA_OPTS="-Xmx4g"
+# of RAM and a small Docker limit gets this wrong. Pin it explicitly.
+#
+# Sized from a measured build, not a guess: the Saskatchewan-only build peaked at
+# 1.8G of a 4.2G heap on a 112 MB extract. A merged SK+AB extract is several times
+# that, which would not fit in the old -Xmx4g. If a build dies with no clear error
+# this is the first thing to raise — that is what OOM looks like here.
+ARG JAVA_OPTS="-Xmx8g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
 COPY --from=osm /osm/region.osm.pbf /planetiler/region.osm.pbf

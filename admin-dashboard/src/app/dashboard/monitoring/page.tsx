@@ -77,6 +77,14 @@ export default function MonitoringPage() {
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [followMode, setFollowMode] = useState(false);
+  // Whether MonitoringMap can actually render in this browser (see its
+  // onCanRenderChange prop / webglOk guard). Defaults to true — the vast
+  // majority of sessions — and MonitoringMap corrects it once, on mount, if
+  // not. Drives the disabled+explained state of controls whose entire
+  // purpose is a map-visual effect (service-area jump buttons, Follow
+  // toggle below): mapHandlesRef.current stays null forever when this is
+  // false, so those controls would otherwise silently no-op. ACTION_ITEMS.md C115.
+  const [mapCanRender, setMapCanRender] = useState(true);
   const [selected, setSelected] = useState<SelectedItem>(null);
   const [selectedDriver, setSelectedDriver] = useState<MonitoringDriver | null>(null);
   const [selectedRide, setSelectedRide] = useState<MonitoringRide | null>(null);
@@ -597,6 +605,15 @@ export default function MonitoringPage() {
     mapHandlesRef.current?.fitArea(areaId);
   }, []);
 
+  // Service areas that actually get a jump button (have somewhere to fly
+  // to). Computed once here rather than inline in the JSX below so the
+  // "map can't render" explanatory text can check the SAME list the
+  // buttons themselves render from — otherwise an area with neither a
+  // polygon nor a fallback center (serviceAreas.length > 0 but this list
+  // empty) would show "jump buttons disabled" with no buttons on screen
+  // to be disabled.
+  const jumpableAreas = serviceAreas.filter((a) => a.geojson || a.fallbackCenter).slice(0, 5);
+
   // Filter active rides list by service area.
   // The WS tick writes into ridesMapRef.current without re-rendering; we
   // recompute visibleRides whenever the `counts` state bumps, which is the
@@ -655,6 +672,7 @@ export default function MonitoringPage() {
         serviceAreas={serviceAreas}
         vehicleTypes={availableVehicleTypes}
         wsStatus={wsStatus}
+        mapCanRender={mapCanRender}
       />
 
       {/* Stale-data warning banner — visible whenever live feed is interrupted */}
@@ -781,6 +799,7 @@ export default function MonitoringPage() {
             demandData={filters.showDemand ? demandData : undefined}
             onSelectDriver={handleSelectDriver}
             onSelectRide={handleSelectRide}
+            onCanRenderChange={setMapCanRender}
             onReady={(handles) => {
               mapHandlesRef.current = handles;
               // Populate map once handles are available
@@ -794,17 +813,33 @@ export default function MonitoringPage() {
               the map's bottom edge; the two used to overlap. bg-white/90 was
               also hardcoded regardless of theme — swapped for the same
               background/border tokens the rest of the admin UI uses. */}
-          {serviceAreas.length > 0 && (
-            <div className="absolute bottom-12 left-1/2 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap justify-center gap-2">
-              {serviceAreas.filter((a) => a.geojson || a.fallbackCenter).slice(0, 5).map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => handleAreaFit(a.id)}
-                  className="rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground shadow backdrop-blur hover:bg-accent"
-                >
-                  {a.name}
-                </button>
-              ))}
+          {jumpableAreas.length > 0 && (
+            <div className="absolute bottom-12 left-1/2 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col items-center gap-1.5">
+              <div className="flex flex-wrap justify-center gap-2">
+                {jumpableAreas.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => handleAreaFit(a.id)}
+                    disabled={!mapCanRender}
+                    title={mapCanRender ? undefined : "Map can't render in this browser, so jumping to an area has no visible effect."}
+                    className={`rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground shadow backdrop-blur transition-opacity ${
+                      mapCanRender ? "hover:bg-accent" : "cursor-not-allowed opacity-50"
+                    }`}
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </div>
+              {/* "Nearby text" explanation, not just the title tooltip above — a
+                  disabled button doesn't reliably fire hover events for the
+                  native title to show in every browser, and this is the exact
+                  "explain, don't just disable silently" pattern MonitoringMap's
+                  own WebGL-guard render branch uses. ACTION_ITEMS.md C115. */}
+              {!mapCanRender && (
+                <p className="rounded bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow backdrop-blur">
+                  Map can&apos;t render in this browser — jump buttons disabled.
+                </p>
+              )}
             </div>
           )}
         </div>

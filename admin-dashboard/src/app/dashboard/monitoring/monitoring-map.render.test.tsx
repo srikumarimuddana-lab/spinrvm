@@ -94,6 +94,37 @@ function baseProps() {
     };
 }
 
+// ACTION_ITEMS.md C115 — onCanRenderChange is the reactive "map can render"
+// signal page.tsx uses to disable/explain the service-area jump buttons and
+// Follow toggle instead of leaving them silently no-op'd (see
+// monitoring-map-controls-availability.render.test.tsx for that consumer
+// side). Covered here, alongside the guard itself, since it's the same
+// webglOk value driving both.
+describe("MonitoringMap onCanRenderChange", () => {
+    it("fires false, once, when WebGL cannot render", () => {
+        vi.mocked(hasRenderingWebGL).mockReturnValue(false);
+        const onCanRenderChange = vi.fn();
+        render(<MonitoringMap {...baseProps()} onCanRenderChange={onCanRenderChange} />);
+
+        expect(onCanRenderChange).toHaveBeenCalledTimes(1);
+        expect(onCanRenderChange).toHaveBeenCalledWith(false);
+    });
+
+    it("fires true, once, when WebGL renders normally", () => {
+        vi.mocked(hasRenderingWebGL).mockReturnValue(true);
+        const onCanRenderChange = vi.fn();
+        render(<MonitoringMap {...baseProps()} onCanRenderChange={onCanRenderChange} />);
+
+        expect(onCanRenderChange).toHaveBeenCalledTimes(1);
+        expect(onCanRenderChange).toHaveBeenCalledWith(true);
+    });
+
+    it("is optional — omitting it doesn't throw either way", () => {
+        vi.mocked(hasRenderingWebGL).mockReturnValue(false);
+        expect(() => render(<MonitoringMap {...baseProps()} />)).not.toThrow();
+    });
+});
+
 beforeEach(() => {
     mapCtor.mockClear();
 });

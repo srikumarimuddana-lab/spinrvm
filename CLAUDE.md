@@ -553,7 +553,7 @@ rather than leave it looking like an oversight.
 
 | Directory | Status | Purpose |
 |-----------|--------|---------|
-| `.kilo/` | Active | Kilo Code AI assistant config |
+| `.kilo/` | Dormant | Kilo Code AI assistant config — not actually in use. `kilo.jsonc` has no model/rule/MCP setup (just `{"snapshot": false}`); its one saved plan is dated 2026-04-14 with no follow-through. Both files entered git in a single incidental commit (2026-09-11, PR #5241, an unrelated rider-app UX diff) — not a deliberate tooling adoption; no other commit has ever touched this directory. Two earlier audits (`docs/claude-audit-2026-04-22.md`, `docs/audit/2026-08-24-repo-hygiene-audit.md`) already flagged this as "archive candidate"/"purpose unclear" — this row's "Active" label was never corrected to match until now (2026-09-14). |
 | `.emergent/` | Active | Emergent AI agent config |
 | `.maestro/` | Active | Maestro orchestration config |
 | `.codex/` | Active | OpenAI Codex CLI config (`agents/`, `hooks/`, `hooks.json`) |

@@ -6,10 +6,13 @@ import * as maplibregl from "maplibre-gl";
 import type { ExpressionSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
+    MAP_STYLE_CARTO_LIGHT,
     MAP_STYLE_POSITRON,
     addStandardControls,
+    attachBasemapFallback,
     fitBoundsToPoints,
-    monitoringFallbackStyle,
+    protomapsStyleUrl,
+    selfHostedStyleUrl,
 } from "@/lib/map/maplibre-base";
 
 export interface HeatMapPoint {
@@ -93,49 +96,37 @@ export default function HeatMap({
     // rendering as a silent blank div -- no basemap, no heat layers, no
     // indication anything went wrong.
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [basemapStatus, setBasemapStatus] = useState<"ok" | "retrying" | "failed">("ok");
 
     // Init map once
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
 
         let cancelled = false;
-        // Guards the retry to exactly one attempt -- a fallback style that
-        // itself fails to load must surface the error, not loop forever.
-        let usedFallback = false;
+        let detach: (() => void) | null = null;
 
-        // A function (not inline) so a style-load failure can tear down and
-        // rebuild once against a different provider -- mirrors
-        // monitoring-map.tsx's buildMap, same reasoning: MapLibre doesn't
-        // support swapping an already-mounted map's style at runtime without
-        // losing sources/layers, so "retry" means a real new Map instance.
-        const buildMap = (styleUrl: string) => {
+        // Grayscale-preferring chain so heat layers pop against a muted basemap.
+        const sh = selfHostedStyleUrl();
+        const pm = protomapsStyleUrl("grayscale");
+        const chain = [...new Set([
+            ...(sh ? [sh] : []),
+            MAP_STYLE_POSITRON,
+            ...(pm ? [pm] : []),
+            MAP_STYLE_CARTO_LIGHT,
+        ])];
+
+        const buildMap = (attempt: number) => {
+            if (cancelled || !containerRef.current) return;
             isLoadedRef.current = false;
+
             const map = new maplibregl.Map({
-                container: containerRef.current!,
-                style: styleUrl,
+                container: containerRef.current,
+                style: chain[attempt],
                 center: [center.lng, center.lat],
                 zoom,
             });
             addStandardControls(map);
             mapRef.current = map;
-
-            map.on("error", (e) => {
-                if (cancelled) return;
-                const err = e?.error as Error | undefined;
-                if (!(err && /style/i.test(err.message ?? ""))) return;
-
-                // Positron is deliberately grayscale so heat layers pop; ask
-                // for the same flavor from the fallback provider rather than
-                // its default light style.
-                const fallback = !usedFallback ? monitoringFallbackStyle("grayscale") : null;
-                if (fallback && fallback !== styleUrl) {
-                    usedFallback = true;
-                    map.remove();
-                    buildMap(fallback);
-                    return;
-                }
-                setLoadError(err.message);
-            });
 
             map.on("load", () => {
                 isLoadedRef.current = true;
@@ -179,9 +170,31 @@ export default function HeatMap({
                     },
                 });
             });
+
+            detach = attachBasemapFallback(map, chain, attempt, {
+                onLoaded: () => {
+                    if (cancelled) return;
+                    setBasemapStatus("ok");
+                },
+                onRetry: (_next, nextAttempt) => {
+                    if (cancelled) return;
+                    detach?.();
+                    detach = null;
+                    map.remove();
+                    if (mapRef.current === map) mapRef.current = null;
+                    setBasemapStatus("retrying");
+                    buildMap(nextAttempt);
+                },
+                onExhausted: (reason) => {
+                    if (cancelled) return;
+                    setLoadError(reason);
+                    setBasemapStatus("failed");
+                },
+            });
         };
 
-        buildMap(MAP_STYLE_POSITRON); // grayscale so heat layers pop
+        setBasemapStatus("ok");
+        buildMap(0);
 
         // Resize fix for dialog / tab mount timing
         const resizeTimer = setTimeout(() => {
@@ -190,6 +203,7 @@ export default function HeatMap({
 
         return () => {
             cancelled = true;
+            detach?.();
             clearTimeout(resizeTimer);
             mapRef.current?.remove();
             mapRef.current = null;
@@ -246,9 +260,19 @@ export default function HeatMap({
     }
 
     return (
-        <div
-            ref={containerRef}
-            style={{ height, width: "100%", borderRadius: "8px", overflow: "hidden" }}
-        />
+        <div style={{ position: "relative", height, width: "100%", borderRadius: "8px", overflow: "hidden" }}>
+            <div
+                ref={containerRef}
+                style={{ height: "100%", width: "100%" }}
+            />
+            {basemapStatus === "retrying" && (
+                <div
+                    role="status"
+                    className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
+                >
+                    Basemap slow to load — trying another provider…
+                </div>
+            )}
+        </div>
     );
 }

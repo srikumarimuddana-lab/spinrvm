@@ -15,10 +15,18 @@ import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScre
 import { TrackBaseUrlContext } from './_layout';
 
 // Hosts that are allowed to load inside the in-app WebView.
-// track.spinr.ca is the current Spinr-controlled live-tracking domain. The
-// backend's app_settings.track_base_url must resolve to one of these. Any
-// other origin — including attacker-controlled deep-link injections — is
-// rejected with an error state before the WebView loads.
+// track.spinr.ca is the current Spinr-controlled live-tracking domain, and
+// app_settings.track_base_url should be set to it.
+//
+// Scope, precisely: this Set gates ONLY the caller-supplied `trackingUrl`
+// route param (the deep-link path, sanitized into sanitizedInitialUrl below).
+// It does NOT gate the track_base_url branch — fetchTrackingUrl builds
+// `${trackBaseUrl}/${token}` and sets it directly, without calling
+// isAllowedTrackingUrl. That is deliberate (track_base_url is admin-configured,
+// so it is trusted input, not attacker input), but it means a misconfigured
+// track_base_url fails as a WebView load error, not as "Invalid tracking link."
+// Don't read this allowlist as a blanket guarantee about every URL this screen
+// can load.
 //
 // spinr-track.app / www.spinr-track.app were removed 2026-09-14. They were
 // carried here as "backward compatibility with links already sent out before
@@ -56,10 +64,11 @@ export default function RideTrackingWebviewScreen() {
 
   const trackBaseUrl = useContext(TrackBaseUrlContext);
 
-  // Validate any caller-supplied trackingUrl before trusting it. Deep links
-  // include broad path patterns, and the custom spinr-user:// scheme is
-  // so an attacker could craft spinr-user://ride-tracking-webview?trackingUrl=
-  // https://evil.example/... and render a phishing page inside Spinr's chrome.
+  // Validate any caller-supplied trackingUrl before trusting it. The custom
+  // spinr-user:// scheme is registered (app.config.ts) and expo-router routes
+  // it straight to this screen, so an attacker could craft
+  // spinr-user://ride-tracking-webview?trackingUrl=https://evil.example/...
+  // and render a phishing page inside Spinr's chrome.
   const sanitizedInitialUrl =
     trackingUrl && isAllowedTrackingUrl(trackingUrl) ? trackingUrl : null;
 

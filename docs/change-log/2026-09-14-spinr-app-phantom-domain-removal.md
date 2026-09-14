@@ -154,8 +154,9 @@ Per-item, if one change specifically needs backing out:
       made by inspection and has NOT been executed.**
 - [x] `ruff check` + `ruff format --check` passed on all staged backend files, via the
       pre-commit hook (the hook has a working ruff even though the session's python does not)
-- [x] `python3 -m py_compile` clean on `middleware.py`, `users.py`, `drivers/referrals.py`,
-      `agents/deployer.py`
+- [x] `python3 -m py_compile` clean on every changed Python file: `middleware.py`,
+      `users.py`, `drivers/referrals.py`, `utils/rate_limiter.py`, `agents/deployer.py`,
+      and `tests/test_p1_cors.py`
 - [x] Both store-metadata files re-parsed with `json.loads` after editing
 - [x] Blast-radius greps performed and recorded: `referral_link` (6 → 0 occurrences),
       `spinr.app` / `spinr-track.app` / `api.spinr.app` repo-wide, `always_allowed` in
@@ -164,7 +165,19 @@ Per-item, if one change specifically needs backing out:
       matching every declared deep-link prefix, and every `openURL`/terms/privacy link site
 - [x] Reviewed against CLAUDE.md conventions: money paths untouched; no ride-state
       transition touched; no PII added to any log; dual-import pattern untouched
-- [x] Reviewer agent (`spinr-security-auditor`) run against the actual diff
+- [x] Reviewer agent (`spinr-security-auditor`) run against the actual diff. Verdict:
+      safe to merge, no PII/auth-bypass/money issue introduced, and it independently
+      confirmed the two load-bearing claims above (the `trackingUrl`-only deep-link
+      path, and that `track_base_url` bypasses the allowlist). It also found four
+      real defects, all fixed in a follow-up commit: a comment this work had
+      garbled in a security-relevant file, a dangling `§12` cross-reference, a
+      missing CORS regression assertion, and `marketing_url` shipped without the
+      TODO hedge its two sibling URLs carry. It surfaced `admin.spinr.ca` as a
+      separate pre-existing CORS gap — filed as C118(h), deliberately not fixed
+      here because adding an origin widens access
+- [x] Regression test added: `backend/tests/test_p1_cors.py` now asserts all four
+      removed origins stay absent, following the negative-assertion precedent the
+      file already used for the dead Vercel preview domain
 - [ ] Manual repro in staging — not performed
 - [x] Feature flag — deliberately none. Every item is a deletion or correction of an inert
       value, not a user-visible UX change, except the consent-link fix, which replaces a

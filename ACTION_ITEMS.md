@@ -26959,6 +26959,24 @@ Links / App Links config from both `app.config.ts` files; corrected the 429
       pages are published at `www.spinr.ca/legal/*`. The finding was never
       tracked in this file; it is tracked here now.
 
+- [ ] **(h) `admin.spinr.ca` (no dash) is not in the CORS allowlist.** Surfaced by
+      the `spinr-security-auditor` pass on this work, and **deliberately not fixed
+      there** — adding a CORS origin *widens* access, the opposite direction of
+      that PR, so it needs a decision rather than a drive-by. The facts:
+      `admin.spinr.ca` and `api.spinr.ca` both resolve, to the same Cloudflare
+      proxy IPs, and are therefore distinct from `admin-spinr.spinr.ca`, which
+      points straight at Vercel. `cert-domain-monitor.yml:57` monitors all four
+      as live certs, and `docs/audit/15_TECH_STACK_AND_FILE_MAPPING.md:616` plus
+      `docs/external-testing.md:90` both name `admin.spinr.ca` as *the*
+      production admin URL — but only the dashed form is in `middleware.py`'s
+      `always_allowed`. If `admin.spinr.ca` is a real entry point to the admin
+      dashboard, its browser calls to the API are CORS-rejected today unless the
+      deployed `ALLOWED_ORIGINS` env var covers it. Decide which hostname is
+      canonical, then either add the other to the allowlist or correct the docs
+      that name it. Note `backend/tests/test_csrf_middleware.py:402-438` already
+      uses `https://admin.spinr.ca` as its origin fixture, which suggests it was
+      once treated as real.
+
 **Note on how this propagated.** `reports/audits/2026-04-19-rider-app-v1.txt:2316`
 inferred the domain's existence *from the deep-link config* — "applinks:spinr.app
 … meaning spinr.app hosts a web landing page" — and remediation R-P1-27 then

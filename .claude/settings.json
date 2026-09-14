@@ -153,6 +153,9 @@
     }
   },
   "enabledPlugins": {
-    "feature-dev@claude-plugins-official@3ea32df": true
+    "feature-dev@claude-plugins-official@3ea32df": true,
+    "pyright-lsp@claude-plugins-official@022b3c2": true,
+    "typescript-lsp@claude-plugins-official@022b3c2": true,
+    "mcp-server-dev@claude-plugins-official@022b3c2": true
   }
 }

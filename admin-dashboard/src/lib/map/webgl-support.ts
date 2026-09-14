@@ -4,8 +4,8 @@
 //
 // Lives in its own module rather than inside ride-route-map.tsx so it can be
 // tested without importing maplibre-gl and its stylesheet, and so the other
-// admin maps (live-map, driver-map, geofence-map) can adopt the same probe when
-// they gain raster fallbacks.
+// admin maps (live-map, geofence-map) can adopt the same probe when they gain
+// raster fallbacks.
 
 /**
  * Does a real, drawing WebGL context exist?

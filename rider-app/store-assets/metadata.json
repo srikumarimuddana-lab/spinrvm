@@ -1,12 +1,12 @@
 {
-  "_comment": "App Store Connect + Google Play metadata for Spinr Rider. Fill in the values marked TODO before submitting. See docs/deploy/04-mobile-eas.md for submission steps.",
+  "_comment": "App Store Connect + Google Play metadata for Spinr Rider. Fill in the values marked TODO before submitting. BLOCKER: privacy_url, support_url and marketing_url below point at spinr.ca pages that DO NOT EXIST YET -- they read as finished values but are not. Apple and Google both require a reachable privacy URL as a condition of listing. These were https://spinr.app/* until 2026-09-14, a domain that has never resolved; the domain is now correct but the pages still have to be stood up before submission. See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md. See docs/deploy/04-mobile-eas.md for submission steps.",
 
   "app_store_connect": {
     "name": "Spinr – Rider",
     "subtitle": "Rides. Simple. 0% Commission.",
-    "privacy_url": "https://spinr.app/privacy",
-    "support_url": "https://spinr.app/support",
-    "marketing_url": "https://spinr.app",
+    "privacy_url": "https://spinr.ca/privacy",
+    "support_url": "https://spinr.ca/support",
+    "marketing_url": "https://spinr.ca",
     "apple_id": "TODO: numeric App Store Connect app ID (e.g. 1234567890)",
     "bundle_identifier": "com.spinr.user",
     "primary_category": "TRAVEL",

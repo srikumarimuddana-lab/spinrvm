@@ -82,6 +82,22 @@ interface CarMarkerProps {
      * source provides one.
      */
     fixTimestampMs?: number | null;
+    fixAccuracyM?: number | null;
+    /** Android Auto: constrain route alignment to observed travel. */
+    trackingV2?: boolean;
+    /**
+     * A course the CALLER has independently established as reliable, used ONLY
+     * to veto a route bearing that contradicts it — see selectBearing's
+     * `courseReference`. This is not `heading` above: that one is the raw
+     * platform value, which this component deliberately demotes because
+     * Android reports a placeholder `0` for "no bearing".
+     *
+     * Android Auto passes the car channel's resolved course, and only while
+     * `getHeadingSource()` says `gps`/`derived` — i.e. only when something
+     * corroborates it. Leave it null (every other call site) and bearing
+     * selection is unchanged.
+     */
+    courseReference?: number | null;
     /**
      * Un-throttled fix stream (see utils/fixFeed). When provided, it is the
      * primary ingest path — the `coordinate` prop then only seeds/anchors —
@@ -258,6 +274,9 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
     heading,
     fixTimestampMs,
+    fixAccuracyM,
+    trackingV2 = false,
+    courseReference = null,
     fixFeed,
     size = 40,
     zIndex = 1,
@@ -271,6 +290,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     mapHeadingRef,
 }) => {
     const markerRef = useRef<any>(null);
+    // Read by the playback ticker, which must not re-fire per prop change —
+    // same reasoning as headingRef below.
+    const trackingOptionsRef = useRef({ trackingV2, fixAccuracyM, courseReference });
+    useEffect(() => {
+        trackingOptionsRef.current = { trackingV2, fixAccuracyM, courseReference };
+    }, [trackingV2, fixAccuracyM, courseReference]);
     // Stable Animated holders created once; reading .current at init is safe.
     // eslint-disable-next-line react-hooks/refs
     const animatedRegion = useRef(
@@ -505,6 +530,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const ingestFix = useCallback((fix: MarkerFix) => {
         const now = Date.now();
         const rawCoord = { latitude: fix.latitude, longitude: fix.longitude };
+        if (trackingOptionsRef.current.trackingV2 && (
+            !Number.isFinite(fix.timestampMs) ||
+            fix.timestampMs > now + 5_000 ||
+            now - fix.timestampMs > 60_000 ||
+            (lastAcceptedRawFixRef.current != null &&
+                fix.timestampMs <= lastAcceptedRawFixRef.current.timestampMs)
+        )) return;
         const ts =
             Number.isFinite(fix.timestampMs) && Math.abs(now - fix.timestampMs) < 60_000
                 ? fix.timestampMs
@@ -591,7 +623,10 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 }
             }
         }
-        smoothingStateRef.current = smoothFix(smoothingStateRef.current, { ...rawCoord, timestampMs: ts });
+        smoothingStateRef.current = smoothFix(smoothingStateRef.current, {
+            ...rawCoord, timestampMs: ts,
+            accuracyM: fix.accuracyM ?? trackingOptionsRef.current.fixAccuracyM,
+        });
         const coord = { latitude: smoothingStateRef.current.latitude, longitude: smoothingStateRef.current.longitude };
         pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);
     }, []);
@@ -621,7 +656,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         const prev = prevCoordRef.current;
         const now = Date.now();
         if (
-            bufferRef.current.length > 0 &&
+            !trackingV2 && bufferRef.current.length > 0 &&
             prev.latitude === coordinate.latitude &&
             prev.longitude === coordinate.longitude
         ) {
@@ -638,9 +673,9 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // travel time, halving the played-back speed). ingestFix guards a
         // nonsense device clock by falling back to arrival time.
         ingestFix({ ...coordinate, timestampMs: fixTimestampMs ?? now });
-        // fixTimestampMs intentionally not a dep: it describes this coordinate.
+        // Timestamp-only updates matter at rest: they stop extrapolation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [coordinate.latitude, coordinate.longitude, coordinate]);
+    }, [coordinate.latitude, coordinate.longitude, coordinate, fixTimestampMs, trackingV2]);
 
     // ── Playback ticker. Every TICK_MS the marker animates toward the
     // playback position ONE TICK IN THE FUTURE with LINEAR easing, so the
@@ -705,13 +740,26 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     heading: headingRef.current,
                     hasMovementBearing: hasMovementBearingRef.current,
                     minMoveMeters: MIN_BEARING_MOVE_M,
+                    courseReference: trackingOptionsRef.current.courseReference,
                 }),
                 { bearing: p.bearing, mode: p.mode },
             );
             const bearing = selected.bearing;
             prevTargetRef.current = target;
             if (bearing != null) {
-                if (selected.source === 'route' || selected.source === 'travel') {
+                if (
+                    selected.source === 'route' ||
+                    selected.source === 'travel' ||
+                    // 'reference' is only ever returned AFTER movement cleared
+                    // minMoveMeters and every movement-derived candidate was
+                    // refused — the same "movement has established a direction"
+                    // precondition the two above represent. Leaving the latch
+                    // unarmed for it reopens the raw-heading fallback, so a car
+                    // that stopped after a vetoed stretch could be spun to north
+                    // by Android's placeholder 0 — the exact failure this latch
+                    // exists to prevent, reached through the new opt-in path.
+                    selected.source === 'reference'
+                ) {
                     hasMovementBearingRef.current = true;
                 }
                 lastWorldBearingRef.current = bearing;
@@ -1085,6 +1133,9 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.coordinate.longitude === next.coordinate.longitude &&
         prev.heading === next.heading &&
         prev.fixTimestampMs === next.fixTimestampMs &&
+        prev.fixAccuracyM === next.fixAccuracyM &&
+        prev.trackingV2 === next.trackingV2 &&
+        prev.courseReference === next.courseReference &&
         prev.fixFeed === next.fixFeed &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&

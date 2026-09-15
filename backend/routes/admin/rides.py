@@ -19,6 +19,7 @@ try:
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn as _spawn
+    from ...utils.datetime_utils import parse_iso_utc
     from ...utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -44,6 +45,7 @@ except ImportError:
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
     from utils.background import spawn as _spawn  # type: ignore
+    from utils.datetime_utils import parse_iso_utc
     from utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -59,7 +61,13 @@ except ImportError:
     from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import default_limiter as limiter
 
-from .drivers import _batch_fetch_drivers_and_users, _user_display_name
+from .drivers import (
+    _DRIVER_SORT_COLUMNS,
+    _batch_fetch_drivers_and_users,
+    _query_driver_rows,
+    _sort_key,
+    _user_display_name,
+)
 
 db = db_supabase  # legacy alias
 
@@ -2996,7 +3004,24 @@ async def admin_export_rides(
 
 @router.get("/export/drivers")
 async def admin_export_drivers(
-    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    limit: int = Query(_EXPORT_MAX_ROWS, ge=1, le=_EXPORT_MAX_ROWS),
+    search: Optional[str] = None,
+    is_verified: Optional[bool] = None,
+    is_online: Optional[bool] = None,
+    is_available: Optional[bool] = None,
+    status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    vehicle_type_id: Optional[str] = None,
+    photo_status: Optional[str] = None,
+    missing_license: bool = False,
+    legacy_import: Optional[bool] = None,
+    pre_launch: Optional[bool] = None,
+    dormant: Optional[bool] = None,
+    dormancy_tier: Optional[str] = None,
+    onboarding_complete: Optional[bool] = None,
+    legacy_review: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
     """Export drivers data. Writes an audit log entry (F-41)."""
@@ -3016,20 +3041,50 @@ async def admin_export_drivers(
         "decals_sent,decals_sent_at,decal_generated_at,decal_number,"
         "created_at,verified_at,deleted_at,last_status_changed_at,updated_at"
     )
-    drivers = await db_supabase.get_rows(
-        "drivers",
-        order="created_at",
-        desc=True,
-        limit=limit,
-        columns=_DRIVER_EXPORT_COLS,
-    )
+    # Export the full matching list, not the visible page. Read a sentinel row
+    # beyond the cap so we never report a silently truncated CSV as complete.
+    drivers = []
+    while len(drivers) <= limit:
+        page_size = min(1000, limit + 1 - len(drivers))
+        page = await _query_driver_rows(
+            limit=page_size,
+            offset=len(drivers),
+            columns=_DRIVER_EXPORT_COLS,
+            search=search,
+            is_verified=is_verified,
+            is_online=is_online,
+            is_available=is_available,
+            status=status,
+            service_area_id=service_area_id,
+            vehicle_type_id=vehicle_type_id,
+            photo_status=photo_status,
+            missing_license=missing_license,
+            legacy_import=legacy_import,
+            pre_launch=pre_launch,
+            dormant=dormant,
+            dormancy_tier=dormancy_tier,
+            onboarding_complete=onboarding_complete,
+            legacy_review=legacy_review,
+            # A unique order prevents tied display values from reshuffling
+            # between pages. Apply the requested display sort after collection.
+            sort_by="id",
+            sort_dir="asc",
+        )
+        drivers.extend(page)
+        if len(page) < page_size:
+            break
+    if len(drivers) > limit:
+        raise HTTPException(status_code=413, detail="Too many matching drivers. Narrow the filters and export again.")
+    order_col = _DRIVER_SORT_COLUMNS.get((sort_by or "").strip(), "created_at")
+    drivers.sort(key=lambda row: _sort_key(row.get(order_col)), reverse=(sort_dir or "desc").strip().lower() != "asc")
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     # Export rows only carry name/email/phone from the user row — project those
     # so the export doesn't read base64 profile_image for every driver.
     users_list = (
-        await db_supabase.get_rows(
+        await db_supabase.get_rows_batched_in(
             "users",
-            {"id": {"$in": user_ids}},
+            "id",
+            user_ids,
             columns="id,first_name,last_name,email,phone",
             limit=max(len(user_ids), 1),
         )
@@ -3118,24 +3173,27 @@ async def admin_export_drivers(
     license_masked = [None if isinstance(m, BaseException) else m for m in license_masked]
     _license_exported = sum(1 for m in license_masked if m)
 
-    # Spinr Pass status — one batch query, newest row per driver (mirrors
-    # admin_get_drivers). Reuses the same summary reducer so the export shows
-    # the same status the list does.
+    # Fleet-sized IN filters must be split to avoid proxy URL limits. Fetch
+    # every subscription page, then select the newest row per driver: the
+    # batching helper does not promise ordering across requests.
     _driver_ids = [d.get("id") for d in drivers if d.get("id")]
     subs_map: dict = {}
     if _driver_ids:
         try:
-            _subs = await db_supabase.get_rows(
+            _subs = await db_supabase.get_rows_batched_in(
                 "driver_subscriptions",
-                {"driver_id": {"$in": _driver_ids}},
+                "driver_id",
+                _driver_ids,
                 columns="driver_id,plan_name,status,expires_at,created_at",
-                order="created_at",
-                desc=True,
-                limit=max(len(_driver_ids) * 5, 100),
             )
+            _oldest = datetime.min.replace(tzinfo=timezone.utc)
             for s in _subs or []:
                 did = s.get("driver_id")
-                if did and did not in subs_map:
+                if did and (
+                    did not in subs_map
+                    or (parse_iso_utc(s.get("created_at")) or _oldest)
+                    > (parse_iso_utc(subs_map[did].get("created_at")) or _oldest)
+                ):
                     subs_map[did] = s
         except Exception as _sub_err:
             logger.warning("admin_export_drivers: subscription enrichment failed: %s", _sub_err)

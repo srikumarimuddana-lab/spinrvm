@@ -716,6 +716,218 @@ class TestAdminExportRidesFiltered:
 
 
 class TestAdminExportDrivers:
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("status=active&service_area_id=saskatoon", ["a"]),
+            ("is_online=true&vehicle_type_id=sedan", ["a", "b"]),
+            ("status=pending&service_area_id=regina", []),
+            ("legacy_import=false", ["a", "c"]),
+            ("onboarding_complete=true&pre_launch=false", ["a", "b"]),
+            ("dormant=true&dormancy_tier=long_dormant", ["b"]),
+            ("legacy_review=true", ["c"]),
+            ("photo_status=pending_review&service_area_id=saskatoon", ["c"]),
+            ("search=Alex&status=active", ["a"]),
+            ("sort_by=created_at&sort_dir=asc", ["c", "b", "a"]),
+        ],
+    )
+    def test_export_uses_list_filters(self, client, as_super_admin, monkeypatch, query, expected):
+        from routes.admin import drivers as driver_routes
+
+        drivers = [
+            dict(
+                id="a",
+                user_id="u-a",
+                status="active",
+                service_area_id="saskatoon",
+                vehicle_type_id="sedan",
+                is_online=True,
+                legacy_import_metadata={},
+                created_at="2026-03-01",
+            ),
+            dict(
+                id="b",
+                user_id="u-b",
+                status="active",
+                service_area_id="regina",
+                vehicle_type_id="sedan",
+                is_online=True,
+                legacy_import_metadata={"source": "legacy"},
+                created_at="2026-02-01",
+            ),
+            dict(
+                id="c",
+                user_id="u-c",
+                status="pending",
+                service_area_id="saskatoon",
+                vehicle_type_id="xl",
+                is_online=False,
+                legacy_import_metadata={},
+                created_at="2026-01-01",
+            ),
+        ]
+
+        def matches(row, filters):
+            for key, value in (filters or {}).items():
+                if key == "$or":
+                    if not any(matches(row, clause) for clause in value):
+                        return False
+                elif isinstance(value, dict):
+                    actual = row.get(key)
+                    if "$in" in value and actual not in value["$in"]:
+                        return False
+                    if "$nin" in value and actual in value["$nin"]:
+                        return False
+                    if "$eq" in value and actual != value["$eq"]:
+                        return False
+                    if "$ne" in value and actual == value["$ne"]:
+                        return False
+                    if "$regex" in value and value["$regex"].lower() not in str(actual or "").lower():
+                        return False
+                elif row.get(key) != value:
+                    return False
+            return True
+
+        async def get_rows(table, filters=None, **kwargs):
+            rows = (
+                drivers
+                if table == "drivers"
+                else (
+                    [{"id": "u-a", "first_name": "Alex"}, {"id": "u-c", "profile_image_status": "pending_review"}]
+                    if table == "users"
+                    else []
+                )
+            )
+            rows = [r for r in rows if matches(r, filters)]
+            if kwargs.get("order"):
+                rows.sort(key=lambda r: r.get(kwargs["order"]) or "", reverse=kwargs.get("desc", False))
+            start = kwargs.get("offset") or 0
+            return rows[start : start + kwargs.get("limit", 1000)]
+
+        monkeypatch.setattr(driver_routes, "fetch_pre_launch_flagged_ids", lambda _: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_incomplete_onboarding_driver_ids", lambda: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_suspect_legacy_driver_ids", lambda: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_dormancy_flagged_ids", lambda tier: {"b"})
+        monkeypatch.setattr(driver_routes, "_resolve_driver_search_user_ids", AsyncMock(return_value=["u-a"]))
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()),
+        ):
+            listed = client.get(f"/api/admin/drivers?{query}")
+            exported = client.get(f"/api/admin/export/drivers?{query}")
+        assert listed.status_code == exported.status_code == 200
+        assert [d["id"] for d in listed.json()] == expected
+        assert [d["id"] for d in exported.json()["drivers"]] == expected
+
+    @pytest.mark.parametrize("limit,expected_status", [(None, 200), (1001, 200), (1000, 413)])
+    def test_export_reads_all_matching_pages_or_rejects_partial_file(
+        self, client, as_super_admin, limit, expected_status
+    ):
+        drivers = [{"id": f"d-{i}", "status": "active"} for i in range(1001)]
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table != "drivers":
+                return []
+            assert kwargs["order"] == "id" and kwargs["desc"] is False
+            start = kwargs.get("offset") or 0
+            return drivers[start : start + kwargs["limit"]]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers", params={"limit": limit} if limit else {})
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert response.json()["count"] == 1001
+            assert [d["id"] for d in response.json()["drivers"]] == [d["id"] for d in drivers]
+        else:
+            assert "drivers" not in response.json()
+            audit.assert_not_awaited()
+
+    @pytest.fixture(autouse=True)
+    def route_batch_reads_through_test_db(self, monkeypatch):
+        # Keep the real batching helper; replace only its DB boundary.
+        import db_supabase
+        import repositories._base as base
+
+        async def get_rows(*args, **kwargs):
+            return await db_supabase.get_rows(*args, **kwargs)
+
+        monkeypatch.setattr(base, "get_rows", get_rows)
+
+    @pytest.mark.parametrize("count", [151, 927])
+    def test_fleet_export_preserves_users_and_latest_subscriptions(self, client, as_super_admin, count):
+        from urllib.parse import urlencode
+
+        drivers = [
+            {"id": f"{i:08d}-0000-4000-8000-{i:012d}", "user_id": f"{i:08d}-0000-4000-9000-{i:012d}"}
+            for i in range(count)
+        ]
+        users = [{"id": d["user_id"], "email": f"driver-{i}@example.com"} for i, d in enumerate(drivers)]
+        # More than one page, with newest rows last and mixed timezone offsets.
+        subscriptions = [
+            {"driver_id": d["id"], "plan_name": plan, "status": "active", "created_at": created}
+            for plan, created in [("Old", "2026-09-15T10:00:00Z")] * 7 + [("Latest", "2026-09-15T06:00:00-06:00")]
+            for d in drivers
+        ]
+        requested_urls = []
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return drivers[: kwargs["limit"]]
+            if table not in ("users", "driver_subscriptions"):
+                return []
+            key = "id" if table == "users" else "driver_id"
+            ids = filters[key]["$in"]
+            url = "/rest/v1/" + table + "?" + urlencode({key: "in.(" + ",".join(ids) + ")"})
+            requested_urls.append(url)
+            assert len(url) < 8000, "oversized PostgREST request URL"
+            rows = [r for r in (users if table == "users" else subscriptions) if r[key] in ids]
+            start = kwargs.get("offset") or 0
+            return rows[start : start + kwargs["limit"]]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == count
+        assert [d["id"] for d in body["drivers"]] == [d["id"] for d in drivers]
+        assert [d["email"] for d in body["drivers"]] == [u["email"] for u in users]
+        assert all(d["subscription_plan"] == "Latest" for d in body["drivers"])
+        assert max(map(len, requested_urls)) < 8000
+        assert audit.call_args.args[1]["details"]["row_count"] == count
+
+    def test_user_batch_failure_does_not_return_partial_export(self, client, as_super_admin):
+        from utils.error_handling import DatabaseError
+
+        drivers = [{"id": f"d-{i}", "user_id": f"u-{i}"} for i in range(151)]
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return drivers
+            ids = filters["id"]["$in"]
+            if len(ids) < 150:
+                raise DatabaseError()
+            return [{"id": uid} for uid in ids]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers")
+
+        assert response.status_code == 503
+        assert "drivers" not in response.json()
+        audit.assert_not_awaited()
+
     def test_export_drivers_happy_path_no_drivers(self, client, as_super_admin):
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),

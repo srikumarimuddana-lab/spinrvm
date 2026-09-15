@@ -350,6 +350,7 @@ def _subscription_summary(sub: Optional[Dict[str, Any]], now: datetime) -> tuple
 # Any token not in this map falls back to created_at so an unexpected value can
 # never inject an arbitrary column into the ORDER BY.
 _DRIVER_SORT_COLUMNS = {
+    "id": "id",
     "created_at": "created_at",
     "name": "first_name",
     "status": "status",
@@ -477,10 +478,9 @@ async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
     return uids
 
 
-@router.get("/drivers")
-async def admin_get_drivers(
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+async def _query_driver_rows(
+    limit: int = 50,
+    offset: int = 0,
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
@@ -498,17 +498,13 @@ async def admin_get_drivers(
     legacy_review: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
+    columns: str = "*",
 ):
-    """Get drivers with filters, enriched with user name/email/phone.
+    """Select raw driver rows with the list/export filters and ordering.
 
     Search, filtering, sorting and pagination all happen at the DB so the admin
     UI operates over the ENTIRE drivers table, not just the rows already loaded
     into the current page.
-
-    Defense-in-depth dedup: migration 31 adds UNIQUE(drivers.phone) and
-    UNIQUE(drivers.user_id) so duplicates can't exist at the DB level.
-    We still collapse by phone/user_id here so that if a legacy snapshot
-    ever restores old state, the admin UI won't show duplicate rows.
 
     `pre_launch`: filters on the pre-launch-legacy-data flag
     (`legacy_import_metadata.pre_launch_test`, set by
@@ -686,7 +682,9 @@ async def admin_get_drivers(
     # — unless the caller explicitly asks for ascending.
     desc = (sort_dir or "desc").strip().lower() != "asc"
     if photo_uids is None:
-        drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
+        drivers = await db_supabase.get_rows(
+            "drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset, columns=columns
+        )
     else:
         # photo_status resolves to a user_id set that the query above caps at
         # 1000. As `filters["user_id"] = {"$in": photo_uids}` that is a ~39 KB
@@ -698,9 +696,57 @@ async def admin_get_drivers(
         # URL-safe batches and order/page in Python rather than asking the
         # database to. Ordering cannot be delegated here: batches are ordered
         # per request, so a DB-side `order` would only sort within each batch.
-        rows = await db_supabase.get_rows_batched_in("drivers", "user_id", photo_uids, filters)
+        rows = await db_supabase.get_rows_batched_in("drivers", "user_id", photo_uids, filters, columns=columns)
         rows.sort(key=lambda r: _sort_key(r.get(order_col)), reverse=desc)
         drivers = rows[offset : offset + limit]
+
+    return drivers
+
+
+@router.get("/drivers")
+async def admin_get_drivers(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = None,
+    is_verified: Optional[bool] = None,
+    is_online: Optional[bool] = None,
+    is_available: Optional[bool] = None,
+    status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    vehicle_type_id: Optional[str] = None,
+    photo_status: Optional[str] = None,
+    missing_license: bool = False,
+    legacy_import: Optional[bool] = None,
+    pre_launch: Optional[bool] = None,
+    dormant: Optional[bool] = None,
+    dormancy_tier: Optional[str] = None,
+    onboarding_complete: Optional[bool] = None,
+    legacy_review: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = None,
+):
+    """List a page of drivers using the shared list/export selection rules."""
+    drivers = await _query_driver_rows(
+        limit=limit,
+        offset=offset,
+        search=search,
+        is_verified=is_verified,
+        is_online=is_online,
+        is_available=is_available,
+        status=status,
+        service_area_id=service_area_id,
+        vehicle_type_id=vehicle_type_id,
+        photo_status=photo_status,
+        missing_license=missing_license,
+        legacy_import=legacy_import,
+        pre_launch=pre_launch,
+        dormant=dormant,
+        dormancy_tier=dormancy_tier,
+        onboarding_complete=onboarding_complete,
+        legacy_review=legacy_review,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
 
     # Defensive dedup — keep the earliest-created row per (user_id, phone) while
     # preserving the DB-returned ORDER BY. We decide which rows to KEEP by

@@ -224,13 +224,9 @@ export default function DriversPage() {
         getDriverStats(params).then((res) => { setData(res); setServiceAreas(res.service_areas || []); }).catch(() => {}).finally(() => setLoading(false));
     }, [serviceAreaId, startDate, endDate]);
 
-    const loadDrivers = useCallback(() => {
-        setTableLoading(true);
-        const reqId = ++reqIdRef.current;
-        // Everything the list narrows/orders by is sent to the server so the
-        // query runs over the entire table: search, service-area, vehicle-type,
-        // status, and sort. The browser only renders the returned page.
-        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE, sort_by: sortKey, sort_dir: sortDir };
+    // One filter snapshot drives both the visible list and its full export.
+    const driverListFilters = useMemo(() => {
+        const opts: NonNullable<Parameters<typeof exportDrivers>[0]> = { sort_by: sortKey, sort_dir: sortDir };
         if (searchDebounced) opts.search = searchDebounced;
         if (serviceAreaId) opts.service_area_id = serviceAreaId;
         if (vehicleTypeFilter) opts.vehicle_type_id = vehicleTypeFilter;
@@ -255,9 +251,15 @@ export default function DriversPage() {
             opts.dormant = true;
             opts.dormancy_tier = "long_dormant";
         }
+        return opts;
+    }, [serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, dormancyFilter, sortKey, sortDir]);
+
+    const loadDrivers = useCallback(() => {
+        setTableLoading(true);
+        const reqId = ++reqIdRef.current;
         // Returns the rendered page so a caller that just mutated a driver can
         // re-sync the open detail sheet from the refreshed server rows.
-        return getDrivers(opts)
+        return getDrivers({ ...driverListFilters, limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE })
             .then((rows) => {
                 if (reqId !== reqIdRef.current) return [] as any[];
                 const arr = Array.isArray(rows) ? rows : [];
@@ -268,7 +270,7 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, dormancyFilter, sortKey, sortDir]);
+    }, [page, driverListFilters]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
@@ -727,7 +729,11 @@ export default function DriversPage() {
 
     const handleExport = async () => {
         try {
-            const res = await exportDrivers();
+            // A click can arrive before the list's search debounce completes.
+            const exportFilters = { ...driverListFilters };
+            if (search.trim()) exportFilters.search = search.trim();
+            else delete exportFilters.search;
+            const res = await exportDrivers(exportFilters);
             exportToCsv("drivers", res.drivers, [
                 { key: "id", label: "ID" }, { key: "driver_code", label: "Driver Code" },
                 { key: "name", label: "Name" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" },

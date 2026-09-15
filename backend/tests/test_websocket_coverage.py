@@ -219,7 +219,16 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
             ws.send_json({"type": "auth", "token": "tok"})
             ws.receive_json()
 
-            ws.send_json({"type": "driver_location", "lat": 50.4452, "lng": -104.6189, "speed": 12, "heading": 90})
+            ws.send_json(
+                {
+                    "type": "driver_location",
+                    "lat": 50.4452,
+                    "lng": -104.6189,
+                    "speed": 12,
+                    "heading": 90,
+                    "captured_at": "2026-09-15T19:00:00+00:00",
+                }
+            )
             # No direct ack for driver_location — give the loop a beat then
             # send a pong to confirm the socket is still alive and the
             # handler didn't raise.
@@ -238,6 +247,8 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
     send_personal.assert_awaited()
     sent_msg, sent_target = send_personal.await_args.args[0], send_personal.await_args.args[1]
     assert sent_msg["type"] == "driver_location_update"
+    assert sent_msg["ride_id"] == active_ride["id"]
+    assert sent_msg["captured_at"] == "2026-09-15T19:00:00+00:00"
     assert sent_target == f"rider_{active_ride['rider_id']}"
     assert sent_msg.get("eta_seconds") == 42
     broadcast_admin_loc.assert_awaited_once()

@@ -116,3 +116,23 @@ Existing access-token policy is unchanged: an expired token defers uploads until
 the foreground renews it. Long screen-lock testing across token expiry is REQUIRED;
 this patch does not claim uninterrupted live delivery across that existing limit.
 Rollback: disable backend flag for live delivery; revert app update for sender.
+
+## Rider ordering and fallback
+
+Root cause: rider ignored ride/driver/capture metadata and treated socket health
+as proof of driver GPS delivery. Old HTTP replies could overwrite a newer event
+once the 10s grace expired. Fix: validate identity, coordinates, age and capture
+ordering; preserve a live fix when an older HTTP request finishes. Both backend
+WS producers now forward original capture time and per-recipient ride identity.
+Before: `if (wsConnected) return` skipped fallback for a silent driver stream.
+After: 15s fallback checks the last driver-message age; resume fetches immediately.
+Alternative: always poll; freshness-driven polling avoids unnecessary DB traffic.
+Consumers: rider useRiderSocket and rideStore, ride-in-progress, driver-arriving's
+existing 5s poll. Driver-arriving interval unchanged; both benefit from store guards.
+Files: rider hook/store + their tests; ride-in-progress + new fallback hook/test;
+backend websocket.py + websocket coverage regression; this log.
+UX: stale movement can recover without reconnecting the rider. Risk: old clients
+without capture times still use arrival time; update backend before enabling REST
+fanout. No UI layout changed; no active mobile visual-regression tooling exists.
+Rollback: revert app/backend update; disable REST flag. No money/state transition
+or historical GPS mutation. 18 rider store/hook tests pass with native/API mocks.

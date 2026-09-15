@@ -17,7 +17,7 @@ import RideLostFound from "./ride-lost-found";
 import RideFlagForm from "./ride-flag-form";
 import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
-import { normalizeDecodedPolyline, routeQualityLabel } from "@spinr/shared/utils/routeSegments";
+import { normalizeActualRouteSegments, normalizeDecodedPolyline, routeQualityLabel } from "@spinr/shared/utils/routeSegments";
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
@@ -756,6 +756,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const pp = ride.phase_polylines || {};
                                             const pickupPts = normalizeDecodedPolyline(pp.navigating_to_pickup);
                                             const tripPts = normalizeDecodedPolyline(pp.trip_in_progress);
+                                            const bookedPts = normalizeDecodedPolyline(ride.planned_route_polyline);
 
                                             let pickupProp: typeof pickupPts | undefined;
                                             let pickupApprox = false;
@@ -805,18 +806,28 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 }
                                             } else if (selectedPhase === "actual") {
                                                 const isV2Route = Number(ride.route_schema_version || 0) >= 2;
-                                                if (isV2Route) {
+                                                const distanceBasis = ride.route_quality?.distance_basis;
+                                                const hasDrawableGps = isV2Route
+                                                    ? normalizeActualRouteSegments(ride.actual_route_segments)
+                                                        .some((segment) => segment.coordinates.length > 1)
+                                                    : false;
+                                                // Finalizer copies planned km when GPS cannot be trusted
+                                                // (`planned_estimated`). A leftover fragment still draws as
+                                                // "actual GPS" and the camera zooms into a few blocks while
+                                                // the card says 8 km. Use the booked road path instead.
+                                                const gpsTooIncomplete = distanceBasis === "planned_estimated"
+                                                    || (isV2Route && !hasDrawableGps);
+                                                if (isV2Route && !gpsTooIncomplete && hasDrawableGps) {
                                                     actualSegmentsProp = ride.actual_route_segments;
-                                                    const segmentCount = Array.isArray(ride.actual_route_segments)
-                                                        ? ride.actual_route_segments.length : 0;
                                                     label = `Pickup → Dropoff (actual GPS) · ${routeQualityLabel(ride.route_quality)}`;
-                                                    if (!segmentCount) {
-                                                        emptyHint = "No captured GPS segments are available for this ride";
-                                                    }
-                                                } else {
+                                                } else if (bookedPts.length > 1 && gpsTooIncomplete) {
+                                                    plannedProp = bookedPts;
+                                                    label = `Pickup → Dropoff · ${routeQualityLabel(ride.route_quality)}`;
+                                                } else if (!isV2Route) {
                                                 // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
                                                 // the clean on-road route SGI / dispute review should see — then
-                                                // fall back to raw trip GPS, then the legacy combined polyline.
+                                                // fall back to raw trip GPS, then the legacy combined polyline,
+                                                // then the booked path so a GPS-less v1 ride still shows km.
                                                 const roadPts = normalizeDecodedPolyline(ride.road_polyline);
                                                 if (roadPts.length > 1) {
                                                     label = "Pickup → Dropoff (road-matched)";
@@ -825,20 +836,30 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     label = "Pickup → Dropoff (actual GPS)";
                                                     tripProp = tripPts;
                                                 } else {
-                                                    label = "Pickup → Dropoff (actual GPS)";
                                                     const legacy = normalizeDecodedPolyline(ride.route_polyline);
-                                                    if (legacy.length > 1) trailForMap = legacy;
-                                                    else emptyHint = "No trip GPS trail for this ride";
+                                                    if (legacy.length > 1) {
+                                                        label = "Pickup → Dropoff (actual GPS)";
+                                                        trailForMap = legacy;
+                                                    } else if (bookedPts.length > 1) {
+                                                        plannedProp = bookedPts;
+                                                        label = "Pickup → Dropoff · Distance estimated from booking · GPS incomplete";
+                                                    } else {
+                                                        label = "Pickup → Dropoff (actual GPS)";
+                                                        emptyHint = "No trip GPS trail for this ride";
+                                                    }
                                                 }
+                                                } else {
+                                                    actualSegmentsProp = ride.actual_route_segments;
+                                                    label = `Pickup → Dropoff (actual GPS) · ${routeQualityLabel(ride.route_quality)}`;
+                                                    emptyHint = "No captured GPS segments are available for this ride";
                                                 }
                                             } else {
                                                 // Planned route: the road-following polyline captured from
                                                 // the Directions API at booking. Falls back to the dashed
                                                 // straight line (drawn by the map) when none was stored.
-                                                const plannedPts = normalizeDecodedPolyline(ride.planned_route_polyline);
-                                                if (plannedPts.length > 1) {
+                                                if (bookedPts.length > 1) {
                                                     label = "Planned Trip (road-following)";
-                                                    plannedProp = plannedPts;
+                                                    plannedProp = bookedPts;
                                                 } else {
                                                     label = "Planned Trip (straight-line reference)";
                                                 }

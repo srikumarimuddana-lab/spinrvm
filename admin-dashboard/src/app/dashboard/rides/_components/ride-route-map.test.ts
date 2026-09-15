@@ -81,6 +81,14 @@ describe('admin route replay contract', () => {
     expect(detailSource).toContain('setSelectedPhase("planned")');
   });
 
+  it('draws the booked polyline on Actual Trip when GPS is too incomplete to measure', () => {
+    // planned_estimated means the km card already shows booked distance; the
+    // map must show that same path, not a leftover GPS fragment.
+    expect(detailSource).toContain('planned_estimated');
+    expect(detailSource).toContain('gpsTooIncomplete');
+    expect(detailSource).toContain('normalizeActualRouteSegments');
+  });
+
   it('passes the v2 actual segments and their quality label from the admin detail', () => {
     expect(detailSource).toContain('actual_route_segments');
     expect(detailSource).toContain('routeQualityLabel');

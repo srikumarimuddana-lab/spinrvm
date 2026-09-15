@@ -26,16 +26,16 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
-    from .scheduled_ride_config import ScheduledRideConfig
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
+    from .scheduled_ride_config import ScheduledRideConfig
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager  # type: ignore[no-redef]
-    from utils.scheduled_ride_config import ScheduledRideConfig
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx  # type: ignore[no-redef]
+    from utils.scheduled_ride_config import ScheduledRideConfig
 
 try:
     from .metrics import inc as _metric_inc

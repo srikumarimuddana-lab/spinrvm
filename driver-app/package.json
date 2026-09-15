@@ -62,7 +62,7 @@
     "expo-updates": "~57.0.22",
     "expo-web-browser": "~57.0.3",
     "firebase": "^12.19.0",
-    "react": "19.2.3",
+    "react": "19.3.0",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
     "react-native-confirmation-code-field": "^8.0.1",
@@ -104,13 +104,13 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
-    "react": "19.2.3",
+    "react": "19.3.0",
     "react-dom": "19.2.3",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1"
   },
   "resolutions": {
-    "react": "19.2.3",
+    "react": "19.3.0",
     "react-dom": "19.2.3",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",

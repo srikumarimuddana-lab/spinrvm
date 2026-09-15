@@ -1716,18 +1716,14 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
 
     async def _write() -> None:
         try:
-            await db.insert_one(
-                "notifications",
-                {
-                    "id": str(uuid.uuid4()),
-                    "user_id": user_id,
-                    "title": title,
-                    "body": body,
-                    "type": notification_type,
-                    "data": data or {},
-                    "is_read": False,
-                },
-            )
+            row = {"id": str(uuid.uuid4()), "user_id": user_id, "title": title,
+                   "body": body, "type": notification_type, "data": data or {}, "is_read": False}
+            if notification_type in {"scheduled_ride_reminder", "scheduled_driver_reminder"} and (data or {}).get("ride_id"):
+                # Retries preserve the first inbox row, including its read state.
+                row["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"spinr:{notification_type}:{data['ride_id']}:{user_id}"))
+                await db.insert_many_ignore_conflicts("notifications", [row], on_conflict="id")
+            else:
+                await db.insert_one("notifications", row)
         except Exception as exc:
             # 23503 on notifications_user_id_fkey means the recipient is no
             # longer in `users`. The commonest source is metadata.user_id read
@@ -1776,8 +1772,12 @@ async def send_push_notification(
     data: Dict[str, str] | None = None,
     priority: str = "normal",
     target_app: str | None = None,
+    report_suppression: bool = False,
 ):
     """Send a push notification to a user.
+
+    ``report_suppression`` opts into None for suppression/no device (terminal),
+    False for transient delivery failure (retryable). Default callers retain bool.
 
     Routes automatically: Expo push tokens go via Expo's REST API; all other
     tokens are assumed to be FCM and sent via Firebase Admin SDK.
@@ -1839,7 +1839,7 @@ async def send_push_notification(
                     f"push: suppressed by push_enabled=false for user {user_id} "
                     f"(priority={priority}); inbox row still recorded"
                 )
-                return False
+                return None if report_suppression else False
             # Finer-grained opt-out layered on top of push_enabled: a rider/
             # driver who leaves push on in general may still turn off the
             # "Ride Updates" toggle specifically (notification_preferences.
@@ -1851,7 +1851,7 @@ async def send_push_notification(
                     f"push: suppressed by ride_updates=false for user {user_id} "
                     f"(type={notif_type}); inbox row still recorded"
                 )
-                return False
+                return None if report_suppression else False
 
             # Global quiet-hours + daily-cap throttling (utils/notification_throttle.py),
             # gated behind notification_throttling_enabled (defaults False — ships
@@ -1882,7 +1882,7 @@ async def send_push_notification(
                         f"push: suppressed by notification_throttling for user {user_id} "
                         f"(priority={priority}); inbox row still recorded"
                     )
-                    return False
+                    return None if report_suppression else False
         except Exception:
             logger.opt(exception=True).error(
                 f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)"
@@ -1898,7 +1898,7 @@ async def send_push_notification(
         user = await db.find_one("users", {"id": user_id})
         if not user:
             logger.warning(f"No user found for {user_id} — push dropped")
-            return False
+            return None if report_suppression else False
 
         token: str | None = None
         if target_app == "rider":
@@ -1910,7 +1910,7 @@ async def send_push_notification(
 
         if not token:
             logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
-            return False
+            return None if report_suppression else False
 
         # Primary path: deliver right now (≈100–300 ms) so a ride offer reaches
         # the driver's phone well inside the offer window. A queued-only dispatch

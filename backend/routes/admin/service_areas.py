@@ -12,6 +12,7 @@ try:
     from ...routes.fares import invalidate_fare_cache
     from ...services.fare_service import DEFAULT_FARE
     from ...utils.audit_logger import log_admin_action
+    from ...utils.scheduled_ride_config import ScheduledRideConfig
     from ...utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
@@ -19,6 +20,7 @@ except ImportError:
     from routes.fares import invalidate_fare_cache
     from services.fare_service import DEFAULT_FARE
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.scheduled_ride_config import ScheduledRideConfig
     from utils.surge_engine import SURGE_CAP
 
 logger = logging.getLogger(__name__)
@@ -184,6 +186,7 @@ def _coerce_airport_fields(is_airport: Optional[bool], airport_fee: Optional[flo
 
 
 class ServiceAreaCreateRequest(BaseModel):
+    scheduled_ride_config: ScheduledRideConfig = Field(default_factory=ScheduledRideConfig)
     name: str
     city: str = ""
     # province + regulatory_* are sent by the admin create form (migration 223).
@@ -249,6 +252,7 @@ class ServiceAreaCreateRequest(BaseModel):
 
 
 class ServiceAreaUpdateRequest(BaseModel):
+    scheduled_ride_config: Optional[ScheduledRideConfig] = None
     name: Optional[str] = None
     city: Optional[str] = None
     geojson: Optional[Any] = None
@@ -631,6 +635,7 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "min_driver_rating": area.min_driver_rating,
         "max_simultaneous_offers": area.max_simultaneous_offers,
         "dispatch_geo_provider": area.dispatch_geo_provider,
+        "scheduled_ride_config": area.scheduled_ride_config.model_dump(),
         "max_candidate_pool": area.max_candidate_pool,
         "use_eta_ranking": area.use_eta_ranking,
         "show_demand_heatmap": area.show_demand_heatmap,
@@ -831,6 +836,8 @@ async def admin_update_service_area(
         val = getattr(area, field)
         if val is not None:
             update_payload[field] = val
+    if area.scheduled_ride_config is not None:
+        update_payload["scheduled_ride_config"] = area.scheduled_ride_config.model_dump()
     if polygon is not None:
         update_payload["polygon"] = polygon
     if surge_active is not None:

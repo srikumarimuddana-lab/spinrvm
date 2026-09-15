@@ -577,7 +577,7 @@ class TestDispatchKillSwitch:
             result = await sr.check_scheduled_rides()
 
         assert result is True
-        get_rows_mock.assert_awaited_once()
+        assert get_rows_mock.await_count == 2
 
     async def test_settings_lookup_failure_fails_open(self):
         from backend.utils import scheduled_rides as sr
@@ -591,7 +591,7 @@ class TestDispatchKillSwitch:
             result = await sr.check_scheduled_rides()
 
         assert result is True
-        get_rows_mock.assert_awaited_once()
+        assert get_rows_mock.await_count == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────

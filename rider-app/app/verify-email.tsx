@@ -23,8 +23,7 @@ import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { shakeHorizontal } from '@shared/utils/motion';
 import { SPACING, FONT } from '@shared/utils/responsive';
 
-const CODE_LENGTH_MIN = 4;
-const CODE_LENGTH_MAX = 6;
+const CODE_LENGTH = 4;
 // Mirrors backend/dependencies/__init__.py::OTP_EXPIRY_MINUTES (5), read
 // directly from backend/routes/users.py's N14 block per the task brief —
 // there is no runtime endpoint that surfaces this, so it's a literal here
@@ -102,7 +101,7 @@ export default function VerifyEmailScreen() {
 
   const handleCodeChange = (text: string) => {
     const digits = text.replace(/\D/g, '');
-    if (digits.length <= CODE_LENGTH_MAX) setCode(digits);
+    if (digits.length <= CODE_LENGTH) setCode(digits);
   };
 
   // POST /users/verify-email/request — no body, sends a code to whatever
@@ -177,7 +176,7 @@ export default function VerifyEmailScreen() {
   // this screen and the account-screen badge in sync immediately, with no
   // stale "not verified" state and no extra round trip.
   const handleVerify = async () => {
-    if (code.length < CODE_LENGTH_MIN || code.length > CODE_LENGTH_MAX) {
+    if (code.length !== CODE_LENGTH) {
       triggerShake();
       showToast('Invalid Code', 'Please enter the code sent to your email.', 'warning');
       return;
@@ -286,7 +285,7 @@ export default function VerifyEmailScreen() {
                   value={code}
                   onChangeText={handleCodeChange}
                   keyboardType="number-pad"
-                  maxLength={CODE_LENGTH_MAX}
+                  maxLength={CODE_LENGTH}
                   autoFocus
                   accessibilityLabel="Verification code"
                 />
@@ -295,7 +294,7 @@ export default function VerifyEmailScreen() {
                   activeOpacity={1}
                   onPress={() => inputRef.current?.focus()}
                 >
-                  {Array.from({ length: CODE_LENGTH_MAX }).map((_, i) => {
+                  {Array.from({ length: CODE_LENGTH }).map((_, i) => {
                     const isFilled = i < code.length;
                     const isActive = i === code.length;
                     return (
@@ -316,19 +315,19 @@ export default function VerifyEmailScreen() {
               <TouchableOpacity
                 style={[
                   styles.verifyBtn,
-                  code.length < CODE_LENGTH_MIN && styles.verifyBtnInactive,
+                  code.length < CODE_LENGTH && styles.verifyBtnInactive,
                   verifying && styles.verifyBtnLoading,
                 ]}
                 onPress={handleVerify}
-                disabled={verifying || code.length < CODE_LENGTH_MIN}
+                disabled={verifying || code.length < CODE_LENGTH}
                 activeOpacity={0.85}
                 accessibilityLabel="Verify email"
-                accessibilityState={{ disabled: verifying || code.length < CODE_LENGTH_MIN }}
+                accessibilityState={{ disabled: verifying || code.length < CODE_LENGTH }}
               >
                 {verifying ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={[styles.verifyBtnText, code.length < CODE_LENGTH_MIN && styles.verifyBtnTextInactive]}>
+                  <Text style={[styles.verifyBtnText, code.length < CODE_LENGTH && styles.verifyBtnTextInactive]}>
                     Verify Email
                   </Text>
                 )}
@@ -394,7 +393,7 @@ function createStyles(colors: ThemeColors) {
     hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
     codeBoxes: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
     codeBox: {
-      width: 44, height: 56, borderRadius: 14,
+      width: 56, height: 64, borderRadius: 16,
       backgroundColor: colors.surfaceLight,
       borderWidth: 1.5, borderColor: colors.border,
       justifyContent: 'center', alignItems: 'center',

@@ -30,3 +30,13 @@ if candidate.captured_at < session_high_water:
     if not bounded_native_source_overlap:
         reject("clock_regression")
 ```
+
+## Finalizer integration
+
+- `backend/utils/route_finalizer.py` reads `settings.route_interleaved_capture_enabled` through `get_app_settings()`. Only boolean true enables the option, consistently for P3 and optional P2 evidence. A settings failure is logged with its traceback and leaves the new option off. Each new route quality record identifies `capture_ordering` as `strict_sequence` or `bounded_native_overlap`.
+- `backend/tests/test_route_finalizer.py` covers flag off/on/malformed, separate pickup/trip evidence, and a logged settings failure. The offline `ride_route_analyzer` continues to use strict ordering as a baseline; its result can differ from flagged finalizer output. It performs no production writes.
+- Alternative: enabling directly in the parser would change every consumer immediately. The database switch permits staged activation and a no-deploy rollback for subsequent finalizations.
+- Risk/UX: enabled finalizations can change observed geometry/quality and the existing downstream distance-stat recomputation, including appended insurance period-distance revisions. This change does not add a fare rewrite, transition, charge, raw evidence update, or automatic backfill of completed rides. Existing published projections are not undone by turning the flag off; if one needs correction, use the existing revisioned finalization process after a separate evidence review.
+- Rollback: set the flag false on `settings` row `id='app_settings'`; allow the existing 60-second settings cache to expire. In-flight work may finish with the old value. Do not delete audit rows or rewrite already-settled fares.
+- Before: `segment_route(points, ride, completion_point)`. After: `segment_route(points, ride, completion_point, allow_interleaved_sources=reorder_captures)`.
+- Verification: normal backend test bootstrap works after installing the workspace's missing SOCKS proxy dependency. Parser, finalizer, and offline analyzer suites passed together (66 tests); no production mutation or phone build is part of this test run.

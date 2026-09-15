@@ -282,9 +282,7 @@ Run from both app environments because shared code is bundled by both:
 
 ~~~bash
 cd rider-app
-yarn test shared/api/__tests__/client.public-auth.test.ts --runInBand
-cd ../driver-app
-yarn test shared/api/__tests__/client.public-auth.test.ts --runInBand
+yarn test ../shared/api/__tests__/client.public-auth.test.ts --runInBand
 ~~~
 
 Expected: public OTP calls currently invoke both providers.
@@ -374,7 +372,8 @@ Run:
 cd rider-app
 yarn test __tests__/app/loginLatency.test.tsx --runInBand
 yarn lint
-npx expo export --platform ios --platform android
+npx expo export --platform ios
+npx expo export --platform android
 ~~~
 
 Expected: tests pass; both platform exports succeed; there is no visual change.
@@ -415,7 +414,8 @@ Run:
 cd driver-app
 yarn test __tests__/app/loginLatency.test.tsx __tests__/app/otpScreen.test.tsx --runInBand
 yarn lint
-npx expo export --platform ios --platform android
+npx expo export --platform ios
+npx expo export --platform android
 ~~~
 
 Expected: tests pass; both platform exports succeed; there is no visual change.
@@ -490,7 +490,7 @@ cd driver-app
 yarn test __tests__/store/authStore.initialize.test.ts utils/__tests__/sessionTeardown.test.ts --runInBand
 yarn lint
 cd ../rider-app
-yarn test __tests__/store/authStore.logoutLatency.test.tsx __tests__/accountScreen.test.tsx --runInBand
+yarn test __tests__/store/authStore.logoutLatency.test.ts __tests__/accountScreen.test.tsx --runInBand
 yarn lint
 ~~~
 

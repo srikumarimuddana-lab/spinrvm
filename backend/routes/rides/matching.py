@@ -15,6 +15,7 @@ try:
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.metrics import observe as _dispatch_observe
     from ...utils.metrics import time_ms as _time_ms
+    from ...utils.scheduled_ride_config import scheduled_search_deadline
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
     from repositories._base import _redact_pg_error  # type: ignore
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - dual-import pattern
     )
     from utils.metrics import observe as _dispatch_observe  # type: ignore
     from utils.metrics import time_ms as _time_ms  # type: ignore
+    from utils.scheduled_ride_config import scheduled_search_deadline
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
         resolve_dispatch_area_scope,
@@ -138,15 +140,17 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
     """Re-attempt dispatch after a delay. Stops if the ride left searching or the
     per-ride attempt cap is reached (the stuck-ride sweeper then owns resolution)."""
     await asyncio.sleep(delay)
-    if attempt > _MAX_DISPATCH_ATTEMPTS:
-        logger.warning(
-            f"[DISPATCH] ride {ride_id} hit {_MAX_DISPATCH_ATTEMPTS} dispatch attempts — "
-            f"stopping retries; stuck-ride sweeper will resolve it"
-        )
+    if attempt > 240:  # bounded even if every DB read fails
         return
     try:
         ride = await _deps.db_supabase.get_ride(ride_id)
         if not ride or ride.get("status") != RideStatus.SEARCHING:
+            return
+        deadline = scheduled_search_deadline(ride)
+        if deadline:
+            if datetime.now(timezone.utc) >= deadline:
+                return
+        elif attempt > _MAX_DISPATCH_ATTEMPTS:
             return
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
@@ -1417,6 +1421,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     # additive metadata for the driver-app offer panel; no dispatch/
                     # matching behavior change.
                     "is_scheduled": bool(ride.get("is_scheduled")),
+                    "scheduled_time": ride.get("scheduled_time"),
                     "countdown_seconds": offer_timeout,
                     "offer_expires_at": _offer_expires_at,
                     "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
@@ -1974,12 +1979,36 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     await asyncio.sleep(timeout_seconds)
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
+        deadline = scheduled_search_deadline(current_ride or {}, timeout_seconds)
+        if deadline and current_ride.get("status") == RideStatus.SEARCHING:
+            remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                current_ride = await _deps.db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
+            scheduled_claimed = False
+            if current_ride.get("is_scheduled"):
+                claimed = await _deps.db_supabase.update_one(
+                    "rides", {"id": r_id, "status": RideStatus.SEARCHING},
+                    {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc),
+                     "updated_at": datetime.now(timezone.utc), "cancelled_by": "system",
+                     "cancellation_type": "no_drivers_found",
+                     "cancellation_reason": "No nearby drivers found. Please try again."},
+                )
+                if not claimed:
+                    return
+                scheduled_claimed = True
             # WS-8 (finding 11): release the booking-time pre-auth hold
             # so the rider's card isn't blocked for 7 days after timeout.
             _booking_pi = current_ride.get("payment_intent_id")
             _auth = (current_ride.get("auth_status") or "").lower()
-            if _booking_pi and _auth in ("authorized", "fare_only"):
+            if scheduled_claimed:
+                try:
+                    from ...utils.card_hold_release import release_open_hold
+                except ImportError:
+                    from utils.card_hold_release import release_open_hold
+                await release_open_hold(current_ride, source="scheduled_timeout")
+            elif _booking_pi and _auth in ("authorized", "fare_only"):
                 try:
                     _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
                     if _released:
@@ -2003,20 +2032,21 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             # back to base_update on PGRST204 ("column does not exist")
             # so the rider-facing cancel still succeeds before the
             # migration lands in prod.
-            try:
-                await _deps.db_supabase.update_ride(
-                    r_id,
-                    {
-                        **base_update,
-                        "cancelled_by": "system",
-                        "cancellation_type": "no_drivers_found",
-                    },
-                )
-            except Exception as _col_exc:
-                logger.opt(exception=True).error(
-                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-                )
-                await _deps.db_supabase.update_ride(r_id, base_update)
+            if not scheduled_claimed:
+                try:
+                    await _deps.db_supabase.update_ride(
+                        r_id,
+                        {
+                            **base_update,
+                            "cancelled_by": "system",
+                            "cancellation_type": "no_drivers_found",
+                        },
+                    )
+                except Exception as _col_exc:
+                    logger.opt(exception=True).error(
+                        f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                    )
+                    await _deps.db_supabase.update_ride(r_id, base_update)
             # 2026-08-18 fleet audit: ride-state-transition metric — one of
             # the most common real cancellation reasons ("no drivers found"),
             # so leaving it uncounted would materially undercount the

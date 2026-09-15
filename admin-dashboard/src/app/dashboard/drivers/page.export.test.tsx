@@ -2,11 +2,13 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+const auth = vi.hoisted(() => ({ role: 'super_admin' }));
+
 vi.mock('@/hooks/useRequireModule', () => ({ useRequireModule: () => ({ allowed: true }) }));
 vi.mock('@/hooks/useFeatureFlag', () => ({ useFeatureFlag: () => false }));
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock('@/store/authStore', () => ({
-  useAuthStore: (selector: (state: unknown) => unknown) => selector({ user: { role: 'admin', modules: ['drivers'] } }),
+  useAuthStore: (selector: (state: unknown) => unknown) => selector({ user: { role: auth.role, modules: ['drivers'] } }),
 }));
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...await importOriginal<Record<string, unknown>>(),
@@ -28,6 +30,7 @@ vi.mock('./_components/driver-list-table', () => ({
       <input aria-label="Search drivers" value={props.search} onChange={e => props.setSearch(e.target.value)} />
       <button onClick={() => { props.setStatusFilter('active'); props.setServiceAreaId('saskatoon'); }}>Select filters</button>
       <button onClick={() => props.setPage(2)}>Next page</button>
+      <button onClick={() => props.setShowPii(!props.showPii)}>Toggle PII</button>
       <button onClick={props.handleExport}>Export</button>
       <button onClick={() => { props.setStatusFilter('all'); props.setServiceAreaId(''); }}>Clear filters</button>
     </>
@@ -39,6 +42,25 @@ import { exportDrivers, getDrivers } from '@/lib/api';
 import { exportToCsv } from '@/lib/export-csv';
 
 describe('driver page export selection', () => {
+  it.each(['super_admin', 'admin'])('honors Show PII with %s permissions and restores masking', async (role) => {
+    auth.role = role;
+    render(<Page />);
+    fireEvent.click(screen.getByText('Select filters'));
+    fireEvent.click(screen.getByText('Toggle PII'));
+    fireEvent.click(screen.getByText('Export'));
+    await waitFor(() => expect(exportDrivers).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'active', service_area_id: 'saskatoon', show_pii: role === 'super_admin',
+    })));
+    expect(vi.mocked(exportToCsv).mock.lastCall?.[2]).toContainEqual({
+      key: 'license_no', label: role === 'super_admin' ? 'License No' : 'License No (last 4)',
+    });
+    fireEvent.click(screen.getByText('Toggle PII'));
+    fireEvent.click(screen.getByText('Export'));
+    await waitFor(() => expect(exportDrivers).toHaveBeenLastCalledWith(expect.objectContaining({ show_pii: false })));
+    expect(vi.mocked(exportToCsv).mock.lastCall?.[2]).toContainEqual({ key: 'license_no', label: 'License No (last 4)' });
+    auth.role = 'super_admin';
+  });
+
   it('uses selected list filters across pages and clears them on the next export', async () => {
     render(<Page />);
     fireEvent.click(screen.getByText('Select filters'));
@@ -50,7 +72,7 @@ describe('driver page export selection', () => {
     fireEvent.click(screen.getByText('Export'));
     await waitFor(() => expect(exportDrivers).toHaveBeenLastCalledWith({
       status: 'active', service_area_id: 'saskatoon', onboarding_complete: true,
-      sort_by: 'created_at', sort_dir: 'desc',
+      sort_by: 'created_at', sort_dir: 'desc', show_pii: false,
     }));
     expect(exportToCsv).toHaveBeenCalledWith('drivers', [{ id: 'matching-driver' }], expect.any(Array));
 
@@ -66,7 +88,7 @@ describe('driver page export selection', () => {
     fireEvent.click(screen.getByText('Clear filters'));
     fireEvent.click(screen.getByText('Export'));
     await waitFor(() => expect(exportDrivers).toHaveBeenLastCalledWith({
-      onboarding_complete: true, sort_by: 'created_at', sort_dir: 'desc',
+      onboarding_complete: true, sort_by: 'created_at', sort_dir: 'desc', show_pii: false,
     }));
   });
 });

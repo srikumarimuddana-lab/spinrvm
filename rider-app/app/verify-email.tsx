@@ -136,8 +136,8 @@ export default function VerifyEmailScreen() {
       if (err?.name === 'RateLimitError') {
         const rateLimitErr = err as RateLimitError;
         const retrySeconds = rateLimitErr.retryAfterSeconds > 0
-          ? Math.min(rateLimitErr.retryAfterSeconds, 60)
-          : 60;
+          ? Math.min(rateLimitErr.retryAfterSeconds, 180)
+          : 180;
         setCountdown(retrySeconds);
         showToast(
           'Too Many Attempts',

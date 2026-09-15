@@ -51,7 +51,7 @@
         "EXPO_PUBLIC_ENV": "production",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
         "SENTRY_ALLOW_FAILURE": "true",
-        "SPINR_ANDROID_MINIFY": "0"
+        "SPINR_ANDROID_MINIFY": "1"
       }
     }
   },

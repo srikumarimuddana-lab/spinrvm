@@ -65,7 +65,7 @@
       "env": {
         "EXPO_PUBLIC_ENV": "production",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
-        "SPINR_ANDROID_MINIFY": "0"
+        "SPINR_ANDROID_MINIFY": "1"
       },
       "android": {
         "resourceClass": "large"

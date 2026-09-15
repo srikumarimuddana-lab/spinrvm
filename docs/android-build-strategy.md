@@ -236,17 +236,20 @@ app/build.gradle  release { minifyEnabled true }
 | `test` | **off** (`developmentClient: true` selects debug) | **off** (debug) |
 | `preview` | **on** | **on** |
 | `android-auto` | — | **on** (highest-risk R8 surface; needs the head-unit check). `distribution: store`, so this produces a minified AAB — but it submits to Play's **internal** track, not production. |
-| `production` | **off** — deliberate | **off** — deliberate |
+| `production` | **on** (2026-09-15) | **on** (2026-09-15) |
 
-Production explicitly sets `SPINR_ANDROID_MINIFY=0`; development and test do too.
-Profile env values override ambient/EAS environment values during normal EAS builds.
-Use `preview` for release APK validation; do not convert the Metro-based test profile.
-Production is off **on purpose**, not by oversight. R8 breakage in this stack surfaces only
-in release builds, and a store upload has no staging gate in front of it, so the first
-minified binaries are internal ones. Flipping production on is a one-line `eas.json` edit
-once a preview build has been validated on a device — see the "Required before flipping
-production on" checklist in
-`docs/change-log/2026-09-14-android-r8-minification-staged.md`.
+Production explicitly sets `SPINR_ANDROID_MINIFY=1` as of 2026-09-15. Development and
+test stay `0`. Profile env values override ambient/EAS environment values during normal
+EAS builds. Use `preview` for release APK validation; do not convert the Metro-based
+test profile.
+
+Production was off until a human validated an internal store AAB, then flipped in
+`eas.json`. A store upload still has no staging gate in front of it: the next
+production-profile AAB is minified, so install that new internal-testing build
+before promoting. Rollback is a new unminified native binary (`0` + rebuild), not
+an OTA. Checklist and residual Sentry mapping gap:
+`docs/change-log/2026-09-14-android-r8-minification-staged.md` and
+`docs/change-log/2026-09-15-android-r8-production-on.md`.
 
 ### The gate fails safe — so verify it actually engaged
 
@@ -287,14 +290,15 @@ and hides which rule is actually load-bearing. **Add rules with a failure to poi
 not pre-emptively. `extraProguardRules` takes a single string, so additional rules go into
 the same string separated by `\n`.
 
-### Known gap before production
+### Known gap with R8 on production
 
 `@sentry/react-native`'s Expo plugin uploads JS sourcemaps, **not** the ProGuard mapping
 file — that needs the separate `sentry-android-gradle-plugin`. So once R8 is on, Java and
 Kotlin frames in Sentry are obfuscated. Firebase Crashlytics is unaffected (its Gradle
 plugin uploads mappings automatically) and JS stack traces are untouched, since R8 doesn't
-process the JS bundle. Treat wiring up Sentry mapping upload as a prerequisite for the
-production flip.
+process the JS bundle. Production minify is on as of 2026-09-15; Java/Kotlin Sentry frames
+will be obfuscated until `sentry-android-gradle-plugin` is wired. Crashlytics and JS Sentry
+are unaffected.
 
 ### Why not AGP 9 (what Play Console actually recommends)
 

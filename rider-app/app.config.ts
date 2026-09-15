@@ -5,9 +5,8 @@ const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spi
 const SCHEME = 'spinr-user';
 
 // R8 is opt-in for Android release builds via SPINR_ANDROID_MINIFY=1.
-// Use preview for validation; test/development are debug clients.
-// Production stays explicitly off in eas.json until device validation and
-// Sentry mapping upload are complete.
+// preview and production are on; test/development are debug clients (off).
+// Sentry Java/Kotlin mapping upload is still not wired — JS frames are fine.
 // See docs/android-build-strategy.md for the rollout and rebuild-only rollback.
 const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
 

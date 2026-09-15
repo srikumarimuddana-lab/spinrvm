@@ -5,10 +5,9 @@ const BUNDLE_ID = 'com.spinr.driver'; // driver-only ID — rider app uses com.s
 const SCHEME = 'spinr-driver';
 
 // R8 is opt-in for Android release builds via SPINR_ANDROID_MINIFY=1.
-// Use preview/android-auto for validation; test/development are debug clients.
-// Production stays explicitly off in eas.json until device validation and
-// Sentry mapping upload are complete. Android Auto uses Play's internal track.
-// See docs/android-build-strategy.md for the rollout and rebuild-only rollback.
+// preview, android-auto, and production are on; test/development are debug (off).
+// Sentry Java/Kotlin mapping upload is still not wired — JS frames are fine.
+// Android Auto uses Play's internal track. See docs/android-build-strategy.md.
 const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
@@ -303,7 +302,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 // name, so R8/ProGuard renaming breaks Android Auto in release
                 // builds only — the only builds a real head unit will load.
                 // LIVE since 2026-09-14 on any profile that sets
-                // SPINR_ANDROID_MINIFY=1 (preview/android-auto). It was an
+                // SPINR_ANDROID_MINIFY=1 (preview/android-auto/production). It was an
                 // inert no-op before that, when minification was off everywhere;
                 // it has never been exercised by a real build, so the head-unit
                 // check on the first minified build is what actually proves it.

@@ -749,7 +749,8 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
             "limit": limit_amount,
-            "documentation_url": "https://spinr.app/docs/rate-limits",
+            # Link to the published runbook; spinr.ca has no /docs/rate-limits page.
+            "documentation_url": "https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/rate-limits.md",
         },
         headers=headers,
     )

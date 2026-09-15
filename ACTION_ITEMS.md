@@ -27167,6 +27167,102 @@ how much they de-risk a public launch._
 - **Already resolved, for reference (not re-litigated here):** CR-2026-033 (#5251, migration 413's `DELETE FROM` — admin merge-override, no code change) and CR-2026-085 (#5381, `ci-guardrails.yml`'s own `merge_group` BASE/HEAD fix — merged via PR #5399).
 - **Not fixed here:** this entry is a registry, not an implementation. CR-2026-086/087 are small and low-risk enough to implement on request; CR-2026-008/#4109 need external (Grafana Cloud / Stripe) access no session here has; CR-2026-032/034-Phase-2 need a human to pull `main`'s branch-protection required-status-checks list (Settings → Branches → main → required status checks) since no GitHub App/token available to any session so far has read access to that endpoint.
 
+### C119. `spinr.app` was referenced in 96 places but has never been a registered or resolving domain — allowlists, store metadata, and operator docs all trusted it
+
+Found 2026-09-14 by tracing `https://{target}.spinr.app` in `agents/deployer.py`.
+`spinr.app` and `spinr-track.app` both return `NXDOMAIN` (no A, no NS) and the
+product owner confirmed neither is registered to Spinr. Full inventory,
+per-class disposition and reasoning:
+`docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md`. Change Impact Log:
+`docs/change-log/2026-09-14-spinr-app-phantom-domain-removal.md`.
+
+Done on branch `claude/inspiring-cerf-1s4ela` (9 commits): removed the four
+unregistered origins from `middleware.py`'s CORS `always_allowed`; narrowed
+`ride-tracking-webview.tsx`'s `ALLOWED_TRACKING_HOSTS` to `track.spinr.ca`;
+deleted the dead `referral_link` field from both referral endpoints and
+registered that pair in `docs/known-forks.md`; deleted the dead Universal
+Links / App Links config from both `app.config.ts` files; corrected the 429
+`documentation_url`, both store-metadata files, `.env.example`,
+`ENVIRONMENT_VARIABLES.md`, two runbooks, and `.agents/roles/devops-engineer.md`
+(which named `api.spinr.app` as the production backend — the real host is
+`api-spinr.spinr.ca`); and dropped the fabricated `url` key from the
+`agents/deployer.py` stub.
+
+**Still open — these are the follow-ups, not the fix:**
+
+- [ ] **(a) Run the test suites.** Nothing in that branch was executed — the
+      session had no `pytest`, no `node_modules`, and no registry access.
+      `rider-app/__tests__/rideTrackingWebviewScreen.test.tsx` contains a
+      hand-written new regression case that has never run. A production build
+      (`app.config.ts` changed in both apps) has also not been attempted.
+- [ ] **(b) Check the deployed `ALLOWED_ORIGINS` env var.** The hardcoded
+      allowlist is fixed, but it is not the only source, and both
+      `.env.example` and `ENVIRONMENT_VARIABLES.md` used to offer an example
+      containing `https://spinr.app`. If ops copied either, production may
+      still carry the dead origin. Strip it there too.
+- [ ] **(c) Confirm `support_url`** in both `store-assets/metadata.json`.
+      Only its host was corrected (`spinr.app` → `www.spinr.ca`); the real
+      support page path is unverified and is marked TODO in each file. Apple
+      and Google both check it.
+- [ ] **(d) Decide the consent-surface inconsistency.** `profile-setup.tsx`
+      now links out to the published `www.spinr.ca/legal/*` pages, but
+      `login.tsx:265` and `otp.tsx:383` render the same "Terms of Service /
+      Privacy Policy" copy and route *in-app* to `/legal`, which reads
+      `app_settings.terms_of_service_text` / `privacy_policy_text` — and those
+      still hold the development placeholder text defined in
+      `backend/routes/settings.py`. So the same consent resolves to real
+      published documents from one screen and to placeholder text from the
+      other two. That has regulatory weight (PIPEDA consent-version capture),
+      so it needs a decision, not a silent unification.
+- [ ] **(e) Rebuild universal links properly, or leave them deleted.** If they
+      are wanted: serve `/.well-known/apple-app-site-association` (JSON
+      content-type, no extension, no redirect) and `/.well-known/assetlinks.json`
+      (needs SHA-256 fingerprints from **both** EAS credentials and Play App
+      Signing) on the real host, add route files matching the prefixes plus
+      inbound URL handling — neither app has any today — and only then
+      re-declare the hosts and cut a native build. Doing it in any other order
+      is worse than leaving it deleted, because Apple negatively caches an AASA
+      fetch that returns HTML for ~24h.
+- [ ] **(f) Close the gate that let this survive.** Nothing lints
+      code-referenced hostnames against the set of domains actually owned.
+      `cert-domain-monitor.yml` cannot catch this class by construction — it
+      seeds `TLS_HOSTS`/`WHOIS_DOMAINS` from the Cloudflare zone for
+      `spinr.ca`, i.e. from what is *already served*. A cheap version: a CI
+      grep for `https?://[a-z0-9.-]*spinr[a-z0-9.-]*` that fails on any host
+      not in an explicit owned-domains allowlist, with that allowlist also
+      feeding `renewal-calendar.md`.
+- [ ] **(g) Correct LGL-11.** `reports/audits/2026-07-22-legal-content-validation-v1.md`
+      (lines 35, 58) recommends standing up the privacy page at
+      `spinr.app/privacy`, inheriting the same false premise. It also states no
+      public page exists anywhere — that is now known to be wrong, the legal
+      pages are published at `www.spinr.ca/legal/*`. The finding was never
+      tracked in this file; it is tracked here now.
+
+- [ ] **(h) `admin.spinr.ca` (no dash) is not in the CORS allowlist.** Surfaced by
+      the `spinr-security-auditor` pass on this work, and **deliberately not fixed
+      there** — adding a CORS origin *widens* access, the opposite direction of
+      that PR, so it needs a decision rather than a drive-by. The facts:
+      `admin.spinr.ca` and `api.spinr.ca` both resolve, to the same Cloudflare
+      proxy IPs, and are therefore distinct from `admin-spinr.spinr.ca`, which
+      points straight at Vercel. `cert-domain-monitor.yml:57` monitors all four
+      as live certs, and `docs/audit/15_TECH_STACK_AND_FILE_MAPPING.md:616` plus
+      `docs/external-testing.md:90` both name `admin.spinr.ca` as *the*
+      production admin URL — but only the dashed form is in `middleware.py`'s
+      `always_allowed`. If `admin.spinr.ca` is a real entry point to the admin
+      dashboard, its browser calls to the API are CORS-rejected today unless the
+      deployed `ALLOWED_ORIGINS` env var covers it. Decide which hostname is
+      canonical, then either add the other to the allowlist or correct the docs
+      that name it. Note `backend/tests/test_csrf_middleware.py:402-438` already
+      uses `https://admin.spinr.ca` as its origin fixture, which suggests it was
+      once treated as real.
+
+**Note on how this propagated.** `reports/audits/2026-04-19-rider-app-v1.txt:2316`
+inferred the domain's existence *from the deep-link config* — "applinks:spinr.app
+… meaning spinr.app hosts a web landing page" — and remediation R-P1-27 then
+added it to the CORS allowlist on the strength of that inference. An unverified
+assumption became two more files. Worth remembering before citing a config block
+as evidence that the thing it configures exists.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

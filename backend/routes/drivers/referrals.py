@@ -171,7 +171,6 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
 
     return {
         "referral_code": referral_code,
-        "referral_link": f"https://spinr.app/join/{referral_code}",
         "total_referrals": total_referrals,
         "qualified_referrals": qualified_referrals,
         "pending_referrals": total_referrals - qualified_referrals,

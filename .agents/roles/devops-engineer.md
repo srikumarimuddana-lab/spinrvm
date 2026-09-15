@@ -76,7 +76,7 @@ cd admin-dashboard && npx vercel --prod
 |------------|-------------|----------|---------|
 | Development | `localhost:8000` | Supabase (dev project) | Local dev |
 | Staging | `<staging>.up.railway.app` | Supabase (staging) | Pre-release testing |
-| Production | `api.spinr.app` | Supabase (prod) | Live users |
+| Production | `api-spinr.spinr.ca` (Fly.io `yyz`, primary) | Supabase (prod) | Live users |
 
 ### Required Environment Variables
 ```bash

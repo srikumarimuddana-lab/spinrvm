@@ -68,14 +68,25 @@ class DeploymentAgent(BaseAgent):
         }
 
     def _execute_deployment(self, context: Dict) -> Dict[str, Any]:
-        """Execute deployment."""
+        """Execute deployment.
+
+        Stub: returns a canned success without performing a deployment, like
+        every other method on this class. The `url` key was dropped 2026-09-14 —
+        it returned f"https://{target}.spinr.app", where `target` is one of
+        backend / rider_app / driver_app / admin_dashboard, so it emitted
+        hostnames like "rider_app.spinr.app": a domain that does not resolve and
+        is not registered to Spinr, under a label containing an underscore, which
+        is not a legal hostname character. Deliberately not repointed at
+        spinr.ca — a real-looking URL from a method that hardcodes success is
+        more misleading than no URL at all. Real deployment targets are in
+        docs/runbooks/railway-fly-failover.md and ADR 007.
+        """
         target = context.get("target", "backend")
         return {
             "success": True,
             "target": target,
             "version": context.get("version", "latest"),
             "deployment_id": "deploy-" + target,
-            "url": f"https://{target}.spinr.app"
         }
 
     def _verify_deployment(self, context: Dict) -> Dict[str, Any]:

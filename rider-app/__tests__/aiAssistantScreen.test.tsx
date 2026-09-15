@@ -177,7 +177,7 @@ beforeEach(() => {
     loadHistory: mockLoadHistory,
     loadConfig: mockLoadConfig,
   };
-  mockApiGet.mockResolvedValue({ data: { share_url: 'https://spinr-track.app/ride-1' } });
+  mockApiGet.mockResolvedValue({ data: { share_url: 'https://track.spinr.ca/ride-1' } });
   jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' } as any);
   mockRequestPermissionsAsync.mockResolvedValue({ granted: true });
 });
@@ -295,7 +295,7 @@ describe('AiAssistantScreen', () => {
     const shareBtn = r.root.findByProps({ accessibilityLabel: 'Share trip' });
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     expect(mockApiGet).toHaveBeenCalledWith('/rides/ride-1/share');
-    expect(Share.share).toHaveBeenCalledWith({ message: 'Follow my Spinr trip live: https://spinr-track.app/ride-1' });
+    expect(Share.share).toHaveBeenCalledWith({ message: 'Follow my Spinr trip live: https://track.spinr.ca/ride-1' });
   });
 
   it('routes the "Track ride" button to the owning screen', async () => {

@@ -1,12 +1,12 @@
 {
-  "_comment": "App Store Connect + Google Play metadata for Spinr Driver. Fill in the values marked TODO before submitting. See docs/deploy/04-mobile-eas.md for submission steps.",
+  "_comment": "App Store Connect + Google Play metadata for Spinr Driver. Fill in the values marked TODO before submitting. Website routes checked against desktop_website and retrieved through web access on 2026-09-14: privacy_url (/legal/privacy), support_url (/help), and marketing_url (/ for rider; /drive for driver). Native deep-link association remains a separate deployment task. See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md and docs/deploy/04-mobile-eas.md.",
 
   "app_store_connect": {
     "name": "Spinr Driver",
     "subtitle": "Drive. Earn More. 0% Commission.",
-    "privacy_url": "https://spinr.app/privacy",
-    "support_url": "https://spinr.app/support",
-    "marketing_url": "https://spinr.app/drive",
+    "privacy_url": "https://www.spinr.ca/legal/privacy",
+    "support_url": "https://www.spinr.ca/help",
+    "marketing_url": "https://www.spinr.ca/drive",
     "apple_id": "TODO: numeric App Store Connect app ID for the driver app",
     "bundle_identifier": "com.spinr.driver",
     "primary_category": "TRAVEL",

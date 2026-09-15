@@ -323,9 +323,17 @@ export default function ProfileSetupScreen() {
           </View>
           <Text style={styles.tosText}>
             I agree to Spinr&apos;s{' '}
-            <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/terms')}>Terms</Text>
+            {/* Published legal pages on the marketing site. Note this screen is
+                the odd one out: login.tsx and otp.tsx render the same consent
+                copy but route in-app to /legal, which reads
+                app_settings.terms_of_service_text / privacy_policy_text and
+                currently still holds placeholder text. Kept as external links
+                here so consent is captured against the real published documents.
+                Until 2026-09-14 these pointed at https://spinr.ca/terms and
+                /privacy — wrong paths, and without the www host. */}
+            <Text style={styles.link} onPress={() => Linking.openURL('https://www.spinr.ca/legal/terms')}>Terms</Text>
             {' '}and{' '}
-            <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/privacy')}>Privacy Policy</Text>
+            <Text style={styles.link} onPress={() => Linking.openURL('https://www.spinr.ca/legal/privacy')}>Privacy Policy</Text>
           </Text>
         </TouchableOpacity>
       )}

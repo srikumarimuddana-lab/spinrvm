@@ -21784,6 +21784,233 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-14, later still same day): 3 more tables, still not
+  closed.** Checked for concurrent work first (`git fetch origin main` +
+  an open-PR search for anything touching `backend/tests/rls/` or
+  `ACTION_ITEMS.md`) — found the admin-export-audit-trail round below
+  (PR #5401) had merged since this worktree's checkout was cut; fast-
+  forwarded onto latest `origin/main` before starting (no local commits
+  lost — this worktree had none of its own yet), so this round is built on
+  top of that one, not a duplicate of it. Picked the "ride distance/GPS
+  integrity audit trail" theme from the remaining-table list the round
+  below published: `ride_distance_integrity_events` (migration 246),
+  `ride_distance_recomputes` (242), and `ride_location_gap_events` (237, +
+  370's additive `status`-value widening) — three tables backing
+  fraud/dispute detection on ride billing *distance*, distinct from the
+  money ledger itself (`financial_events`, already covered). Picked
+  deliberately for the same regulatory/dispute-audit stakes class as last
+  round's insurance-period tables — `ride_distance_recomputes`' own
+  migration comment states its purpose as letting "a rider/driver dispute
+  or SGI review... reconstruct exactly when and why a displayed distance
+  changed." New file `backend/tests/rls/test_ride_distance_integrity_rls.py`,
+  43 tests (33 test functions, 3 parametrized over 3 roles, 1 parametrized
+  over 5 `kind` values). Full `tests/rls` suite: **369 passed, 0 failed**,
+  against the same real local Postgres 16 `rlstest` cluster (port 5544,
+  isolated from the pre-existing `main` cluster's auth config, per this
+  backlog item's own standing constraint) the two rounds above this one
+  already stood up in this environment.
+  - **Blast radius:** grepped every `.py`/`.sql`/`.ts`/`.tsx` file
+    repo-wide for all three table names. Production request-path
+    reads/writes go through `db_supabase` (service-role client) from
+    `utils/distance_integrity.py`, `utils/route_finalizer.py`,
+    `utils/route_gap_monitor.py`, and `utils/retention_purge.py`; no
+    admin-dashboard/rider-app/driver-app/shared file references any of
+    the three. Two extra, non-request-path consumers found (missed in an
+    earlier pass of this same grep, caught by `/code-review`'s own diff
+    review below): `scripts/analyze_ride_route.py`, a read-only
+    per-ride diagnostic CLI, also reads `ride_location_gap_events` and
+    `ride_distance_recomputes` (also via `db_supabase`), and
+    `scripts/delete_test_driver_accounts.sql`
+    `DELETE`s from all three (a manual, superuser-run cleanup tool). Both
+    are out of scope for this tier — neither is part of the RLS-gated
+    request surface, by the same reasoning already applied to every other
+    ops/diagnostic script
+    in this backlog).
+  - **Review used:** the Task/Agent tool needed to invoke
+    `spinr-security-auditor` as a full subagent was not available in this
+    session's isolated-worktree environment (checked via tool search,
+    confirmed absent) — used the CLAUDE.md-sanctioned fallback,
+    `/code-review` at high effort, against the actual diff, per gate #10's
+    explicit "(or `/code-review` at medium+ effort)" allowance. Real,
+    not-a-rubber-stamp findings, both fixed before commit: (1) the blast-
+    radius bullet above had already missed `scripts/analyze_ride_route.py`
+    (a read-only diagnostic CLI that also reads `ride_location_gap_events`/
+    `ride_distance_recomputes`) in its first draft — corrected above rather
+    than left wrong; (2) the test file's `_seed_driver` helper was defined
+    but never called — fixed by adding
+    `test_gap_event_driver_id_references_real_driver`, which exercises the
+    FK against a real seeded driver (the test count above already reflects
+    this fix, not the pre-fix count).
+  - **One real, previously-undiscovered finding, not fixed here:** neither
+    `ride_distance_integrity_events` nor `ride_distance_recomputes` has any
+    DB-level trigger preventing `service_role` (the only role that can
+    write to either table at all) from directly `UPDATE`ing or `DELETE`ing
+    a row, despite each migration's own comment asserting "event rows are
+    immutable" / "audit rows are immutable" "on purpose" — unlike
+    `audit_logs` (migrations 51/56/57) and `compliance_export_events`
+    (263/285), which each got a dedicated anti-tamper trigger specifically
+    *because* they are regulatory/security audit trails. No production
+    code path issues either kind of write today (confirmed by the same
+    blast-radius grep above), so nothing is broken in practice, but the
+    guarantee these two "immutable" audit tables assert rests entirely on
+    application-code discipline, not DB enforcement — a weaker guarantee
+    than the pattern this codebase already uses elsewhere for tables
+    making the identical claim, and these two feed the same class of
+    SGI/dispute-forensics stakes that justified building that pattern in
+    the first place. Reproduced directly against real Postgres (not
+    inferred) via `test_integrity_event_service_role_can_mutate_despite_immutable_comment`
+    / `test_recompute_service_role_can_mutate_despite_immutable_comment`
+    in the new test file — both pass today, documenting current behavior
+    without fixing it. Filed as **C118** (new); not fixed here, since
+    adding a trigger is a production schema change with its own review,
+    out of scope for a test-coverage-only PR. `ride_location_gap_events`
+    does NOT share this gap — its own migration comment never claims
+    immutability (it has real, live UPDATE/DELETE production paths:
+    status-transition updates from `route_gap_monitor.py` and a 7-year
+    retention DELETE from `purge_trip_route_geometry()`), so there's no
+    comment/enforcement mismatch to flag for that one.
+  - **Running total after this round:** 42 of ~70 distinct policy-bearing
+    tables (39 + these 3, by the same corrected multiline-aware sweep
+    method the round below established). Still not closed: of the
+    remaining ~28, the "ride tracking/integrity" theme the round below
+    named now has only `ride_live_activities`/`ride_messages`/`ride_offers`
+    left in it (this round closed the other three); every other themed
+    group from that list (`ai_conversations`/`ai_messages`; notifications;
+    the four remaining `corporate_*` tables; `disputes`; driver ops;
+    reference/static data; the three `financial_*`/`subscription_payments`
+    tables; the three singletons) is untouched by this round.
+  Change log: `docs/change-log/2026-09-14-c49-ride-distance-integrity-rls-coverage.md`.
+- [ ] **Status (2026-09-14, later same day): 3 more tables, still not
+  closed.** Checked for concurrent work first (`git fetch origin main` +
+  open-PR search for any PR touching `backend/tests/rls/` or
+  `ACTION_ITEMS.md`) — none found, clear to proceed. Picked the admin
+  PII-export audit trail as this round's themed slice, deliberately: all
+  three tables back the same dual-approval/export-audit hardening already
+  done at the app layer earlier this session (B1 — gated the SIN/DOB
+  backfill router to super_admin; W2a-c — added per-handler super_admin
+  rechecks to the data_transfer export/import/search, data_transfer_jobs,
+  sgi_forms, export_approvals, and migration_status handlers). This round
+  adds the DB-level RLS/constraint backstop under that same surface:
+  `data_transfer_export_jobs` (migration 262 + 264's additive `reason`
+  column), `compliance_export_events` (263, + an extracted slice of 285's
+  DELETE-gating trigger redefinition), and `admin_export_approval_requests`
+  (268), plus each table's FK-removal fix (270/274/278 — a real,
+  already-shipped bug class where an admin caller's id, which lives in
+  `admin_staff` or an env-var-creds sentinel, could never satisfy a
+  `REFERENCES users(id)` FK; confirmed live in each migration's own header
+  that zero rows were ever written to any of the three tables before its
+  fix). New file `backend/tests/rls/test_admin_export_audit_rls.py`, 31
+  tests. Full `tests/rls` suite: **326 passed, 0 failed**, against the same
+  real local Postgres 16 this session's earlier C49 round stood up.
+  - **Review used:** `spinr-security-auditor` via the Agent tool (available
+    in this session, unlike an earlier session this same day whose
+    isolated-worktree environment lacked it) — independently re-derived
+    every asserted policy/GRANT/trigger from the actual migration SQL, ran
+    the suite itself, and confirmed all 3 tables' real production
+    read/write paths go through the service-role client only (grepped
+    `routes/admin/`, `services/`, `db_supabase.py`), matching this round's
+    "service-role only" assumption.
+  - **One real finding, fixed before merge:** the file's own docstring
+    claimed `data_transfer_export_jobs` and `admin_export_approval_requests`
+    are "identical shape," but only the former had a DELETE-denial test —
+    `admin_export_approval_requests`' `service_delete` policy (migration
+    268) went unexercised by any negative case. Fixed by adding
+    `test_authenticated_cannot_delete_approval_request` for parity. No
+    other findings — verdict was "safe to merge."
+  - **Noted, not a bug:** neither table's `FOR DELETE TO service_role`
+    policy is exercised by a *positive* test either, because no production
+    code path issues a hard DELETE on any of the 3 tables today
+    (`data_transfer_export_jobs` only ever soft-deletes via a `deleted_at`
+    UPDATE in `utils/data_export_purge.py`; no `.delete(`/`delete_many`
+    call exists anywhere for the other two) — genuinely dead DB-layer
+    capability today, not a test gap.
+  - **Running total after this round:** 39 of ~70 distinct policy-bearing
+    tables (36 + these 3), by a corrected version of the same sweep method
+    prior rounds used — a repo-wide `CREATE POLICY ... ON <table>` regex
+    sweep, run multiline/dotall this time (a plain single-line regex, as
+    used by at least one earlier round, misses every multi-line
+    `CREATE POLICY "name"\n  ON table\n  ...` statement, which is most of
+    them — confirmed by comparing 31 single-line matches against 64
+    multiline matches over the identical file set). 64 static matches + the
+    6 already-known FOREACH-loop-generated corporate tables (migration 27)
+    = 70 total distinct policy-bearing tables, 36 covered before this round
+    (including those 6 dynamic ones). Still not closed: ~31 tables remain,
+    grouped by rough theme for whoever picks up the next slice — AI
+    (`ai_conversations`/`ai_messages`), notifications
+    (`cloud_messages`/`push_retry_queue`/`push_tokens`), corporate
+    (`corporate_section_spend`/`corporate_sections`/
+    `corporate_subscription_plans`/`corporate_subscriptions`), disputes
+    (`disputes`, distinct from the already-covered `stripe_disputes`),
+    driver ops (`driver_bonuses`/`driver_onboarding_reminder_log`/
+    `document_requirements`), reference/static data
+    (`faqs`/`fare_configs`/`provinces`/`service_areas`/
+    `service_area_tax_history`/`vehicle_types`), financial
+    (`financial_event_entries`/`reconciliation_discrepancies`/
+    `subscription_payments`), ride tracking/integrity
+    (`ride_distance_integrity_events`/`ride_distance_recomputes`/
+    `ride_live_activities`/`ride_location_gap_events`/`ride_messages`/
+    `ride_offers`), and singletons (`meta_capi_deliveries`,
+    `support_tickets`, `surge_pricing`). This is the first time this backlog
+    item has published an actual remaining-table list rather than just a
+    fraction — future rounds should correct it rather than re-deriving from
+    scratch, since the sweep method itself has already been wrong once
+    (see above).
+  Change log: `docs/change-log/2026-09-14-c49-admin-export-audit-rls-coverage.md`.
+- [ ] **Status (2026-09-14): 3 more tables, still not closed.** Checked for
+  concurrent work first (`git fetch origin main` + open-PR search) — no PR
+  currently touches `backend/tests/rls/`, clear to proceed. Picked
+  `audit_logs` (security/admin-action audit trail, migrations 06/51/56/57)
+  plus its two insurance-period audit siblings `driver_insurance_period_corrections`
+  (355) and `driver_period_distances` (249) — a themed "audit-trail
+  integrity" slice: one security-audit table plus a direct extension of the
+  already-covered `driver_insurance_periods` (migration 64) family, both
+  high-consequence per CLAUDE.md (security-relevant events; SGI/Saskatchewan
+  Transportation Act insurance-period audit). New file
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py`, 29 tests.
+  Full `tests/rls` suite: **295 passed, 0 failed**, against a real local
+  Postgres 16 (this sandbox had none preinstalled; stood one up via a fresh,
+  isolated `pg_createcluster` cluster — not by weakening the pre-existing
+  `main` cluster's auth, which the harness's own safety classifier correctly
+  refused when first attempted).
+  - **Review used:** the Task/Agent tool needed to invoke `spinr-security-auditor`
+    as a full subagent was not available in this session's environment
+    (checked via tool search, confirmed absent) — used the CLAUDE.md-
+    sanctioned fallback, `/code-review` at high effort, against the actual
+    diff instead, per gate #10's explicit "(or `/code-review` at medium+
+    effort)" allowance.
+  - **Real findings, not a rubber stamp:** the review surfaced that this
+    round's harness silently omitted migration 56 (`audit_logs_delete_lockdown`)
+    and mischaracterized two of `audit_logs`' three tamper-evidence triggers
+    as a "harmless duplication." Verified by direct execution against a real
+    Postgres (not assumed): it is not harmless — migration 57's
+    unconditional `audit_logs_no_mutate` trigger silently defeats migration
+    56's flag-gated DELETE exception that `purge_pii_retention()`'s 7-year
+    retention step depends on. This is a real, previously-undiscovered
+    production bug, not introduced by this PR — filed as **C112** (new),
+    with a passing regression test added here that reproduces (does not
+    fix) it. The review also caught a real duplicate-entry bug in this
+    round's own `pg_cur` TRUNCATE list, and that 4 of this round's own new
+    tests asserted the wrong Postgres RLS behavior for UPDATE/DELETE with no
+    applicable policy (expected an exception; Postgres actually filters
+    silently to 0 rows for UPDATE/DELETE, unlike INSERT's WITH CHECK, which
+    does raise) — both fixed here after being caught by running the suite,
+    not just reasoning about it.
+  - **Running total after this round:** 35 of ~64 distinct policy-bearing
+    tables (32 + these 3) by the same sweep method prior rounds used
+    (`CREATE POLICY ... ON <table>` regex over `backend/migrations/*.sql` +
+    `backend/supabase_rls.sql`). Correction to that denominator: this
+    round's own repo-wide sweep found the plain-text regex misses 6 tables
+    entirely — `corporate_wallets`, `corporate_wallet_transactions`,
+    `corporate_policies`, `corporate_allowed_domains`, `ride_payment_sources`,
+    `corporate_policy_evaluations` — because migration 27 creates their
+    admin policies via a `FOREACH ... EXECUTE format('CREATE POLICY ...')`
+    loop, not a static `CREATE POLICY` statement. All 6 are already covered
+    (prior rounds, via migration 27/142 applied directly rather than
+    grepped), so the *coverage* fraction is unaffected, but the true
+    denominator is closer to ~70, not ~64 — flagging for whoever does the
+    next sweep rather than re-deriving a final canonical number here (same
+    "doesn't reconcile cleanly" caveat every prior round has carried).
+  Change log: `docs/change-log/2026-09-14-c49-audit-trail-rls-coverage.md`.
 - [ ] **Status (2026-09-13): more progress, still not closed.** Two rounds of
   undocumented progress from other sessions surfaced while picking this item
   up, plus new work this session:
@@ -25238,16 +25465,20 @@ how much they de-risk a public launch._
 
 ### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
 
-- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+- [x] **Status:** CLOSED (2026-09-14) — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
   Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
   fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
   status line above wrongly listed #4 as still open two days after it had already shipped
   2026-09-09; caught by re-reading the actual code rather than trusting the prior note), the
   delivery-outcome metric (recommendation #3), and the `expo-notifications` dead-code fix
   (recommendation #6, see 2026-09-11 addendum below — turned out bigger than "cleanup") have all
-  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on
-  Fly/Railway, #1) and the iOS background-mode confirmation (#5) remain open — both need access
-  this session doesn't have.
+  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on Fly, #1)
+  and the iOS background-mode confirmation (#5) — the two items this line previously said "need
+  access this session doesn't have" — are both now resolved too, see the 2026-09-13 and
+  2026-09-14 addenda below. All 6 recommendations addressed; closing the entry. Residual caveat
+  carried into the 2026-09-14 addendum rather than claimed away: confirming the *current* Fly
+  credential works is not the same as having confirmed the *original*, pre-remediation one was
+  ever actually broken in production.
 - **Addendum (2026-09-11) — recommendation #6 turned out to be a real routing gap, not just dead
   code, and was fixed, untested on a real device (user's explicit choice — see below):**
   Going deeper on #6 found the original "misleading dead code, cleanup" framing understated it.
@@ -25395,9 +25626,10 @@ how much they de-risk a public launch._
   the OS already shows for every non-data-only type per the correction above; closes the
   "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
   and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
-  #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
-  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below,
-  which resolves this without needing a compiled build.
+  #1 (ops check on Fly/Railway Firebase credential) — see 2026-09-14 addendum below, resolved via
+  a scoped Fly API credential rather than the ops access C99 said no Claude session had; #5 (iOS
+  `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below, which resolves this without
+  needing a compiled build.
 - **Addendum (2026-09-13) — #5 resolved via exhaustive config-plugin source trace, not a compiled
   build, and rescoped to a much narrower (currently inert) impact than finding #10 implied:**
   `driver-app` has no checked-in `ios/` directory (confirmed: pure managed Expo workflow), so the
@@ -25447,6 +25679,45 @@ how much they de-risk a public launch._
   - **What was NOT verified:** an actual compiled `Info.plist` from a real EAS iOS build (this
     session has no such artifact) — the conclusion above is a static trace of every plugin that
     could write this key, not a physical read of the generated file.
+- **Addendum (2026-09-14) — #1 resolved: the Fly-hosted backend's Firebase Admin SDK is confirmed
+  initializing successfully on a verified-valid credential, via a scoped Fly API credential added
+  to this Claude Code environment (network access + API-credential auth, see PR #5403 for the
+  `autoMode` permission side of this) rather than the ops access C99 said no session had:**
+  - Queried `spinr-backend-yyz`'s current secrets via Fly's GraphQL API (`app.secrets`) — this
+    itself hit a real gap: an app-scoped **deploy** token (chosen deliberately over an org-wide
+    **readonly** token, to keep the credential's blast radius to this one app) returns an empty
+    `secrets: []` list even when secrets exist, which is a token-scope limitation of that API
+    path, not evidence of a missing secret — worth remembering for any future session that hits
+    the same empty result.
+  - While setting `FIREBASE_SERVICE_ACCOUNT_JSON` via Fly's dashboard, the value was briefly set
+    to a local file **path** instead of the JSON file's **contents** (a real, human error, not a
+    code bug) — corrected to the actual JSON text in the same session.
+  - A dashboard secret-set does **not** auto-restart already-running Machines-platform machines
+    (confirmed empirically: `updated_at` on both running machines stayed at their pre-edit
+    timestamp after the secret was corrected) — the fix does not take effect until the running
+    machines are actually restarted. Fly's `restartApp` GraphQL mutation (the more discoverable
+    API) does not work for apps on Fly's newer Machines platform — it returned a consistent
+    `SERVER_ERROR` on every attempt; use the Machines API's own
+    `POST /v1/apps/:app/machines/:machine_id/restart` per machine instead.
+  - Restarted both of `spinr-backend-yyz`'s currently-running machines (`894526a9005298`,
+    `863994ce20016d`) individually via that endpoint. Both came back `state: started` with a
+    fresh `updated_at`. Searched Sentry immediately after for `"Firebase initialization failed"`
+    (the exact log/capture text `backend/core/security.py`'s `init_firebase()` emits on failure,
+    tagged `domain=drivers`/`surface=backend`) — zero results in the 24h window covering both
+    restarts, and the app's own status stayed `deployed` throughout (no crash-loop).
+  - **What this confirms:** the Firebase Admin SDK credential currently deployed on Fly parses
+    and initializes without error. **What this does NOT confirm:** whether the *original*,
+    pre-this-session credential (before the file-path mistake and its correction) was itself
+    valid or invalid — the file-path mistake happened md-session while investigating, so there is
+    no clean "before" read to compare against. The infra-shaped root cause finding #1 named at
+    the top of this entry (ADC fallback silently failing on a non-GCP host) remains a real,
+    demonstrated failure *mode* — it's just not confirmed as the thing that was actually
+    happening in production before this session touched the secret.
+  - **Recommendation:** no further action needed on this recommendation. If driver-app push
+    notifications are still reported as not visible after this, the backend credential path is
+    no longer the likely cause — look at the client-side findings (#2, already addressed by
+    recs #4/#6) or gather a fresh Sentry event from the actual device, same as the still-open
+    Notifications-screen crash tracked separately (PR #5341's `ErrorBoundary`).
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -26411,6 +26682,490 @@ how much they de-risk a public launch._
 - **Files (reference only, nothing changed by this entry):**
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
+
+### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
+- [ ] **Status:** OPEN, real (not informational) — reproduced by direct execution
+  against a real Postgres running the actual shipped migration SQL, not inferred
+  from reading the files. Found by `/code-review` (high effort, CLAUDE.md gate
+  #10 — the Task/Agent tool to invoke `spinr-security-auditor` as a full
+  subagent was unavailable in this session's environment, so the CLAUDE.md-
+  sanctioned fallback was used instead) while adding RLS coverage for
+  `audit_logs` under C49.
+- **What's true today:** three migrations independently add tamper-evidence
+  triggers to `audit_logs`, and the two most recent do not compose safely:
+  - Migration 51 (`51_audit_logs_lockdown.sql`) adds `audit_logs_no_update`
+    (BEFORE UPDATE, unconditional, `check_violation`).
+  - Migration 56 (`56_audit_logs_delete_lockdown.sql`) replaces an earlier,
+    unconditional `audit_logs_no_delete` trigger (from
+    `50_audit_logs_append_only.sql`) with a **flag-gated** one: DELETE is
+    blocked unless the session-local GUC `spinr.audit_logs.allow_delete` is
+    `'true'`, which `purge_pii_retention()`'s Step G sets immediately before
+    its 7-year `audit_logs` retention DELETE and clears immediately after —
+    the sanctioned way to let the regulatory retention job (and *only* that
+    job) delete old rows.
+  - Migration 57 (`57_audit_logs_schema_standardization.sql`) separately adds
+    `audit_logs_no_mutate` (BEFORE UPDATE OR DELETE), **unconditional, with no
+    knowledge of migration 56's flag at all.**
+  - Postgres fires every applicable BEFORE ROW trigger for one statement, in
+    alphabetical order by trigger name ("audit_logs_no_delete" <
+    "audit_logs_no_mutate" < "audit_logs_no_update"). On DELETE:
+    `audit_logs_no_delete` (56) fires first and, when the flag is correctly
+    set, lets the delete through — but `audit_logs_no_mutate` (57) then fires
+    next and aborts unconditionally anyway. **The flag-gated exception
+    migration 56 built specifically for the retention job does not work once
+    migration 57 has also been applied.** Confirmed directly: with the flag
+    set exactly the way `purge_pii_retention()`'s Step G sets it, `DELETE FROM
+    audit_logs` still raises `psycopg2.errors.RaiseException` from 57's
+    trigger. See `backend/tests/rls/test_audit_and_insurance_correction_rls.py::test_flag_gated_delete_is_still_blocked_by_migration_57_trigger`
+    (new, this round) — a passing regression test that encodes today's real
+    (broken) behavior; it does not fix it.
+- **Blast radius if migration 57 is live in production:** migration 56's own
+  `purge_pii_retention()` body wraps Step G's DELETE in `EXCEPTION WHEN OTHERS
+  THEN ... RAISE;` — it clears the flag and **re-raises**, so the whole
+  function call fails. Since Steps A–F (ride GPS anonymization at 3y, ride
+  hard-delete at 7y, `driver_location_history`/`ride_messages` purge at 90d,
+  expired `refresh_tokens` cleanup, `stripe_events` purge at 90d) run in the
+  same function invocation ahead of Step G, an unhandled exception at Step G
+  would roll back the entire call — meaning **every PIPEDA/Saskatchewan
+  Transportation Act retention step this function performs could be silently
+  failing on every scheduled run**, not just the audit-log piece, in any
+  environment where migration 57 has actually been applied on top of 56.
+- **What is NOT confirmed here:** (1) whether migrations 56 and 57 have both
+  actually been applied to the live production `schema_migrations` table —
+  no production DB access from this environment, same caveat as the
+  `complaints`/`lost_and_found` UUID-vs-TEXT drift entry above. (2) The exact
+  function body currently live for `purge_pii_retention()` — at least a dozen
+  more migrations (`57_fix_retention_purge_audit_insert.sql`,
+  `57_purge_pii_retention_regression_fix.sql`, `66`, `67`, `141`, `143`,
+  `187`, `216`, `228`, `285`, `289`, `296`, `321`, `323`, `324`, `335`,
+  `350`–`352`, `366`, …) also `CREATE OR REPLACE` this function after 56/57;
+  a full audit of which version is currently live, and whether Step G's
+  flag-set/DELETE/flag-clear shape survived every rewrite, is its own
+  investigation and explicitly out of scope here. **What IS confirmed
+  independent of the function body:** the trigger-level conflict itself —
+  `audit_logs_no_mutate` (57) unconditionally blocks DELETE regardless of
+  the flag, for *any* caller, function-body history aside.
+- **Correction (2026-09-14, same day, per `spinr-regulatory-compliance-checker`'s
+  adversarial review of this PR): the "Blast radius if migration 57 is live
+  in production" section above is wrong about how the bug currently
+  manifests — the trigger conflict itself is still real, but today's actual
+  effect is a silent no-op, not a crashing rollback.** Traced which
+  `purge_pii_retention()` body is actually live: `335_purge_pii_retention_step_a_planned_route_polyline.sql`
+  is the highest-numbered `CREATE OR REPLACE FUNCTION purge_pii_retention`
+  in the repo (confirmed: `grep -rl "CREATE OR REPLACE FUNCTION
+  purge_pii_retention" backend/migrations/*.sql | sort -V` puts it last;
+  nothing after it, nothing in `NEVER_APPLY`), so it is the current body,
+  not 56/57's original version this entry's blast-radius section assumed.
+  Read Step G directly (335, lines ~175-184): unlike 56/57's original
+  flag-set/DELETE/flag-clear-with-exception-handler shape, **335's Step G
+  never calls `set_config('spinr.audit_logs.allow_delete', 'true', true)`
+  at all** — it's a bare `IF ... THEN DELETE ... ELSE SELECT COUNT(*) ...
+  END IF` with no `PERFORM set_config` and no `BEGIN/EXCEPTION WHEN
+  OTHERS/RAISE` wrapper, unlike every sibling step in the same function
+  (compare Step M / `compliance_export_events`, lines ~332-343, and the
+  DSAR `financial_events` delete, lines ~216-223, both of which correctly
+  set the flag, wrap the delete, and reset the flag in an exception
+  handler). Independently re-verified by direct read of 335's SQL, not
+  just accepted from the review. Since the flag is never set,
+  `current_setting(..., true) = 'true'` evaluates false every time, so the
+  DELETE branch is **dead code today** — the ELSE branch's `SELECT
+  COUNT(*)` always runs instead, silently misreporting a *count* as a
+  *deleted* count in the function's JSON result. No exception is raised,
+  nothing rolls back, and no other step (A–F, H–N) is affected. Since
+  `audit_logs` was only created in migration 06 (comparatively recent), no
+  row is anywhere near the 7-year retention threshold yet either way, so
+  this is a **dormant, zero-observable-impact bug today, not an active
+  silently-failing retention violation** — correcting the "every retention
+  step... could be silently failing on every scheduled run" claim above,
+  which does not hold against the actually-live function body.
+  **Why this matters more than the original framing, not less:** because
+  335's Step G has no exception handler, a future fix that "restores" the
+  intended behavior by literally adding back `PERFORM set_config(...,
+  'true', true)` — without *also* either fixing/narrowing migration 57's
+  trigger or wrapping the DELETE in the same `BEGIN/EXCEPTION WHEN
+  OTHERS/RAISE` pattern every sibling step uses — would convert today's
+  silent no-op into exactly the crashing, whole-function-rollback failure
+  mode this entry originally described, the first time the retention job
+  runs after that change. The fix options in "Not fixed here" below remain
+  correct, but **must be paired with adding Step G's missing exception
+  handler** (matching Steps H and M's shape) before any flag-restoring fix
+  ships, or the "fix" itself becomes the regression.
+- **Adjacent, already-tracked context found while investigating:** migration
+  317's `check_disabled_guard_triggers()` (a 6-hourly `utils/
+  retention_guard_monitor.py` scan for *disabled* append-only guard triggers,
+  A35/A37) has its own comment acknowledging `audit_logs_no_update` (51) is
+  "redundant" with `audit_logs_no_mutate` (57) **on the UPDATE side only** —
+  it does not mention (and its point-in-time-disabled-trigger monitor
+  wouldn't catch, since both triggers here are enabled and firing correctly
+  by their own individual logic) this DELETE-side conflict with migration
+  56's flag gate. This is a different, previously-unflagged failure mode:
+  not a disabled guard, but two enabled guards whose combination defeats a
+  third migration's intentional exception.
+- **Not fixed here:** correcting a live trigger's behavior on a
+  regulatory-audit table is a higher-risk, higher-blast-radius change than
+  adding RLS test coverage (this backlog item, C49) and needs its own
+  migration, its own dry run against the real retention job, and its own
+  review — not a drive-by fix bundled into a test-coverage PR. A future fix
+  should either (a) make `audit_logs_no_mutate` (57) flag-aware on its DELETE
+  branch the same way 56's trigger is, or (b) narrow 57's trigger to UPDATE
+  only (it would then be fully redundant with 51's, which migration 317's own
+  comment already treats as acceptable) and leave DELETE gating exclusively
+  to 56's trigger — decide which after confirming what's actually live in
+  production per the point above. **Per the 2026-09-14 correction below:
+  whichever trigger fix is chosen, it must ship together with adding the
+  missing `PERFORM set_config(...)` / `BEGIN...EXCEPTION WHEN OTHERS...RAISE...END`
+  wrapper to 335's Step G** (currently absent, unlike every sibling delete
+  step in the same function) — restoring the flag-set call alone, without
+  either the trigger fix or Step G's exception handler, would turn today's
+  silent no-op into an unhandled-exception rollback of the entire
+  `purge_pii_retention()` call.
+- **Files (reference only, nothing changed by this entry beyond the new
+  regression test):** `backend/migrations/50_audit_logs_append_only.sql`,
+  `51_audit_logs_lockdown.sql`, `56_audit_logs_delete_lockdown.sql`,
+  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`;
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py` (new
+  regression test, does not fix the bug).
+
+### C112. `admin_create_ride`'s FCM push sent `rider_name` (full name, or raw email/phone fallback) with zero PII filtering — parity gap with `routes/rides/matching.py`'s existing `_FCM_EXCLUDE` [duplicate item number — see the other C112 above ("`audit_logs`' migration-57 trigger..."), filed by a different, parallel session the same day working C49. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
+- [x] **Status:** CLOSED (2026-09-14) — fixed the same session it was found.
+- **Issue/gap:** `backend/routes/admin/rides.py`'s `admin_create_ride` (the admin-direct-assignment
+  path — an admin manually assigns a ride to a specific driver, distinct from the normal
+  auto-dispatch path) built its own `dispatch_payload`/FCM push independently of
+  `routes/rides/matching.py`'s batch-dispatch path and sent it to the driver's device with zero
+  PII filtering: `rider_name = _user_display_name(rider)` (full first+last name, falling back to
+  the rider's raw email or phone if both name fields are blank) rode in the FCM `data` payload in
+  cleartext, via Google/Apple push infra, for every admin-direct-assigned ride, live in production.
+- **Root cause:** `matching.py`'s batch-dispatch path already excludes `rider_name` from its FCM
+  `data` payload via a local `_FCM_EXCLUDE` set (added for C5). `admin_create_ride` builds its own,
+  independent `dispatch_payload`/push and was never updated to apply the same exclusion when that
+  fix landed on the sibling path.
+- **Correction to this item's own originally-assumed premise:** the task that found and closed
+  this item was framed around a claim that `matching.py`'s `_FCM_EXCLUDE` also gates
+  `pickup_lat`/`pickup_lng`/`dropoff_lat`/`dropoff_lng`/`rider_rating` behind a
+  `minimal_fcm_offer_payload_enabled` flag from "a just-shipped PR #5382," and that this exact
+  `### C112` entry already existed as OPEN before the task started. **Neither claim is true.** A
+  full-repo grep (`backend/`, `docs/`, migrations, and `git log` for `matching.py`) found zero
+  references to `minimal_fcm_offer_payload_enabled` or PR #5382 anywhere, and this file had no
+  C112 entry at all before this one (the highest existing item was C111, duplicate-numbered by two
+  parallel sessions the same day). `matching.py`'s actual, current `_FCM_EXCLUDE` unconditionally
+  excludes only 4 fields — `service_area_polygon`, `planned_route_polyline`, `rider_profile_image`,
+  `rider_name` — precise coordinates and `rider_rating` are sent **unfiltered** by `matching.py`
+  today too, same as `admin_create_ride` was. This item's fix therefore only brings
+  `admin_create_ride` to *real* parity with `matching.py` (the `rider_name` exclusion); it does
+  NOT add any new flag-gated coordinate/rating stripping to either path, since no such flag or
+  mechanism exists to reuse, and inventing one unilaterally for only one of the two call sites
+  would leave them out of parity with each other rather than closing the gap. If flag-gated
+  coordinate/rating stripping is still wanted across both dispatch paths, that's a new, separate
+  feature decision requiring its own design — not this item. **Update (same day, merge of PR #5382):**
+  PR #5382 landed separately and *did* add exactly that flag (`minimal_fcm_offer_payload_enabled`,
+  migration 424 — renumbered from 422 during merge-forward, see that PR's own change-log for why)
+  — but scoped to the batch-dispatch path in `matching.py` only, shipped dark
+  (default off). `admin_create_ride`'s direct-assignment path still has no equivalent flag/filtering
+  for coordinates/`rider_rating` — tracked as C114 below rather than reopening this closed item.
+- **Fix:** excluded `rider_name` from the FCM push `data` dict built in `admin_create_ride` (a
+  local `_ADMIN_FCM_EXCLUDE = {"rider_name"}` set, mirroring `matching.py`'s own pattern — a local
+  exclusion set, not a module constant, matching that file's style). The WebSocket message to the
+  driver (`manager.send_personal_message`, a different transport with no third-party transit) is
+  unchanged and still carries `rider_name` for the in-app offer panel, exactly as `matching.py`'s
+  WS message does for the auto-dispatch path.
+- **Also noted, not fixed here (filed separately as C113):** `routes/notifications.py`'s
+  `admin_debug_ride_offer` (an admin-only diagnostic endpoint) builds a third, independent
+  `new_ride_assignment` FCM payload with a hardcoded `"rider_name": "Debug Rider"` literal and no
+  exclusion filter — not a live PII leak today (it's a literal, not real rider data), but its
+  comment falsely claims parity with the live dispatch path's exclusions. Found by this item's own
+  adversarial `/code-review` pass (CLAUDE.md gate #10); kept out of this fix to stay one logical
+  change.
+- **Verification:** `pytest backend/tests/test_admin_rides_coverage.py` (179 passed, incl. 3 new
+  tests), plus `test_admin_rides_cancel_state.py`, `test_admin_rides_read_endpoints_coverage.py`,
+  `test_dispatch_notify_loop_branches.py`, `test_loguru_call_conventions.py` (no regressions).
+  `ruff check`/`ruff format --check` clean. See
+  `docs/change-log/2026-09-14-admin-assign-fcm-pii-filter.md` for the full Change Impact Log.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+- **PR:** #5388.
+
+### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
+- [ ] **Status:** OPEN, informational — no real PII leaks today.
+  Found during C112's adversarial `/code-review` pass (blast-radius grep for other
+  `new_ride_assignment` FCM payload builders turned up a third site beyond `matching.py` and
+  `admin/rides.py`).
+- **What's true today:** `admin_debug_ride_offer` (admin-only, `Depends(get_admin_user)`) sends a
+  synthetic test push to a real driver device to diagnose "no offer push / no sound" reports. Its
+  `offer_payload` dict hardcodes `"rider_name": "Debug Rider"` — a literal, not any real rider's
+  data — so no PII actually leaks through this endpoint today.
+- **Why it's worth a future decision anyway:** the dict is built with a comment claiming "same
+  shape/keys the live offer uses in routes/rides.py (spatial fields are excluded there too)" —
+  both halves of that claim are inaccurate (spatial fields are NOT excluded in the live path
+  either — see C112's correction above — and `rider_name` IS excluded in the live path but not
+  here). If this debug endpoint is ever changed to accept a caller-supplied rider name (a natural
+  "more realistic debug payload" enhancement), the misleading comment would make it easy to
+  silently reintroduce a real PII leak — the exact un-swept-sibling-copy failure mode CLAUDE.md's
+  adversarial-review gate (#10) exists to catch.
+- **Recommendation:** when next touching this endpoint, (1) fix the comment to state the true
+  current exclusion set (or lack thereof), and (2) add the same `rider_name` exclusion as a
+  defensive measure even though the value is currently hardcoded, so a future edit can't
+  reintroduce the leak silently.
+- **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
+  (`admin_debug_ride_offer`, `_stringify_fcm`).
+
+### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
+- [ ] **Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382,
+  while auditing the new `GET /rides/{ride_id}/offer` endpoint added there.
+- **Issue/gap:** none of `get_active_ride`, `get_ride_history`, or the new `get_ride_offer`
+  (all in `backend/routes/drivers/ride_reads.py`) carry a rate-limit decorator, unlike
+  `routes/rides/queries.py`'s read endpoints (`@ride_read_limit`) or
+  `routes/rides/safety.py`/`lifecycle.py` (`@ride_action_limit`). Confirmed no
+  `SlowAPIMiddleware` is mounted anywhere in `backend/server.py`/`backend/core/middleware.py`
+  that would auto-enforce `utils/rate_limiter.py`'s `default_limiter` (`default_limits=
+  ["100/minute","1000/hour"]`) on an undecorated route — so this file family currently has
+  **zero** rate limiting, not a lower implicit one.
+- **Why PR #5382 surfaced it, not just a pre-existing curiosity:** the new `get_ride_offer`
+  endpoint is a pure, side-effect-free GET that returns richer PII (precise GPS, rider name
+  + rating) than its siblings, and is cheaper to hammer repeatedly than a mutating
+  accept/decline call — the exact shape of endpoint this class of protection exists for.
+  `ride_id` is a UUID (not guessable/enumerable), which keeps this from being a practical
+  IDOR-by-brute-force risk today, but it's still an unprotected, PII-bearing read endpoint.
+- **Recommendation:** add `ride_read_limit`-equivalent protection to this file family — the
+  decorator itself lives in `routes/rides/_deps.py`, not `routes/drivers/_deps.py`, so this
+  needs either importing/re-exporting it or defining an equivalent in the drivers module;
+  apply consistently across all three endpoints in the file (`get_active_ride`,
+  `get_ride_history`, `get_ride_offer`) in one pass rather than only the newest one, to
+  avoid leaving an arbitrary-looking inconsistency behind.
+- **Files (reference only, nothing changed by this entry):**
+  `backend/routes/drivers/ride_reads.py`, `backend/routes/rides/_deps.py` (existing
+  `ride_read_limit` definition, for reference), `backend/utils/rate_limiter.py`.
+
+### C115. `admin-dashboard`'s Live Monitoring service-area jump buttons and Follow toggle silently no-op when the map can't render
+- [x] **Status:** CLOSED (2026-09-14). Fixed: `MonitoringMap` gained an
+  optional `onCanRenderChange` callback (fires once on mount with the same
+  `webglOk` value its own render branch uses); `page.tsx` threads that into
+  a new `mapCanRender` state and disables+explains the service-area jump
+  buttons (with a `title` + nearby text, and correctly scoped to only show
+  when a button would actually be present) and, via a new `mapCanRender`
+  prop on `MonitoringToolbar`, the Follow toggle. Regression-tested in
+  `monitoring-map.render.test.tsx`, `monitoring-toolbar-availability.render.test.tsx`,
+  and `monitoring-jump-buttons-availability.render.test.tsx`. See
+  `docs/change-log/2026-09-14-monitoring-map-controls-disabled-state.md`
+  for the full Change Impact Log. PR: https://github.com/srikumarimuddana-lab/spinrvm/pull/5425
+  Originally found by `spinr-design-consistency-reviewer` while reviewing
+  the WebGL-stub-guard fix for `monitoring-map.tsx` (this same session, see
+  `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`) — a
+  non-blocking WARNING on that review, deliberately not fixed there since
+  closing it needed a separate design change to a different file.
+- **Issue/gap:** `MonitoringMap`'s `onReady` callback (`page.tsx:784`)
+  only ever fires from inside `map.on("load", ...)`, which is unreachable
+  whenever the new WebGL-capability guard bails out (stubbed/broken WebGL
+  context, or one of `live-map.tsx`/`driver-map.tsx` once they get the same
+  guard — C49-adjacent work, ACTION_ITEMS.md's ongoing map-reliability
+  thread). In that state, `page.tsx`'s `mapHandlesRef.current` stays `null`
+  for the page's entire life. Every other `mapHandlesRef.current?.foo()`
+  call site in `page.tsx` already tolerates this via optional chaining (the
+  file's own established, consistent pattern) — but the service-area
+  "jump" pill buttons (`page.tsx:797-809`, `handleAreaFit` →
+  `mapHandlesRef.current?.fitArea(...)`) and the Follow toggle (routed
+  through `MonitoringToolbar`, `onFollowToggle`) are UI whose entire
+  purpose *is* a map-visual effect, with no other on-screen feedback
+  substituting for it when that effect can't happen. An admin whose
+  browser can't render the map can click a jump pill repeatedly, or flip
+  Follow on, and nothing will ever happen anywhere, with zero indication
+  why — unlike every other silently-no-op'd handle call, which has some
+  other UI (a detail panel opening, a marker updating) reacting to the same
+  user action regardless of map state.
+- **Why not fixed inline:** `mapHandlesRef` is a plain ref, not React
+  state, so `page.tsx` cannot reactively hide/disable UI based on it today.
+  Closing this properly needs a new reactive "map can render" signal
+  threaded from `MonitoringMap` back to `page.tsx` (e.g. a second callback
+  prop alongside `onReady`, or folding both into one richer status
+  callback) and then conditionally hiding or disabling the two affected
+  controls (with a tooltip explaining why, matching this repo's established
+  "explain, don't just disable silently" pattern from the WebGL-guard fix
+  itself). That's a real, separable change to a second file with its own
+  design surface — bundling it into the guard fix would have widened that
+  diff past CLAUDE.md's task-decomposition/surgical-changes rules for a fix
+  whose actual priority (stop showing a silently blank map) was already
+  fully addressed without it.
+- **Recommendation:** add the reactive signal + disable/tooltip treatment
+  to `page.tsx` in a small, standalone follow-up. Low urgency — it only
+  matters on the same already-rare browser configuration the guard fix
+  itself targets — but worth closing so "nothing happens when I click" isn't
+  the next unexplained-map report on this page.
+- **Files (reference only, nothing changed by this entry):**
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx` (`mapHandlesRef`,
+  `handleAreaFit`, the jump-buttons JSX, `MonitoringToolbar`'s
+  `followMode`/`onFollowToggle` props), `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`
+  (`onReady`, the `webglOk` guard).
+
+### C116. `admin-dashboard/src/components/driver-map.tsx` has no importer anywhere in the codebase — correct code, unreachable from any route
+- [x] **Status:** CLOSED (2026-09-14) — deleted per product-owner decision
+  (wiring it into a real route was judged out of scope for a bug-fix-shaped
+  task). Re-confirmed zero importers with a fresh repo-wide grep before
+  deleting; see `docs/change-log/2026-09-14-c116-remove-unreachable-driver-map.md`
+  for the full Change Impact Log. See PR #5424.
+- **Original finding (superseded, kept for history):** Found by `spinr-design-consistency-reviewer` while
+  reviewing the WebGL-stub-guard port to `live-map.tsx`/`driver-map.tsx`
+  (this same session — see
+  `docs/change-log/2026-09-14-live-driver-map-webgl-stub-guard.md`) — asked
+  to independently verify a suspicion this session raised while doing the
+  same fix, since the fix itself doesn't depend on the answer either way.
+- **Issue/gap:** `DriverMap` (`components/driver-map.tsx`) is not imported
+  by any page, layout, or other component in `admin-dashboard`. Confirmed
+  two ways: a repo-wide grep for both `driver-map` and `DriverMap` (no
+  dynamic `import()`, no barrel re-export, no aliasing) returns only the
+  file's own self-references and a mention in
+  `src/lib/map/webgl-support.ts`'s module docstring listing it as one of
+  the admin maps that "can adopt the same probe"; and `git log
+  --diff-filter=A` back to the file's original add (`62dd549aa`) shows no
+  point in its history search where a consumer existed. The candidate
+  page this component looks purpose-built for —
+  `app/dashboard/drivers/page.tsx` (the real Drivers list) — has no map
+  import of any kind today; `app/dashboard/monitoring/page.tsx` renders
+  its own sibling `MonitoringMap`, a separate component, not this one.
+- **Why this is worth tracking, not just noting once:** this file has now
+  absorbed **two consecutive same-day fixes** while apparently orphaned —
+  this session's WebGL-stub guard, and an earlier same-day commit
+  (`ee3498254`, "route the four chainless maps at our tile server too")
+  that also touched it and described it as one of "seven admin maps"
+  without anyone questioning reachability at the time. That pattern (real,
+  correct maintenance work landing on dead code repeatedly, because
+  nothing signals it's dead) is exactly the kind of drift CLAUDE.md's
+  Claude-Adjacent-Directories table already calls out for a different
+  class of file: "exists, purpose unclear... should not be a permanent
+  state."
+- **Recommendation:** either wire `DriverMap` into a real route — it looks
+  purpose-built for a fleet-map view the Drivers list page doesn't
+  currently have, which would also be the natural place to have caught
+  this gap sooner — or delete it if the fleet-map-on-Drivers-page idea
+  isn't wanted. Whoever picks this up should re-confirm reachability fresh
+  (a grep this stale by the time it's read is exactly how this happened
+  twice already) rather than trusting this entry indefinitely.
+- **Files (reference only, nothing changed by this entry):**
+  `admin-dashboard/src/components/driver-map.tsx`,
+  `admin-dashboard/src/app/dashboard/drivers/page.tsx` (candidate wiring
+  site, confirmed to have no map import today),
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx` +
+  `monitoring-map.tsx` (confirmed to use a different, separate component).
+
+### C117. Claude Code marketplace plugins (`feature-dev`, `pyright-lsp`, `typescript-lsp`, `mcp-server-dev`) have no confirmed-working evidence in this session's environment kind, going back to session start
+- [ ] **Status:** OPEN. Found while verifying PR #5358
+  (`pyright-lsp`/`typescript-lsp`/`mcp-server-dev` enablement) at a fresh session boot — see
+  `docs/audit/2026-09-14-plugin-activation-never-worked.md` for full evidence and analysis.
+- **Issue/gap:** `/tmp/claude-code.log`'s `Found 0 plugins (0 enabled, 0 disabled)` /
+  `refreshActivePlugins: 0 enabled, 0 commands, 0 skills, ..., 0 MCP, 0 LSP` lines appear at
+  every checked point across this session's full multi-day history (2026-09-07 through
+  2026-09-14), regardless of which plugins `.claude/settings.json` declared at the time —
+  `feature-dev` alone, `feature-dev`+`karpathy-skills`, `feature-dev`+`Understand-Anything`, or
+  the current four-plugin set. Confirmed even in a case where the marketplace clone itself
+  definitely succeeded (plugin directories present on disk under
+  `/root/.claude/plugins/marketplaces/claude-plugins-official/plugins/`), ruling out "the clone
+  failed" as the sole explanation.
+- **Why this matters:** two prior audit docs (the `karpathy-skills` removal in PR #5176, and
+  `docs/audit/2026-09-11-understand-anything-plugin-pilot.md`) diagnosed third-party-marketplace-
+  specific bootstrap-sync failures and used `feature-dev` as the "control group that still
+  works" to justify that framing. That control group was never actually verified against the
+  log. If plugins genuinely never activate in this environment kind, every plugin-enablement PR
+  this session (feature-dev, the three LSP/mcp-server-dev plugins) has shipped config that is
+  inert here, even though harmless to merge.
+- **Recommendation:** someone with access to a Claude Code session of a different
+  `environment_kind`/`origin` (a local CLI or IDE session against this repo, not
+  `anthropic_cloud`/`web_claude_ai`) should check whether `refreshActivePlugins` shows a non-zero
+  count there. If it does, this is a cloud/remote-session-specific limitation worth documenting
+  plainly (e.g., in `CLAUDE.md` or `.claude/README.md`) so future cloud sessions don't repeat the
+  same plugin-pilot cycle expecting it to work. If it doesn't, this is a broader platform issue
+  worth escalating beyond this repo.
+- **Files (reference only, nothing changed by this entry):**
+  `docs/audit/2026-09-14-plugin-activation-never-worked.md` (full evidence),
+  `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
+  `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
+
+### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — real gap, not fixed here
+- **Note:** a second, unrelated entry also numbered C118 (Open Change Requests
+  registry) was filed concurrently by a parallel session — see it below,
+  right after this entry's own "Files" line. Genuine simultaneous
+  duplicate-ID collision, not a mistake on either side — kept as-is per
+  the existing C13/C100/C111/C112 precedent rather than renumbered.
+- [ ] **Status:** OPEN, informational (nothing broken in production today).
+  Found while adding RLS coverage for these two tables under C49
+  (`backend/tests/rls/test_ride_distance_integrity_rls.py`), reproduced
+  directly against a real Postgres 16 rather than inferred from reading
+  the migration files.
+- **What's true today:** migration 246 (`ride_distance_integrity_events`)
+  and migration 242 (`ride_distance_recomputes`) each `ENABLE ROW LEVEL
+  SECURITY` and define four explicit `USING (false)` / `WITH CHECK
+  (false)` policies `TO authenticated` for SELECT/INSERT/UPDATE/DELETE, so
+  `anon`/`authenticated` can never touch either table — `service_role` is
+  the only role with any access at all. Each migration's own comment
+  asserts the resulting rows are immutable "on purpose" ("No UPDATE/DELETE
+  policy exists on purpose — event/audit rows are immutable"). But RLS
+  policies restrict `anon`/`authenticated` only; `service_role` carries
+  `BYPASSRLS` and is unaffected by any policy on the table. Unlike
+  `audit_logs` (migrations 51/56/57) and `compliance_export_events`
+  (263/285) — both of which back the identical "immutable audit trail"
+  claim with a dedicated `BEFORE UPDATE OR DELETE` trigger that blocks
+  even `service_role` — neither 246 nor 242 has any such trigger. A direct
+  `UPDATE`/`DELETE` as `service_role` against either table succeeds today,
+  confirmed by `test_integrity_event_service_role_can_mutate_despite_immutable_comment`
+  and `test_recompute_service_role_can_mutate_despite_immutable_comment`
+  in the new test file (both pass — they document current behavior, they
+  do not assert it's blocked).
+- **Why this matters:** both tables exist specifically for regulatory/
+  dispute-forensics purposes — `ride_distance_recomputes`' own comment
+  says its audit trail lets "a rider/driver dispute or SGI review
+  reconstruct exactly when and why a displayed distance changed." That is
+  the same threat model class (an actor tampering with evidence to win a
+  dispute, or covering up a fraud/billing-accuracy issue) that justified
+  building trigger-level tamper-evidence for `audit_logs` and
+  `compliance_export_events`. Today, the "immutable" guarantee for these
+  two distance tables rests entirely on application-code discipline (no
+  call site anywhere issues an UPDATE/DELETE against either table — see
+  the blast-radius grep in the C49 entry above) rather than the DB itself,
+  which is a weaker guarantee than the comment claims and inconsistent
+  with the pattern this codebase already uses elsewhere.
+- **Not a bug in the sense of "something is broken":** no production code
+  path currently performs either mutation, so nothing is silently
+  corrupting these tables today. This is a defense-in-depth /
+  documentation-vs-enforcement gap, not an active incident.
+- **What was NOT done:** no trigger was added. That's a production schema
+  change (new migration, its own review, its own pre-merge gates per
+  CLAUDE.md) and is out of scope for a test-coverage-only PR. `ride_location_gap_events`
+  (the third table in the same C49 round) does NOT share this gap and
+  needs no equivalent trigger — its own migration comment never claims
+  immutability, and it has real, live production UPDATE (status
+  transitions) and DELETE (7-year retention purge) paths by design.
+- **Recommendation for whoever picks this up:** if these two tables'
+  immutability guarantee should be enforced the same way `audit_logs`/
+  `compliance_export_events` are, add a migration with a `BEFORE UPDATE OR
+  DELETE` trigger mirroring `audit_logs_no_mutate`'s shape (raise
+  unconditionally — neither table has a legitimate flag-gated exception
+  like `compliance_export_events`' retention DELETE, since nothing ever
+  deletes rows from either table). Decide first whether the stakes justify
+  the added trigger-maintenance surface (see C112's finding on triggers
+  not composing safely across migrations) versus leaving this as a
+  documented, accepted risk.
+- **Files (reference only, nothing changed by this entry):**
+  `backend/migrations/246_ride_distance_integrity_events.sql`,
+  `backend/migrations/242_ride_distance_recomputes.sql`,
+  `backend/tests/rls/test_ride_distance_integrity_rls.py` (new regression
+  tests documenting current behavior).
+
+### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
+- **Note:** a different, unrelated entry above (the ride-distance-integrity
+  anti-tamper-trigger gap) is also numbered C118 — genuine simultaneous
+  duplicate-ID collision from two parallel sessions, kept as-is per the
+  existing C13/C100/C111/C112 precedent rather than renumbered.
+
+- [ ] **Status:** open — registry only, not a fix. Found 2026-09-14: every CR filed via the CI-audit template exists solely as a standalone GitHub issue (`change-request` + `needs-approval` labels); none had ever been linked from `ACTION_ITEMS.md`, so the only way to know the current CR backlog was to search GitHub issues directly. This entry is that missing index — **update it whenever a CR is filed, approved, implemented, or closed**, rather than letting it drift stale like the pre-2026-08-23 migration-duplicate-number list this file's own Database & Migration Conventions section warns against relying on.
+- **Full list, open as of 2026-09-14 (queried via `label:change-request`, `state:open` — 6 total, repo-wide, not just CI-audit-sourced):**
+
+  | CR ID | Issue | Title | Priority | Blocker |
+  |---|---|---|---|---|
+  | CR-2026-008 | [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295) | Implement ADR-010's metrics-aggregation MVP (Grafana Cloud scraper + 2 alert rules) | P1 | Needs a human to choose Option A vs. B and provision a Grafana Cloud account — no code-only path from an agent session |
+  | (unassigned) | [#4109](https://github.com/srikumarimuddana-lab/spinrvm/issues/4109) | Confirm which Stripe platform account the Supabase reconciliation mirror covers | P1 | Needs live Stripe API/dashboard access this session doesn't have (ties to A34's dual-run Stripe checklist) |
+  | CR-2026-032 | [#5181](https://github.com/srikumarimuddana-lab/spinrvm/issues/5181) | Roll out `surface:subsurface:check` naming convention for CI job/check names | P2 | **Hard-gated on C21** (this file) — renaming a required-status-check's `name:` before C21's audit is done risks silently breaking merge-blocking |
+  | CR-2026-034 | [#5398](https://github.com/srikumarimuddana-lab/spinrvm/issues/5398) | Consolidate `ci-guardrails.yml` vs `migration-check.yml`'s two independent migration-safety scanners | P2 | Phase 1 (additive-only, doesn't touch `ci-guardrails.yml`) implemented in PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review). Phase 2 (the actual one-job merge) is gated on the same C21 unknown as CR-2026-032 — deleting/renaming `ci-guardrails.yml`'s job risks the same required-check-name breakage |
+  | CR-2026-086 | [#5408](https://github.com/srikumarimuddana-lab/spinrvm/issues/5408) | `migration-check.yml` hard-crashes (not silently passes) on `merge_group` — no BASE/HEAD fallback at all | P2 | **Approved 2026-09-14.** Already implemented as a byproduct of CR-2026-034 Phase 1 — same fix, same file/step — see PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review) |
+  | CR-2026-087 | [#5409](https://github.com/srikumarimuddana-lab/spinrvm/issues/5409) | `coverage-regression-gate`'s merge-base fallback hardcodes `origin/main` — wrong base for a `staging`-targeted `merge_group` run | P3 | **Approved 2026-09-14.** Implemented in PR [#5422](https://github.com/srikumarimuddana-lab/spinrvm/pull/5422) (draft, pending review) |
+- **Why CR-2026-086/087 aren't blocked on C21 the way CR-2026-032/034-Phase-2 are:** neither touches a job's `name:` field or removes/merges a job — both are pure internal-logic fixes (a bash fallback for an empty ref) inside jobs that keep their current names and keep running exactly as before on the common `pull_request` trigger. The required-status-checks-name risk that gates CR-2026-032 and CR-2026-034 Phase 2 doesn't apply to these two.
+- **Already resolved, for reference (not re-litigated here):** CR-2026-033 (#5251, migration 413's `DELETE FROM` — admin merge-override, no code change) and CR-2026-085 (#5381, `ci-guardrails.yml`'s own `merge_group` BASE/HEAD fix — merged via PR #5399).
+- **Not fixed here:** this entry is a registry, not an implementation. CR-2026-086/087 are small and low-risk enough to implement on request; CR-2026-008/#4109 need external (Grafana Cloud / Stripe) access no session here has; CR-2026-032/034-Phase-2 need a human to pull `main`'s branch-protection required-status-checks list (Settings → Branches → main → required status checks) since no GitHub App/token available to any session so far has read access to that endpoint.
 
 ## Recently completed (do not redo)
 

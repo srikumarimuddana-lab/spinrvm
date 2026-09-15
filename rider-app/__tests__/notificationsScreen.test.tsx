@@ -189,9 +189,9 @@ describe('NotificationsScreen', () => {
     expect(mockPush).toHaveBeenCalledWith('/lost-and-found');
   });
 
-  it('does not navigate for a chat_message notification with no ride id', async () => {
+  it('does not navigate for a chat_message notification with no ride id, and opens the detail modal instead', async () => {
     mockApiGet.mockResolvedValue({
-      data: { notifications: [{ ...N1, id: 'n5', title: 'New message', type: 'chat_message' }], unread_count: 1 },
+      data: { notifications: [{ ...N1, id: 'n5', title: 'New message', type: 'chat_message', body: 'Full message text' }], unread_count: 1 },
     });
     const r = await renderScreen();
     const card = findCardByTitle(r, 'New message');
@@ -200,6 +200,10 @@ describe('NotificationsScreen', () => {
       await flush();
     });
     expect(mockPush).not.toHaveBeenCalled();
+    const modal = r.root.findByProps({ testID: 'notification-detail-modal' });
+    expect(modal.props.visible).toBe(true);
+    const body = r.root.findByProps({ testID: 'notification-detail-body' });
+    expect(body.props.children).toBe('Full message text');
   });
 
   it('routes to /driver-arriving for a driver_accepted notification with a ride id', async () => {
@@ -281,6 +285,30 @@ describe('NotificationsScreen', () => {
     expect(allText(r)).toContain('5m ago');
     expect(allText(r)).toContain('3h ago');
     expect(allText(r)).toContain('2d ago');
+  });
+
+  it('opens the detail modal for a fully unmapped type (e.g. ride_cancelled) and closing it hides it again', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { notifications: [{ ...N1, id: 'n9', title: 'Ride Cancelled', type: 'ride_cancelled', body: 'The rider cancelled this ride.' }], unread_count: 1 },
+    });
+    const r = await renderScreen();
+    const card = findCardByTitle(r, 'Ride Cancelled');
+    await act(async () => {
+      card.props.onPress();
+      await flush();
+    });
+    expect(mockPush).not.toHaveBeenCalled();
+    let modal = r.root.findByProps({ testID: 'notification-detail-modal' });
+    expect(modal.props.visible).toBe(true);
+
+    const closeBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Close')),
+    )!;
+    act(() => {
+      closeBtn.props.onPress();
+    });
+    modal = r.root.findByProps({ testID: 'notification-detail-modal' });
+    expect(modal.props.visible).toBe(false);
   });
 
   it('colors a safety notification icon with the danger color', async () => {

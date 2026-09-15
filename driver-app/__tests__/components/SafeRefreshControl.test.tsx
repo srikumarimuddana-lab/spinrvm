@@ -55,7 +55,7 @@ describe('FallbackRefreshControl', () => {
           <Text>list content</Text>
         </FallbackRefreshControl>,
       );
-      const json = renderer.toJSON() as { props: { style: unknown } };
+      const json = renderer.toJSON() as unknown as { props: { style: unknown } };
       expect(json.props.style).toEqual([{ flex: 1 }, { backgroundColor: 'red' }]);
     });
   });

@@ -76,11 +76,19 @@ safety audit trail migration 64); extended since across several rounds
 deny-all tables, the `corporate_*` money/PII tables (migrations 05/17/27/142)
 plus `stripe_disputes`/`stripe_orphan_refunds` (88/254), `otp_records`/
 `rider_email_verification_otp`/`emergency_contacts`/`safety_incidents`/
-`safety_incident_photos`, and -- this round -- the remaining four of the
-nine migration-27 corporate tables (`corporate_policies`,
-`corporate_allowed_domains`, `ride_payment_sources`,
-`corporate_policy_evaluations`)). See each test file's own docstring for
-what it covers, and ACTION_ITEMS.md C49 for the current fraction covered.
+`safety_incident_photos`, the remaining four of the nine migration-27
+corporate tables (`corporate_policies`, `corporate_allowed_domains`,
+`ride_payment_sources`, `corporate_policy_evaluations`), `audit_logs`
+(security audit trail, migrations 06/51/57) plus its two insurance-period
+audit siblings `driver_insurance_period_corrections` (355) and
+`driver_period_distances` (249), the admin PII-export
+audit trail: `data_transfer_export_jobs` (262), `compliance_export_events`
+(263), and `admin_export_approval_requests` (268), and -- this round -- the
+ride distance/GPS integrity audit trail: `ride_distance_integrity_events`
+(246), `ride_distance_recomputes` (242), and `ride_location_gap_events`
+(237, + 370's additive status-value widening)). See each test file's own
+docstring for what it covers, and ACTION_ITEMS.md C49 for the current
+fraction covered.
 
 Running these tests
 --------------------
@@ -168,6 +176,30 @@ def _extract_section(sql_text: str, start_marker: str, end_marker: str) -> str:
     return sql_text[start:end]
 
 
+def _extract_policy(sql_text: str, marker: str) -> str:
+    """Pull one `CREATE POLICY ...;` statement out of a larger .sql file by
+    tracking paren depth from its first '(' to close, then reading to the
+    next ';' -- same paren-balanced-then-semicolon technique as
+    _extract_create_table, generalized since an individual CREATE POLICY
+    statement isn't wrapped in one outer paren group the way a CREATE TABLE
+    is. Used for migration 06, which creates audit_logs' two original
+    policies interleaved with unrelated cloud_messages/push_tokens
+    statements this harness doesn't build."""
+    start = sql_text.index(marker)
+    depth = 0
+    i = sql_text.index("(", start)
+    for j in range(i, len(sql_text)):
+        ch = sql_text[j]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = sql_text.index(";", j) + 1
+                return sql_text[start:end]
+    raise AssertionError(f"unbalanced parens extracting policy from {marker!r}")
+
+
 _AUTH_SHIM_SQL = """
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -251,18 +283,6 @@ CREATE TABLE service_areas (id text primary key);
 -- side-effect ADD COLUMN statements those migrations carry.
 CREATE TABLE admin_staff (id text primary key);
 CREATE TABLE payouts (id text primary key);
--- Minimal stub matching the 6 columns migration 399's outbox_redrive() RPC
--- writes (id/action/entity_type/entity_id/actor_id/details) -- the real
--- audit_logs table (migration 06, actor_id added migration 57) isn't part
--- of this harness's 5-table coverage scope; only outbox_redrive touches it.
-CREATE TABLE audit_logs (
-    id text primary key,
-    action text,
-    entity_type text,
-    entity_id text,
-    actor_id text,
-    details text
-);
 """
 
 
@@ -598,6 +618,155 @@ def pg_conn(pg_test_dbname):
         "TO anon, authenticated, service_role"
     )
 
+    # --- audit_logs (ACTION_ITEMS.md C49): migration 06 creates the table +
+    # its original two policies (interleaved with unrelated cloud_messages/
+    # push_tokens statements this harness doesn't build -- pulled out via
+    # _extract_create_table/_extract_policy rather than hand-copied), 51
+    # locks it down (SELECT-only admin policy, append-only UPDATE trigger,
+    # REVOKE/GRANT narrowing), 56 adds a flag-gated DELETE trigger so
+    # purge_pii_retention()'s 7y retention step can still delete old rows,
+    # 57 adds actor_id (needed by migration 399's outbox_redrive() INSERT,
+    # previously covered by a stub table here -- see the removed
+    # _STUB_TABLES_SQL comment history) plus a second, unconditional
+    # UPDATE-OR-DELETE trigger -- applied in filename-sort order (51 < 56 <
+    # 57), matching how run_migrations.py would actually apply them. Two
+    # more `57_*.sql` files besides this one exist (duplicate numeric
+    # prefix, expected per CLAUDE.md) and are deliberately not applied --
+    # both only rewrite purge_pii_retention(), unrelated to audit_logs'
+    # RLS/grant/trigger surface under test here.
+    #
+    # 56 and 57's triggers do NOT compose safely -- see
+    # test_flag_gated_delete_is_still_blocked_by_migration_57_trigger below,
+    # which reproduces (does not fix) a real, currently-live production bug:
+    # ACTION_ITEMS.md C112. ---
+    migration_06_sql = (migrations_dir / "06_cloud_messaging.sql").read_text()
+    cur.execute(_extract_create_table(migration_06_sql, "audit_logs"))
+    cur.execute("ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin full access audit_logs"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass audit_logs"'))
+    # Baseline grant before 51's REVOKE narrows it -- mirrors Supabase's own
+    # default new-table grant (same reasoning as the blanket "ALL TABLES"
+    # grant above), so 51's REVOKE has something real to revoke rather than
+    # being a no-op against a table nothing was ever granted on.
+    cur.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON audit_logs TO anon, authenticated, service_role")
+    cur.execute((migrations_dir / "51_audit_logs_lockdown.sql").read_text())
+    cur.execute((migrations_dir / "56_audit_logs_delete_lockdown.sql").read_text())
+    cur.execute((migrations_dir / "57_audit_logs_schema_standardization.sql").read_text())
+
+    # --- driver_insurance_period_corrections (migration 355) / -- 355 references
+    # driver_insurance_periods(id) (migration 64, already applied above);
+    # driver_period_distances (migration 249) -- both self-contained
+    # regulatory-audit tables (append-only, owner-or-admin SELECT, no
+    # INSERT/UPDATE/DELETE policy for anon/authenticated), applied verbatim
+    # in full like driver_insurance_periods itself. ---
+    cur.execute((migrations_dir / "355_driver_insurance_period_corrections.sql").read_text())
+    cur.execute((migrations_dir / "249_driver_period_distances.sql").read_text())
+
+    # Baseline grant for the two plain new tables, by name (same reasoning
+    # as every other by-name grant above -- doesn't touch audit_logs, which
+    # already got its own baseline grant before 51's REVOKE ran). Neither
+    # table has an INSERT/UPDATE/DELETE policy for anon/authenticated, so
+    # without this grant every write attempt from those roles would be
+    # denied at the grant layer instead of ever reaching RLS -- same
+    # baseline-grant-then-narrow shape used for every other table above.
+    # (Postgres raises the identical SQLSTATE 42501 either way, so no test
+    # here can distinguish which layer produced a given denial -- this
+    # grant is about matching Supabase's own default table permissions,
+    # not about producing an observably different error.)
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON driver_insurance_period_corrections, "
+        "driver_period_distances TO anon, authenticated, service_role"
+    )
+
+    # --- admin PII-export audit trail (ACTION_ITEMS.md C49): three tables
+    # tied to the dual-approval/export-audit hardening already done at the
+    # app layer this session (B1/W2a-c) -- this round adds the RLS/DB-
+    # constraint backstop. `data_transfer_export_jobs` (262, + 264's
+    # additive `reason` column) and `admin_export_approval_requests` (268)
+    # are both service-role-only: zero policy for anon/authenticated at
+    # all, RLS default-denies the rest. `compliance_export_events` (263) is
+    # SELECT-admin/super_admin-only, INSERT/UPDATE/DELETE service-role-
+    # only, with a tamper-evidence trigger -- 285's own DELETE-gating
+    # section (extracted below, not its much larger purge_pii_retention()
+    # redefinition, which reaches tables outside this harness's scope, e.g.
+    # driver_location_history/ride_routes/price_searches) applied on top so
+    # the retention-purge flag path can be exercised too. Applied in
+    # filename-sort order (262 < 263 < 264 < 268 < 270 < 274 < 278),
+    # matching how run_migrations.py would actually apply them.
+    #
+    # 270/274/278 drop each table's admin-identity FK to `users(id)` -- a
+    # real, already-shipped fix for a bug class where a real admin caller's
+    # id (admin_staff.id, or the "admin-001"/"break-glass" sentinel) can
+    # never satisfy that FK (confirmed live in each migration's own header:
+    # zero rows ever written to any of these three tables before its fix).
+    # Applied here so this harness doesn't silently paper over that removed
+    # constraint the way a synthetic seeded-users-row test double otherwise
+    # could -- see test_admin_export_audit_rls.py's FK-regression tests. ---
+    cur.execute((migrations_dir / "262_data_transfer_export_jobs.sql").read_text())
+    cur.execute((migrations_dir / "263_compliance_export_events.sql").read_text())
+    cur.execute((migrations_dir / "264_data_transfer_export_reason.sql").read_text())
+    cur.execute((migrations_dir / "268_admin_export_approvals.sql").read_text())
+    cur.execute((migrations_dir / "270_export_approvals_admin_id_no_fk.sql").read_text())
+    cur.execute((migrations_dir / "274_data_transfer_export_jobs_admin_id_no_fk.sql").read_text())
+    cur.execute((migrations_dir / "278_compliance_export_events_admin_id_no_fk.sql").read_text())
+
+    migration_285_sql = (migrations_dir / "285_retention_purge_compliance_export_events.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_285_sql,
+            "CREATE OR REPLACE FUNCTION _compliance_export_events_immutable()",
+            "-- Trigger definition itself is unchanged",
+        )
+    )
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON data_transfer_export_jobs, "
+        "admin_export_approval_requests, compliance_export_events "
+        "TO anon, authenticated, service_role"
+    )
+
+    # --- ride distance/GPS integrity audit trail (ACTION_ITEMS.md C49):
+    # three tables backing fraud/dispute detection on ride billing distance
+    # -- distinct from the money ledger itself (financial_events, already
+    # covered above). `ride_distance_integrity_events` (246) and
+    # `ride_distance_recomputes` (242) are each self-contained, single-
+    # migration tables with no later migration touching either (confirmed
+    # by a repo-wide grep on both table names). `ride_location_gap_events`
+    # (237) picks up migration 370's additive CHECK-constraint widening
+    # (adds 'unresolved_at_completion' to the allowed `status` values),
+    # applied verbatim in filename order right after 237, matching how
+    # run_migrations.py would actually apply it.
+    #
+    # All three ENABLE ROW LEVEL SECURITY then define four EXPLICIT
+    # `USING (false)` / `WITH CHECK (false)` policies `TO authenticated`
+    # for SELECT/INSERT/UPDATE/DELETE -- unlike the admin-export-audit
+    # trio just above (RLS's *implicit* default-deny, zero policy at all),
+    # these are *explicit* deny-all policies, but the observable behavior
+    # for anon/authenticated is identical: SELECT/UPDATE/DELETE filter
+    # silently to zero rows, INSERT raises InsufficientPrivilege. No
+    # policy exists for `anon` at all on any of the three, so anon gets
+    # the same RLS implicit-default-deny the other tables use.
+    #
+    # Migration 238 (trip_route_integrity_retention) is deliberately NOT
+    # applied: it ALTERs `ride_routes`, a table outside this harness's
+    # build scope (applying it verbatim would raise UndefinedTable), and
+    # its only touch on ride_location_gap_events is a plain index plus a
+    # reference inside purge_trip_route_geometry() -- neither an RLS
+    # policy nor a CHECK constraint this harness's tests need, so it's
+    # skipped exactly like migrations 280/315 were skipped for
+    # safety_incidents above (see that comment for the same "not the
+    # migration that defines the policies" reasoning). ---
+    cur.execute((migrations_dir / "237_ride_location_gap_events.sql").read_text())
+    cur.execute((migrations_dir / "370_add_unresolved_at_completion_status_to_gap_events.sql").read_text())
+    cur.execute((migrations_dir / "242_ride_distance_recomputes.sql").read_text())
+    cur.execute((migrations_dir / "246_ride_distance_integrity_events.sql").read_text())
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ride_location_gap_events, "
+        "ride_distance_recomputes, ride_distance_integrity_events "
+        "TO anon, authenticated, service_role"
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -649,6 +818,14 @@ def pg_cur(pg_conn):
         "rider_email_verification_otp",
         "safety_incident_photos",
         "safety_incidents",
+        "driver_insurance_period_corrections",
+        "driver_period_distances",
+        "data_transfer_export_jobs",
+        "admin_export_approval_requests",
+        "compliance_export_events",
+        "ride_location_gap_events",
+        "ride_distance_recomputes",
+        "ride_distance_integrity_events",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

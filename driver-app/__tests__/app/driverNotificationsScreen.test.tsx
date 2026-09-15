@@ -116,12 +116,26 @@ describe('notification row press → mark read + navigate', () => {
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/driver/lost-and-found-chat', params: { caseId: 'case-9' } });
   });
 
-  it('a chat_message / unmapped type does not navigate anywhere, just marks read', () => {
-    mockNotifData = { unread_count: 1, notifications: [notif({ type: 'chat_message' })] };
+  it('a chat_message / unmapped type does not navigate anywhere, just marks read and opens the detail modal', () => {
+    mockNotifData = { unread_count: 1, notifications: [notif({ type: 'chat_message', body: 'Full unread body text' })] };
     const screen = render(<NotificationsScreen />);
     fireEvent.press(screen.getByText('Title'));
     expect(mockMarkReadMutate).toHaveBeenCalled();
     expect(mockPush).not.toHaveBeenCalled();
+    expect(screen.getByTestId('notification-detail-modal').props.visible).toBe(true);
+    expect(screen.getByTestId('notification-detail-body').props.children).toBe('Full unread body text');
+  });
+
+  it('closing the detail modal hides it again', () => {
+    mockNotifData = { unread_count: 1, notifications: [notif({ type: 'chat_message' })] };
+    const screen = render(<NotificationsScreen />);
+    fireEvent.press(screen.getByText('Title'));
+    expect(screen.getByTestId('notification-detail-modal')).toBeTruthy();
+    fireEvent.press(screen.getByText('common.close'));
+    // RN's Modal unmounts its subtree entirely when `visible` is false in
+    // this test environment, rather than staying in the tree with a false
+    // prop — assert absence, not a prop value.
+    expect(screen.queryByTestId('notification-detail-modal')).toBeNull();
   });
 
   it('an unknown type falls back to the system icon without crashing', () => {

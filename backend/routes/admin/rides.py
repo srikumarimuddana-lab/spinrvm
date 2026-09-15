@@ -1322,11 +1322,27 @@ async def admin_create_ride(
                 dispatch_payload,
                 f"driver_{driver['user_id']}",
             )
+            # PIPEDA (C112): rider_name must never ride in an FCM data
+            # payload — it transits Google/Apple push infra in cleartext and
+            # is visible in the OS notification tray. Same exclusion
+            # routes/rides/matching.py's batch-dispatch path already applies
+            # via its own _FCM_EXCLUDE for the normal auto-dispatch flow;
+            # this admin-direct-assignment path builds its push separately
+            # and had never been updated to match. The driver still gets the
+            # rider's name via the WebSocket message just above
+            # (dispatch_payload, no FCM/third-party transit) — only the push
+            # copy is stripped. (dispatch_payload here carries no
+            # service_area_polygon / planned_route_polyline /
+            # rider_profile_image keys — this admin payload is a smaller
+            # shape than matching.py's — so rider_name is the only field of
+            # matching.py's exclusion set that actually applies to this call
+            # site.)
+            _ADMIN_FCM_EXCLUDE = {"rider_name"}
             await send_push_notification(
                 driver["user_id"],
                 "New ride request",
                 f"{ride_doc['pickup_address']} → {ride_doc['dropoff_address']}",
-                {k: str(v) for k, v in dispatch_payload.items() if v is not None},
+                {k: str(v) for k, v in dispatch_payload.items() if v is not None and k not in _ADMIN_FCM_EXCLUDE},
                 priority="dispatch",
                 target_app="driver",
             )

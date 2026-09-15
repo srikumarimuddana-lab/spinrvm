@@ -1,0 +1,142 @@
+name: Android Production → Play Internal Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App to build with production settings"
+        required: true
+        default: both
+        type: choice
+        options: [driver-app, rider-app, both]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-submit:
+    name: "Production Android / ${{ matrix.app }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(inputs.app == 'both' && '["driver-app","rider-app"]' || format('["{0}"]', inputs.app)) }}
+    concurrency:
+      # Shares the Android-only native workflow's lock for the same app.
+      group: eas-native-build-${{ matrix.app }}-android
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.app }}
+    steps:
+      - name: Require main
+        working-directory: .
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this production build workflow from main."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate credentials and internal-track configuration
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ] || [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::Configure EXPO_TOKEN and base64-encoded PLAY_SERVICE_ACCOUNT_JSON."
+            exit 1
+          fi
+          if ! printf '%s' "$PLAY_KEY_B64" | base64 --decode |
+            jq -e '.type == "service_account" and
+              (.client_email | type == "string" and length > 0) and
+              (.private_key | type == "string" and length > 0)' > /dev/null 2>&1; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON must contain a base64-encoded service account JSON key."
+            exit 1
+          fi
+          jq -e '
+            .cli.appVersionSource == "remote" and
+            .build.production.distribution == "store" and
+            .build.production.autoIncrement == true and
+            .build.production.channel == "production" and
+            .build.production.environment == "production" and
+            .build.production.env.EXPO_PUBLIC_ENV == "production" and
+            (.build.production.android.buildType // "app-bundle") == "app-bundle" and
+            .submit.production.android.track == "internal" and
+            .submit.production.android.releaseStatus == "completed" and
+            .submit.production.android.serviceAccountKeyPath == "./play-service-account.json"
+          ' eas.json > /dev/null || {
+            echo "::error::Expected a production AAB profile submitting only to the completed internal track."
+            exit 1
+          }
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+
+      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install locked dependencies
+        timeout-minutes: 20
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Build production Android bundle
+        id: build
+        timeout-minutes: 75
+        run: |
+          eas build --platform android --profile production --non-interactive --wait --json \
+            --message "GitHub $GITHUB_RUN_ID / $GITHUB_SHA" > "$RUNNER_TEMP/android-build.json"
+          BUILD_ID=$(jq -er '
+            if length == 1 and .[0].status == "FINISHED"
+            then .[0].id else error("Expected one completed build") end
+            | select(type == "string")
+            | select(test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
+          ' "$RUNNER_TEMP/android-build.json")
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "### Production build completed: $BUILD_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      # Create the publishing key AFTER the build upload; it never enters
+      # the build archive. Each app's .easignore also excludes this path.
+      - name: Prepare Play submission key
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$PLAY_KEY_B64" | base64 --decode > play-service-account.json
+
+      - name: Submit this build to internal testing
+        timeout-minutes: 20
+        env:
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+          EXPO_PUBLIC_ENV: production
+        run: |
+          eas submit --platform android --profile production \
+            --id "$BUILD_ID" --non-interactive --wait
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
+
+      - name: Submission completed
+        env:
+          APP_NAME: ${{ matrix.app }}
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+        run: |
+          {
+            echo "### $APP_NAME submitted to Google Play internal testing"
+            echo "- Build ID: $BUILD_ID"
+            echo "- Build profile, EAS environment and OTA channel: production"
+            echo "- Play track: internal; release status: completed"
+            echo "- Testers install/update through the Play internal-testing opt-in link."
+            echo "- Google Play processing or review can delay availability."
+          } >> "$GITHUB_STEP_SUMMARY"

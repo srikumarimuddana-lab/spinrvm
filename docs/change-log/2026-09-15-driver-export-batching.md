@@ -1,5 +1,9 @@
 # Driver export: bound fleet-sized PostgREST requests
 
+Follow-up: [filtered driver export](2026-09-15-filtered-driver-export.md) extends
+this initial fix with shared list filters, complete matching-page retrieval,
+and the updated validation/release boundaries.
+
 | Field | Value |
 |---|---|
 | Date / author | 2026-09-15 / Codex |

@@ -64,3 +64,53 @@ It strips list `limit`/`offset` so a visible page cannot truncate an export.
 The new contract test failed before implementation, then all 15 API tests passed.
 The page remains unchanged in this commit, so its selected filters are not yet
 sent. Final build and page-level checks follow in the next step.
+
+## Step 4: page integration and final verification
+
+`admin-dashboard/src/app/dashboard/drivers/page.tsx` builds one memoized filter
+object for the list and Export. Only the list adds pagination. Export replaces
+the debounced search with the current trimmed input, so immediate typing or
+clearing cannot download the previous search. Clearing other filters also
+updates the next export. Internal admins see the change on their next click;
+the layout, CSV fields and other application surfaces do not change.
+
+Before/after behavior:
+```typescript
+// Before: export ignores selected filters.
+await exportDrivers();
+// After: same filters as the list, with current search at click time.
+await exportDrivers(exportFilters);
+```
+
+`page.export.test.tsx` exercises the real page callbacks with a stubbed table:
+Active + Saskatoon, page navigation, clearing filters, and immediate search
+typing/clearing. Both the missing filter wiring and stale-search tests failed
+before their fixes. It verifies parent behavior, not layout or real dropdowns.
+`admin-dashboard/e2e/drivers.spec.ts` now checks actual filter controls, export
+query parameters and CSV contents instead of merely clicking Export.
+
+Final checks:
+- 164 backend search/list/legacy/dormancy/batching/export tests passed.
+- 16 client API/page-component tests passed.
+- `npm run build` completed successfully on the final page code.
+- Ruff/diff checks passed. Targeted ESLint completed with zero errors and 13
+  existing warnings; existing Vite/Starlette/Next/Sentry warnings remain.
+- Independent review found no remaining blockers after the stale-search fix.
+
+Not verified: production/staging download, full test suites, or browser/visual
+regression. The Chromium download repeatedly timed out, so Playwright failed
+before launching a browser. The improved browser test is ready for CI.
+The repository has active admin visual-regression tooling including Drivers;
+it was not run locally. No visual layout change or baseline update is intended.
+
+Environment limit: `npm ci` failed because the existing lockfile is missing
+`magic-string@1.4.1`. Local validation used `npm install --package-lock=false
+--ignore-scripts`; manifests/lockfiles were not changed. CI clean-install
+reproducibility is therefore not established by this local build.
+
+Rollout: deploy the backend before the dashboard. The old backend ignores
+unknown filter query parameters, so deploying the new dashboard first would
+still export unfiltered data until the backend update lands. This is an
+explicit correction requested by the user; no feature flag is introduced.
+Rollback the dashboard first, then the backend, by reverting these commits and
+redeploying prior images. There are no schema or live-data mutations to undo.

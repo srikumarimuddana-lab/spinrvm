@@ -719,6 +719,7 @@ class TestAdminExportDrivers:
     def test_export_drivers_happy_path_no_drivers(self, client, as_super_admin):
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}, "total": 0}])),
             patch("db_supabase.insert_one", AsyncMock(return_value=None)),
         ):
             resp = client.get("/api/admin/export/drivers")
@@ -756,8 +757,11 @@ class TestAdminExportDrivers:
                 return []
             return []
 
+        _rpc_result = [{"by_driver": {"drv-1": "150.50"}, "total": "150.50"}]
+
         with (
             patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=_rpc_result)),
             patch("db_supabase.insert_one", AsyncMock(return_value=None)),
         ):
             resp = client.get("/api/admin/export/drivers")
@@ -770,6 +774,85 @@ class TestAdminExportDrivers:
         # VIN must be masked to last-4, never exported in full (PIPEDA).
         assert row["vehicle_vin"] == "*" * 13 + "3456"
         assert row["license_no"] is None
+
+    def test_export_drivers_total_earnings_from_rpc_not_column(self, client, as_super_admin):
+        """Regression: drivers.total_earnings does not exist as a DB column.
+
+        CRIMSON-SMOKE-7445-WK — PostgREST returned 'column drivers.total_earnings
+        does not exist'. The export must compute earnings from
+        admin_driver_earnings_rollup RPC, not select it off the drivers row.
+        """
+        driver = {
+            "id": "drv-99",
+            "driver_code": "D099",
+            "user_id": "usr-99",
+            "status": "active",
+            "is_verified": True,
+            "is_online": False,
+            "is_available": False,
+            "license_number": None,
+            "vehicle_vin": None,
+            "created_at": "2026-09-01T00:00:00Z",
+        }
+
+        async def _get_rows(table, *args, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "users":
+                return [{"id": "usr-99", "first_name": "Test", "last_name": "D", "email": "t@x.com", "phone": "111"}]
+            if table == "vehicle_types":
+                return []
+            if table == "service_areas":
+                return []
+            if table == "driver_subscriptions":
+                return []
+            return []
+
+        _rpc_result = [{"by_driver": {"drv-99": "250.75"}, "total": "250.75"}]
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=_rpc_result)),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.get("/api/admin/export/drivers")
+        assert resp.status_code == 200
+        row = resp.json()["drivers"][0]
+        # Earnings come from the RPC, not from a (non-existent) column.
+        assert row["total_earnings"] == 250.75
+
+    def test_export_drivers_earnings_rpc_failure_degrades_gracefully(self, client, as_super_admin):
+        """When the earnings RPC fails, export still succeeds with 0.0 earnings."""
+        driver = {
+            "id": "drv-fail",
+            "driver_code": "DFAIL",
+            "user_id": "usr-fail",
+            "status": "active",
+            "is_verified": True,
+            "is_online": False,
+            "is_available": False,
+            "license_number": None,
+            "vehicle_vin": None,
+            "created_at": "2026-09-01T00:00:00Z",
+        }
+
+        async def _get_rows(table, *args, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "users":
+                return [{"id": "usr-fail", "first_name": "F", "last_name": "D", "email": "f@x.com", "phone": "222"}]
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=Exception("RPC down"))),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.get("/api/admin/export/drivers")
+        assert resp.status_code == 200
+        row = resp.json()["drivers"][0]
+        # Graceful degradation: earnings default to 0.0 when RPC fails.
+        assert row["total_earnings"] == 0.0
 
 
 # ---------------------------------------------------------------------------

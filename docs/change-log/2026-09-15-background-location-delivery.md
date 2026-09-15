@@ -67,3 +67,17 @@ After: `markerFixFeed.emit({...fix, timestampMs: loc.timestamp})` / no fake fixe
 Rollback: revert app update; isolated producer repair has no data migration or live
 money side effects. 11 hook tests pass; 3 new regressions failed before the fix.
 Native APIs mocked; no production Android build or visual regression tooling.
+
+## Cancellable native startup
+
+Before: an asynchronous permission/arbiter wait could outlive the online caller.
+After: `startBackgroundLocation(config, canStart)` rechecks the caller and encrypted
+signed-out marker inside the existing native task arbiter, before registration.
+Alternative: hook-only precheck; insufficient because native startup also awaits.
+Consumers: dashboard toggle/hydration, recoverTripLocation, geofence recovery and
+Android Auto handover retain their existing behavior when no callback is supplied.
+Risk: canceled startups return false; dashboard must suppress errors for obsolete
+calls. No new task or service, no permission or fare change. Revert app update to
+roll back; ephemeral lifecycle guard only. Tests run the real start function with
+native APIs mocked, including a permission wait that finishes after going offline.
+Files: backgroundLocation.ts, backgroundLocation.test.ts, this log.

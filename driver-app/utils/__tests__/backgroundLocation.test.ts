@@ -385,6 +385,33 @@ describe('updateBackgroundLocationCadence', () => {
     expect(mockStartUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it('does not resurrect tracking when the caller goes offline during permission lookup', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    (Location.getBackgroundPermissionsAsync as jest.Mock).mockImplementationOnce(async () => {
+      allowed = false;
+      return { status: 'granted' };
+    });
+    await expect(startBackgroundLocation(TRIP_CADENCE, () => allowed)).resolves.toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after the final asynchronous session-marker read', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    let reads = 0;
+    const storage = SecureStore.getItemAsync as jest.Mock;
+    const original = storage.getMockImplementation();
+    storage.mockImplementation(async (key: string) => {
+      if (key === 'spinr_session_ended' && ++reads === 3) allowed = false;
+      return null;
+    });
+    try {
+      await expect(startBackgroundLocation(TRIP_CADENCE, () => allowed)).resolves.toBe(false);
+      expect(mockStartUpdates).not.toHaveBeenCalled();
+    } finally { storage.mockImplementation(original); }
+  });
+
   it('re-tunes the running task to dense TRIP_CADENCE using location-service liveness', async () => {
     await updateBackgroundLocationCadence(TRIP_CADENCE);
     expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');

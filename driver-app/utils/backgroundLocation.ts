@@ -446,7 +446,11 @@ export async function isBackgroundLocationRunning(): Promise<boolean> {
   }
 }
 
-export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
+export async function startBackgroundLocation(
+  config?: BgLocationConfig,
+  canStart: () => boolean = () => true,
+): Promise<boolean> {
+  if (!canStart()) return false;
   // A signed-out device must never (re)start location capture, from ANY
   // caller — go-online, geofence recovery, or the FCM location_health nudge
   // (which runs headless, where "the foreground auth store knows best" does
@@ -484,8 +488,11 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
   }
 
   return runExclusive('bg-start', async () => {
+    // A resume or permission wait may outlive its online/account lifecycle.
+    if (await isSessionEnded() || !canStart()) return false;
     // Re-probe under the lock — a queued car-task start may have raced us.
     if (await Location.hasStartedLocationUpdatesAsync(TASK_NAME)) return true;
+    if (!canStart()) return false;
 
     // SINGLE-WRITER, order matters: stop the car task BEFORE promoting this
     // one. expo-location runs ALL location tasks through ONE shared Android
@@ -508,6 +515,7 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
       // Android Auto layer absent — nothing to stand down.
     }
 
+    if (await isSessionEnded() || !canStart()) return false;
     await _applyTaskOptions(config);
     console.log('[BgLocation] Started');
     return true;

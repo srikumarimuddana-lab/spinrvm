@@ -3007,7 +3007,7 @@ async def admin_export_drivers(
         "is_online,is_available,service_area_id,city,regulatory_region,"
         "vehicle_make,vehicle_model,vehicle_year,vehicle_color,vehicle_type_id,"
         "license_plate,vehicle_vin,license_number,license_class,"
-        "rating,total_rides,total_earnings,acceptance_rate,"
+        "rating,total_rides,total_ratings,acceptance_rate,"
         "license_expiry_date,insurance_expiry_date,vehicle_inspection_expiry_date,"
         "background_check_expiry_date,work_eligibility_expiry_date,"
         "regulatory_authority,regulatory_authority_approved,regulatory_authority_approved_at,"

@@ -36,3 +36,31 @@ steps will be recorded below before the PR update.
 
 Step 1 verification: 144 existing search/list/legacy/dormancy/batching tests pass;
 independent review found no blocker. No production or browser check in this step.
+
+## Step 2: filtered export
+
+`backend/routes/admin/rides.py` accepts the same list criteria and calls shared
+selection in pages ordered by unique driver ID. It then sorts by the selected
+display column. The default export cap rises from 1,000 to 10,000. An explicit
+`limit` is now a maximum allowed match count: exceeding it returns 413 with a
+request to narrow filters, rather than producing a truncated file. No matches
+returns an empty export. CSV fields, admin auth, masking and audit remain intact.
+
+Tests in `backend/tests/test_admin_rides_read_endpoints_coverage.py` cover status
+plus service area, vehicle/online, search, photo, legacy/onboarding/pre-launch,
+dormancy, display sort, no matches, multiple pages and exact/overflow caps.
+The 11 initial new cases failed against the previous export. After implementation,
+38 focused export/helper/list tests pass; the paging contract was also checked.
+Independent review found no blocker. Offset paging is not a snapshot: concurrent
+inserts/deletes can affect results. The list's existing capped photo-user lookup
+and potentially large search/flag ID filters are inherited limitations.
+
+## Step 3: client contract
+
+`admin-dashboard/src/lib/api/content-area.ts` accepts filter options derived from
+the existing list API type; it preserves false values and URL-encodes search.
+It strips list `limit`/`offset` so a visible page cannot truncate an export.
+`admin-dashboard/src/lib/__tests__/api.test.ts` tests the actual fetch URL.
+The new contract test failed before implementation, then all 15 API tests passed.
+The page remains unchanged in this commit, so its selected filters are not yet
+sent. Final build and page-level checks follow in the next step.

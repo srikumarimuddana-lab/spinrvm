@@ -3,6 +3,7 @@
 // the per-domain split.
 
 import { request } from "./client";
+import type { getDrivers } from "./drivers";
 
 /* ── FAQs ───────────────────────────────────── */
 export const getFaqs = () =>
@@ -123,6 +124,16 @@ export const overrideDriverStatus = (driverId: string, status: string, reason?: 
         body: JSON.stringify({ status, reason }),
     });
 
-export const exportDrivers = () =>
-    request<{ drivers: any[]; count: number }>("/api/admin/export/drivers");
-
+export const exportDrivers = (
+    opts: Omit<NonNullable<Parameters<typeof getDrivers>[0]>, "limit" | "offset"> = {},
+) => {
+    const sp = new URLSearchParams();
+    for (const [key, value] of Object.entries(opts)) {
+        // Export spans all matching pages, even if a caller passes list options.
+        if (key !== "limit" && key !== "offset" && value != null && value !== "") {
+            sp.set(key, String(value));
+        }
+    }
+    const qs = sp.toString();
+    return request<{ drivers: any[]; count: number }>(`/api/admin/export/drivers${qs ? `?${qs}` : ""}`);
+};

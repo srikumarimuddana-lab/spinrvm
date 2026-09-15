@@ -182,6 +182,44 @@ const MAX_ROTATE_MS = 600;
 // driver-app/components/CarMarker.tsx.
 const MAX_IMAGE_RETRIES = 3;
 
+type AndroidMarkerNode = {
+    animateMarkerToCoordinate?: (
+        coord: { latitude: number; longitude: number },
+        duration: number,
+    ) => void;
+    setCoordinates?: (coord: { latitude: number; longitude: number }) => void;
+} | null;
+
+/**
+ * Move the Android Google Maps marker. The JS `animateMarkerToCoordinate`
+ * wrapper is always present on react-native-maps 1.27 even when Fabric's
+ * native command is a no-op or throws, so a truthy check is not a fallback.
+ * Prefer the animator when it actually runs; always have `setCoordinates`
+ * (the Fabric command that writes lat/lng) as the path that cannot freeze.
+ * Ported from driver-app/components/CarMarker.tsx (2026-09-15 frozen-marker
+ * live test).
+ */
+function moveAndroidMarker(
+    node: AndroidMarkerNode,
+    target: { latitude: number; longitude: number },
+    durationMs: number,
+): void {
+    try {
+        if (typeof node?.animateMarkerToCoordinate === 'function') {
+            node.animateMarkerToCoordinate(target, durationMs);
+        }
+    } catch {
+        // Native command missing/throws — setCoordinates below still runs.
+    }
+    try {
+        if (typeof node?.setCoordinates === 'function') {
+            node.setCoordinates(target);
+        }
+    } catch {
+        // Caller still re-syncs the React coordinate prop for remounts.
+    }
+}
+
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
  *
@@ -210,12 +248,14 @@ const MAX_IMAGE_RETRIES = 3;
  * corners. When the buffer runs dry (network gap) the position dead-reckons
  * along the last segment for a short capped window, then holds honestly.
  *
- * Platform split: Android drives a plain Marker through the NATIVE
- * animateMarkerToCoordinate (UI-thread ValueAnimator — the JS AnimatedRegion
- * path degrades to 5-10 fps on Android, react-native-maps#1765), with the
- * coordinate prop re-synced after each animation window so re-renders can't
- * teleport the marker back to its mount position. iOS keeps Marker.Animated
- * + AnimatedRegion.timing, which is smooth there.
+ * Platform split: Android drives a plain Marker. Fabric (react-native-maps
+ * 1.27 RNMapsMarker) does not reliably apply later `coordinate` prop diffs
+ * on custom markers, and `animateMarkerToCoordinate` can exist on the JS
+ * ref while the native command no-ops or throws — checking truthiness is
+ * not a fallback. Each tick therefore tries the native animator and always
+ * issues Fabric `setCoordinates`, then re-syncs the React `coordinate` prop
+ * so a remount is not pinned to the trip-start pin. iOS keeps Marker.Animated
+ * + AnimatedRegion.timing.
  *
  * Rotation: animated through an Animated.Value along the shortest arc, so
  * the car turns smoothly instead of snapping its angle. Bearing source
@@ -394,83 +434,21 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         [],
     );
 
-    // Android renders a PLAIN Marker driven by the native
-    // animateMarkerToCoordinate (a UI-thread ValueAnimator): the
-    // AnimatedRegion path marches every animation frame over the JS bridge
-    // and is documented to degrade to 5–10 fps under load
-    // (react-native-maps#1765); the native call is the mechanism the
-    // Uber-style Android implementations use. Teleport guard: the coordinate
-    // prop is kept in a state that re-syncs to each tick's target only AFTER
-    // the animation window, so a re-render's prop-diff sets the native
-    // coordinate to where the marker already is (visual no-op) instead of
-    // yanking it back to its mount position — the regression that motivated
-    // the earlier all-JS approach. animateMarkerToCoordinate must not be
-    // called on Marker.Animated (react-native-maps#3913), hence the plain
-    // Marker here.
+    // Android renders a PLAIN Marker (animateMarkerToCoordinate cannot be
+    // called on Marker.Animated — react-native-maps#3913). Fabric ignores
+    // later `coordinate` prop diffs on custom markers, so the tick always
+    // finishes with Fabric `setCoordinates` (see moveAndroidMarker).
     const isAndroid = Platform.OS === 'android';
     const [androidCoord, setAndroidCoord] = useState(coordinate);
-    // Android rotation steps per tick (the rotation prop is not animatable on
-    // a plain Marker). The spline bearing is C¹-continuous, so consecutive
-    // steps are a few degrees — visually smooth at 2 steps/second.
+    // Android rotation is a plain native prop on a non-Animated Marker, so it
+    // steps once per TICK_MS rather than a per-frame React setState loop.
+    // A requestAnimationFrame tween of this prop was added 2026-09-09 for
+    // smoother corners; after the 2026-09-14 Fabric markerRotation patch
+    // those per-frame diffs reach native and re-pin position at the still-
+    // stale coordinate prop. Once-per-tick is the last-known-good cadence.
     const [androidRotation, setAndroidRotation] = useState(
         heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
     );
-    // Interpolated Android rotation: Marker.rotation is a plain native prop,
-    // not an Animated.Value, so stepping it directly to each tick's target
-    // (the old behavior here) snapped the icon through a corner whenever a
-    // turn's angular rate exceeded a few degrees inside one TICK_MS window —
-    // position stayed smooth via animateMarkerToCoordinate while heading
-    // visibly jumped. Ported from driver-app/components/CarMarker.tsx
-    // (2026-09-09 fix, see docs/known-forks.md): a requestAnimationFrame loop
-    // tweens rotation along the shortest arc over the same duration position
-    // animates over, so the two stay in step.
-    const androidRotationCurrentRef = useRef(rotationValueRef.current);
-    const androidRotationFromRef = useRef(rotationValueRef.current);
-    const androidRotationTargetRef = useRef(rotationValueRef.current);
-    const androidRotationStartRef = useRef(0);
-    const androidRotationDurationRef = useRef(TICK_MS);
-    const androidRotationRafRef = useRef<number | null>(null);
-    const stepAndroidRotation = useCallback(() => {
-        const elapsed = Date.now() - androidRotationStartRef.current;
-        const duration = androidRotationDurationRef.current;
-        const t = duration > 0 ? Math.min(1, elapsed / duration) : 1;
-        const from = androidRotationFromRef.current;
-        const to = androidRotationTargetRef.current;
-        const value = from + (to - from) * t;
-        androidRotationCurrentRef.current = value;
-        setAndroidRotation(((value % 360) + 360) % 360);
-        if (t < 1) {
-            androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
-        } else {
-            androidRotationRafRef.current = null;
-        }
-    }, []);
-    // Stable by construction — reads/writes only refs and the stable
-    // stepAndroidRotation callback.
-    const animateAndroidRotationTo = useCallback(
-        (bearing: number, duration: number) => {
-            const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
-            if (target === rotationValueRef.current) return;
-            rotationValueRef.current = target;
-            hasBearingRef.current = true;
-            // Start the new tween from wherever the current tween actually
-            // is right now (not its old target) — else an in-flight tween
-            // would visibly jump to its previous target before starting the
-            // next leg.
-            androidRotationFromRef.current = androidRotationCurrentRef.current;
-            androidRotationTargetRef.current = target;
-            androidRotationStartRef.current = Date.now();
-            androidRotationDurationRef.current = Math.min(duration, MAX_ROTATE_MS);
-            if (androidRotationRafRef.current == null) {
-                androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
-            }
-        },
-        [stepAndroidRotation],
-    );
-    useEffect(() => () => {
-        if (androidRotationRafRef.current != null) cancelAnimationFrame(androidRotationRafRef.current);
-    }, []);
-    const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
     // Single ingest path used by both the feed subscription and the prop
@@ -701,24 +679,21 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     hasMovementBearingRef.current = true;
                 }
                 if (isAndroid) {
-                    animateAndroidRotationTo(bearing, TICK_MS);
+                    const rotTarget = shortestArcRotationTarget(rotationValueRef.current, bearing);
+                    if (rotTarget !== rotationValueRef.current) {
+                        rotationValueRef.current = rotTarget;
+                        hasBearingRef.current = true;
+                        setAndroidRotation(((rotTarget % 360) + 360) % 360);
+                    }
                 } else {
                     animateRotationTo(bearing, TICK_MS);
                 }
             }
 
             if (isAndroid) {
-                const node = markerRef.current;
-                if (node?.animateMarkerToCoordinate) {
-                    node.animateMarkerToCoordinate(target, TICK_MS);
-                    if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
-                    resyncTimerRef.current = setTimeout(() => setAndroidCoord(target), TICK_MS);
-                } else {
-                    // New-arch/interop builds where the native method is
-                    // missing: fall back to a direct prop set (steps at
-                    // 2 fps, but never a frozen marker).
-                    setAndroidCoord(target);
-                }
+                const node = markerRef.current as AndroidMarkerNode;
+                moveAndroidMarker(node, target, TICK_MS);
+                setAndroidCoord(target);
                 return;
             }
             animatedRegion
@@ -733,7 +708,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         }, TICK_MS);
         return () => {
             clearInterval(id);
-            if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
         };
         // All inputs are stable refs; the ticker itself must never restart.
         // eslint-disable-next-line react-hooks/exhaustive-deps

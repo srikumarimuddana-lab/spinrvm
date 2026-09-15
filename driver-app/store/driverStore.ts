@@ -100,6 +100,9 @@ export type RideState =
     | 'trip_completed';
 
 export interface RideInfo {
+    is_scheduled?: boolean;
+    scheduled_time?: string;
+    driver_arrived_at?: string;
     id: string;
     status: string;
     pickup_address: string;
@@ -355,6 +358,7 @@ interface IncomingRide {
     // Surfaced as a "Pre-booked" badge in the offer panel; purely
     // informational, no dispatch/matching behavior change.
     is_scheduled?: boolean;
+    scheduled_time?: string;
     // Per-offer countdown sourced from the dispatch payload — overrides
     // the cached configuredCountdownSeconds so an admin-changed timeout
     // takes effect on the very next offer, not the next cold start.
@@ -931,6 +935,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
                             quiet_mode: ride.quiet_mode ?? existing?.quiet_mode,
                             is_scheduled: (ride as any).is_scheduled ?? existing?.is_scheduled,
+                            scheduled_time: (ride as any).scheduled_time ?? existing?.scheduled_time,
                             planned_route_polyline: (ride as any).planned_route_polyline ?? undefined,
                             service_area_polygon: (res.data as any).service_area_polygon ?? existing?.service_area_polygon ?? undefined,
                         },

@@ -70,6 +70,7 @@ async def _sweep() -> None:
             .update(update_payload)
             .eq("status", "searching")
             .lt("ride_requested_at", cutoff_iso)
+            .or_(f"scheduled_time.is.null,scheduled_time.lt.{cutoff_iso}")
             .execute()
         )
         return db_supabase._rows_from_res(res)

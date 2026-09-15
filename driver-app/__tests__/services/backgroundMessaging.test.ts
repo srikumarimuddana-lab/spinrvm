@@ -135,3 +135,9 @@ describe('with the car session subscribed', () => {
     expect(mockSetItem).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it.each(['false','true'])('preserves scheduled pickup metadata with minimal offer %s', async minimal => {
+  await handler()({data:{...OFFER, offer_minimal:minimal, is_scheduled:'True', scheduled_time:'2026-09-15T14:00:00Z'}});
+  expect(JSON.parse(mockSetItem.mock.calls[0][1])).toMatchObject({is_scheduled:true, scheduled_time:'2026-09-15T14:00:00Z'});
+});

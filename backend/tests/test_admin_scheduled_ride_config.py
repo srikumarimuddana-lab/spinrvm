@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
+
 from backend.routes.admin import service_areas as m
 
 

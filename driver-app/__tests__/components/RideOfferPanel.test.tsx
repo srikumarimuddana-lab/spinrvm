@@ -395,3 +395,10 @@ describe('RideOfferPanel', () => {
     });
   });
 });
+
+
+it('shows booked pickup with explicit readable text color', () => {
+  const view = render(<RideOfferPanel {...defaultProps} incomingRide={{...mockRide, is_scheduled:true, scheduled_time:'2026-09-15T14:00:00Z'}} />);
+  const label = view.getByText(/^Pickup /);
+  expect(StyleSheet.flatten(label.props.style).color).toBeTruthy();
+});

@@ -220,9 +220,7 @@ function PaymentConfirmScreenContent() {
       });
       Analytics.paymentInitiated({ method: selectedPayment, amount: totalFare });
 
-      // Schedule a local 15-min reminder if this is a scheduled ride.
-      // The backend cron also fires an FCM `scheduled_ride_reminder`; this
-      // local notification is a client-side fallback.
+      // Clear legacy local alarms; the server owns service-area reminder timing.
       if (scheduledTime && bookedRide.id) {
         scheduleReminder(bookedRide.id, scheduledTime).catch(() => {});
       }

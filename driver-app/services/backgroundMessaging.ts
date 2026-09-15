@@ -278,6 +278,8 @@ export function registerBackgroundMessageHandlers(): void {
       rider_rating: isMinimalOffer ? toNum(fetchedOffer?.rider_rating) : toNum(data.rider_rating),
       requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
       quiet_mode: data.quiet_mode === 'true' || data.quiet_mode === 'True',
+      is_scheduled: fetchedOffer?.is_scheduled ?? (String(data.is_scheduled).toLowerCase() === 'true'),
+      scheduled_time: fetchedOffer?.scheduled_time ?? data.scheduled_time,
       countdown_seconds: toNum(data.countdown_seconds),
       offer_expires_at: data.offer_expires_at || undefined,
       surge_multiplier: surgeMultiplier,

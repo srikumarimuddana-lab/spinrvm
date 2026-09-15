@@ -49,7 +49,7 @@ import {
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 import { setLogRocketInstance } from '@shared/services/logRocketInstance';
 
-import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import { clearLegacyScheduledReminders, handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import ConfirmSheet from '../components/ConfirmSheet';
 import type { ConfirmSheetButton } from '../components/ConfirmSheet';
@@ -285,6 +285,7 @@ function targetPathForRideStatus(status: string): string | null {
 }
 
 function RootLayout() {
+  useEffect(() => { void clearLegacyScheduledReminders(); }, []);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,

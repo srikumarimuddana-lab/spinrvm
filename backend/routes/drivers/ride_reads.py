@@ -432,6 +432,7 @@ async def get_ride_offer(ride_id: str, current_user: dict = Depends(get_current_
         "requires_wav": bool(ride.get("requires_wav")),
         "quiet_mode": bool(ride.get("quiet_mode")),
         "is_scheduled": bool(ride.get("is_scheduled")),
+        "scheduled_time": ride.get("scheduled_time"),
         "countdown_seconds": offer_timeout,
         "offer_expires_at": offer_expires_at,
         "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,

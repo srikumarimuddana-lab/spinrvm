@@ -53,6 +53,7 @@ interface IncomingRide {
     // falsy-default so an offer payload from a backend that hasn't shipped
     // this field yet renders identically to today (no badge).
     is_scheduled?: boolean;
+    scheduled_time?: string;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
     total_bonus?: number;
@@ -352,6 +353,11 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     </View>
 
                     {/* Badges row: pre-booked, surge, wav, quiet, cash, payment */}
+                    {incomingRide.is_scheduled && incomingRide.scheduled_time && Number.isFinite(Date.parse(incomingRide.scheduled_time)) && (
+                        <Text style={[styles.badgeText, { color: SCHEDULED_INDIGO }]}>Pickup {new Date(incomingRide.scheduled_time).toLocaleString('en-CA', {
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                        })}</Text>
+                    )}
                     {(incomingRide.is_scheduled || hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
                             {incomingRide.is_scheduled && (

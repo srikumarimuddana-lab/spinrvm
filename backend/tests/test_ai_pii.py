@@ -82,6 +82,78 @@ class TestEmails:
         assert scrubbed == "email me at [EMAIL] please"
 
 
+class TestOfficialContactPreserve:
+    """The in-app assistant is supposed to quote the support email/phone from
+    admin Settings (get_company_info + the contact tail on the system prompt).
+    Those values are public marketing contact details, not rider PII — the
+    public web assistant already skips reply-scrubbing for this reason. The
+    rider/driver chat still runs scrub_pii on tool results and streamed
+    replies, so without an allowlist the published address becomes the
+    literal '[EMAIL]' the rider sees."""
+
+    def test_preserved_email_survives_next_to_a_personal_one(self):
+        scrubbed = scrub_pii(
+            "email us at help@northern.test or jane@x.ca",
+            policy=ScrubPolicy.AI_CHAT,
+            preserve=("help@northern.test",),
+        )
+        assert "help@northern.test" in scrubbed
+        assert "jane@x.ca" not in scrubbed
+        assert "[EMAIL]" in scrubbed
+
+    def test_preserve_is_case_insensitive_and_keeps_the_written_casing(self):
+        scrubbed = scrub_pii(
+            "write Help@Northern.Test",
+            policy=ScrubPolicy.AI_CHAT,
+            preserve=("help@northern.test",),
+        )
+        assert "Help@Northern.Test" in scrubbed
+        assert "[EMAIL]" not in scrubbed
+
+    def test_a_lookalike_email_is_not_preserved_by_substring(self):
+        scrubbed = scrub_pii(
+            "not-help@northern.test and help@northern.test",
+            policy=ScrubPolicy.AI_CHAT,
+            preserve=("help@northern.test",),
+        )
+        assert "help@northern.test" in scrubbed
+        assert "not-help@northern.test" not in scrubbed
+        assert scrubbed.count("[EMAIL]") == 1
+
+    def test_preserved_phone_survives_by_digits_not_formatting(self):
+        scrubbed = scrub_pii(
+            "call 306-555-0100 or 306-555-1234",
+            policy=ScrubPolicy.AI_CHAT,
+            preserve=("+1 306 555 0100",),
+        )
+        assert "306-555-0100" in scrubbed
+        assert "306-555-1234" not in scrubbed
+        assert "[PHONE]" in scrubbed
+
+    def test_empty_preserve_is_a_no_op(self):
+        assert scrub_pii("a@b.ca", preserve=()) == "[EMAIL]"
+        assert scrub_pii("a@b.ca", preserve=("  ",)) == "[EMAIL]"
+
+    def test_deep_preserves_company_email_in_tool_results(self):
+        result = scrub_pii_deep(
+            {"email": "help@northern.test", "note": "cc jane@x.ca"},
+            policy=ScrubPolicy.AI_CHAT,
+            preserve=("help@northern.test",),
+        )
+        assert result["email"] == "help@northern.test"
+        assert result["note"] == "cc [EMAIL]"
+
+    def test_official_contact_preserve_reads_admin_settings(self):
+        from backend.ai.pii import official_contact_preserve
+
+        assert official_contact_preserve(None) == ()
+        assert official_contact_preserve({"company_email": "  ", "company_phone": None}) == ()
+        assert official_contact_preserve({"company_email": "help@northern.test", "company_phone": "306-555-0100"}) == (
+            "help@northern.test",
+            "306-555-0100",
+        )
+
+
 class TestCoordinates:
     def test_lat_lng_pair_redacted(self):
         scrubbed = scrub_pii("I'm at 52.131802, -106.660767 right now")

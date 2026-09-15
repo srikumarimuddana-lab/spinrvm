@@ -1170,7 +1170,7 @@ async def apply_rider_referral(req: ApplyRiderReferralRequest, current_user: dic
 
 
 class RiderEmailVerifyConfirmRequest(BaseModel):
-    code: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
+    code: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
 
 
 def _rider_email_verify_lockout_key(user_id: str) -> str:

@@ -33,7 +33,7 @@
     "@react-navigation/bottom-tabs": "^7.18.18",
     "@react-navigation/elements": "^2.0.0",
     "@react-navigation/native": "^7.3.18",
-    "@sentry/react-native": "^8.25.0",
+    "@sentry/react-native": "^8.26.0",
     "@spinr/shared": "file:../shared",
     "@stripe/stripe-react-native": "0.76.0",
     "@supabase/supabase-js": "2.115.0",

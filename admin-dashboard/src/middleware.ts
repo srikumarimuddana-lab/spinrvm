@@ -64,7 +64,7 @@ function buildCsp(nonce: string): string {
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "connect-src 'self' https: wss: ws:",
-    // MapLibre GL v5 creates its tile-processing Web Worker from a blob: URL.
+    // MapLibre GL v5+ creates its tile-processing Web Worker from a blob: URL.
     // Chrome does not extend 'self' to cover blob: workers even when the blob
     // is same-origin — it requires blob: explicitly here. Without this the
     // worker is blocked and the map canvas stays blank.

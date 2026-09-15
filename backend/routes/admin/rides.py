@@ -19,6 +19,7 @@ try:
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn as _spawn
+    from ...utils.datetime_utils import parse_iso_utc
     from ...utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -44,6 +45,7 @@ except ImportError:
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
     from utils.background import spawn as _spawn  # type: ignore
+    from utils.datetime_utils import parse_iso_utc
     from utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -3027,9 +3029,10 @@ async def admin_export_drivers(
     # Export rows only carry name/email/phone from the user row — project those
     # so the export doesn't read base64 profile_image for every driver.
     users_list = (
-        await db_supabase.get_rows(
+        await db_supabase.get_rows_batched_in(
             "users",
-            {"id": {"$in": user_ids}},
+            "id",
+            user_ids,
             columns="id,first_name,last_name,email,phone",
             limit=max(len(user_ids), 1),
         )
@@ -3118,24 +3121,27 @@ async def admin_export_drivers(
     license_masked = [None if isinstance(m, BaseException) else m for m in license_masked]
     _license_exported = sum(1 for m in license_masked if m)
 
-    # Spinr Pass status — one batch query, newest row per driver (mirrors
-    # admin_get_drivers). Reuses the same summary reducer so the export shows
-    # the same status the list does.
+    # Fleet-sized IN filters must be split to avoid proxy URL limits. Fetch
+    # every subscription page, then select the newest row per driver: the
+    # batching helper does not promise ordering across requests.
     _driver_ids = [d.get("id") for d in drivers if d.get("id")]
     subs_map: dict = {}
     if _driver_ids:
         try:
-            _subs = await db_supabase.get_rows(
+            _subs = await db_supabase.get_rows_batched_in(
                 "driver_subscriptions",
-                {"driver_id": {"$in": _driver_ids}},
+                "driver_id",
+                _driver_ids,
                 columns="driver_id,plan_name,status,expires_at,created_at",
-                order="created_at",
-                desc=True,
-                limit=max(len(_driver_ids) * 5, 100),
             )
+            _oldest = datetime.min.replace(tzinfo=timezone.utc)
             for s in _subs or []:
                 did = s.get("driver_id")
-                if did and did not in subs_map:
+                if did and (
+                    did not in subs_map
+                    or (parse_iso_utc(s.get("created_at")) or _oldest)
+                    > (parse_iso_utc(subs_map[did].get("created_at")) or _oldest)
+                ):
                     subs_map[did] = s
         except Exception as _sub_err:
             logger.warning("admin_export_drivers: subscription enrichment failed: %s", _sub_err)

@@ -716,6 +716,87 @@ class TestAdminExportRidesFiltered:
 
 
 class TestAdminExportDrivers:
+    @pytest.fixture(autouse=True)
+    def route_batch_reads_through_test_db(self, monkeypatch):
+        # Keep the real batching helper; replace only its DB boundary.
+        import db_supabase
+        import repositories._base as base
+
+        async def get_rows(*args, **kwargs):
+            return await db_supabase.get_rows(*args, **kwargs)
+
+        monkeypatch.setattr(base, "get_rows", get_rows)
+
+    @pytest.mark.parametrize("count", [151, 927])
+    def test_fleet_export_preserves_users_and_latest_subscriptions(self, client, as_super_admin, count):
+        from urllib.parse import urlencode
+
+        drivers = [
+            {"id": f"{i:08d}-0000-4000-8000-{i:012d}", "user_id": f"{i:08d}-0000-4000-9000-{i:012d}"}
+            for i in range(count)
+        ]
+        users = [{"id": d["user_id"], "email": f"driver-{i}@example.com"} for i, d in enumerate(drivers)]
+        # More than one page, with newest rows last and mixed timezone offsets.
+        subscriptions = [
+            {"driver_id": d["id"], "plan_name": plan, "status": "active", "created_at": created}
+            for plan, created in [("Old", "2026-09-15T10:00:00Z")] * 7 + [("Latest", "2026-09-15T06:00:00-06:00")]
+            for d in drivers
+        ]
+        requested_urls = []
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return drivers[: kwargs["limit"]]
+            if table not in ("users", "driver_subscriptions"):
+                return []
+            key = "id" if table == "users" else "driver_id"
+            ids = filters[key]["$in"]
+            url = "/rest/v1/" + table + "?" + urlencode({key: "in.(" + ",".join(ids) + ")"})
+            requested_urls.append(url)
+            assert len(url) < 8000, "oversized PostgREST request URL"
+            rows = [r for r in (users if table == "users" else subscriptions) if r[key] in ids]
+            start = kwargs.get("offset") or 0
+            return rows[start : start + kwargs["limit"]]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == count
+        assert [d["id"] for d in body["drivers"]] == [d["id"] for d in drivers]
+        assert [d["email"] for d in body["drivers"]] == [u["email"] for u in users]
+        assert all(d["subscription_plan"] == "Latest" for d in body["drivers"])
+        assert max(map(len, requested_urls)) < 8000
+        assert audit.call_args.args[1]["details"]["row_count"] == count
+
+    def test_user_batch_failure_does_not_return_partial_export(self, client, as_super_admin):
+        from utils.error_handling import DatabaseError
+
+        drivers = [{"id": f"d-{i}", "user_id": f"u-{i}"} for i in range(151)]
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return drivers
+            ids = filters["id"]["$in"]
+            if len(ids) < 150:
+                raise DatabaseError()
+            return [{"id": uid} for uid in ids]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers")
+
+        assert response.status_code == 503
+        assert "drivers" not in response.json()
+        audit.assert_not_awaited()
+
     def test_export_drivers_happy_path_no_drivers(self, client, as_super_admin):
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),

@@ -173,7 +173,7 @@ Per-item, if one change specifically needs backing out:
       garbled in a security-relevant file, a dangling `§12` cross-reference, a
       missing CORS regression assertion, and `marketing_url` shipped without the
       TODO hedge its two sibling URLs carry. It surfaced `admin.spinr.ca` as a
-      separate pre-existing CORS gap — filed as C118(h), deliberately not fixed
+      separate pre-existing CORS gap — filed as C119(h), deliberately not fixed
       here because adding an origin widens access
 - [x] Regression test added: `backend/tests/test_p1_cors.py` now asserts all four
       removed origins stay absent, following the negative-assertion precedent the

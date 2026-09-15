@@ -21784,6 +21784,82 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-14, later same day): 3 more tables, still not
+  closed.** Checked for concurrent work first (`git fetch origin main` +
+  open-PR search for any PR touching `backend/tests/rls/` or
+  `ACTION_ITEMS.md`) — none found, clear to proceed. Picked the admin
+  PII-export audit trail as this round's themed slice, deliberately: all
+  three tables back the same dual-approval/export-audit hardening already
+  done at the app layer earlier this session (B1 — gated the SIN/DOB
+  backfill router to super_admin; W2a-c — added per-handler super_admin
+  rechecks to the data_transfer export/import/search, data_transfer_jobs,
+  sgi_forms, export_approvals, and migration_status handlers). This round
+  adds the DB-level RLS/constraint backstop under that same surface:
+  `data_transfer_export_jobs` (migration 262 + 264's additive `reason`
+  column), `compliance_export_events` (263, + an extracted slice of 285's
+  DELETE-gating trigger redefinition), and `admin_export_approval_requests`
+  (268), plus each table's FK-removal fix (270/274/278 — a real,
+  already-shipped bug class where an admin caller's id, which lives in
+  `admin_staff` or an env-var-creds sentinel, could never satisfy a
+  `REFERENCES users(id)` FK; confirmed live in each migration's own header
+  that zero rows were ever written to any of the three tables before its
+  fix). New file `backend/tests/rls/test_admin_export_audit_rls.py`, 31
+  tests. Full `tests/rls` suite: **326 passed, 0 failed**, against the same
+  real local Postgres 16 this session's earlier C49 round stood up.
+  - **Review used:** `spinr-security-auditor` via the Agent tool (available
+    in this session, unlike an earlier session this same day whose
+    isolated-worktree environment lacked it) — independently re-derived
+    every asserted policy/GRANT/trigger from the actual migration SQL, ran
+    the suite itself, and confirmed all 3 tables' real production
+    read/write paths go through the service-role client only (grepped
+    `routes/admin/`, `services/`, `db_supabase.py`), matching this round's
+    "service-role only" assumption.
+  - **One real finding, fixed before merge:** the file's own docstring
+    claimed `data_transfer_export_jobs` and `admin_export_approval_requests`
+    are "identical shape," but only the former had a DELETE-denial test —
+    `admin_export_approval_requests`' `service_delete` policy (migration
+    268) went unexercised by any negative case. Fixed by adding
+    `test_authenticated_cannot_delete_approval_request` for parity. No
+    other findings — verdict was "safe to merge."
+  - **Noted, not a bug:** neither table's `FOR DELETE TO service_role`
+    policy is exercised by a *positive* test either, because no production
+    code path issues a hard DELETE on any of the 3 tables today
+    (`data_transfer_export_jobs` only ever soft-deletes via a `deleted_at`
+    UPDATE in `utils/data_export_purge.py`; no `.delete(`/`delete_many`
+    call exists anywhere for the other two) — genuinely dead DB-layer
+    capability today, not a test gap.
+  - **Running total after this round:** 39 of ~70 distinct policy-bearing
+    tables (36 + these 3), by a corrected version of the same sweep method
+    prior rounds used — a repo-wide `CREATE POLICY ... ON <table>` regex
+    sweep, run multiline/dotall this time (a plain single-line regex, as
+    used by at least one earlier round, misses every multi-line
+    `CREATE POLICY "name"\n  ON table\n  ...` statement, which is most of
+    them — confirmed by comparing 31 single-line matches against 64
+    multiline matches over the identical file set). 64 static matches + the
+    6 already-known FOREACH-loop-generated corporate tables (migration 27)
+    = 70 total distinct policy-bearing tables, 36 covered before this round
+    (including those 6 dynamic ones). Still not closed: ~31 tables remain,
+    grouped by rough theme for whoever picks up the next slice — AI
+    (`ai_conversations`/`ai_messages`), notifications
+    (`cloud_messages`/`push_retry_queue`/`push_tokens`), corporate
+    (`corporate_section_spend`/`corporate_sections`/
+    `corporate_subscription_plans`/`corporate_subscriptions`), disputes
+    (`disputes`, distinct from the already-covered `stripe_disputes`),
+    driver ops (`driver_bonuses`/`driver_onboarding_reminder_log`/
+    `document_requirements`), reference/static data
+    (`faqs`/`fare_configs`/`provinces`/`service_areas`/
+    `service_area_tax_history`/`vehicle_types`), financial
+    (`financial_event_entries`/`reconciliation_discrepancies`/
+    `subscription_payments`), ride tracking/integrity
+    (`ride_distance_integrity_events`/`ride_distance_recomputes`/
+    `ride_live_activities`/`ride_location_gap_events`/`ride_messages`/
+    `ride_offers`), and singletons (`meta_capi_deliveries`,
+    `support_tickets`, `surge_pricing`). This is the first time this backlog
+    item has published an actual remaining-table list rather than just a
+    fraction — future rounds should correct it rather than re-deriving from
+    scratch, since the sweep method itself has already been wrong once
+    (see above).
+  Change log: `docs/change-log/2026-09-14-c49-admin-export-audit-rls-coverage.md`.
 - [ ] **Status (2026-09-14): 3 more tables, still not closed.** Checked for
   concurrent work first (`git fetch origin main` + open-PR search) — no PR
   currently touches `backend/tests/rls/`, clear to proceed. Picked
@@ -26763,11 +26839,22 @@ how much they de-risk a public launch._
   `ride_read_limit` definition, for reference), `backend/utils/rate_limiter.py`.
 
 ### C115. `admin-dashboard`'s Live Monitoring service-area jump buttons and Follow toggle silently no-op when the map can't render
-- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
-  reviewing the WebGL-stub-guard fix for `monitoring-map.tsx` (this same
-  session, see `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`)
-  — a non-blocking WARNING on that review, deliberately not fixed there
-  since closing it needs a separate design change to a different file.
+- [x] **Status:** CLOSED (2026-09-14). Fixed: `MonitoringMap` gained an
+  optional `onCanRenderChange` callback (fires once on mount with the same
+  `webglOk` value its own render branch uses); `page.tsx` threads that into
+  a new `mapCanRender` state and disables+explains the service-area jump
+  buttons (with a `title` + nearby text, and correctly scoped to only show
+  when a button would actually be present) and, via a new `mapCanRender`
+  prop on `MonitoringToolbar`, the Follow toggle. Regression-tested in
+  `monitoring-map.render.test.tsx`, `monitoring-toolbar-availability.render.test.tsx`,
+  and `monitoring-jump-buttons-availability.render.test.tsx`. See
+  `docs/change-log/2026-09-14-monitoring-map-controls-disabled-state.md`
+  for the full Change Impact Log. PR: https://github.com/srikumarimuddana-lab/spinrvm/pull/5425
+  Originally found by `spinr-design-consistency-reviewer` while reviewing
+  the WebGL-stub-guard fix for `monitoring-map.tsx` (this same session, see
+  `docs/change-log/2026-09-14-monitoring-map-webgl-stub-guard.md`) — a
+  non-blocking WARNING on that review, deliberately not fixed there since
+  closing it needed a separate design change to a different file.
 - **Issue/gap:** `MonitoringMap`'s `onReady` callback (`page.tsx:784`)
   only ever fires from inside `map.on("load", ...)`, which is unreachable
   whenever the new WebGL-capability guard bails out (stubbed/broken WebGL
@@ -26812,7 +26899,12 @@ how much they de-risk a public launch._
   (`onReady`, the `webglOk` guard).
 
 ### C116. `admin-dashboard/src/components/driver-map.tsx` has no importer anywhere in the codebase — correct code, unreachable from any route
-- [ ] **Status:** OPEN. Found by `spinr-design-consistency-reviewer` while
+- [x] **Status:** CLOSED (2026-09-14) — deleted per product-owner decision
+  (wiring it into a real route was judged out of scope for a bug-fix-shaped
+  task). Re-confirmed zero importers with a fresh repo-wide grep before
+  deleting; see `docs/change-log/2026-09-14-c116-remove-unreachable-driver-map.md`
+  for the full Change Impact Log. See PR #5424.
+- **Original finding (superseded, kept for history):** Found by `spinr-design-consistency-reviewer` while
   reviewing the WebGL-stub-guard port to `live-map.tsx`/`driver-map.tsx`
   (this same session — see
   `docs/change-log/2026-09-14-live-driver-map-webgl-stub-guard.md`) — asked
@@ -26888,7 +26980,24 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
 
-### C118. `spinr.app` was referenced in 96 places but has never been a registered or resolving domain — allowlists, store metadata, and operator docs all trusted it
+### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
+
+- [ ] **Status:** open — registry only, not a fix. Found 2026-09-14: every CR filed via the CI-audit template exists solely as a standalone GitHub issue (`change-request` + `needs-approval` labels); none had ever been linked from `ACTION_ITEMS.md`, so the only way to know the current CR backlog was to search GitHub issues directly. This entry is that missing index — **update it whenever a CR is filed, approved, implemented, or closed**, rather than letting it drift stale like the pre-2026-08-23 migration-duplicate-number list this file's own Database & Migration Conventions section warns against relying on.
+- **Full list, open as of 2026-09-14 (queried via `label:change-request`, `state:open` — 6 total, repo-wide, not just CI-audit-sourced):**
+
+  | CR ID | Issue | Title | Priority | Blocker |
+  |---|---|---|---|---|
+  | CR-2026-008 | [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295) | Implement ADR-010's metrics-aggregation MVP (Grafana Cloud scraper + 2 alert rules) | P1 | Needs a human to choose Option A vs. B and provision a Grafana Cloud account — no code-only path from an agent session |
+  | (unassigned) | [#4109](https://github.com/srikumarimuddana-lab/spinrvm/issues/4109) | Confirm which Stripe platform account the Supabase reconciliation mirror covers | P1 | Needs live Stripe API/dashboard access this session doesn't have (ties to A34's dual-run Stripe checklist) |
+  | CR-2026-032 | [#5181](https://github.com/srikumarimuddana-lab/spinrvm/issues/5181) | Roll out `surface:subsurface:check` naming convention for CI job/check names | P2 | **Hard-gated on C21** (this file) — renaming a required-status-check's `name:` before C21's audit is done risks silently breaking merge-blocking |
+  | CR-2026-034 | [#5398](https://github.com/srikumarimuddana-lab/spinrvm/issues/5398) | Consolidate `ci-guardrails.yml` vs `migration-check.yml`'s two independent migration-safety scanners | P2 | Phase 1 (additive-only, doesn't touch `ci-guardrails.yml`) implemented in PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review). Phase 2 (the actual one-job merge) is gated on the same C21 unknown as CR-2026-032 — deleting/renaming `ci-guardrails.yml`'s job risks the same required-check-name breakage |
+  | CR-2026-086 | [#5408](https://github.com/srikumarimuddana-lab/spinrvm/issues/5408) | `migration-check.yml` hard-crashes (not silently passes) on `merge_group` — no BASE/HEAD fallback at all | P2 | **Approved 2026-09-14.** Already implemented as a byproduct of CR-2026-034 Phase 1 — same fix, same file/step — see PR [#5419](https://github.com/srikumarimuddana-lab/spinrvm/pull/5419) (draft, pending review) |
+  | CR-2026-087 | [#5409](https://github.com/srikumarimuddana-lab/spinrvm/issues/5409) | `coverage-regression-gate`'s merge-base fallback hardcodes `origin/main` — wrong base for a `staging`-targeted `merge_group` run | P3 | **Approved 2026-09-14.** Implemented in PR [#5422](https://github.com/srikumarimuddana-lab/spinrvm/pull/5422) (draft, pending review) |
+- **Why CR-2026-086/087 aren't blocked on C21 the way CR-2026-032/034-Phase-2 are:** neither touches a job's `name:` field or removes/merges a job — both are pure internal-logic fixes (a bash fallback for an empty ref) inside jobs that keep their current names and keep running exactly as before on the common `pull_request` trigger. The required-status-checks-name risk that gates CR-2026-032 and CR-2026-034 Phase 2 doesn't apply to these two.
+- **Already resolved, for reference (not re-litigated here):** CR-2026-033 (#5251, migration 413's `DELETE FROM` — admin merge-override, no code change) and CR-2026-085 (#5381, `ci-guardrails.yml`'s own `merge_group` BASE/HEAD fix — merged via PR #5399).
+- **Not fixed here:** this entry is a registry, not an implementation. CR-2026-086/087 are small and low-risk enough to implement on request; CR-2026-008/#4109 need external (Grafana Cloud / Stripe) access no session here has; CR-2026-032/034-Phase-2 need a human to pull `main`'s branch-protection required-status-checks list (Settings → Branches → main → required status checks) since no GitHub App/token available to any session so far has read access to that endpoint.
+
+### C119. `spinr.app` was referenced in 96 places but has never been a registered or resolving domain — allowlists, store metadata, and operator docs all trusted it
 
 Found 2026-09-14 by tracing `https://{target}.spinr.app` in `agents/deployer.py`.
 `spinr.app` and `spinr-track.app` both return `NXDOMAIN` (no A, no NS) and the

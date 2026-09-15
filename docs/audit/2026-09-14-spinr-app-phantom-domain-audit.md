@@ -1,7 +1,7 @@
 # `spinr.app` — phantom-domain audit and disposition proposal
 
 **Date:** 2026-09-14
-**Status:** Decided and implemented. What shipped: `docs/change-log/2026-09-14-spinr-app-phantom-domain-removal.md`. What is still open: `ACTION_ITEMS.md` C118 (a)–(g).
+**Status:** Decided and implemented. What shipped: `docs/change-log/2026-09-14-spinr-app-phantom-domain-removal.md`. What is still open: `ACTION_ITEMS.md` C119 (a)–(h).
 **Scope:** every reference to `spinr.app` / `spinr-track.app` / `api.spinr.app` in the repo.
 
 ---

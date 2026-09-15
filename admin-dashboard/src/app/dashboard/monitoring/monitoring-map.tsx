@@ -137,6 +137,21 @@ interface MonitoringMapProps {
     onSelectRide: (id: string) => void;
     /** Exposes imperative update handles to parent */
     onReady: (handles: MapHandles) => void;
+    /**
+     * Fires once, on mount, with whether this browser can actually render
+     * the map (mirrors the `webglOk` guard below — see hasRenderingWebGL()
+     * in src/lib/map/webgl-support.ts). `onReady` above never fires when
+     * `webglOk` is false, so without this the parent has no way to know
+     * the map is inert: `mapHandlesRef.current` just stays null forever.
+     * Every `mapHandlesRef.current?.foo()` call site already tolerates
+     * that via optional chaining, but controls whose entire purpose IS a
+     * map-visual effect (the service-area jump buttons, the Follow
+     * toggle) need this signal to disable themselves with an explanation
+     * instead of silently no-op'ing. webglOk is computed once and never
+     * changes post-mount, so this is a one-shot signal, not something
+     * that needs to re-fire. See ACTION_ITEMS.md C115.
+     */
+    onCanRenderChange?: (canRender: boolean) => void;
 }
 
 export interface MapHandles {
@@ -205,6 +220,7 @@ export function MonitoringMap({
     onSelectDriver,
     onSelectRide,
     onReady,
+    onCanRenderChange,
 }: MonitoringMapProps) {
     const { resolvedTheme } = useTheme();
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -217,6 +233,15 @@ export function MonitoringMap({
     // effect below (which would cause a needless extra render and trips
     // react-hooks/set-state-in-effect).
     const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
+
+    const onCanRenderChangeRef = useRef(onCanRenderChange);
+    onCanRenderChangeRef.current = onCanRenderChange;
+    // Report the render-capability signal once. webglOk never changes after
+    // mount, so [webglOk] fires this exactly once — see the prop doc comment
+    // on MonitoringMapProps.onCanRenderChange for why the parent needs it.
+    useEffect(() => {
+        onCanRenderChangeRef.current?.(webglOk);
+    }, [webglOk]);
 
     const driverMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
     const driverVisibleRef = useRef<Map<string, boolean>>(new Map());

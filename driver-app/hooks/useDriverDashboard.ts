@@ -870,6 +870,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           // ── Display trust gate — everything below moves markers/UI state. ──
+          // A re-created watcher can first return an older cached fix. Keep
+          // its durable capture above, but never rewind a fresh resume fix.
+          if (!Number.isFinite(loc.timestamp) || Date.now() - loc.timestamp > 60_000 ||
+              loc.timestamp > Date.now() + 5_000 ||
+              (locationRef.current && loc.timestamp < locationRef.current.timestamp)) return;
           if (!integrity.trusted) {
             console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
             return;

@@ -136,3 +136,38 @@ without capture times still use arrival time; update backend before enabling RES
 fanout. No UI layout changed; no active mobile visual-regression tooling exists.
 Rollback: revert app/backend update; disable REST flag. No money/state transition
 or historical GPS mutation. 18 rider store/hook tests pass with native/API mocks.
+
+Final resume race regression: a newly installed watcher can return a cached fix
+older than the one-shot resume result. The dashboard now keeps such captures in
+the durable recorder but excludes them from marker/state updates. Actual-hook
+regression failed before the gate and passes after it. Same dashboard consumer,
+rollback and native-verification limits as the resume change above.
+
+## Release validation (required before claiming the device issue resolved)
+
+1. Apply migration 427 and deploy backend before installing new mobile clients.
+2. Build Driver and Rider production Android binaries for Play internal testing.
+3. Enable `background_location_fanout_enabled` in trusted admin settings for the
+   pre-production test window (default remains false; this PR does not activate it).
+4. Test already-online cold launch, pickup and active ride; minimize into Maps,
+   lock screen, drive 20+ minutes, return. On rider phone, compare successive car
+   positions with capture/receive timestamps. Confirm recording and uploads while
+   minimized, immediate fresh marker on return, no backward replay after reconnect.
+5. Repeat online-idle with idle history disabled; airplane-mode recovery; offline
+   and logout during startup; denied permission; a stationary stop; Android Auto.
+   Verify no location collection resumes after intentional offline/logout.
+6. If a headless-only runtime outlives its access token, existing policy defers
+   uploads. App shell refreshes each minute while runnable, but a suspended shell
+   cannot guarantee that; record this separately from GPS capture and do not call
+   continuous delivery across token expiry verified. No token lifetime extended.
+
+Verification scope: isolated Node/Jest harness with real hooks/store/task and
+mocked native boundaries; backend pytest with mocked persistence/event bus. No
+production app build, emulator, physical device or live migration was run here.
+
+Final targeted results: **75 backend + 81 driver + 18 rider = 174 passing tests**.
+Backend Ruff and git diff whitespace checks pass. Independent review of each
+logical change caught timestamp normalization, native cancellation ordering and
+zero-coordinate validation issues; corrected before committing. Full application
+typecheck/native production build and cross-replica concurrency were not run.
+The flag is global, not a per-driver allowlist; enable in pre-production first.

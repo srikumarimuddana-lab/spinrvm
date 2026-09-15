@@ -283,3 +283,15 @@ it('replaces the foreground watcher on resume and removes a late subscription', 
   await act(async () => resolve({ remove }));
   expect(remove).toHaveBeenCalledTimes(1);
 });
+
+it('does not let a cached watcher callback rewind the fresh resume position', async () => {
+  (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted' });
+  const fresh = fix();
+  (Location.getCurrentPositionAsync as jest.Mock).mockResolvedValue(fresh);
+  await mount();
+  const received = jest.fn(); dashboard.markerFixFeed.subscribe(received);
+  const callback = (Location.watchPositionAsync as jest.Mock).mock.calls.at(-1)[1];
+  await act(async () => callback(fix(fresh.timestamp - 10_000, 50.44)));
+  expect(received).not.toHaveBeenCalled();
+  expect(dashboard.location?.coords.latitude).toBe(fresh.coords.latitude);
+});

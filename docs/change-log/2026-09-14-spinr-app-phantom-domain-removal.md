@@ -88,8 +88,8 @@ nothing new is trusted, and no behaviour is widened.**
 | `docs/known-forks.md` | Registered the rider/driver referral pair | It was an undeclared fork that had already drifted (`/r/` vs `/join/`) |
 | `rider-app/app.config.ts`, `driver-app/app.config.ts` | Deleted `associatedDomains` + `intentFilters` | Dead config; see §7 |
 | `rider-app/app/profile-setup.tsx` | Consent links → `https://www.spinr.ca/legal/{terms,privacy}` | **Live dead links on a consent surface** |
-| `rider-app/store-assets/metadata.json`, `driver-app/store-assets/metadata.json` | `privacy_url` → published page; `support_url` marked TODO; `_comment` extended | Store submission requires a reachable privacy URL |
-| `backend/utils/rate_limiter.py` | `documentation_url` → `spinr.ca` | Key is pinned by two tests; value was dead |
+| `rider-app/store-assets/metadata.json`, `driver-app/store-assets/metadata.json` | All three URLs → published pages: `privacy_url` `/legal/privacy`, `support_url` `/help`, `marketing_url` `/` (rider) and `/drive` (driver) | Store submission requires a reachable privacy URL. **Superseded by `53268bf`** — this session shipped `support_url`/`marketing_url` as unverified guesses marked TODO; the repo owner then checked every route against the live site and corrected `support_url` from the invented `/support` to the real `/help`, replacing the TODO with the verified list |
+| `backend/utils/rate_limiter.py` | `documentation_url` → the published runbook on GitHub | Key is pinned by two tests; value was dead. **Superseded by `36178cd`** — this session pointed it at `https://spinr.ca/docs/rate-limits`, which is also a page that does not exist; the repo owner repointed it at `docs/runbooks/rate-limits.md` on GitHub, which actually resolves. That is the better fix: it swaps a dead URL for a live one instead of a differently-dead one |
 | `backend/.env.example`, `docs/ENVIRONMENT_VARIABLES.md` | `ALLOWED_ORIGINS` examples no longer suggest `spinr.app` | This is how the dead origin could reach a real deployment |
 | `.agents/roles/devops-engineer.md` | Production backend → `api-spinr.spinr.ca` | Was `api.spinr.app` — wrong host in an incident-response doc |
 | `docs/runbooks/rate-limits.md`, `docs/runbooks/error-responses.md` | curl examples → `api-spinr.spinr.ca` | Copy-pasted repro commands would not resolve |
@@ -198,8 +198,13 @@ State this plainly rather than let the checklist above imply coverage:
 - **The new URLs were never fetched.** The egress proxy in this environment rejects
   `spinr.ca` outright (every probe returns `000`), so `https://www.spinr.ca/legal/privacy`
   and `/legal/terms` are taken on the product owner's word, not confirmed by a request.
-- **`support_url` in both store-metadata files is unconfirmed** — only its host was
-  corrected. It is marked TODO in each file rather than left looking verified.
+- ~~**`support_url` in both store-metadata files is unconfirmed**~~ — **closed by `53268bf`.**
+  Originally only its host was corrected, leaving an invented `/support` path marked TODO.
+  The repo owner then checked the routes against the live site and set the real `/help`.
+- ~~**The new legal URLs were never fetched.**~~ — **partly closed by `53268bf`**, whose
+  message records that the website routes were retrieved through web access on 2026-09-14.
+  This session still never fetched them (the egress proxy rejects `spinr.ca`); the
+  confirmation is the repo owner's, not this session's.
 - **Registration status of `spinr.app` was never independently proven.** `whois` and `dig`
   are absent and the proxy blocks RDAP; the NXDOMAIN result proves *not configured*, not
   *not owned*. The "not owned" fact comes from the product owner.

@@ -506,6 +506,7 @@ class SettingsUpdateRequest(BaseModel):
     # dropoff tail anchor), ride_repo.py (rider pickup-leg display),
     # route_gap_monitor.py (FCM nudge), stale_p3_closer.py (autoclose).
     idle_location_v2_enabled: Optional[bool] = None
+    background_location_fanout_enabled: Optional[bool] = None
     period1_distance_tracking_enabled: Optional[bool] = None
     # Migration 370. Driver location marker write gate (utils/
     # location_write_gate.py): False = shadow mode (count-only), True =

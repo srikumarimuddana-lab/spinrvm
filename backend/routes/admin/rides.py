@@ -3002,7 +3002,27 @@ async def admin_export_drivers(
     """Export drivers data. Writes an audit log entry (F-41)."""
     import uuid  # noqa: PLC0415
 
-    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
+    _DRIVER_EXPORT_COLS = (
+        "id,user_id,driver_code,first_name,last_name,phone,status,is_verified,"
+        "is_online,is_available,service_area_id,city,regulatory_region,"
+        "vehicle_make,vehicle_model,vehicle_year,vehicle_color,vehicle_type_id,"
+        "license_plate,vehicle_vin,license_number,license_class,"
+        "rating,total_rides,total_earnings,acceptance_rate,"
+        "license_expiry_date,insurance_expiry_date,vehicle_inspection_expiry_date,"
+        "background_check_expiry_date,work_eligibility_expiry_date,"
+        "regulatory_authority,regulatory_authority_approved,regulatory_authority_approved_at,"
+        "sgi_approved,sgi_approved_at,work_authorization_status,"
+        "is_permanent_resident,is_citizen,"
+        "decals_sent,decals_sent_at,decal_generated_at,decal_number,"
+        "created_at,verified_at,deleted_at,last_status_changed_at,updated_at"
+    )
+    drivers = await db_supabase.get_rows(
+        "drivers",
+        order="created_at",
+        desc=True,
+        limit=limit,
+        columns=_DRIVER_EXPORT_COLS,
+    )
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     # Export rows only carry name/email/phone from the user row — project those
     # so the export doesn't read base64 profile_image for every driver.

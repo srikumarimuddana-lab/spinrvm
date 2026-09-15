@@ -716,6 +716,137 @@ class TestAdminExportRidesFiltered:
 
 
 class TestAdminExportDrivers:
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("status=active&service_area_id=saskatoon", ["a"]),
+            ("is_online=true&vehicle_type_id=sedan", ["a", "b"]),
+            ("status=pending&service_area_id=regina", []),
+            ("legacy_import=false", ["a", "c"]),
+            ("onboarding_complete=true&pre_launch=false", ["a", "b"]),
+            ("dormant=true&dormancy_tier=long_dormant", ["b"]),
+            ("legacy_review=true", ["c"]),
+            ("photo_status=pending_review&service_area_id=saskatoon", ["c"]),
+            ("search=Alex&status=active", ["a"]),
+            ("sort_by=created_at&sort_dir=asc", ["c", "b", "a"]),
+        ],
+    )
+    def test_export_uses_list_filters(self, client, as_super_admin, monkeypatch, query, expected):
+        from routes.admin import drivers as driver_routes
+
+        drivers = [
+            dict(
+                id="a",
+                user_id="u-a",
+                status="active",
+                service_area_id="saskatoon",
+                vehicle_type_id="sedan",
+                is_online=True,
+                legacy_import_metadata={},
+                created_at="2026-03-01",
+            ),
+            dict(
+                id="b",
+                user_id="u-b",
+                status="active",
+                service_area_id="regina",
+                vehicle_type_id="sedan",
+                is_online=True,
+                legacy_import_metadata={"source": "legacy"},
+                created_at="2026-02-01",
+            ),
+            dict(
+                id="c",
+                user_id="u-c",
+                status="pending",
+                service_area_id="saskatoon",
+                vehicle_type_id="xl",
+                is_online=False,
+                legacy_import_metadata={},
+                created_at="2026-01-01",
+            ),
+        ]
+
+        def matches(row, filters):
+            for key, value in (filters or {}).items():
+                if key == "$or":
+                    if not any(matches(row, clause) for clause in value):
+                        return False
+                elif isinstance(value, dict):
+                    actual = row.get(key)
+                    if "$in" in value and actual not in value["$in"]:
+                        return False
+                    if "$nin" in value and actual in value["$nin"]:
+                        return False
+                    if "$eq" in value and actual != value["$eq"]:
+                        return False
+                    if "$ne" in value and actual == value["$ne"]:
+                        return False
+                    if "$regex" in value and value["$regex"].lower() not in str(actual or "").lower():
+                        return False
+                elif row.get(key) != value:
+                    return False
+            return True
+
+        async def get_rows(table, filters=None, **kwargs):
+            rows = (
+                drivers
+                if table == "drivers"
+                else (
+                    [{"id": "u-a", "first_name": "Alex"}, {"id": "u-c", "profile_image_status": "pending_review"}]
+                    if table == "users"
+                    else []
+                )
+            )
+            rows = [r for r in rows if matches(r, filters)]
+            if kwargs.get("order"):
+                rows.sort(key=lambda r: r.get(kwargs["order"]) or "", reverse=kwargs.get("desc", False))
+            start = kwargs.get("offset") or 0
+            return rows[start : start + kwargs.get("limit", 1000)]
+
+        monkeypatch.setattr(driver_routes, "fetch_pre_launch_flagged_ids", lambda _: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_incomplete_onboarding_driver_ids", lambda: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_suspect_legacy_driver_ids", lambda: {"c"})
+        monkeypatch.setattr(driver_routes, "fetch_dormancy_flagged_ids", lambda tier: {"b"})
+        monkeypatch.setattr(driver_routes, "_resolve_driver_search_user_ids", AsyncMock(return_value=["u-a"]))
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()),
+        ):
+            listed = client.get(f"/api/admin/drivers?{query}")
+            exported = client.get(f"/api/admin/export/drivers?{query}")
+        assert listed.status_code == exported.status_code == 200
+        assert [d["id"] for d in listed.json()] == expected
+        assert [d["id"] for d in exported.json()["drivers"]] == expected
+
+    @pytest.mark.parametrize("limit,expected_status", [(None, 200), (1001, 200), (1000, 413)])
+    def test_export_reads_all_matching_pages_or_rejects_partial_file(
+        self, client, as_super_admin, limit, expected_status
+    ):
+        drivers = [{"id": f"d-{i}", "status": "active"} for i in range(1001)]
+
+        async def get_rows(table, filters=None, **kwargs):
+            if table != "drivers":
+                return []
+            assert kwargs["order"] == "id" and kwargs["desc"] is False
+            start = kwargs.get("offset") or 0
+            return drivers[start : start + kwargs["limit"]]
+
+        with (
+            patch("db_supabase.get_rows", side_effect=get_rows),
+            patch("db_supabase.rpc", AsyncMock(return_value=[{"by_driver": {}}])),
+            patch("db_supabase.insert_one", AsyncMock()) as audit,
+        ):
+            response = client.get("/api/admin/export/drivers", params={"limit": limit} if limit else {})
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert response.json()["count"] == 1001
+            assert [d["id"] for d in response.json()["drivers"]] == [d["id"] for d in drivers]
+        else:
+            assert "drivers" not in response.json()
+            audit.assert_not_awaited()
+
     @pytest.fixture(autouse=True)
     def route_batch_reads_through_test_db(self, monkeypatch):
         # Keep the real batching helper; replace only its DB boundary.

@@ -350,6 +350,7 @@ def _subscription_summary(sub: Optional[Dict[str, Any]], now: datetime) -> tuple
 # Any token not in this map falls back to created_at so an unexpected value can
 # never inject an arbitrary column into the ORDER BY.
 _DRIVER_SORT_COLUMNS = {
+    "id": "id",
     "created_at": "created_at",
     "name": "first_name",
     "status": "status",

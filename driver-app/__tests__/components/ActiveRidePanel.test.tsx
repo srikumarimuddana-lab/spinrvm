@@ -1,6 +1,6 @@
 import React from 'react';
 import { Animated, Linking } from 'react-native';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
 
@@ -257,4 +257,16 @@ describe('ActiveRidePanel', () => {
       expect(calledWith.startsWith('comgooglemaps://')).toBe(false);
     });
   });
+});
+
+
+it('shows booked pickup and does not count early arrival as waiting', () => {
+  jest.useFakeTimers();
+  const booked = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const view = renderWithSafeArea(<ActiveRidePanel {...defaultProps} rideState="arrived_at_pickup" ride={{...mockRide, is_scheduled:true, scheduled_time:booked} as any} />);
+  expect(view.getByText(/^Scheduled pickup:/)).toBeTruthy();
+  act(() => { jest.advanceTimersByTime(60 * 1000); });
+  expect(view.getByText('0s')).toBeTruthy();
+  view.unmount();
+  jest.useRealTimers();
 });

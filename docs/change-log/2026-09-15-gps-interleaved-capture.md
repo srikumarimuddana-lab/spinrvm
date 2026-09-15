@@ -40,3 +40,9 @@ if candidate.captured_at < session_high_water:
 - Rollback: set the flag false on `settings` row `id='app_settings'`; allow the existing 60-second settings cache to expire. In-flight work may finish with the old value. Do not delete audit rows or rewrite already-settled fares.
 - Before: `segment_route(points, ride, completion_point)`. After: `segment_route(points, ride, completion_point, allow_interleaved_sources=reorder_captures)`.
 - Verification: normal backend test bootstrap works after installing the workspace's missing SOCKS proxy dependency. Parser, finalizer, and offline analyzer suites passed together (66 tests); no production mutation or phone build is part of this test run.
+
+## Database rollout switch
+
+`backend/migrations/425_route_interleaved_capture_flag.sql` adds a boolean column, default false, to the existing single-row settings table. `backend/schemas.py` supplies the same default when the column is absent. The loader merges database values over schema defaults. No new table, query index, data copy, or RLS policy is needed. The migration is append-only; 424 was the highest numbered migration at branch creation. Recheck the number before merge if another migration lands.
+
+Applying the migration alone changes no route behavior. Activation is an operational database update, not an exposed admin/mobile switch. The rollback SQL is in the migration header. Syntax/defaults and the consuming flag tests were checked; the migration has **not** been applied to any database. Production activation, historical re-finalization, and distance/insurance revision review are separate release steps.

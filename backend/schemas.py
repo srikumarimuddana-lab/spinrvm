@@ -744,6 +744,10 @@ class AppSettings(BaseModel):
     # See migration 424. Ships dark -- requires human device verification
     # (physical iOS + Android, staging) before enabling in production.
     minimal_fcm_offer_payload_enabled: bool = False
+    # Migration 425: bounded native foreground/background capture reordering
+    # in completed-route finalization. Operated via the trusted settings row;
+    # keep dark until staged route/distance evidence has been reviewed.
+    route_interleaved_capture_enabled: bool = False
     # ── Dispatch geo provider / candidate pool ───────────────────────────
     # Global default provider (migration 397, settings.dispatch_geo_provider
     # TEXT NOT NULL). A service area's own dispatch_geo_provider is a

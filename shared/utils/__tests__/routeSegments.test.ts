@@ -3,7 +3,7 @@
  * "estimated from booking" copy shown when GPS was too incomplete to trust,
  * so the rider is never shown a precise-looking distance that isn't measured.
  */
-import { routeQualityLabel } from '../routeSegments';
+import { normalizeDecodedPolyline, routeQualityLabel } from '../routeSegments';
 
 describe('routeQualityLabel', () => {
   it('shows the estimated-from-booking copy for planned_estimated basis', () => {
@@ -55,5 +55,38 @@ describe('routeQualityLabel', () => {
     expect(
       routeQualityLabel({ reconstruction_status: 'retrying', distance_basis: 'planned_estimated' }),
     ).toBe('Route reconstruction in progress');
+  });
+});
+
+describe('normalizeDecodedPolyline', () => {
+  it('keeps contract [[lat, lng], …] arrays', () => {
+    expect(normalizeDecodedPolyline([[50.45, -104.62], [50.46, -104.61]])).toEqual([
+      { lat: 50.45, lng: -104.62 },
+      { lat: 50.46, lng: -104.61 },
+    ]);
+  });
+
+  it('accepts legacy {lat, lng} objects so a route still draws', () => {
+    expect(normalizeDecodedPolyline([
+      { lat: 50.45, lng: -104.62 },
+      { lat: 50.46, lng: -104.61 },
+    ])).toEqual([
+      { lat: 50.45, lng: -104.62 },
+      { lat: 50.46, lng: -104.61 },
+    ]);
+  });
+
+  it('swaps GeoJSON [lng, lat] when the first number cannot be a latitude', () => {
+    expect(normalizeDecodedPolyline([[-104.62, 50.45], [-104.61, 50.46]])).toEqual([
+      { lat: 50.45, lng: -104.62 },
+      { lat: 50.46, lng: -104.61 },
+    ]);
+  });
+
+  it('coerces numeric strings', () => {
+    expect(normalizeDecodedPolyline([['50.45', '-104.62'], ['50.46', '-104.61']])).toEqual([
+      { lat: 50.45, lng: -104.62 },
+      { lat: 50.46, lng: -104.61 },
+    ]);
   });
 });

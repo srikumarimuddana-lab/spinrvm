@@ -17,7 +17,7 @@ import RideLostFound from "./ride-lost-found";
 import RideFlagForm from "./ride-flag-form";
 import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
-import { routeQualityLabel } from "@spinr/shared/utils/routeSegments";
+import { normalizeDecodedPolyline, routeQualityLabel } from "@spinr/shared/utils/routeSegments";
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
@@ -99,7 +99,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [showCancelDialog, setShowCancelDialog] = useState(false);
     const [cancelReason, setCancelReason] = useState("Cancelled by admin");
     const [cancelling, setCancelling] = useState(false);
-    const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
+    const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("planned");
 
     const loadRide = useCallback(async () => {
         if (!rideId) return;
@@ -117,7 +117,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     useEffect(() => {
         if (open && rideId) loadRide();
         if (!open) setRide(null);
-        setSelectedPhase("actual");
+        setSelectedPhase("planned");
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
@@ -754,10 +754,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {/* Map */}
                                         {ride.pickup_lat && ride.dropoff_lat && (() => {
                                             const pp = ride.phase_polylines || {};
-                                            const pickupPts = Array.isArray(pp.navigating_to_pickup)
-                                                ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
-                                            const tripPts = Array.isArray(pp.trip_in_progress)
-                                                ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
+                                            const pickupPts = normalizeDecodedPolyline(pp.navigating_to_pickup);
+                                            const tripPts = normalizeDecodedPolyline(pp.trip_in_progress);
 
                                             let pickupProp: typeof pickupPts | undefined;
                                             let pickupApprox = false;
@@ -784,8 +782,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 // Prefer the OSRM road-matched pickup leg, then raw Phase 2
                                                 // GPS, then a driver-start → pickup reference line so the
                                                 // card always shows the approach.
-                                                const pickupRoad = Array.isArray(ride.road_polyline_pickup) && ride.road_polyline_pickup.length > 1
-                                                    ? ride.road_polyline_pickup.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                const pickupRoad = normalizeDecodedPolyline(ride.road_polyline_pickup);
                                                 if (pickupRoad.length > 1) {
                                                     label = "Driver → Pickup (road-matched)";
                                                     pickupProp = pickupRoad;
@@ -820,8 +817,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
                                                 // the clean on-road route SGI / dispute review should see — then
                                                 // fall back to raw trip GPS, then the legacy combined polyline.
-                                                const roadPts = Array.isArray(ride.road_polyline) && ride.road_polyline.length > 1
-                                                    ? ride.road_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                const roadPts = normalizeDecodedPolyline(ride.road_polyline);
                                                 if (roadPts.length > 1) {
                                                     label = "Pickup → Dropoff (road-matched)";
                                                     tripProp = roadPts;
@@ -830,8 +826,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     tripProp = tripPts;
                                                 } else {
                                                     label = "Pickup → Dropoff (actual GPS)";
-                                                    const legacy = Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
-                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                    const legacy = normalizeDecodedPolyline(ride.route_polyline);
                                                     if (legacy.length > 1) trailForMap = legacy;
                                                     else emptyHint = "No trip GPS trail for this ride";
                                                 }
@@ -840,8 +835,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 // Planned route: the road-following polyline captured from
                                                 // the Directions API at booking. Falls back to the dashed
                                                 // straight line (drawn by the map) when none was stored.
-                                                const plannedPts = Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1
-                                                    ? ride.planned_route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                const plannedPts = normalizeDecodedPolyline(ride.planned_route_polyline);
                                                 if (plannedPts.length > 1) {
                                                     label = "Planned Trip (road-following)";
                                                     plannedProp = plannedPts;

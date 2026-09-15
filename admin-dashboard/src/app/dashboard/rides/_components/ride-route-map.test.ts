@@ -46,6 +46,41 @@ describe('admin route replay contract', () => {
     expect(mapSource).not.toContain('makeCircleMarkerEl');
   });
 
+  it('refits the camera after the dialog panel has a real size', () => {
+    // Default zoom 13 in a 280px-tall panel cannot show an 8 km N-S ride.
+    // fitBounds must run after map.resize() once the container is measurable.
+    expect(mapSource).toContain('map.resize()');
+    expect(mapSource).toContain('ResizeObserver');
+    expect(mapSource).toContain('box.clientHeight < 2');
+  });
+
+  it('normalizes stored polylines in the detail modal', () => {
+    expect(detailSource).toContain('normalizeDecodedPolyline');
+    expect(mapSource).toContain('routeLineData');
+    expect(mapSource).toContain('finiteTrail');
+  });
+
+  it('draws the route as an SVG overlay so it cannot sit under basemap fills', () => {
+    // Pins are DOM markers; a GL line can be buried by late style fills or
+    // wiped by a styledata clear+add loop. The overlay uses the same stacking
+    // context as the pins.
+    expect(mapSource).toContain('ride-route-svg-overlay');
+    expect(mapSource).toContain('map.project');
+    expect(mapSource).toContain('syncRouteSvgOverlay');
+  });
+
+  it('does not rebuild route layers on every styledata once they exist', () => {
+    expect(mapSource).toContain('hasRouteLayer');
+    expect(mapSource).toContain('restackRouteLayers');
+  });
+
+  it('opens the ride modal on Planned Trip so the camera frames that polyline', () => {
+    // Actual GPS is often incomplete; defaulting to that tab framed two pins
+    // (or a fragment) instead of the booked road route.
+    expect(detailSource).toContain('useState<"pickup" | "actual" | "planned">("planned")');
+    expect(detailSource).toContain('setSelectedPhase("planned")');
+  });
+
   it('passes the v2 actual segments and their quality label from the admin detail', () => {
     expect(detailSource).toContain('actual_route_segments');
     expect(detailSource).toContain('routeQualityLabel');

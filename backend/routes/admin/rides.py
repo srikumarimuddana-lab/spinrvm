@@ -3007,7 +3007,7 @@ async def admin_export_drivers(
         "is_online,is_available,service_area_id,city,regulatory_region,"
         "vehicle_make,vehicle_model,vehicle_year,vehicle_color,vehicle_type_id,"
         "license_plate,vehicle_vin,license_number,license_class,"
-        "rating,total_rides,total_earnings,acceptance_rate,"
+        "rating,total_rides,acceptance_rate,"
         "license_expiry_date,insurance_expiry_date,vehicle_inspection_expiry_date,"
         "background_check_expiry_date,work_eligibility_expiry_date,"
         "regulatory_authority,regulatory_authority_approved,regulatory_authority_approved_at,"
@@ -3067,6 +3067,27 @@ async def admin_export_drivers(
         if _sa_ids
         else {}
     )
+
+    # drivers.total_earnings does not exist as a column (it lives on
+    # driver_daily_stats only). Compute lifetime earnings from completed rides
+    # via the same admin_driver_earnings_rollup RPC the driver listing uses.
+    _driver_ids_for_earnings = [d.get("id") for d in drivers if d.get("id")]
+    _earnings_by_driver: Dict[str, float] = {}
+    if _driver_ids_for_earnings:
+        try:
+            _earn_rows = await db_supabase.rpc(
+                "admin_driver_earnings_rollup",
+                {"p_driver_ids": _driver_ids_for_earnings},
+            )
+            _earn_rollup = _earn_rows[0] if isinstance(_earn_rows, list) and _earn_rows else _earn_rows
+            if isinstance(_earn_rollup, dict):
+                for _did, _amt in (_earn_rollup.get("by_driver") or {}).items():
+                    _earnings_by_driver[_did] = float(_amt or 0)
+        except Exception as _earn_err:
+            logger.warning(
+                "admin_export_drivers: earnings rollup failed, exporting without earnings: %s",
+                _earn_err,
+            )
 
     # License number is encrypted PII (pgsodium vault). Per the admin's choice we
     # export only a MASKED last-4 (e.g. ****1234) — the full number never leaves
@@ -3166,7 +3187,7 @@ async def admin_export_drivers(
                 "license_class": d.get("license_class"),
                 "rating": d.get("rating"),
                 "total_rides": d.get("total_rides"),
-                "total_earnings": d.get("total_earnings"),
+                "total_earnings": _earnings_by_driver.get(d.get("id"), 0.0),
                 "acceptance_rate": d.get("acceptance_rate"),
                 "license_expiry": d.get("license_expiry_date"),
                 "insurance_expiry": d.get("insurance_expiry_date"),

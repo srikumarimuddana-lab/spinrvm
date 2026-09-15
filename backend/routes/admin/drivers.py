@@ -358,7 +358,10 @@ _DRIVER_SORT_COLUMNS = {
     "vehicle_make": "vehicle_make",
     "rating": "rating",
     "total_rides": "total_rides",
-    "total_earnings": "total_earnings",
+    # "total_earnings" removed — column does not exist on drivers table (lives
+    # on driver_daily_stats only). Sorting by it crashed PostgREST with
+    # "column drivers.total_earnings does not exist". Earnings are computed on
+    # demand via admin_driver_earnings_rollup RPC, not stored on the row.
     "region": "service_area_id",
 }
 

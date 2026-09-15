@@ -169,6 +169,45 @@ async def _apply_v2_live_marker_update(
             logger.error(
                 "location-batch v2: marker write failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
             )
+        # Live delivery must not depend on whether the DB write was coalesced.
+        if -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+            try:
+                try:
+                    from ...settings_loader import get_app_settings
+                except ImportError:
+                    from settings_loader import get_app_settings
+                settings = await get_app_settings() or {}
+                if settings.get("background_location_fanout_enabled", False):
+                    rides = await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver_id}, limit=1)
+                    ride = rides[0] if rides else {}
+                    if (
+                        ride.get("id") == ride_id
+                        and ride.get("driver_id") == driver_id
+                        and ride.get("status") in {"driver_accepted", "driver_arrived", "in_progress"}
+                        and ride.get("rider_id")
+                    ):
+                        await _deps.manager.send_personal_message(
+                            {
+                                "type": "driver_location_update",
+                                "driver_id": driver_id,
+                                "ride_id": ride_id,
+                                "lat": lat,
+                                "lng": lng,
+                                "heading": heading,
+                                "speed": speed,
+                                "accuracy": accuracy,
+                                "captured_at": captured_at.isoformat(),
+                            },
+                            f"rider_{ride['rider_id']}",
+                            durable=False,
+                        )
+            except Exception:
+                logger.error(
+                    "location-batch v2: rider delivery failed for driver_id=%s ride_id=%s",
+                    driver_id,
+                    ride_id,
+                    exc_info=True,
+                )
 
     if is_online:
         await _deps.mark_present(driver_id)
@@ -404,9 +443,10 @@ async def _persist_v2_location_batch(
         raise HTTPException(status_code=503, detail="Location persistence unavailable") from exc
 
     rejected_sequences = {rejection.sequence_number for rejection in result.ack.rejected}
-    latest = next(
-        (point for point in reversed(request.points) if point.sequence_number not in rejected_sequences),
-        None,
+    latest = max(
+        (point for point in request.points if point.sequence_number not in rejected_sequences),
+        key=lambda point: parse_iso_utc(point.captured_at.isoformat()),
+        default=None,
     )
     lat = lng = None
     if latest is not None:
@@ -440,7 +480,7 @@ async def _persist_v2_location_batch(
             latest.accuracy,
             latest.mocked,
             bool(driver.get("is_online")),
-            latest.captured_at,
+            parse_iso_utc(latest.captured_at.isoformat()),
         )
     elif driver.get("is_online"):
         background_tasks.add_task(_deps.mark_present, driver["id"])

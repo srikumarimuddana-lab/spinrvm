@@ -104,3 +104,15 @@ dark behind the same delivery flag; migration 427 adds its settings column and
 admin write allowlist. Rollback: set flag false, allow 60s cache expiry. No schema
 migration or flag activation executed against Supabase. Additive schema tested by
 inspection and admin settings drift guard, not a live migration run.
+
+Headless sender now captures first, then independently uploads the newest trusted
+recent fix to location-live while draining history. Both fetches use a 10s abort
+deadline; failures retain the durable outbox and the next native fix retries live
+position. Alternative: reuse legacy location-batch; rejected because it also
+persists breadcrumbs and would duplicate the v2 recording contract.
+Files: backgroundLocation.ts, its actual-task regression suite, this log.
+Risk: one additional HTTP request per native callback; deploy backend before app.
+Existing access-token policy is unchanged: an expired token defers uploads until
+the foreground renews it. Long screen-lock testing across token expiry is REQUIRED;
+this patch does not claim uninterrupted live delivery across that existing limit.
+Rollback: disable backend flag for live delivery; revert app update for sender.

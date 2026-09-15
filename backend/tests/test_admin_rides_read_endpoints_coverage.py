@@ -716,6 +716,72 @@ class TestAdminExportRidesFiltered:
 
 
 class TestAdminExportDrivers:
+    @pytest.mark.parametrize("show_pii,expected", [(False, "******1234"), (True, "SKTEST1234")])
+    def test_license_export_respects_pii_choice(self, client, as_super_admin, show_pii, expected):
+        async def rows(table, *args, **kwargs):
+            return [{"id": "driver-test", "license_number": "vault-token"}] if table == "drivers" else []
+
+        async def decrypt(*args):
+            if show_pii:
+                assert audit.await_count == 1
+            return "SKTEST1234"
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=[])),
+            patch("db_supabase.insert_one", AsyncMock(return_value={"id": "audit-test"})) as audit,
+            patch("routes.drivers._vault_decrypt", AsyncMock(side_effect=decrypt)),
+        ):
+            response = client.get("/api/admin/export/drivers", params={"show_pii": str(show_pii).lower()})
+        assert response.status_code == 200
+        assert response.json()["drivers"][0]["license_no"] == expected
+        if show_pii:
+            assert response.headers["cache-control"] == "no-store"
+            assert audit.call_args.args[1]["details"]["license_full_included"] == 1
+        assert "SKTEST1234" not in str(audit.call_args_list)
+        assert "vault-token" not in response.text
+
+    @pytest.mark.parametrize("result", [None, "vault-token", RuntimeError("decrypt failed")])
+    def test_full_license_export_never_returns_failed_decryption(self, client, as_super_admin, result):
+        async def rows(table, *args, **kwargs):
+            return [{"id": "driver-test", "license_number": "vault-token"}] if table == "drivers" else []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=[])),
+            patch("db_supabase.insert_one", AsyncMock(return_value={"id": "audit-test"})),
+            patch(
+                "routes.drivers._vault_decrypt",
+                AsyncMock(
+                    side_effect=result if isinstance(result, Exception) else None,
+                    return_value=result,
+                ),
+            ),
+        ):
+            response = client.get("/api/admin/export/drivers?show_pii=true")
+        assert response.status_code == 200
+        assert response.json()["drivers"][0]["license_no"] is None
+        assert "vault-token" not in response.text
+
+    def test_full_license_export_denies_regular_admin_before_db_read(self, client, app_fixture):
+        from dependencies import get_admin_user
+
+        app_fixture.dependency_overrides[get_admin_user] = lambda: {**_SUPER_ADMIN, "role": "admin"}
+        with patch("db_supabase.get_rows", AsyncMock()) as rows:
+            response = client.get("/api/admin/export/drivers?show_pii=true")
+        assert response.status_code == 403
+        rows.assert_not_awaited()
+
+    @pytest.mark.parametrize("failure", [None, RuntimeError("audit unavailable")])
+    def test_full_license_export_stops_if_intent_audit_fails(self, client, as_super_admin, failure):
+        with (
+            patch("db_supabase.insert_one", AsyncMock(side_effect=failure, return_value=None)),
+            patch("routes.drivers._vault_decrypt", AsyncMock()) as decrypt,
+        ):
+            response = client.get("/api/admin/export/drivers?show_pii=true")
+        assert response.status_code == 503
+        decrypt.assert_not_awaited()
+
     @pytest.mark.parametrize(
         "query,expected",
         [

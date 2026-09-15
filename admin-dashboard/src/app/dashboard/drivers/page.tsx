@@ -730,7 +730,8 @@ export default function DriversPage() {
     const handleExport = async () => {
         try {
             // A click can arrive before the list's search debounce completes.
-            const exportFilters = { ...driverListFilters };
+            const exportFullLicense = showPii && isSuperAdmin;
+            const exportFilters = { ...driverListFilters, show_pii: exportFullLicense };
             if (search.trim()) exportFilters.search = search.trim();
             else delete exportFilters.search;
             const res = await exportDrivers(exportFilters);
@@ -746,7 +747,7 @@ export default function DriversPage() {
                 { key: "vehicle_year", label: "Vehicle Year" }, { key: "vehicle_color", label: "Vehicle Color" },
                 { key: "vehicle_type", label: "Vehicle Type" }, { key: "license_plate", label: "License Plate" },
                 { key: "vehicle_vin", label: "VIN (last 4)" },
-                { key: "license_no", label: "License No (last 4)" }, { key: "license_class", label: "License Class" },
+                { key: "license_no", label: exportFullLicense ? "License No" : "License No (last 4)" }, { key: "license_class", label: "License Class" },
                 { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" },
                 { key: "total_earnings", label: "Total Earnings" }, { key: "acceptance_rate", label: "Acceptance Rate" },
                 { key: "license_expiry", label: "License Expiry" }, { key: "insurance_expiry", label: "Insurance Expiry" },

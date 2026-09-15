@@ -125,7 +125,7 @@ export const overrideDriverStatus = (driverId: string, status: string, reason?: 
     });
 
 export const exportDrivers = (
-    opts: Omit<NonNullable<Parameters<typeof getDrivers>[0]>, "limit" | "offset"> = {},
+    opts: Omit<NonNullable<Parameters<typeof getDrivers>[0]>, "limit" | "offset"> & { show_pii?: boolean } = {},
 ) => {
     const sp = new URLSearchParams();
     for (const [key, value] of Object.entries(opts)) {

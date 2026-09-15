@@ -47,3 +47,23 @@ native GPS, OEM battery behavior and real rides remain unverified.
 Verification: 26 targeted backend tests passed (fanout + location-batch); the
 new suite failed on missing fanout before the fix. Independent reviewer caught
 naive/aware timestamp mixing; normalization and regression now pass. Ruff clean.
+
+## Driver resume marker
+
+Root cause: refreshLocation updated React coordinates but CarMarker ignores props
+after its fix feed is seeded. A timer repeatedly stamped an old position as new,
+making genuine movement during backgrounding appear implausibly fast on resume.
+Fix: feed real recent resume measurements with capture time and existing integrity/
+accuracy gates; remove fabricated fixes. Failed GPS cannot mark an old cache healthy.
+Alternative: remount CarMarker on every resume; feeding the existing channel avoids
+resetting map animation and keeps the raw capture timestamp contract.
+Consumers: dashboard hook is used by driver/(tabs)/index.tsx; both forked CarMarkers
+already hold after capped extrapolation (shared markerPlayback), neither is edited.
+Risk/UX: standstill now uses the existing 1.5s extrapolation cap then holds; physical
+stop/resume animation needs device validation. No layout or new copy changes.
+Files: useDriverDashboard.ts (producer), its socketLifecycle test (actual hook), this log.
+Before: `setLocation(loc)` / cached fix plus `Date.now()` heartbeat.
+After: `markerFixFeed.emit({...fix, timestampMs: loc.timestamp})` / no fake fixes.
+Rollback: revert app update; isolated producer repair has no data migration or live
+money side effects. 11 hook tests pass; 3 new regressions failed before the fix.
+Native APIs mocked; no production Android build or visual regression tooling.

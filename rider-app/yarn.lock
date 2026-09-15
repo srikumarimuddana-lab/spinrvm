@@ -3613,10 +3613,10 @@
 "@spinr/shared@file:../shared":
   version "0.1.0"
 
-"@stripe/stripe-react-native@0.75.0":
-  version "0.75.0"
-  resolved "https://registry.yarnpkg.com/@stripe/stripe-react-native/-/stripe-react-native-0.75.0.tgz#64a1e199557172a285a0804d54e2b9587ff5503e"
-  integrity sha512-F0yRHnpj3QVX87aZllhW1UQwzRjpisdM77QFAVZZ2ccpR/W/qrvvD1XPVUmzYoFxCaUAP6/CoqLWwaPJe7zV6g==
+"@stripe/stripe-react-native@0.76.0":
+  version "0.76.0"
+  resolved "https://registry.yarnpkg.com/@stripe/stripe-react-native/-/stripe-react-native-0.76.0.tgz#b4973e14e749fad5ed54d84add177f337ec9025d"
+  integrity sha512-D1ZjQ1XlTYdLWnfSlKw3X2I3VshrMUpNhxxffOzg95Pwn6v/1YA0UzVYTPCbrJ7E1npHLaR6qdyTbIhfpQs43A==
 
 "@supabase/auth-js@2.115.0":
   version "2.115.0"

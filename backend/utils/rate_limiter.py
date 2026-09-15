@@ -749,13 +749,8 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
             "limit": limit_amount,
-            # spinr.ca is the registered Spinr domain; this previously read
-            # spinr.app, which does not resolve and is not registered to Spinr.
-            # The page itself is not live yet — see ACTION_ITEMS.md and
-            # docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md. The key
-            # stays populated because tests/test_rate_limit_response_shape.py
-            # pins its presence as a crawlable pointer to the runbook.
-            "documentation_url": "https://spinr.ca/docs/rate-limits",
+            # Link to the published runbook; spinr.ca has no /docs/rate-limits page.
+            "documentation_url": "https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/rate-limits.md",
         },
         headers=headers,
     )

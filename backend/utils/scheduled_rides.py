@@ -26,12 +26,14 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
+    from .scheduled_ride_config import ScheduledRideConfig
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager  # type: ignore[no-redef]
+    from utils.scheduled_ride_config import ScheduledRideConfig
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx  # type: ignore[no-redef]
 
@@ -227,6 +229,7 @@ async def _maybe_nudge_nearby_drivers(ride: dict) -> None:
                 "Scheduled ride coming up nearby",
                 "A rider has a pickup scheduled in your area within the hour. Stay online for first chance at it.",
                 data={"type": "scheduled_ride_nudge", "ride_id": ride_id},
+                target_app="driver",
             )
         except Exception as push_err:
             logger.debug(f"scheduled dispatch: driver-nudge push failed for {ride_id} -> {driver_user_id}: {push_err}")
@@ -320,7 +323,7 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
             rider_id=ride.get("rider_id"),
             estimated_fare=Decimal(str(grand_total)),
             ride_type="standard",
-            pickup_time=datetime.now(timezone.utc),
+            pickup_time=parse_iso_utc(ride.get("scheduled_time")) or datetime.now(timezone.utc),
         )
     except Exception as policy_err:
         logger.error(
@@ -596,7 +599,7 @@ async def _dispatch_scheduled_ride(ride: dict):
             try:
                 await send_push_notification(
                     rider_id,
-                    "Your scheduled ride is starting!",
+                    "Finding your scheduled ride",
                     f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
                     data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
                     target_app="rider",
@@ -644,13 +647,17 @@ async def _send_reminder(ride: dict):
 
         if rider_id and should_push:
             try:
-                await send_push_notification(
+                delivered = await send_push_notification(
                     rider_id,
-                    "Ride reminder - 10 minutes",
-                    f"Your ride to {ride.get('dropoff_address', 'your destination')} is scheduled soon. A driver will be assigned shortly.",
+                    "Scheduled ride reminder",
+                    "Your scheduled pickup is coming up. Open Spinr to check your driver and ride status.",
                     data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
-                    target_app="rider",
+                    target_app="rider", report_suppression=True,
                 )
+                if delivered is False:
+                    await redis_delete(dedupe_key)
+                    logger.error("Scheduled rider reminder delivery failed for %s; will retry", ride_id)
+                    return
             except Exception:
                 try:
                     await redis_delete(dedupe_key)
@@ -667,6 +674,44 @@ async def _send_reminder(ride: dict):
 
     except Exception as e:
         logger.error(f"Failed to send reminder for ride {ride_id}: {e}", exc_info=True)
+
+
+async def _send_driver_reminder(ride: dict) -> None:
+    """One accepted-driver reminder per assignment; retry transient delivery failures."""
+    ride_id, driver_id = ride["id"], ride.get("driver_id")
+    if not driver_id or ride.get("scheduled_driver_reminder_driver_id") == driver_id:
+        return
+    key = f"spinr:sched_driver_reminder:{ride_id}:{driver_id}"
+    try:
+        current = await db.find_one("rides", {"id": ride_id})
+        if not current or current.get("driver_id") != driver_id or current.get("status") not in ("driver_accepted", "driver_arrived"):
+            return
+        driver = await db.get_driver_by_id(driver_id)
+        if not driver or not driver.get("user_id"):
+            logger.error("Scheduled reminder cannot resolve driver for ride %s", ride_id)
+            return
+        if not await redis_set_nx(key, "1", ttl=7200):
+            return
+        try:
+            delivered = await send_push_notification(
+                driver["user_id"], "Scheduled pickup coming up",
+                "Your accepted scheduled pickup is coming up. Open Spinr to check the pickup time and directions.",
+                data={"type": "scheduled_driver_reminder", "ride_id": ride_id,
+                      "scheduled_time": str(current.get("scheduled_time") or "")},
+                target_app="driver", report_suppression=True,
+            )
+            if delivered is False:
+                await redis_delete(key)
+                logger.error("Scheduled driver reminder delivery failed for ride %s; will retry", ride_id)
+                return
+        except Exception:
+            await redis_delete(key)
+            raise
+        await db.update_one("rides", {"id": ride_id, "driver_id": driver_id,
+                            "status": {"$in": ["driver_accepted", "driver_arrived"]}},
+                            {"$set": {"scheduled_driver_reminder_driver_id": driver_id}})
+    except Exception:
+        logger.error("Scheduled driver reminder failed for ride %s", ride_id, exc_info=True)
 
 
 async def check_scheduled_rides() -> Optional[bool]:
@@ -714,7 +759,7 @@ async def check_scheduled_rides() -> Optional[bool]:
 
     try:
         now = datetime.now(timezone.utc)
-        ten_min_from_now = now + timedelta(minutes=10)
+        reminder_window_end = now + timedelta(minutes=60)
         nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
 
         try:
@@ -732,7 +777,8 @@ async def check_scheduled_rides() -> Optional[bool]:
                 order="scheduled_time",
                 columns=(
                     "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
-                    "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
+                    "pickup_lat,pickup_lng,payment_method,corporate_account_id,corporate_member_id,grand_total,total_fare,"
+                    "status,driver_id,service_area_id,scheduled_driver_reminder_driver_id"
                 ),
             )
         except Exception as e:
@@ -750,7 +796,30 @@ async def check_scheduled_rides() -> Optional[bool]:
             )
             _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
 
+        try:
+            # Separate active reminders from pending dispatch so neither scan crowds out the other.
+            active = await db.get_rows("rides", {
+                "is_scheduled": True,
+                "status": {"$in": ["searching", "driver_assigned", "driver_accepted", "driver_arrived"]},
+                "scheduled_time": {"$gte": now.isoformat(), "$lte": reminder_window_end.isoformat()},
+            }, limit=_SCHEDULED_RIDES_TICK_LIMIT, order="scheduled_time")
+            by_id = {r["id"]: r for r in scheduled}
+            by_id.update({r["id"]: r for r in active if r.get("status") in
+                          ("searching", "driver_assigned", "driver_accepted", "driver_arrived")})
+            scheduled = list(by_id.values())
+            area_ids = sorted({r["service_area_id"] for r in scheduled if r.get("service_area_id")})
+            areas = await db.get_rows("service_areas", {"id": {"$in": area_ids}},
+                                      columns="id,scheduled_ride_config", limit=len(area_ids)) if area_ids else []
+            configs = {a["id"]: ScheduledRideConfig.model_validate(a.get("scheduled_ride_config") or {}) for a in areas}
+        except Exception:
+            logger.error("Scheduled ride area/reminder lookup failed; retrying next tick", exc_info=True)
+            return False
+
         for ride in scheduled:
+            status = ride.get("status", "scheduled")
+            if status not in ("scheduled", "searching", "driver_assigned", "driver_accepted", "driver_arrived"):
+                continue
+            config = configs.get(ride.get("service_area_id"), ScheduledRideConfig())
             scheduled_time_str = ride.get("scheduled_time")
             if not scheduled_time_str:
                 continue
@@ -762,18 +831,23 @@ async def check_scheduled_rides() -> Optional[bool]:
             already_dispatched = ride.get("scheduled_dispatched", False)
             already_reminded = ride.get("reminder_sent", False)
 
-            # Send reminder 10 minutes before (if not already sent)
-            if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
+            rider_lead = config.rider_reminder_minutes if config.enabled else 10
+            if not already_reminded and now <= scheduled_time <= now + timedelta(minutes=rider_lead):
                 await _send_reminder(ride)
+
+            if (config.enabled and status in ("driver_accepted", "driver_arrived") and ride.get("driver_id")
+                    and now <= scheduled_time <= now + timedelta(minutes=config.driver_reminder_minutes)):
+                await _send_driver_reminder(ride)
 
             # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
             # Best-effort and self-deduped (Redis NX inside the function) — safe
             # to call every tick within the window.
-            if now <= scheduled_time and scheduled_time <= nudge_window_end:
+            if status == "scheduled" and now <= scheduled_time <= nudge_window_end:
                 await _maybe_nudge_nearby_drivers(ride)
 
             # Dispatch when it's time (or past time)
-            if not already_dispatched and now >= scheduled_time:
+            dispatch_lead = config.dispatch_lead_minutes if config.enabled else 0
+            if status == "scheduled" and not already_dispatched and now >= scheduled_time - timedelta(minutes=dispatch_lead):
                 await _dispatch_scheduled_ride(ride)
 
         return True

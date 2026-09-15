@@ -26,6 +26,13 @@ After: `license_no = decrypted if show_pii else mask(decrypted)` after super-adm
 
 ## Verification and rollout
 
-Restored the previously reviewed implementation after workspace replacement. Prior workspace: 28 endpoint tests passed, with missing permission/opt-in/audit behavior demonstrated by failing tests before implementation. Fresh verification and frontend results will be recorded before publication.
+Restored the previously reviewed implementation after workspace replacement. Fresh verification:
+
+- 28 backend export endpoint tests passed, including full/masked mode, regular-admin denial, audit failure/absent-row failure, decrypt failure, selected filters and pagination.
+- 24 client/page-component/CSV tests passed. All three page regressions failed before wiring the option. Backend missing opt-in/authorization/audit behavior was demonstrated by failing tests in the prior workspace.
+- `npm run build` passed after the final frontend changes. Targeted ESLint: zero errors, 13 existing warnings. Ruff and `git diff --check` passed.
+- Independent backend security and frontend reviews found no remaining blockers. Fixed safe logging was added for audit failures; no licence values enter logs.
+- Dependencies were copied from an existing same-repository checkout for local tests/build, with a test-only socksio dependency added outside the repository. No manifests or lockfiles changed by this feature.
+- Not verified: authenticated production download, live Vault decryption, browser/visual regression or full application suites. Page tests stub the table and verify the real page callback; they do not prove live browser behavior. Existing dashboard visual regression tooling remains applicable; layout is unchanged.
 
 Deploy backend before dashboard. An old backend ignores show_pii and continues masking. No merge/deployment or live PII export is part of this PR. The earlier live filtering report remains separate and has not been verified in the user's browser.

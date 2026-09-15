@@ -275,20 +275,24 @@ channel reaches `res/raw/ride_offer.mp3` (`plugins/withRideOfferSound`). A silen
 silenced ride offer is a dispatch regression, not an app-size win. Don't turn it on
 casually; if you do, verify the ride-offer sound on a device first.
 
-### Keep rules
+### Keep / dontwarn rules
 
-Only one, in `driver-app`: `-keep class
-com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }`, required by
-`@iternio/react-native-auto-play` >= 0.5.3 because Nitro resolves hybrid objects by class
-name. It sat inert from the day it was added until 2026-09-14 — **a minified build has
-never actually exercised it.**
+Two, both added with a real failure (or a documented vendor requirement) to point at:
+
+- `driver-app`: `-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }`,
+  required by `@iternio/react-native-auto-play` >= 0.5.3 because Nitro resolves hybrid
+  objects by class name.
+- `rider-app`: `-dontwarn com.stripe.android.pushProvisioning.**`. Stripe Issuing tap-to-
+  add is optional and not on our classpath; `@stripe/stripe-react-native` still references
+  those classes. The first minified rider production build (EAS `04071f79`, 2026-09-15)
+  failed `:app:minifyReleaseWithR8` on `PushProvisioningActivity$f` and
+  `PushProvisioningActivityStarter*`.
 
 Everything else relies on the consumer ProGuard rules that AARs ship (React Native core,
 Expo modules, Firebase, Play Services, Stripe, OkHttp, Notifee), which R8 applies
-automatically. No speculative keep rules were added: over-keeping defeats the optimization
-and hides which rule is actually load-bearing. **Add rules with a failure to point at**,
-not pre-emptively. `extraProguardRules` takes a single string, so additional rules go into
-the same string separated by `\n`.
+automatically. **Add rules with a failure to point at**, not pre-emptively.
+`extraProguardRules` takes a single string, so additional rules go into the same string
+separated by `\n`.
 
 ### Known gap with R8 on production
 

@@ -238,6 +238,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 // both apps on code-only minification keeps them comparable.
                 enableMinifyInReleaseBuilds: ANDROID_MINIFY,
                 enableShrinkResourcesInReleaseBuilds: false,
+                // Stripe Issuing "add card to Google Wallet" is an optional
+                // native module. @stripe/stripe-react-native still *references*
+                // com.stripe.android.pushProvisioning, but that AAR is not on
+                // the classpath (we don't ship Issuing). Unminified release
+                // builds ignore the missing classes; R8 treats them as errors.
+                // First minified production build (EAS 04071f79, 2026-09-15)
+                // failed :app:minifyReleaseWithR8 on PushProvisioningActivity$f
+                // and PushProvisioningActivityStarter*. -dontwarn is the
+                // documented fix (stripe-react-native#1489/#1700). Do not add
+                // the Issuing AAR just to satisfy R8.
+                extraProguardRules:
+                    '-dontwarn com.stripe.android.pushProvisioning.**',
             },
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).
             ios: {

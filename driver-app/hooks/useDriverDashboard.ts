@@ -401,6 +401,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // eslint-disable-next-line react-hooks/purity
   const markerFixFeedRef = useRef(createFixFeed());
   const locationRefreshGenerationRef = useRef(0);
+  const [locationResumeEpoch, setLocationResumeEpoch] = useState(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
@@ -632,10 +633,45 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     refreshLocation(true);
     const sub = AppState.addEventListener('change', (next) => {
       // Skip cache on resume — we want a fresh fix, not yesterday's.
-      if (next === 'active') refreshLocation(false);
+      if (next === 'active') {
+        setLocationResumeEpoch(value => value + 1);
+        refreshLocation(false);
+      }
     });
     return () => { locationRefreshGenerationRef.current++; sub.remove(); };
   }, [refreshLocation]);
+
+  // Native registration belongs to the online lifecycle, not profile hydration.
+  // Resume can repair a missing task without sending the driver to Settings again.
+  useEffect(() => {
+    if (!isOnline || !user?.id) return;
+    let cancelled = false;
+    const accountId = user.id;
+    const canStart = () => !cancelled && isOnlineRef.current && !isTogglingRef.current &&
+      AppState.currentState === 'active' && useAuthStore.getState().user?.id === accountId;
+    const ensureTracking = async () => {
+      if (!canStart()) return;
+      try {
+        const permission = await Location.getBackgroundPermissionsAsync();
+        if (!canStart()) return;
+        if (permission.status !== 'granted') {
+          setWsError('Allow background location in Settings to keep your ride location updated.');
+          return;
+        }
+        const cadence = TRACKED_TRIP_PHASES.includes(useDriverStore.getState().rideState) ? TRIP_CADENCE : IDLE_CADENCE;
+        const started = await startBackgroundLocation(cadence, canStart);
+        if (!started && canStart()) setWsError('Background location unavailable. Check location permissions in Settings.');
+      } catch (error) {
+        if (!canStart()) return;
+        captureException(error instanceof Error ? error : new Error('Background tracking restart failed'),
+          { domain: 'drivers', location: 'resume_background_tracking' });
+        setWsError('Background location unavailable. Check location permissions in Settings.');
+      }
+    };
+    void ensureTracking();
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') void ensureTracking(); });
+    return () => { cancelled = true; sub.remove(); };
+  }, [isOnline, user?.id, rideState]);
 
   // ─── Durable trip-location upload ─────────────────────────────────
   // The recorder owns the only durable queue. This transport is deliberately
@@ -746,6 +782,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
     const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;
+    let cancelled = false;
     // Re-tune the *background* task to match the phase too. The foreground
     // watchPositionAsync below only fires while the app is foregrounded, so a
     // trip driven with the app backgrounded (driver in Maps / screen locked)
@@ -784,6 +821,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             distanceInterval: config.distanceInterval,
           },
           (loc) => {
+          if (cancelled) return;
           // CAPTURE BEFORE FILTER (SPR-PE7TTB): durable trip capture happens
           // first and unconditionally — a client-side integrity drop is route
           // history lost forever. The verdict below gates DISPLAY surfaces
@@ -914,20 +952,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         );
       } catch (e) {
+        if (cancelled) return;
         console.error('[Location] watchPositionAsync failed — driver is GPS-blind:', e);
         setWsError('Location unavailable. Check location permissions in Settings.');
         return;
       }
+      if (cancelled) { sub.remove(); return; }
       locationSubRef.current = sub;
     })();
 
     return () => {
+      cancelled = true;
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
-  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
+  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch, locationResumeEpoch]);
 
   // Period-1 idle durable recording: while online with no trip, keep ONE idle
   // outbox session open (the recorder throttles fixes to ≥30s/60s or 100m).
@@ -2026,11 +2067,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // stays entirely backend-owned.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOnline(!!serverOnline);
-    if (serverOnline) {
-      // Re-arm background tracking for a resumed-online session. Idempotent:
-      // startBackgroundLocation no-ops when the task is already running.
-      startBackgroundLocation().catch(() => {});
-    }
   }, [driverData?.is_online, isOnline]);
 
   // ─── Fetch earnings when online ─────────────────────────────────

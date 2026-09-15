@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import { ensureFreshToken } from '@shared/api/client';
 import { useDriverDashboard } from '../useDriverDashboard';
 import * as Location from 'expo-location';
+import { startBackgroundLocation, TRIP_CADENCE, IDLE_CADENCE } from '../../utils/backgroundLocation';
 
 const mockAppListeners = new Set<(state: string) => void>();
 const mockNetListeners = new Set<(state: object) => void>();
@@ -54,14 +55,14 @@ jest.mock('../useRideOfferSound', () => {
 });
 jest.mock('../../services/notifeeService', () => ({ dismissRideOfferNotification: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../../services/pendingRideOffer', () => ({ consumePendingRideOffer: jest.fn().mockResolvedValue(null) }));
-jest.mock('../../utils/backgroundLocation', () => Object.fromEntries([
+jest.mock('../../utils/backgroundLocation', () => ({ ...Object.fromEntries([
   'startBackgroundLocation', 'stopBackgroundLocation', 'startGeofenceRecovery', 'stopGeofenceRecovery',
   'setBackgroundTripActive', 'updateBackgroundLocationCadence', 'recoverTripLocation',
-].map(name => [name, jest.fn().mockResolvedValue(undefined)])));
+].map(name => [name, jest.fn().mockResolvedValue(true)])), TRIP_CADENCE: { timeInterval: 4000 }, IDLE_CADENCE: { timeInterval: 30000 } }));
 jest.mock('../../utils/sensorIntegrity', () => ({ startSensorMonitoring: jest.fn(), stopSensorMonitoring: jest.fn(), checkMovementConsistency: () => ({ consistent: true }) }));
 jest.mock('../../utils/deviceIntegrity', () => ({ attestDeviceIntegrity: jest.fn() }));
 jest.mock('../../utils/tripLocationRecorder', () => ({ tripLocationRecorder: Object.fromEntries([
-  'flushPending', 'stopIdleSession', 'setIdleRecordingEnabled', 'startIdleSession',
+  'flushPending', 'stopIdleSession', 'setIdleRecordingEnabled', 'startIdleSession', 'startRide',
 ].map(name => [name, jest.fn().mockResolvedValue(undefined)])) }));
 jest.mock('expo-location', () => ({
   Accuracy: { High: 4, Balanced: 3 },
@@ -70,6 +71,7 @@ jest.mock('expo-location', () => ({
   hasServicesEnabledAsync: jest.fn().mockResolvedValue(true),
   getLastKnownPositionAsync: jest.fn().mockResolvedValue(null),
   getCurrentPositionAsync: jest.fn(),
+  getBackgroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
   watchPositionAsync: jest.fn().mockResolvedValue({ remove: jest.fn() }),
 }), { virtual: true });
 
@@ -111,6 +113,10 @@ beforeEach(() => {
   (ensureFreshToken as jest.Mock).mockReset().mockResolvedValue(undefined);
   (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied' });
   (Location.getLastKnownPositionAsync as jest.Mock).mockResolvedValue(null);
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockReset().mockResolvedValue({ status: 'granted' });
+  mockAuth.driver.is_online = true;
+  mockDriver.rideState = 'idle';
+  mockDriver.activeRide = null;
 });
 afterEach(async () => {
   await act(async () => { mounted?.unmount(); }); mounted = undefined;
@@ -231,4 +237,49 @@ it('does not label a stale last-known position healthy after resume failure', as
   (Location.getLastKnownPositionAsync as jest.Mock).mockResolvedValue(fix(Date.now() - 120_000));
   await mount();
   expect(dashboard.locationStatus).toBe('unavailable');
+});
+
+it('ensures native tracking for an already-online mount and foreground resume', async () => {
+  await mount();
+  expect(startBackgroundLocation).toHaveBeenCalledWith(IDLE_CADENCE, expect.any(Function));
+  (startBackgroundLocation as jest.Mock).mockClear();
+  await appState('background'); await appState('active');
+  expect(startBackgroundLocation).toHaveBeenCalledTimes(1);
+});
+
+it('restores active-trip native tracking at trip cadence', async () => {
+  mockDriver.rideState = 'trip_in_progress';
+  mockDriver.activeRide = { ride: { id: 'ride-1' } } as any;
+  await mount();
+  expect(startBackgroundLocation).toHaveBeenCalledWith(TRIP_CADENCE, expect.any(Function));
+});
+
+it('does not restart or prompt when offline or background permission is denied', async () => {
+  mockAuth.driver.is_online = false;
+  await mount(); await appState('background'); await appState('active');
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+  await act(async () => mounted!.unmount()); mounted = undefined;
+  mockAuth.driver.is_online = true;
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied' });
+  await mount(); await appState('background'); await appState('active');
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+});
+
+it('cancels recovery when permission lookup finishes after unmount', async () => {
+  let resolve!: (value: object) => void;
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockReturnValue(new Promise(done => { resolve = done; }));
+  await mount();
+  await act(async () => mounted!.unmount()); mounted = undefined;
+  await act(async () => resolve({ status: 'granted' }));
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+});
+
+it('replaces the foreground watcher on resume and removes a late subscription', async () => {
+  let resolve!: (value: object) => void;
+  const remove = jest.fn();
+  (Location.watchPositionAsync as jest.Mock).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  await mount(); await appState('background'); await appState('active');
+  expect(Location.watchPositionAsync).toHaveBeenCalledTimes(2);
+  await act(async () => resolve({ remove }));
+  expect(remove).toHaveBeenCalledTimes(1);
 });

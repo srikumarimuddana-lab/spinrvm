@@ -222,7 +222,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
-                targetSdkVersion: 35,
+                targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
                 // Code shrinking + obfuscation + optimization (R8). Without it
                 // Play Console's App optimization panel reports Optimization,

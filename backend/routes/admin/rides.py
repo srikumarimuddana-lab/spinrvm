@@ -3004,6 +3004,8 @@ async def admin_export_rides(
 
 @router.get("/export/drivers")
 async def admin_export_drivers(
+    response: Response,
+    show_pii: bool = False,
     limit: int = Query(_EXPORT_MAX_ROWS, ge=1, le=_EXPORT_MAX_ROWS),
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,
@@ -3024,8 +3026,34 @@ async def admin_export_drivers(
     sort_dir: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """Export drivers data. Writes an audit log entry (F-41)."""
+    """Export matching drivers; full licence numbers require super-admin opt-in."""
     import uuid  # noqa: PLC0415
+
+    response.headers["Cache-Control"] = "no-store"
+    if show_pii:
+        if (admin.get("role") or "").lower() != "super_admin":
+            raise HTTPException(status_code=403, detail="Full licence export requires super-admin access.")
+        # Persist intent before any read/decrypt. A failed audit must prevent
+        # a bulk government-ID disclosure; never put licence values in logs.
+        try:
+            audit_row = await db_supabase.insert_one(
+                "audit_logs",
+                {
+                    "id": str(uuid.uuid4()),
+                    "actor_id": admin["id"],
+                    "actor_role": admin.get("role"),
+                    "action": "export_driver_licenses_requested",
+                    "entity_type": "drivers",
+                    "entity_id": "export",
+                    "details": {"show_pii": True},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            if not audit_row:
+                raise RuntimeError("Export audit was not persisted")
+        except Exception:
+            logger.error("Driver licence export blocked: audit record unavailable")
+            raise HTTPException(status_code=503, detail="Could not record this export. Please try again.") from None
 
     _DRIVER_EXPORT_COLS = (
         "id,user_id,driver_code,first_name,last_name,phone,status,is_verified,"
@@ -3144,11 +3172,8 @@ async def admin_export_drivers(
                 _earn_err,
             )
 
-    # License number is encrypted PII (pgsodium vault). Per the admin's choice we
-    # export only a MASKED last-4 (e.g. ****1234) — the full number never leaves
-    # the server. Decrypt server-side (bounded by the run_sync thread pool), take
-    # last-4, discard the plaintext. _vault_decrypt returns the raw token on
-    # failure, so a result equal to the input means "unavailable" -> blank.
+    # Keep Vault encryption at rest. Only an explicit authorized export gets
+    # plaintext; a failed decrypt remains blank, never an encrypted token.
     import asyncio as _asyncio  # noqa: PLC0415
 
     try:
@@ -3156,7 +3181,7 @@ async def admin_export_drivers(
     except ImportError:
         from routes.drivers import _vault_decrypt  # type: ignore
 
-    async def _license_last4(driver_row: dict):
+    async def _license_export_value(driver_row: dict):
         tok = driver_row.get("license_number")
         if not tok:
             return None
@@ -3167,11 +3192,13 @@ async def admin_export_drivers(
         if not plain or plain == str(tok):
             return None
         s = str(plain).strip()
+        if show_pii:
+            return s or None
         return ("*" * max(len(s) - 4, 0)) + s[-4:] if len(s) > 4 else s
 
-    license_masked = await _asyncio.gather(*[_license_last4(d) for d in drivers], return_exceptions=True)
-    license_masked = [None if isinstance(m, BaseException) else m for m in license_masked]
-    _license_exported = sum(1 for m in license_masked if m)
+    license_values = await _asyncio.gather(*[_license_export_value(d) for d in drivers], return_exceptions=True)
+    license_values = [None if isinstance(m, BaseException) else m for m in license_values]
+    _license_exported = sum(1 for m in license_values if m)
 
     # Fleet-sized IN filters must be split to avoid proxy URL limits. Fetch
     # every subscription page, then select the newest row per driver: the
@@ -3240,8 +3267,8 @@ async def admin_export_drivers(
                 "license_plate": d.get("license_plate"),
                 # VIN is plaintext at rest but exported masked to last-4.
                 "vehicle_vin": _mask_vin(d.get("vehicle_vin")),
-                # License number stays masked to last-4 (full value never exported).
-                "license_no": license_masked[i],
+                # Full number only after explicit, audited super-admin opt-in.
+                "license_no": license_values[i],
                 "license_class": d.get("license_class"),
                 "rating": d.get("rating"),
                 "total_rides": d.get("total_rides"),
@@ -3286,7 +3313,12 @@ async def admin_export_drivers(
             "action": "export_drivers",
             "entity_type": "drivers",
             "entity_id": "export",
-            "details": {"row_count": len(out), "license_last4_included": _license_exported},
+            "details": {
+                "row_count": len(out),
+                "show_pii": show_pii,
+                "license_last4_included": 0 if show_pii else _license_exported,
+                "license_full_included": _license_exported if show_pii else 0,
+            },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

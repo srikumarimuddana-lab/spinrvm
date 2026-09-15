@@ -468,7 +468,11 @@ export default function RideRouteMap({
                     paths={suppressStraightFallback && staticPaths?.length === 0 ? [] : staticPaths}
                 />
             ) : (
-                <div ref={containerRef} className="absolute inset-0" />
+                <div
+                    ref={containerRef}
+                    className="h-full w-full"
+                    style={{ height: "100%", width: "100%" }}
+                />
             )}
             {/* Only while MapLibre is still failing over. Once the chain is
                 exhausted we hand off to StaticRouteMap, which draws the route

@@ -24,12 +24,24 @@ except ImportError:
 
 ADMIN = {"id": "admin-1", "role": "super_admin"}
 
+_SENTRY_MOD = sentry.__name__
 
-def _resp(status_code=200, payload=None, content=b"{}"):
+
+@pytest.fixture(autouse=True)
+def _no_cache():
+    with (
+        patch(f"{_SENTRY_MOD}.redis_get", AsyncMock(return_value=None)),
+        patch(f"{_SENTRY_MOD}.redis_set", AsyncMock()),
+    ):
+        yield
+
+
+def _resp(status_code=200, payload=None, content=b"{}", headers=None):
     r = MagicMock(spec=httpx.Response)
     r.status_code = status_code
     r.content = content
     r.json.return_value = payload if payload is not None else {}
+    r.headers = headers or {}
     return r
 
 
@@ -841,3 +853,150 @@ async def test_update_status_resolves_issue_and_writes_audit_row():
     assert a_args[2] == "sentry_issue"
     assert a_args[3] == "123"
     assert a_args[4] == {"status": "resolved", "surface": "backend", "project": "spinr-backend"}
+
+
+# ---------------------------------------------------------------------------
+# 429 retry in _sentry_request
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_sentry_request_retries_once_on_429():
+    """A 429 should be retried once after respecting Retry-After."""
+    r429 = _resp(429, headers={"Retry-After": "0.1"})
+    r200 = _resp(200, payload=[{"id": "1"}])
+    client = MagicMock()
+    client.request = AsyncMock(side_effect=[r429, r200])
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        out = await sentry._sentry_request(client, "GET", "/x/")
+    assert out.status_code == 200
+    assert client.request.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_sentry_request_429_gives_up_after_one_retry():
+    """Two consecutive 429s should raise a 502 rather than retrying forever."""
+    r429 = _resp(429, headers={"Retry-After": "0.1"})
+    client = MagicMock()
+    client.request = AsyncMock(return_value=r429)
+    with patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"):
+        with pytest.raises(HTTPException) as ei:
+            await sentry._sentry_request(client, "GET", "/x/")
+    assert ei.value.status_code == 502
+    assert "429" in ei.value.detail
+
+
+@pytest.mark.anyio
+async def test_sentry_request_429_caps_retry_after_at_10s():
+    """Unreasonably large Retry-After should be capped."""
+    r429 = _resp(429, headers={"Retry-After": "999"})
+    r200 = _resp(200, payload=[])
+    client = MagicMock()
+    client.request = AsyncMock(side_effect=[r429, r200])
+    with (
+        patch.object(sentry.settings, "SENTRY_API_TOKEN", "tok"),
+        patch.object(sentry.asyncio, "sleep", AsyncMock()) as sleep_mock,
+    ):
+        await sentry._sentry_request(client, "GET", "/x/")
+    sleep_mock.assert_awaited_once_with(10.0)
+
+
+# ---------------------------------------------------------------------------
+# Tag-mode staggered fan-out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_issues_tag_mode_staggers_requests():
+    """In tag mode the requests should be sequential, not parallel."""
+    call_order = []
+
+    async def _fake_fetch(client, surface, project, *, query, stats_period, limit):
+        call_order.append(surface)
+        return [{"id": f"i-{surface}", "last_seen": "2026-01-01T00:00:00Z"}]
+
+    shared = "crimson-smoke-7445"
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_shared_project", return_value=shared),
+        patch.object(sentry, "_per_surface_projects", return_value={}),
+        patch.object(sentry, "_tag_mode", return_value=True),
+        patch.object(sentry, "_fetch_project_issues", _fake_fetch),
+        patch.object(sentry.asyncio, "sleep", AsyncMock()) as sleep_mock,
+    ):
+        await _call_list_issues()
+    assert len(call_order) == 5
+    assert sleep_mock.await_count == 4
+
+
+# ---------------------------------------------------------------------------
+# Response caching
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_issues_returns_cached_response(_no_cache):
+    """A cache hit should return immediately without hitting Sentry."""
+    import json
+
+    cached_payload = {
+        "issues": [{"id": "cached-1", "last_seen": "2026-01-01T00:00:00Z"}],
+        "count": 1,
+        "surfaces": ["backend"],
+        "errors": [],
+        "partial": False,
+        "status": "unresolved",
+        "stats_period": "14d",
+        "per_project_limit": 25,
+        "truncated": False,
+    }
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch(f"{_SENTRY_MOD}.redis_get", AsyncMock(return_value=json.dumps(cached_payload))),
+        patch.object(sentry, "_fetch_project_issues", AsyncMock()) as fetch_mock,
+    ):
+        out = await _call_list_issues()
+    assert out["issues"][0]["id"] == "cached-1"
+    fetch_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_list_issues_caches_successful_response(_no_cache):
+    """Successful responses should be cached to Redis."""
+    import json
+
+    set_mock = AsyncMock()
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend"}),
+        patch.object(
+            sentry,
+            "_fetch_project_issues",
+            AsyncMock(return_value=[{"id": "i1", "last_seen": "2026-01-01T00:00:00Z"}]),
+        ),
+        patch(f"{_SENTRY_MOD}.redis_get", AsyncMock(return_value=None)),
+        patch(f"{_SENTRY_MOD}.redis_set", set_mock),
+    ):
+        await _call_list_issues()
+    set_mock.assert_awaited_once()
+    cached = json.loads(set_mock.call_args[0][1])
+    assert cached["count"] == 1
+    assert set_mock.call_args[1]["ttl"] == sentry._CACHE_TTL_SECONDS
+
+
+@pytest.mark.anyio
+async def test_list_issues_does_not_cache_on_partial_failure(_no_cache):
+    """Responses with errors should not be cached."""
+    set_mock = AsyncMock()
+    good = [{"id": "b1", "last_seen": "2026-01-02T00:00:00Z"}]
+    fetch = AsyncMock(side_effect=[good, HTTPException(status_code=404, detail="not found")])
+    with (
+        patch.object(sentry, "_is_configured", return_value=True),
+        patch.object(sentry, "_surface_projects", return_value={"backend": "spinr-backend", "rider-app": "typo-slug"}),
+        patch.object(sentry, "_fetch_project_issues", fetch),
+        patch(f"{_SENTRY_MOD}.redis_get", AsyncMock(return_value=None)),
+        patch(f"{_SENTRY_MOD}.redis_set", set_mock),
+    ):
+        out = await _call_list_issues()
+    assert out["partial"] is True
+    set_mock.assert_not_awaited()

@@ -48,7 +48,7 @@ JSON body when those are missing (see below).
   "message": "Too many requests. Please slow down and try again later.",
   "retry_after": 60,
   "limit": 3,
-  "documentation_url": "https://spinr.ca/docs/rate-limits"
+  "documentation_url": "https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/rate-limits.md"
 }
 ```
 

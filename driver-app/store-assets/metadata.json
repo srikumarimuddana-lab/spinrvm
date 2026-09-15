@@ -1,11 +1,11 @@
 {
-  "_comment": "App Store Connect + Google Play metadata for Spinr Driver. Fill in the values marked TODO before submitting. privacy_url is the ONLY URL here confirmed by the product owner (2026-09-14). TODO before submitting: support_url and marketing_url are both UNCONFIRMED -- each was carried over from the old https://spinr.app/* and only had its host corrected, so the paths are guesses, not verified pages. Apple and Google check these. These URLs were all on https://spinr.app until 2026-09-14, a domain that has never resolved and is not registered to Spinr. See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md. See docs/deploy/04-mobile-eas.md for submission steps.",
+  "_comment": "App Store Connect + Google Play metadata for Spinr Driver. Fill in the values marked TODO before submitting. Website routes checked against desktop_website and retrieved through web access on 2026-09-14: privacy_url (/legal/privacy), support_url (/help), and marketing_url (/ for rider; /drive for driver). Native deep-link association remains a separate deployment task. See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md and docs/deploy/04-mobile-eas.md.",
 
   "app_store_connect": {
     "name": "Spinr Driver",
     "subtitle": "Drive. Earn More. 0% Commission.",
     "privacy_url": "https://www.spinr.ca/legal/privacy",
-    "support_url": "https://www.spinr.ca/support",
+    "support_url": "https://www.spinr.ca/help",
     "marketing_url": "https://www.spinr.ca/drive",
     "apple_id": "TODO: numeric App Store Connect app ID for the driver app",
     "bundle_identifier": "com.spinr.driver",

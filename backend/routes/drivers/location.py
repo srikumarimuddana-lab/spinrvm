@@ -726,6 +726,74 @@ async def _guard_revoked_session(token_session_id: str | None) -> None:
         raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
 
 
+class LiveLocationRequest(BaseModel):
+    """Ephemeral position, independent of the durable history outbox."""
+
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    captured_at: datetime
+    heading: float | None = Field(default=None, allow_inf_nan=False)
+    speed: float | None = Field(default=None, allow_inf_nan=False)
+    accuracy: float | None = Field(default=None, allow_inf_nan=False)
+    mocked: bool = False
+
+    @model_validator(mode="after")
+    def _reject_missing_position(self):
+        if self.lat == 0 and self.lng == 0:
+            raise ValueError("A real position is required")
+        return self
+
+
+@router.post("/location-live")
+@location_update_limit
+async def update_live_location(
+    point: LiveLocationRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
+):
+    await _guard_revoked_session(token_session_id)
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
+        return {"accepted": False}
+    drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    if not drivers:
+        raise HTTPException(status_code=403, detail="Driver profile required")
+    driver = drivers[0]
+    if not driver.get("is_online"):
+        raise HTTPException(status_code=409, detail="Driver is not online")
+    captured_at = parse_iso_utc(point.captured_at.isoformat())
+    if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+        raise HTTPException(status_code=422, detail="A recent position is required")
+    # Assignment is server-owned; never trust a caller's ride or driver ID.
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "driver_id": driver["id"],
+            "status": {"$in": list(_V2_ACTIVE_RIDE_STATUSES)},
+        },
+        limit=1,
+    )
+    background_tasks.add_task(
+        _apply_v2_live_marker_update,
+        driver["id"],
+        rides[0]["id"] if rides else "",
+        point.lat,
+        point.lng,
+        point.heading,
+        point.speed,
+        point.accuracy,
+        point.mocked,
+        True,
+        captured_at,
+    )
+    return {"accepted": True}
+
+
 @router.post("/location-batch")
 @location_update_limit
 async def update_location_batch(

@@ -81,3 +81,26 @@ calls. No new task or service, no permission or fare change. Revert app update t
 roll back; ephemeral lifecycle guard only. Tests run the real start function with
 native APIs mocked, including a permission wait that finishes after going offline.
 Files: backgroundLocation.ts, backgroundLocation.test.ts, this log.
+
+## Service restore and idle live transport
+
+Startup now belongs to the online dashboard lifecycle (mount, phase and resume),
+not only profile hydration. Existing native arbiter/cadence retained; revoked
+background permission produces an actionable message without routine prompting.
+Resume replaces the foreground watcher; obsolete callbacks/subscriptions are removed.
+21 hook/hydration tests and 58 background-service tests pass with native boundaries
+mocked. No Android/iOS production build performed; there is no mobile visual gate.
+The obsolete hydration source assertion was replaced by actual-hook coverage.
+
+Separate root cause: when idle history is disabled, headless fixes produce no
+durable batch, and foreground WS is closed while backgrounded. New rate-limited
+`POST /drivers/location-live` accepts a recent ephemeral fix only from an online,
+authenticated driver, checks session revocation, derives assignment server-side,
+and reuses integrity-gated marker/presence/fanout. No history insert or fare change.
+Alternative: enable idle history globally; rejected because history consent/rollout
+must not control live dispatch location. Capture and live delivery stay independent.
+Backend changes: location.py, test_live_location.py, this log. Added endpoint is
+dark behind the same delivery flag; migration 427 adds its settings column and
+admin write allowlist. Rollback: set flag false, allow 60s cache expiry. No schema
+migration or flag activation executed against Supabase. Additive schema tested by
+inspection and admin settings drift guard, not a live migration run.

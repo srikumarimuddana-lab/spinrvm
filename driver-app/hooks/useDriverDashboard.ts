@@ -371,7 +371,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // returns) would each construct a real WebSocket; the loser is orphaned but
   // never closed, stays authenticated, and its onmessage still dispatches — so
   // ride offers get processed twice. This mutex makes the connect path reentrant-safe.
-  const wsConnectingRef = useRef(false);
+  const wsConnectingRef = useRef<object | null>(null);
+  const wsLifecycleActiveRef = useRef(false);
   // Wall-clock floor between connectivity-triggered reconnects. Without it a
   // flapping connection (tunnel edge, cell handoff) fires NetInfo repeatedly,
   // and each tick zeroing reconnectAttemptRef would pin every retry at tier 0
@@ -1212,7 +1213,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // handleWSMessage] and recreated on unrelated store changes — the mount
   // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
   // leaving the banner stuck on "Reconnecting…".
-  const openWebSocket = useCallback(async () => {
+  const openWebSocket = useCallback(async (attempt: object) => {
     // Ensure the access token is fresh before opening the socket. Without
     // this, a driver returning from a long background period opens a WS
     // with an expired token — the server rejects auth and the socket
@@ -1229,6 +1230,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
     }
 
+    if (wsConnectingRef.current !== attempt || !wsLifecycleActiveRef.current ||
+        AppState.currentState === 'background') return;
     const currentUser = userRef.current;
     if (!isOnlineRef.current || !currentUser) return;
 
@@ -1291,6 +1294,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }, AUTH_WATCHDOG_MS);
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
         type: 'auth',
@@ -1304,6 +1308,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       try {
         let data = JSON.parse(event.data);
         if (data && typeof data === 'object' && 'seq' in data && 'data' in data) {
@@ -1398,10 +1403,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // onclose fires after the reset and creates a second socket, which
       // then has onclose fire again — producing a connection-storm.
       if (ws !== wsRef.current) return;
+      wsRef.current = null;
 
       if (authWatchdogRef.current) { clearTimeout(authWatchdogRef.current); authWatchdogRef.current = null; }
 
-      if (isOnlineRef.current && userRef.current) {
+      if (wsLifecycleActiveRef.current && AppState.currentState !== 'background' &&
+          isOnlineRef.current && userRef.current) {
         // Report ONCE at the threshold, then keep retrying at the capped tier.
         // This used to `return` with no timer armed, which permanently gave up
         // on the socket: reconnectAttemptRef is only reset on auth_success or
@@ -1433,6 +1440,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const jitter = Math.random() * jitterRange * 2 - jitterRange;
         const delay = Math.max(500, baseDelay + jitter);
         reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           reconnectAttemptRef.current++;
           connectWebSocket();
         }, delay);
@@ -1462,18 +1470,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // offers — the orphan is never closed because onclose's `ws !== wsRef.current`
   // guard correctly makes it a no-op.
   const connectWebSocket = useCallback(async () => {
-    if (wsConnectingRef.current) return;
-    wsConnectingRef.current = true;
+    if (!wsLifecycleActiveRef.current || AppState.currentState === 'background' ||
+        !isOnlineRef.current || !userRef.current || wsConnectingRef.current) return;
+    const ws = wsRef.current;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    const attempt = {};
+    wsConnectingRef.current = attempt;
     try {
-      await openWebSocket();
+      await openWebSocket(attempt);
     } finally {
-      // Cleared once wsRef.current is assigned (or an early return bailed), so
-      // a later caller sees a real socket and correctly declines to reconnect.
-      wsConnectingRef.current = false;
+      // An obsolete refresh must not release a newer attempt's ownership.
+      if (wsConnectingRef.current === attempt) wsConnectingRef.current = null;
     }
   }, [openWebSocket]);
 
   useEffect(() => {
+    wsLifecycleActiveRef.current = isOnline && !!user;
+    wsConnectingRef.current = null;
     if (!isOnline || !user) {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -1484,8 +1497,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         authWatchdogRef.current = null;
       }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
+        const ws = wsRef.current;
         wsRef.current = null;
+        try { ws.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
       }
       // Sync connection-state UI with the driver going offline / signing
       // out. Doesn't feed back into isOnline/user, so this can't loop.
@@ -1497,16 +1511,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     connectWebSocket();
 
     return () => {
+      wsLifecycleActiveRef.current = false;
+      wsConnectingRef.current = null;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (authWatchdogRef.current) {
         clearTimeout(authWatchdogRef.current);
         authWatchdogRef.current = null;
       }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }
+        const ws = wsRef.current;
         wsRef.current = null;
+        try { ws.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }
       }
     };
     // connectWebSocket is stable (empty deps, reads state through refs), so
@@ -1516,13 +1534,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline, user?.id]);
 
-  // Uber/Lyft-style presence: proactively close the WebSocket when the
-  // app backgrounds so the backend clears Redis presence immediately
-  // (via the disconnect handler), instead of waiting for the 90 s TTL
-  // to expire. Reconnect on return to foreground. Mobile OSes suspend
-  // background sockets silently — without this the driver shows as
-  // online to admins and can even receive ride offers after the app
-  // was swiped away.
+  // Proactively close background sockets before the OS suspends them and
+  // reconnect on foreground. The backend owns the presence grace period;
+  // the native background GPS/HTTP pipeline is independent of this socket.
   //
   // Background close is debounced ~3s and `inactive` is ignored, so a
   // transient transition (notification shade, control-center, system
@@ -1554,6 +1568,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           connectWebSocket();
         }
       } else if (nextState === 'background') {
+        wsConnectingRef.current = null;
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
         // Schedule the close — if the app comes back to 'active' within
         // the debounce window (notification shade pull, system dialog),
         // we cancel and keep the socket open. `inactive` is iOS partial
@@ -1561,9 +1580,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         cancelBackgroundClose();
         backgroundCloseTimer = setTimeout(() => {
           backgroundCloseTimer = null;
-          if (wsRef.current) {
-            try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+          if (AppState.currentState !== 'background' || !wsLifecycleActiveRef.current) return;
+          const ws = wsRef.current;
+          wsRef.current = null;
+          if (authWatchdogRef.current) {
+            clearTimeout(authWatchdogRef.current);
+            authWatchdogRef.current = null;
           }
+          if (ws) {
+            try { ws.close(1001, 'app_backgrounded'); }
+            catch (e) { console.warn('[WS] close error (background):', e); }
+          }
+          setConnectionState('disconnected');
         }, BACKGROUND_CLOSE_DELAY_MS);
       }
       // 'inactive' (iOS): intentionally no-op.
@@ -1592,7 +1620,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // the question being asked here — it is only null when NetInfo cannot
       // determine it, which is when isConnected is the right fallback.
       const up = state.isInternetReachable ?? state.isConnected ?? false;
-      if (!up || !isOnlineRef.current || !userRef.current) return;
+      if (!up || !wsLifecycleActiveRef.current || AppState.currentState === 'background' ||
+          !isOnlineRef.current || !userRef.current) return;
       // A marginal connection emits "restored" repeatedly, and resetting the
       // backoff on every tick would hold every retry at tier 0 (~1s)
       // indefinitely, defeating the 30s cap this ladder exists to enforce and
@@ -1624,8 +1653,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   useEffect(() => {
     if (connectionState !== 'connected') return;
     const id = setInterval(() => {
-      if (Date.now() - lastServerMsgRef.current > 15_000) {
-        wsRef.current?.close(4001, 'heartbeat_timeout');
+      const ws = wsRef.current;
+      if (AppState.currentState !== 'background' && ws?.readyState === WebSocket.OPEN &&
+          Date.now() - lastServerMsgRef.current > 15_000) {
+        ws.close(4001, 'heartbeat_timeout');
       }
     }, 5_000);
     return () => clearInterval(id);

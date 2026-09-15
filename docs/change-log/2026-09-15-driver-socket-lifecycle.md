@@ -21,6 +21,21 @@ Files:
 
 Before: the close handler retries whenever the driver is online; token refresh can return after cleanup; messages from replaced sockets reach the handler.
 
-Intended after: connecting requires a current dashboard lifecycle and non-background app state, including after token refresh. Background/cleanup invalidates pending attempts. Only the current socket can authenticate or dispatch messages. Intentional background closure keeps the existing debounce, and foreground/network regain use the existing retry path.
+After: connecting requires a current dashboard lifecycle and non-background app state, including after token refresh. Background/cleanup invalidates pending attempts. Only the current socket can authenticate or dispatch messages. Intentional background closure keeps the existing debounce, and foreground/network regain use the existing retry path.
 
 Regression baseline: five intended behavioral failures and one passing short-transition control against unchanged main. Ran the real hook through Jest 30.3/React 19.3 with a minimal Babel/Node test harness and mocked native boundaries while the full Expo dependency installation was still running. No production source was changed for that run. The initial test commit deliberately records the failures; the implementation commit must make them pass before publication. This phase does not claim to repair missing native GPS samples or prove that the rider's car marker moves on a physical phone.
+
+Implementation verification: the same mounted-hook suite now passes **8/8** cases, including account changes and two attempts sharing the same pending auth refresh. The fix cancels socket attempts; it does not abort or bypass the shared authentication refresh. The full frozen-lockfile Expo dependency installation remains incomplete, so the standard Expo Jest suite, typecheck and production export/native build have **not** passed or been claimed. The temporary test harness uses matching React/react-test-renderer 19.3.0; the repository currently pins renderer 19.2.3 alongside React 19.3.0, which must be resolved or validated in the normal environment before merge.
+
+Before/after connection eligibility:
+```ts
+// Before
+if (wsConnectingRef.current) return;
+await openWebSocket(); // refresh completion could outlive the dashboard
+// After: check lifecycle/background/online state before and after refresh
+const attempt = {};
+wsConnectingRef.current = attempt;
+await openWebSocket(attempt); // returns when this attempt no longer owns creation
+```
+
+Required device gate before release: verify foreground driving, short app switch, navigation app backgrounding, screen lock, airplane-mode recovery and logout/login on the supported Android devices. Compare driver capture timestamps, backend location receipt, rider event receipt and marker movement. This PR addresses socket ownership; native GPS continuity and rider rendering remain separate diagnostic work.

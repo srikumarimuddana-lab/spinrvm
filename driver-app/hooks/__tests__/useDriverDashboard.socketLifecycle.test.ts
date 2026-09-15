@@ -170,3 +170,25 @@ it('keeps foreground network failures retryable and ignores messages from a repl
   await act(async () => old.onmessage?.({ data: JSON.stringify({ type: 'ride_cancelled' }) }));
   expect(mockDriver.resetRideState).not.toHaveBeenCalled();
 });
+
+
+it('creates only one socket when obsolete and current attempts share the pending auth refresh', async () => {
+  let resolve!: () => void;
+  (ensureFreshToken as jest.Mock).mockReturnValue(new Promise<void>(done => { resolve = done; }));
+  await mount(); await appState('background'); await appState('active'); await networkUp();
+  expect(Socket.instances).toHaveLength(0);
+  await act(async () => resolve());
+  expect(Socket.instances).toHaveLength(1);
+});
+
+it('invalidates an old account attempt when the dashboard changes users', async () => {
+  let resolve!: () => void;
+  (ensureFreshToken as jest.Mock).mockReturnValueOnce(new Promise<void>(done => { resolve = done; }));
+  await mount();
+  mockAuth.user = { id: 'driver-2' };
+  await act(async () => { mounted!.update(React.createElement(Dashboard)); });
+  expect(Socket.instances).toHaveLength(1);
+  expect(Socket.instances[0].url).toContain('/ws/driver/driver-2');
+  await act(async () => resolve());
+  expect(Socket.instances).toHaveLength(1);
+});

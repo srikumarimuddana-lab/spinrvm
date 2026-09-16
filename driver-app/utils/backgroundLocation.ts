@@ -19,6 +19,7 @@ import { runExclusive } from './locationTaskArbiter';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
+import { stationaryTrackingEnabled } from './stationaryTrackingFlag';
 
 // Also cover native task imports that do not mount the app shell.
 installNativeSessionCoordination();
@@ -369,7 +370,8 @@ export interface BgLocationConfig {
 // Keep online and trip timing equally frequent: Android can reject a trip
 // retune while backgrounded, so the existing online options must not leave
 // live updates waiting 30 seconds. Idle fixes renew the 90s presence window;
-// use High accuracy and no movement threshold so parked drivers keep sampling.
+// the rollout gate selects High accuracy/no movement threshold for parked drivers.
+// With the gate off, native application retains main's Balanced/10m baseline.
 // Trips retain their route-recording distance filter. OS scheduling still applies.
 export const IDLE_CADENCE: BgLocationConfig = {
   timeInterval: 4_000,
@@ -393,12 +395,20 @@ export function _resetLastAppliedCadence(): void {
   _lastAppliedCadence = null;
 }
 
-async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
-  const interval = config?.timeInterval ?? IDLE_CADENCE.timeInterval!;
-  const distance = config?.distanceInterval ?? IDLE_CADENCE.distanceInterval!;
+async function _applyTaskOptions(config?: BgLocationConfig, canApply: () => boolean = () => true): Promise<boolean> {
+  // Gate only the new idle mode. Missing/off/error restores main's existing
+  // four-second Balanced/10m settings; trip recording is never gated.
+  const requested = config ?? IDLE_CADENCE;
+  const effective = requested === IDLE_CADENCE && !(await stationaryTrackingEnabled())
+    ? { timeInterval: 4_000, distanceInterval: 10, accuracy: Location.Accuracy.Balanced }
+    : requested;
+  const interval = effective.timeInterval ?? IDLE_CADENCE.timeInterval!;
+  const distance = effective.distanceInterval ?? IDLE_CADENCE.distanceInterval!;
+  // The bounded settings lookup may outlive logout or a go-offline action.
+  if (await isSessionEnded() || !canApply()) return false;
 
   await Location.startLocationUpdatesAsync(TASK_NAME, {
-    accuracy: config?.accuracy ?? IDLE_CADENCE.accuracy!,
+    accuracy: effective.accuracy ?? IDLE_CADENCE.accuracy!,
     timeInterval: interval,
     distanceInterval: distance,
     // Android already applies timeInterval. iOS ignores it, so keep its
@@ -419,6 +429,7 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
   // cadence in force, so recording the attempted one would make the self-heal
   // re-assert a cadence the task never actually had.
   _lastAppliedCadence = config ?? IDLE_CADENCE;
+  return true;
 }
 
 /**
@@ -509,7 +520,7 @@ export async function startBackgroundLocation(
     }
 
     if (await isSessionEnded() || !canStart()) return false;
-    await _applyTaskOptions(config);
+    if (!(await _applyTaskOptions(config, canStart))) return false;
     console.log('[BgLocation] Started');
     return true;
   });
@@ -638,7 +649,8 @@ export function _resetDeferredReassert(): void {
 /**
  * Re-tune the cadence/accuracy of the *already-running* background task —
  * use TRIP_CADENCE's movement filter during a ride, allow stationary updates
- * via IDLE_CADENCE when idle. Both request High accuracy and four-second timing. No-op if the task
+ * via IDLE_CADENCE when enabled; otherwise idle keeps Balanced/10m. Both request
+ * four-second timing. No-op if the task
  * isn't registered (go-online hasn't started it yet) or permission was
  * revoked. Calling startLocationUpdatesAsync on a live task replaces its
  * options in place — the task identity and handler are unchanged.
@@ -656,7 +668,7 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
       // is backgrounded — which is exactly when this call matters most, because
       // the trip-phase tighten fires from a driver who has just put the phone
       // down or handed the screen to Android Auto. The throw leaves the running
-      // task on its PREVIOUS movement filter, with High accuracy and
+      // task on its PREVIOUS movement filter and accuracy, with
       // four-second timing retained. Park a foreground replay so it self-heals
       // the moment the activity resumes, and let the caller see the failure.
       if (_isBackgroundedForegroundServiceRejection(e)) {

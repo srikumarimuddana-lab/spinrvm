@@ -5,6 +5,8 @@
  */
 
 let mockBgPermission = 'granted';
+const mockStationaryFlag = jest.fn(async () => true);
+jest.mock('../stationaryTrackingFlag', () => ({ stationaryTrackingEnabled: () => mockStationaryFlag() }));
 const mockAsyncStorage: Record<string, string> = {};
 const mockQueuedPoints: Record<string, unknown>[] = [];
 let mockSequence = 0;
@@ -464,6 +466,7 @@ describe('updateBackgroundLocationCadence', () => {
   const originalOS = platform.OS;
   afterEach(() => { platform.OS = originalOS; });
   beforeEach(() => {
+    mockStationaryFlag.mockResolvedValue(true);
     platform.OS = 'android';
     mockStartUpdates.mockClear();
     mockHasStartedLocationUpdates.mockClear();
@@ -478,6 +481,34 @@ describe('updateBackgroundLocationCadence', () => {
 
     expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');
     expect(mockStartUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses baseline idle sampling while the remote gate is off, then applies enable and rollback', async () => {
+    mockStationaryFlag.mockResolvedValue(false);
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    await startBackgroundLocation();
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({
+      timeInterval: 4000, distanceInterval: 10, accuracy: Location.Accuracy.Balanced,
+    }));
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    mockStationaryFlag.mockResolvedValue(true);
+    await updateBackgroundLocationCadence(IDLE_CADENCE);
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 0, accuracy: Location.Accuracy.High }));
+    mockStationaryFlag.mockResolvedValue(false);
+    await updateBackgroundLocationCadence(IDLE_CADENCE);
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 10, accuracy: Location.Accuracy.Balanced }));
+    mockStationaryFlag.mockClear();
+    await updateBackgroundLocationCadence(TRIP_CADENCE);
+    expect(mockStationaryFlag).not.toHaveBeenCalled();
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 10, accuracy: Location.Accuracy.High }));
+  });
+
+  it('does not start when go-online is cancelled during the remote flag read', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    mockStationaryFlag.mockImplementationOnce(async () => { allowed = false; return true; });
+    expect(await startBackgroundLocation(undefined, () => allowed)).toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
   });
 
   it('does not resurrect tracking when the caller goes offline during permission lookup', async () => {

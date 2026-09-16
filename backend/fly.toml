@@ -8,28 +8,13 @@
 # URLs point at a stable DNS alias (e.g. redis.spinr.ca) so the backend can be
 # repointed without a redeploy. Only non-secret config lives in [env] below.
 #
-# UVICORN_WORKERS stays at 2: 4 workers on shared-cpu-1x/1gb is memory-tight, and
-# worker count is a capacity knob only — the background loops (41 today;
-# _WATCHDOG_LOOP_NAMES in backend/core/lifespan.py is the live registry, do not
-# hard-code a count elsewhere) are replay-safe per process (atomic DB claims /
-# idempotency keys / Redis leader locks).
-#
-# BURST CAPACITY (see docs/runbooks/capacity-scaling.md). The app is scaled to 8
-# machines in yyz (bootstrap-fly.yml); autostop suspends idle ones down to
-# min_machines_running=2, and Fly's proxy resumes them when running machines
-# exceed soft_limit. That suspended pool IS the autoscaling mechanism — before
-# it existed the fleet was a fixed 2 machines and hard-rejected past ~500
-# connections. Suspend (not stop) is deliberate: memory-snapshot resume is
-# sub-second versus a 5-15s cold boot (VM + uvicorn + lifespan DB probe + the
-# background loops) plus the 30s check grace period. Suspend supports machines <=2GB, so
-# 1gb qualifies. If resumed machines show stale-connection anomalies beyond what
-# run_sync's httpx.NetworkError retry absorbs, flip this to "stop".
-#
-# Concurrency is counted in connections because riders and drivers hold a
-# long-lived WebSocket each, making connection count ~= active users. 8 x 750
-# soft = 6000 users before the last machine is woken; 8 x 1000 hard = 8000
-# absolute. Do NOT raise per-machine limits further without loadtest evidence —
-# shared-cpu-1x CPU, not memory, is the binding constraint at this size.
+# Two warm 4 GB Machines and six 2 GB burst Machines, eight total.
+# See docs/runbooks/fly-mixed-fleet.md BEFORE the first mixed-group deploy.
+# Proxy handles connection demand; the external controller handles memory/CPU.
+# Scale-out only during observation: disable autostop so memory-driven starts
+# are retained. No automatic scale-in until trip/WS draining is verified.
+# Existing 750/1000 connection limits require load testing; they are not a
+# supported-user count. Both groups run the same application on the same ports.
 app = "spinr-backend-yyz"
 primary_region = "yyz"
 kill_signal = "SIGINT"
@@ -45,6 +30,10 @@ kill_timeout = "30s"
   UVICORN_WORKERS = "2"
   PYTHONUNBUFFERED = "1"
 
+[processes]
+  app = 'sh -c "exec uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-2}"'
+  burst = 'sh -c "exec uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-2}"'
+
 [deploy]
   strategy = "rolling"
   max_unavailable = 1
@@ -52,7 +41,7 @@ kill_timeout = "30s"
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = "suspend"
+  auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 2
   processes = ["app"]
@@ -69,6 +58,42 @@ kill_timeout = "30s"
     timeout = "5s"
     path = "/health"
 
+# Same public service as app; only the idle policy and VM size differ.
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  processes = ["burst"]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [services.concurrency]
+    type = "connections"
+    soft_limit = 750
+    hard_limit = 1000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
 [[vm]]
+  processes = ["app"]
+  size = "shared-cpu-2x"
+  memory = "4gb"
+
+[[vm]]
+  processes = ["burst"]
   size = "shared-cpu-1x"
-  memory = "1gb"
+  memory = "2gb"

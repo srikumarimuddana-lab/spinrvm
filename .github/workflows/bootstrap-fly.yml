@@ -3,7 +3,7 @@ name: Bootstrap Fly.io app (one-time / manual)
 # Manually-triggered, idempotent bootstrap so you never need flyctl locally:
 #   1. creates the Fly app (no-op if it already exists)
 #   2. verifies the required secrets already exist ON THE FLY APP
-#   3. (optional) deploys and scales to 2 machines in yyz, then probes /health
+#   3. (optional) deploys the mixed eight-Machine pool, then probes /ready
 #
 # Secrets are NOT managed here — set them directly in Fly (dashboard or
 # `fly secrets set ...`) so production values never live in GitHub. This job
@@ -46,6 +46,11 @@ on:
         required: false
         default: true
         type: boolean
+
+# Share the lock with normal deploys, including runs from different refs.
+concurrency:
+  group: deploy-fly-spinr-backend-yyz
+  cancel-in-progress: false
 
 jobs:
   bootstrap:
@@ -102,26 +107,29 @@ jobs:
           [ "$missing" -eq 0 ] || { echo "Set the missing secrets in Fly, then re-run."; exit 1; }
           echo "All required secrets present on ${FLY_APP}."
 
+      - name: Validate mixed fleet inventory
+        if: ${{ inputs.deploy }}
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p test_fly_fleet_preflight.py
+          flyctl machine list -a "${FLY_APP}" --json | python3 scripts/fly_fleet_preflight.py
+
       # Build context must be backend/ (root Dockerfile COPYs a root
       # requirements.txt that does not exist — only backend/ has one).
       - name: Deploy
         if: ${{ inputs.deploy }}
         working-directory: backend
-        run: flyctl deploy --remote-only --config fly.toml
+        run: flyctl deploy --remote-only --config fly.toml --ha=false
 
-      # 8 machines is the burst POOL, not the running count. fly.toml sets
-      # min_machines_running=2 with auto_stop_machines="suspend", so Fly
-      # suspends the 6 idle machines and its proxy resumes them when running
-      # machines exceed soft_limit (750 connections). Suspended machines bill
-      # for rootfs storage only. See docs/runbooks/capacity-scaling.md.
-      - name: Scale to 8 machines in yyz (2 warm + 6 suspended burst pool)
+      # Preflight prevents destructive scale-down or creating a ninth Machine.
+      - name: Ensure mixed pool (2 warm 4 GB + 6 burst 2 GB)
         if: ${{ inputs.deploy }}
-        run: flyctl scale count 8 --region yyz -a "${FLY_APP}" --yes
+        run: flyctl scale count app=2 burst=6 --region yyz -a "${FLY_APP}" --yes
 
-      - name: Smoke-test /health
+      - name: Smoke-test /ready
         if: ${{ inputs.deploy }}
         run: |
-          URL="https://${FLY_APP}.fly.dev/health"
+          URL="https://${FLY_APP}.fly.dev/ready"
           echo "Polling ${URL} …"
           for i in $(seq 1 18); do
             STATUS=$(curl -sf --max-time 5 "${URL}" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")

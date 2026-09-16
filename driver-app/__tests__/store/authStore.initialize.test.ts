@@ -106,6 +106,7 @@ beforeEach(() => {
   Object.keys(mockSecureStoreBacking).forEach((k) => delete mockSecureStoreBacking[k]);
   mockGet.mockReset();
   mockPost.mockReset();
+  mockPut.mockReset();
   mockSetInMemoryToken.mockClear();
   mockSetRefreshCallback.mockClear();
   useAuthStore.setState({
@@ -485,5 +486,87 @@ describe('session-ended marker + full token wipe', () => {
     expect(mockSecureStoreBacking['spinr_session_ended']).toBeUndefined();
     expect(mockSecureStoreBacking['refresh_token']).toBe('refresh');
     expect(mockSecureStoreBacking['fg_access_token']).toBe('access');
+  });
+});
+
+describe('logout / logoutAll — no second dead-token round trip', () => {
+  it('logoutAll posts /auth/logout-all once and does not PUT go-offline', async () => {
+    // After /auth/logout-all bumps token_version, a follow-up
+    // PUT /drivers/{id}/status 401s and queues behind a doomed refresh —
+    // hanging sign-out so router.replace('/login') never runs.
+    mockPost.mockResolvedValue({ data: { success: true, revoked_refresh_tokens: 2 }, status: 200 });
+    useAuthStore.setState({
+      token: 'access',
+      refreshToken: 'refresh',
+      user: { id: 'u1' } as never,
+      driver: { id: 'd1', is_online: true } as never,
+    });
+
+    await useAuthStore.getState().logoutAll();
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout-all');
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(useAuthStore.getState()).toMatchObject({
+      token: null, user: null, driver: null, refreshToken: null,
+    });
+  });
+
+  it('logout({ revokeServerSession: false }) skips go-offline even when the driver is online', async () => {
+    useAuthStore.setState({
+      token: 'dead-access',
+      user: { id: 'u1' } as never,
+      driver: { id: 'd1', is_online: true } as never,
+    });
+
+    await useAuthStore.getState().logout({ revokeServerSession: false });
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().token).toBeNull();
+  });
+
+  it('regular logout fires go-offline and /auth/logout together, not one after the other', async () => {
+    let putStarted = false;
+    let logoutStarted = false;
+    let finishPut!: () => void;
+    let finishLogout!: () => void;
+    mockPut.mockImplementation(() => {
+      putStarted = true;
+      return new Promise((resolve) => { finishPut = () => resolve({ data: {}, status: 200 }); });
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === '/auth/logout') {
+        logoutStarted = true;
+        return new Promise((resolve) => { finishLogout = () => resolve({ data: { success: true }, status: 200 }); });
+      }
+      return Promise.resolve({ data: {}, status: 200 });
+    });
+    useAuthStore.setState({
+      token: 'access',
+      refreshToken: 'refresh',
+      user: { id: 'u1' } as never,
+      driver: { id: 'd1', is_online: true } as never,
+    });
+
+    const pending = useAuthStore.getState().logout();
+    // logout() reads SecureStore under the session lock before POST /auth/logout;
+    // drain microtasks until both network calls are in flight. If they were still
+    // sequential, logoutStarted would stay false until finishPut().
+    for (let i = 0; i < 20 && !(putStarted && logoutStarted); i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(putStarted).toBe(true);
+    expect(logoutStarted).toBe(true);
+    expect(useAuthStore.getState().token).toBe('access');
+
+    finishPut();
+    finishLogout();
+    await pending;
+
+    expect(mockPut).toHaveBeenCalledWith('/drivers/d1/status', { is_online: false });
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'refresh' });
+    expect(useAuthStore.getState().token).toBeNull();
   });
 });

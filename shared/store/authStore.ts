@@ -737,42 +737,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async (options) => {
     const generation = loginGeneration;
-    // Uber/Lyft-style: a driver explicitly signing out must flip offline
-    // before the socket drops and tokens get wiped. Without this, the
-    // admin live-monitoring map (and any rider mid-match) would keep
-    // seeing the driver as online until their presence TTL expired. We
-    // swallow errors — a flaky network shouldn't block the user from
-    // signing out — and fall through to the normal cleanup.
     const { driver, token } = get();
-    if (driver?.id && token) {
-      try {
-        await api.put(`/drivers/${driver.id}/status`, { is_online: false });
-      } catch (error) {
-        if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
-      }
-    }
+    // Skip remote flips when the credential is already dead (logoutAll,
+    // interceptor 401, refresh rejected). A PUT/POST here 401s and queues
+    // behind a doomed refresh — hanging sign-out so router.replace('/login')
+    // never runs. /auth/logout-all now takes the driver offline itself.
+    const liveCredential = options?.revokeServerSession !== false && !!token;
+
+    // Start go-offline immediately so it overlaps /auth/logout rather than
+    // blocking it. Swallow errors — a flaky network must not block sign-out.
+    const goOffline =
+      liveCredential && driver?.id
+        ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
+            if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
+          })
+        : Promise.resolve();
 
     return withSessionLock(async () => {
-      if (generation !== loginGeneration) return;
+      if (generation !== loginGeneration) {
+        await goOffline;
+        return;
+      }
       // Background refresh may have replaced BOTH credentials while the UI slept.
       const persistedAccess = await storage.getItem('fg_access_token');
       if (persistedAccess) setInMemoryToken(persistedAccess);
-      // End the session server-side. Without this the refresh token stayed valid
-      // for its full 30 days after a sign-out, so the session could be resurrected
-      // from a stolen token, and the access token was trusted for its remaining
-      // ~15 minutes — which is what let a signed-out driver app keep uploading GPS.
-      // The backend also tombstones the session so opt-in ingest paths can reject
-      // that still-valid access token.
-      //
-      // Ordered after the go-offline PUT and before the token wipe, because it
-      // needs the live credential to authenticate.
-      //
-      // Skipped via revokeServerSession:false on the paths where the credential is
-      // already known-dead (refresh rejected, interceptor backstop) or already
-      // revoked (logoutAll). Calling it there would 401 and queue behind the
-      // interceptor's in-flight refresh — the same deadlock the go-offline PUT
-      // comment above warns about — for no benefit.
-      if (options?.revokeServerSession !== false && (persistedAccess || token)) {
+
+      const serverLogout = (async () => {
+        if (!(liveCredential && (persistedAccess || token))) return;
         try {
           // F02 (2026-09-08 AI security assessment): this used to POST with no
           // body. The server revokes a refresh token only if one arrives in a
@@ -790,9 +781,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           // behaviour, so it must not block the user from signing out.
           if (__DEV__) console.log('[Auth] server logout failed (non-fatal):', error);
         }
-      }
+      })();
 
-
+      await Promise.all([goOffline, serverLogout]);
       await clearLocalSessionUnlocked();
     });
   },
@@ -814,8 +805,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (error: unknown) {
       if (__DEV__) console.log('logout-all backend call failed:', isApiError(error) ? (error.message ?? error) : String(error));
     } finally {
-      // /auth/logout-all already bumped token_version and revoked every refresh
-      // token row, so a second per-session revoke would be redundant.
+      // /auth/logout-all already bumped token_version, revoked every refresh
+      // token row, and took an idle driver offline. Skip both the per-session
+      // POST /auth/logout and the go-offline PUT — either would 401.
       await get().logout({ revokeServerSession: false });
     }
     return { revoked_refresh_tokens: revoked };

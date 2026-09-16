@@ -122,6 +122,17 @@ beforeEach(() => {
 });
 
 describe('authStore.refreshTokens — rotation-race recovery', () => {
+  it('changes the capture epoch only on sign-in, preserving it through rotation', async () => {
+    await useAuthStore.getState().setTokens('access-a', 'refresh-a', 1);
+    const epoch = mockSecureStoreBacking['spinr_session_generation'];
+    expect(epoch).toEqual(expect.any(String));
+    mockPost.mockResolvedValue({ data: { token: 'renewed-a', refresh_token: 'renewed-refresh-a', expires_in: 900 } });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+    expect(mockSecureStoreBacking['spinr_session_generation']).toBe(epoch);
+    await useAuthStore.getState().setTokens('access-b', 'refresh-b', 900);
+    expect(mockSecureStoreBacking['spinr_session_generation']).not.toBe(epoch);
+  });
+
   it('adopts a fresh background credential without rotating it again', async () => {
     useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
     Object.assign(mockSecureStoreBacking, { fg_access_token: 'background-access', refresh_token: 'background-refresh', token_expires_at: String(Date.now() + 900_000) });

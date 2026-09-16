@@ -11,3 +11,6 @@ export let sessionKeychainOptions: { keychainAccessible?: number } | undefined;
 export function setSessionKeychainOptions(options: { keychainAccessible?: number }): void {
   sessionKeychainOptions = options;
 }
+
+// Non-secret capture fence; changes only on explicit sign-in, never rotation.
+export const SESSION_GENERATION_KEY = 'spinr_session_generation';

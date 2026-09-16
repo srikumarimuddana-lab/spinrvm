@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
-import { withSessionLock, sessionKeychainOptions } from '../auth/sessionLock';
+import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
 import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -260,7 +260,12 @@ async function publishTokensUnlocked(token: string, refreshToken: string, expire
   // A live session exists again — clear the end-of-session marker before
   // writing tokens, so a headless task that fires mid-write can never see
   // fresh tokens alongside a stale "signed out" marker and tear itself down.
-  if (newSession) await storage.deleteItem(SESSION_ENDED_KEY);
+  if (newSession) {
+    // This is an ownership fence, not an authentication secret. Publish before
+    // clearing the ended marker so delayed GPS callbacks cannot adopt a login.
+    await storage.setItem(SESSION_GENERATION_KEY, `${Date.now()}:${Math.random()}`);
+    await storage.deleteItem(SESSION_ENDED_KEY);
+  }
   await storage.setItem('refresh_token', refreshToken);
   await storage.setItem('token_expires_at', String(expiresAt));
   // Persist the access token so the background location task (which runs

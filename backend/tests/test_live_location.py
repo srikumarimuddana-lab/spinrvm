@@ -101,7 +101,8 @@ def test_live_endpoint_updates_marker_with_fanout_disabled(monkeypatch):
     monkeypatch.setattr(location.db_supabase, "get_rows", rows)
     monkeypatch.setattr("settings_loader.get_app_settings", AsyncMock(return_value={}))
     monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
-    monkeypatch.setattr(location._deps, "mark_present", AsyncMock())
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
     monkeypatch.setattr("utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, "ok")))
     monkeypatch.setattr(location, "_newer_than_last_written_marker", AsyncMock(return_value=True))
     write = AsyncMock()
@@ -124,3 +125,4 @@ def test_live_endpoint_updates_marker_with_fanout_disabled(monkeypatch):
     assert write.await_args.args[1]["lat"] == point.lat
     assert write.await_args.args[1]["lng"] == point.lng
     send.assert_not_awaited()
+    presence.assert_awaited_once_with("driver-1")

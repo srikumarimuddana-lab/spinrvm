@@ -121,6 +121,8 @@ async def _apply_v2_live_marker_update(
     mocked: bool,
     is_online: bool,
     captured_at: datetime,
+    *,
+    refresh_presence: bool = True,
 ) -> None:
     """Background task: GPS-integrity-gated live marker write + presence refresh.
 
@@ -209,7 +211,7 @@ async def _apply_v2_live_marker_update(
                     exc_info=True,
                 )
 
-    if is_online:
+    if is_online and refresh_presence:
         await _deps.mark_present(driver_id)
 
 
@@ -789,6 +791,7 @@ async def update_live_location(
         point.mocked,
         True,
         captured_at,
+        refresh_presence=False,
     )
     return {"accepted": True}
 

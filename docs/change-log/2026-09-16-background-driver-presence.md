@@ -1,5 +1,9 @@
 # Background driver discovery cadence
 
+## Luna review: avoid a second queued presence renewal
+
+The live endpoint already renews presence before queuing marker work. Its helper now receives `refresh_presence=False`, avoiding a duplicate Redis write and a delayed renewal after an offline clear. Batch callers retain the default helper renewal. Files: location.py, test_live_location.py, this log. Before: request and queued marker both renew; after: live request renews once. Blast radius is the live endpoint only; default helper behavior preserves other callers. An optional argument avoids changing batch semantics. Rollback: backend release rollback; no durable data change. Regression asserts one renewal while the actual marker helper still writes coordinates. Luna ran 49 focused backend settings/location tests successfully. No live Redis/offline race test was performed; this removes the redundant queued renewal, not all pre-existing read/write races.
+
 ## Review correction: marker writes independent of fanout
 
 The earlier heartbeat-only correction still left moving drivers at stale persisted coordinates with fanout disabled. The live endpoint now always queues the existing integrity/order/coalescing-protected marker helper after validation. That helper already gates rider messages internally. `accepted:true` means queued, not guaranteed persisted; invalid/offline/revoked fixes still fail validation. This supersedes earlier descriptions of flag-off accepted:false. Alternative of enabling fanout was rejected because nearby/dispatch coordinates must not depend on optional rider delivery.

@@ -28,6 +28,10 @@ the one column name you touched). This test's whole value is in being
 inconvenient to stay green without a real diff.
 """
 
+from unittest.mock import AsyncMock
+
+import pytest
+
 from routes.admin.settings import SettingsUpdateRequest
 
 # Snapshot of `settings` table columns, taken directly from
@@ -95,6 +99,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "driver_heatmap_enabled",
         "driver_heatmap_v2_enabled",
         "driver_matching_algorithm",
+        "driver_stationary_tracking_enabled",
         "dual_approval_exports_enabled",
         "fare_distance_basis",
         "fare_lock_enabled",
@@ -242,3 +247,20 @@ def test_every_settings_column_is_admin_writable_or_explicitly_excluded():
         f"Column(s) marked excluded here but now ARE on SettingsUpdateRequest: {sorted(stale_exclusions)}. "
         "Remove them from NOT_ADMIN_WRITABLE_BY_DESIGN / KNOWN_UNFIXED_GAPS_2026_08_22 above."
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_stationary_tracking_admin_save_preserves_boolean(monkeypatch, enabled):
+    from routes.admin import settings
+
+    monkeypatch.setattr(settings.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "app_settings"}]))
+    write = AsyncMock()
+    monkeypatch.setattr(settings.db_supabase, "update_one", write)
+    monkeypatch.setattr(settings.db_supabase, "insert_one", AsyncMock())
+    await settings.admin_update_settings(
+        SettingsUpdateRequest(driver_stationary_tracking_enabled=enabled),
+        admin={"id": "admin-1", "role": "admin"},
+    )
+    assert write.await_args.args[2]["driver_stationary_tracking_enabled"] is enabled
+    assert "driver_stationary_tracking_enabled" not in SettingsUpdateRequest().model_dump(exclude_none=True)

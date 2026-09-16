@@ -1,5 +1,11 @@
 # Background driver discovery cadence
 
+## Review correction: supported admin rollout writes
+
+The new column was missing from SettingsUpdateRequest and its maintained schema snapshot, so admin PUT silently discarded rollout changes. Added the optional Boolean to the existing audited admin write path and drift snapshot, with enable/disable persistence and omission tests. No new endpoint or permission model. Consumers: dashboard settings save and any authenticated admin settings client; public/mobile readers remain unchanged. This supersedes the earlier SQL-only operational limitation. A custom SQL-only control was rejected because the existing admin settings path already provides access control, auditing and bounded cache expiry.
+
+Files: backend/routes/admin/settings.py (allow field), backend/tests/test_admin_settings_write_allowlist_drift.py (snapshot and save regression), this log. Before: unknown field discarded; after: explicit true/false persisted, omitted field left unchanged. UX: operators can enable/roll back through supported settings requests. Risk: authorized admins can change stationary sampling and its battery/network cost. Rollback: save false and allow cache expiry plus foreground resume; no schema removal. Verification: three regression cases failed before the field was added; 11 targeted settings tests passed. Live database writes and real-device rollout remain unverified.
+
 ## Review correction: refresh running tracking on foreground resume
 
 Issue/root cause: an already-running task returned immediately from startBackgroundLocation, so a parked driver without GPS callbacks never reapplied a changed rollout flag. Fix: that path now invokes the locked reassert helper, preserving persisted trip cadence and passing the caller's lifecycle cancellation guard through the asynchronous flag read. Before: running -> return. After: running -> guarded reassert -> return.

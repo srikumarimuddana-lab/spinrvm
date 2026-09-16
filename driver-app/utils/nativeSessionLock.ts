@@ -1,6 +1,16 @@
 import * as SQLite from 'expo-sqlite';
 import type { SessionLock } from '../../shared/auth/sessionLock';
 
+let installed = false;
+export function installNativeSessionCoordination(): void {
+  if (installed || require('react-native').Platform.OS === 'web') return;
+  const SecureStore = require('expo-secure-store');
+  const { installSessionLock, setSessionKeychainOptions } = require('../../shared/auth/sessionLock');
+  installSessionLock(createNativeSessionLock());
+  setSessionKeychainOptions({ keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
+  installed = true;
+}
+
 type Connection = { execAsync(sql: string): Promise<void>; closeAsync(): Promise<void> };
 export function createNativeSessionLock(
   open: () => Promise<Connection> = () => SQLite.openDatabaseAsync('spinr-session-lock.db', { useNewConnection: true }),

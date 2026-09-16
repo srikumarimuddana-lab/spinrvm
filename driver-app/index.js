@@ -23,6 +23,10 @@
 //    to the modular API.
 globalThis.RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
 
+// Install before any handler or route imports auth. Foreground and headless
+// runtimes must contend for the same native lock before rotating credentials.
+require('./utils/nativeSessionLock').installNativeSessionCoordination();
+
 // 1. Register the headless FCM + Notifee background handlers FIRST, before the
 //    app component is registered. Ride offers are data-only FCM messages; when
 //    the app is killed Android delivers them via a headless JS launch where no

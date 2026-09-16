@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNativeSessionLock } from '../../utils/nativeSessionLock';
@@ -57,4 +58,21 @@ it('defers on contention instead of taking over a suspended owner', async () => 
     expect(ran).toBe(false);
     expect(closed).toBe(true);
   } finally { jest.useRealTimers(); }
+});
+
+it('installs native session exclusion before loading headless handlers or the UI', () => {
+  const events: string[] = [];
+  runInNewContext(readFileSync(join(__dirname, '../../index.js'), 'utf8'), {
+    require: (name: string) => {
+      if (name === './utils/nativeSessionLock') return { installNativeSessionCoordination: () => events.push('session-lock') };
+      if (name === './services/backgroundMessaging') {
+        events.push('handlers-loaded');
+        return { registerBackgroundMessageHandlers: () => events.push('handlers-registered') };
+      }
+      if (name === 'react-native') return { Platform: { OS: 'ios' } };
+      if (name === 'expo-router/entry') { events.push('ui'); return {}; }
+      throw new Error(`Unexpected entry dependency ${name}`);
+    },
+  });
+  expect(events).toEqual(['session-lock', 'handlers-loaded', 'handlers-registered', 'ui']);
 });

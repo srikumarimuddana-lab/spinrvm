@@ -366,15 +366,13 @@ export interface BgLocationConfig {
   accuracy?: Location.Accuracy;
 }
 
-// Idle cadence: coarse + battery-friendly — the driver is online but not on a
-// trip, so a rough live marker is enough. Trip cadence: dense + high accuracy
-// so a trip stays well-sampled even while the app is backgrounded (driver in
-// Google Maps / screen locked) — exactly when the foreground watchPositionAsync
-// stops firing. Billed distance is settled from these breadcrumbs, so
-// under-sampling here directly undercounts km and the SGI per-period audit.
+// Keep online and trip timing equally frequent: Android can reject a trip
+// retune while backgrounded, so the existing online options must not leave
+// live updates waiting 30 seconds. Idle retains Balanced accuracy; trips use
+// High accuracy for route recording. OS scheduling and distance still apply.
 export const IDLE_CADENCE: BgLocationConfig = {
-  timeInterval: 30_000,
-  distanceInterval: 50,
+  timeInterval: 4_000,
+  distanceInterval: 10,
   accuracy: Location.Accuracy.Balanced,
 };
 export const TRIP_CADENCE: BgLocationConfig = {
@@ -402,7 +400,9 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
     accuracy: config?.accuracy ?? Location.Accuracy.Balanced,
     timeInterval: interval,
     distanceInterval: distance,
-    deferredUpdatesInterval: interval,
+    // Android already applies timeInterval. iOS ignores it, so keep its
+    // delivery interval to avoid distance-only callbacks flooding live uploads.
+    deferredUpdatesInterval: Platform.OS === 'ios' ? interval : 0,
     showsBackgroundLocationIndicator: true,
     // iOS: prevent CoreLocation from silently pausing updates when the
     // driver appears stationary (red light, loading zone, traffic jam).
@@ -636,8 +636,8 @@ export function _resetDeferredReassert(): void {
 
 /**
  * Re-tune the cadence/accuracy of the *already-running* background task —
- * tighten to TRIP_CADENCE while a ride is active so a backgrounded trip is
- * still sampled densely, relax to IDLE_CADENCE when idle. No-op if the task
+ * raise accuracy to TRIP_CADENCE while a ride is active, use Balanced accuracy
+ * via IDLE_CADENCE when idle. Both request four-second timing. No-op if the task
  * isn't registered (go-online hasn't started it yet) or permission was
  * revoked. Calling startLocationUpdatesAsync on a live task replaces its
  * options in place — the task identity and handler are unchanged.
@@ -655,8 +655,8 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
       // is backgrounded — which is exactly when this call matters most, because
       // the trip-phase tighten fires from a driver who has just put the phone
       // down or handed the screen to Android Auto. The throw leaves the running
-      // task on its PREVIOUS cadence (idle), so swallowing it silently costs the
-      // whole trip its dense sampling. Park a foreground replay so it self-heals
+      // task on its PREVIOUS accuracy (idle/Balanced), although its timing is
+      // already four seconds. Park a foreground replay so it self-heals
       // the moment the activity resumes, and let the caller see the failure.
       if (_isBackgroundedForegroundServiceRejection(e)) {
         console.warn('[BgLocation] Cadence change blocked while backgrounded — deferred to next foreground');

@@ -460,7 +460,11 @@ describe('geofence recovery task (NSRangeException guard)', () => {
 });
 
 describe('updateBackgroundLocationCadence', () => {
+  const platform = require('react-native').Platform;
+  const originalOS = platform.OS;
+  afterEach(() => { platform.OS = originalOS; });
   beforeEach(() => {
+    platform.OS = 'android';
     mockStartUpdates.mockClear();
     mockHasStartedLocationUpdates.mockClear();
     mockHasStartedLocationUpdates.mockResolvedValue(true);
@@ -525,9 +529,35 @@ describe('updateBackgroundLocationCadence', () => {
     expect(mockStartUpdates).not.toHaveBeenCalled();
   });
 
-  it('TRIP_CADENCE samples denser than IDLE_CADENCE', () => {
-    expect(TRIP_CADENCE.timeInterval!).toBeLessThan(IDLE_CADENCE.timeInterval!);
-    expect(TRIP_CADENCE.distanceInterval!).toBeLessThan(IDLE_CADENCE.distanceInterval!);
+  it.each([
+    ['android', 'online', IDLE_CADENCE, 0],
+    ['android', 'trip', TRIP_CADENCE, 0],
+    ['ios', 'online', IDLE_CADENCE, 4000],
+    ['ios', 'trip', TRIP_CADENCE, 4000],
+  ] as const)(
+    'requests four-second delivery on %s for %s', async (os, _phase, cadence, deliveryInterval) => {
+      platform.OS = os;
+      await updateBackgroundLocationCadence(cadence);
+      expect(mockStartUpdates).toHaveBeenCalledWith('spinr-background-location', expect.objectContaining({
+        timeInterval: 4000,
+        distanceInterval: 10,
+        deferredUpdatesInterval: deliveryInterval,
+      }));
+    },
+  );
+
+  it('keeps the four-second default when the native trip retune is rejected', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    await startBackgroundLocation();
+    const runningOptions = mockStartUpdates.mock.calls[0][1];
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    mockStartUpdates.mockRejectedValueOnce(new Error('Native cadence update rejected'));
+    await expect(updateBackgroundLocationCadence(TRIP_CADENCE)).rejects.toThrow('Native cadence update rejected');
+    expect(runningOptions).toEqual(expect.objectContaining({
+      timeInterval: 4000,
+      distanceInterval: 10,
+      deferredUpdatesInterval: 0,
+    }));
   });
 });
 

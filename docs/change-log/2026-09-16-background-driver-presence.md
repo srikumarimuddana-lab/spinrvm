@@ -1,5 +1,24 @@
 # Background driver discovery cadence
 
+## Review correction: default-off remote rollout
+
+This section supersedes earlier statements that no feature flag/schema change exists. Migration 428 adds `settings.driver_stationary_tracking_enabled BOOLEAN NOT NULL DEFAULT FALSE`; public GET /settings exposes it, defaulting false when missing. Operations controls it through the Supabase SQL settings row, not the admin settings form. No migration or production enablement has been performed.
+
+Off/missing/unreadable: idle remains main's 4s/10m/Balanced. On: idle selects 4s/0m/High. Trip remains 4s/10m/High regardless of flag. `stationaryTrackingFlag.ts` checks the public endpoint with App Check, bounds the entire read to 3 seconds, caches for 60 seconds in each JS runtime and clears expired enablement on failure while reporting it to Crashlytics. It persists no enablement across process starts. All actual idle callers use the IDLE_CADENCE constant or default options; native start/retune/reassert flows therefore pass through the gate. A post-read session/cancellation check prevents obsolete go-online work starting tracking.
+
+Remote rollout/rollback: after applying migration and deploying backend/app, an operator can set the flag true for a controlled validation window. Set it false to restore baseline without another mobile release:
+
+```sql
+UPDATE public.settings SET driver_stationary_tracking_enabled = false
+WHERE id = 'app_settings';
+```
+
+Retain the column during rollback; remove only after retiring readers. Server and mobile caches each last up to 60 seconds. Reconfiguration occurs on native option application/self-heal, not immediately on the SQL write. Android cannot re-promote its foreground service while backgrounded, so restoration may wait until foreground resume; go offline still stops tracking. iOS reapplies on the next eligible self-heal/cadence callback. This is a remotely controlled rollout, not an instantaneous background stop switch. Initial false state means experimental stationary sampling remains dark until enabled; the shared backend 90s lease remains independent.
+
+Files added/changed for review: migration428, backend/routes/settings.py and backend/tests/test_public_settings.py; driver-app/utils/stationaryTrackingFlag.ts and its unit test; backgroundLocation.ts, backgroundLocation.test.ts and backgroundLocation.reassert.test.ts. Existing settings table RLS unchanged; no new index or user-data table. Public endpoint exposes a boolean only. Flag read failures report no coordinates or credentials. No new production loop.
+
+Verification: settings regression initially failed then 8 backend settings tests passed. 134 mobile tests passed across six suites, including strict boolean gate, cache/remote disable, timeout/late response, read failure, baseline/enable/rollback, trip bypass and cancelled startup. Android/iOS production Hermes exports passed after integration. ESLint: 0 errors, 15 test warnings. Migration and mobile code reviews found no functional blockers; PR schema and rollback declarations updated. Native release binary, actual migration, real-phone battery/locked-screen rollout and live SQL rollback remain unverified.
+
 ## Merge resolution against main (2026-09-16)
 
 This section supersedes the original 10-second cadence and background-auth limitation below. Main added a user-approved four-second online cadence and coordinated background token renewal. Resolution preserves both, combines idle four-second timing with this PR's zero movement threshold and High accuracy, and retains the shared 90-second presence window. Android deferred delivery remains zero; iOS remains four seconds. Trip cadence stays four seconds/10 metres/High. Token renewal and native session-lock code are unchanged from main.

@@ -52,7 +52,7 @@ class Policy:
         if any(
             not all(math.isfinite(v) for v in (s.memory, s.cpu, s.timestamp))
             or not (0 <= s.memory <= 1 and 0 <= s.cpu <= 1)
-            or not 0 <= now - s.timestamp <= 45
+            or not 0 <= now - s.timestamp <= 90
             for s in samples.values()
         ):
             self.high_since = None

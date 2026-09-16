@@ -451,9 +451,29 @@ describe('updateBackgroundLocationCadence', () => {
     expect(mockStartUpdates).not.toHaveBeenCalled();
   });
 
-  it('TRIP_CADENCE samples denser than IDLE_CADENCE', () => {
+  it.each(['start', 'return-to-idle'] as const)('%s requests stationary fixes before presence expires', async (path) => {
+    if (path === 'start') {
+      mockHasStartedLocationUpdates.mockResolvedValue(false);
+      await startBackgroundLocation();
+    } else {
+      await updateBackgroundLocationCadence(TRIP_CADENCE);
+      mockStartUpdates.mockClear();
+      await updateBackgroundLocationCadence(IDLE_CADENCE);
+    }
+    const opts = mockStartUpdates.mock.calls[0][1];
+    // Backend presence expires after 30s. Leave room for scheduling/network
+    // delay, and never require the waiting driver to move to stay discoverable.
+    expect(opts.timeInterval).toBeLessThanOrEqual(10_000);
+    expect(opts.deferredUpdatesInterval).toBeLessThanOrEqual(10_000);
+    expect(opts.distanceInterval).toBe(0);
+    expect(opts.accuracy).toBe(Location.Accuracy.High);
+    expect(opts.pausesUpdatesAutomatically).toBe(false);
+    expect(opts.foregroundService).toBeDefined();
+  });
+
+  it('keeps the existing trip cadence while requesting idle presence more slowly', () => {
     expect(TRIP_CADENCE.timeInterval!).toBeLessThan(IDLE_CADENCE.timeInterval!);
-    expect(TRIP_CADENCE.distanceInterval!).toBeLessThan(IDLE_CADENCE.distanceInterval!);
+    expect(TRIP_CADENCE).toEqual({ timeInterval: 4_000, distanceInterval: 10, accuracy: Location.Accuracy.High });
   });
 });
 

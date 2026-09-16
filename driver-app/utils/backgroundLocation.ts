@@ -395,16 +395,19 @@ export interface BgLocationConfig {
   accuracy?: Location.Accuracy;
 }
 
-// Idle cadence: coarse + battery-friendly — the driver is online but not on a
-// trip, so a rough live marker is enough. Trip cadence: dense + high accuracy
+// Idle fixes also renew the backend's 30s presence lease after the socket
+// closes in background. Request updates well inside that window, without a
+// movement threshold: a parked driver waiting for an offer must stay visible.
+// High accuracy keeps native GPS sampling active rather than relying on coarse
+// position changes. Trip cadence: dense + high accuracy
 // so a trip stays well-sampled even while the app is backgrounded (driver in
 // Google Maps / screen locked) — exactly when the foreground watchPositionAsync
 // stops firing. Billed distance is settled from these breadcrumbs, so
 // under-sampling here directly undercounts km and the SGI per-period audit.
 export const IDLE_CADENCE: BgLocationConfig = {
-  timeInterval: 30_000,
-  distanceInterval: 50,
-  accuracy: Location.Accuracy.Balanced,
+  timeInterval: 10_000,
+  distanceInterval: 0,
+  accuracy: Location.Accuracy.High,
 };
 export const TRIP_CADENCE: BgLocationConfig = {
   timeInterval: 4_000,
@@ -428,7 +431,7 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
   const distance = config?.distanceInterval ?? IDLE_CADENCE.distanceInterval!;
 
   await Location.startLocationUpdatesAsync(TASK_NAME, {
-    accuracy: config?.accuracy ?? Location.Accuracy.Balanced,
+    accuracy: config?.accuracy ?? IDLE_CADENCE.accuracy!,
     timeInterval: interval,
     distanceInterval: distance,
     deferredUpdatesInterval: interval,

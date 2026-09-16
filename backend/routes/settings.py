@@ -87,6 +87,9 @@ async def get_public_settings():
         # (migration 345). Driver-app reads this to open/close idle recording
         # sessions; the server-side ingest gate is authoritative either way.
         "idle_location_v2_enabled": bool(settings.get("idle_location_v2_enabled", False)),
+        # Default-off canary for high-accuracy stationary idle GPS. Operated via
+        # the settings row; clients keep the existing cadence until enabled.
+        "driver_stationary_tracking_enabled": settings.get("driver_stationary_tracking_enabled") is True,
     }
 
 

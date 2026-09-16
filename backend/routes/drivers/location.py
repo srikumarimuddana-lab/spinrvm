@@ -121,6 +121,8 @@ async def _apply_v2_live_marker_update(
     mocked: bool,
     is_online: bool,
     captured_at: datetime,
+    *,
+    refresh_presence: bool = True,
 ) -> None:
     """Background task: GPS-integrity-gated live marker write + presence refresh.
 
@@ -209,7 +211,7 @@ async def _apply_v2_live_marker_update(
                     exc_info=True,
                 )
 
-    if is_online:
+    if is_online and refresh_presence:
         await _deps.mark_present(driver_id)
 
 
@@ -754,12 +756,6 @@ async def update_live_location(
     token_session_id: str | None = Depends(get_token_session_id),
 ):
     await _guard_revoked_session(token_session_id)
-    try:
-        from ...settings_loader import get_app_settings
-    except ImportError:
-        from settings_loader import get_app_settings
-    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
-        return {"accepted": False}
     drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     if not drivers:
         raise HTTPException(status_code=403, detail="Driver profile required")
@@ -769,6 +765,11 @@ async def update_live_location(
     captured_at = parse_iso_utc(point.captured_at.isoformat())
     if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
         raise HTTPException(status_code=422, detail="A recent position is required")
+    # Fresh authenticated GPS is a heartbeat even when optional delivery/history
+    # rollouts are off. Never renew from an offline driver or a stale fix.
+    await _deps.mark_present(driver["id"])
+    # Keep discovery/dispatch coordinates fresh independently of rider fanout.
+    # The marker helper gates rider delivery internally.
     # Assignment is server-owned; never trust a caller's ride or driver ID.
     rides = await db_supabase.get_rows(
         "rides",
@@ -790,6 +791,7 @@ async def update_live_location(
         point.mocked,
         True,
         captured_at,
+        refresh_presence=False,
     )
     return {"accepted": True}
 

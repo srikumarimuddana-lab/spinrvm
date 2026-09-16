@@ -5,6 +5,8 @@
  */
 
 let mockBgPermission = 'granted';
+const mockStationaryFlag = jest.fn(async () => true);
+jest.mock('../stationaryTrackingFlag', () => ({ stationaryTrackingEnabled: () => mockStationaryFlag() }));
 const mockAsyncStorage: Record<string, string> = {};
 const mockQueuedPoints: Record<string, unknown>[] = [];
 let mockSequence = 0;
@@ -112,9 +114,11 @@ import {
   stopBackgroundLocation,
   isSessionEnded,
   _resetGeofenceDebounce,
+  _resetForegroundUploadPacing,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../backgroundLocation';
+import { AppState } from 'react-native';
 import * as TaskManager from 'expo-task-manager';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
@@ -208,6 +212,7 @@ describe('background durable trip recording', () => {
     // The singleton recorder carries flush-backoff state across tests; a
     // failure test would otherwise make every later flush silently skip.
     tripLocationRecorder._resetUploadBackoff();
+    _resetForegroundUploadPacing();
     await tripLocationRecorder.startRide('ride-1');
   });
 
@@ -322,6 +327,197 @@ describe('background durable trip recording', () => {
       expect(live[1].signal).toBeDefined();
       expect(calls.some(([url]) => url.endsWith('/drivers/location-batch'))).toBe(false);
     } finally { capture.mockRestore(); }
+  });
+
+  it('keeps every iOS foreground sample durable while pacing live and history uploads', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } as any });
+      expect(global.fetch).toHaveBeenCalledTimes(2); // live + first durable batch
+
+      const second = handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      await jest.advanceTimersByTimeAsync(0);
+      await second;
+
+      // Native callbacks can arrive faster than iOS's requested cadence. Capture
+      // still happens immediately, while a callback inside the pacing window is
+      // coalesced into the next native callback.
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(3_999);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(1);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(2)] } } as any);
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(3);
+      expect(global.fetch).toHaveBeenCalledTimes(4); // third live + history
+    } finally {
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('does not let overlapping iOS foreground callbacks bypass the upload slot', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    let resolveNetwork!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const pendingNetwork = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>(resolve => {
+      resolveNetwork = resolve;
+    });
+    let started = 0;
+    let resolveFirstUploads!: () => void;
+    const firstUploads = new Promise<void>(resolve => { resolveFirstUploads = resolve; });
+    (global.fetch as jest.Mock).mockImplementation(() => {
+      started += 1;
+      if (started === 2) resolveFirstUploads();
+      return pendingNetwork;
+    });
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      const first = handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      await firstUploads;
+
+      const second = handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      await jest.advanceTimersByTimeAsync(0);
+      await second;
+
+      // The second sample is durable, but the in-flight live/history requests
+      // own both lanes; no queued callback may create a burst later.
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      resolveNetwork({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      await first;
+    } finally {
+      resolveNetwork?.({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('keeps live uploads independent when an iOS history flush is slow', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    let resolveHistory!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const pendingHistory = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>(resolve => {
+      resolveHistory = resolve;
+    });
+    let networkCalls = 0;
+    let resolveFirstNetwork!: () => void;
+    const firstNetwork = new Promise<void>(resolve => { resolveFirstNetwork = resolve; });
+    let batchCalls = 0;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      networkCalls += 1;
+      if (networkCalls === 2) resolveFirstNetwork();
+      if (url.endsWith('/drivers/location-batch')) {
+        batchCalls += 1;
+        return pendingHistory;
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      const first = handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      // Let both first-lane requests reach fetch while the history request is held.
+      await firstNetwork;
+      expect(batchCalls).toBe(1);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      await jest.advanceTimersByTimeAsync(4_000);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => url.endsWith('/drivers/location-live'))).toHaveLength(2);
+      expect(batchCalls).toBe(1); // history lane is still in flight
+
+      resolveHistory({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      await first;
+    } finally {
+      resolveHistory?.({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('paces live requests from actual dispatch after slow App Check', async () => {
+    const platform = require('react-native').Platform;
+    const { getAppCheckToken } = require('@shared/services/firebase');
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    platform.OS = 'ios'; AppState.currentState = 'active';
+    let now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const capture = jest.spyOn(tripLocationRecorder, 'recordNativeFix').mockResolvedValue(null);
+    const flush = jest.spyOn(tripLocationRecorder, 'flushPending').mockResolvedValue({
+      uploaded_points: 0,
+      acknowledged_points: 0,
+      skipped: false,
+    });
+    let release!: (value: string) => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    getAppCheckToken.mockImplementationOnce(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+    const callback = () => handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: now }] } as any });
+    try {
+      _resetForegroundUploadPacing();
+      const first = callback();
+      await ready;
+      now += 5000;
+      release('app-check');
+      await first;
+      now += 1000;
+      await callback();
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      now += 3000;
+      await callback();
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      release?.('app-check'); clock.mockRestore(); capture.mockRestore(); flush.mockRestore();
+      _resetForegroundUploadPacing(); platform.OS = originalOS; AppState.currentState = originalState;
+    }
+  });
+
+  it('does not pace iOS background delivery', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    platform.OS = 'ios';
+    AppState.currentState = 'background';
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      expect(global.fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      _resetForegroundUploadPacing();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
   });
 
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {
@@ -464,6 +660,7 @@ describe('updateBackgroundLocationCadence', () => {
   const originalOS = platform.OS;
   afterEach(() => { platform.OS = originalOS; });
   beforeEach(() => {
+    mockStationaryFlag.mockResolvedValue(true);
     platform.OS = 'android';
     mockStartUpdates.mockClear();
     mockHasStartedLocationUpdates.mockClear();
@@ -478,6 +675,61 @@ describe('updateBackgroundLocationCadence', () => {
 
     expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');
     expect(mockStartUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses baseline idle sampling while the remote gate is off, then applies enable and rollback', async () => {
+    mockStationaryFlag.mockResolvedValue(false);
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    await startBackgroundLocation();
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({
+      timeInterval: 4000, distanceInterval: 10, accuracy: Location.Accuracy.Balanced,
+    }));
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    mockStationaryFlag.mockResolvedValue(true);
+    await updateBackgroundLocationCadence(IDLE_CADENCE);
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 0, accuracy: Location.Accuracy.High }));
+    mockStationaryFlag.mockResolvedValue(false);
+    await updateBackgroundLocationCadence(IDLE_CADENCE);
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 10, accuracy: Location.Accuracy.Balanced }));
+    mockStationaryFlag.mockClear();
+    await updateBackgroundLocationCadence(TRIP_CADENCE);
+    expect(mockStationaryFlag).not.toHaveBeenCalled();
+    expect(mockStartUpdates.mock.calls.at(-1)[1]).toEqual(expect.objectContaining({ distanceInterval: 10, accuracy: Location.Accuracy.High }));
+  });
+
+  it('does not start when go-online is cancelled during the remote flag read', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    mockStationaryFlag.mockImplementationOnce(async () => { allowed = false; return true; });
+    expect(await startBackgroundLocation(undefined, () => allowed)).toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('refreshes stationary rollout on resume with no GPS callback or task restart', async () => {
+    platform.OS = 'ios';
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    read.mockResolvedValue(null);
+    try {
+      mockStationaryFlag.mockResolvedValue(false);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(10);
+      mockStationaryFlag.mockResolvedValue(true);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(0);
+      mockStationaryFlag.mockResolvedValue(false);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(10);
+      await startBackgroundLocation(TRIP_CADENCE);
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].accuracy).toBe(Location.Accuracy.High);
+      let allowed = true;
+      mockStartUpdates.mockClear();
+      mockStationaryFlag.mockImplementationOnce(async () => { allowed = false; return true; });
+      await startBackgroundLocation(undefined, () => allowed);
+      expect(mockStartUpdates).not.toHaveBeenCalled();
+    } finally {
+      read.mockImplementation(previous);
+    }
   });
 
   it('does not resurrect tracking when the caller goes offline during permission lookup', async () => {
@@ -530,6 +782,35 @@ describe('updateBackgroundLocationCadence', () => {
   });
 
   it.each([
+    ['android', 'start'], ['android', 'return-to-idle'],
+    ['ios', 'start'], ['ios', 'return-to-idle'],
+  ] as const)('%s %s requests stationary fixes before presence expires', async (os, path) => {
+    platform.OS = os;
+    if (path === 'start') {
+      mockHasStartedLocationUpdates.mockResolvedValue(false);
+      await startBackgroundLocation();
+    } else {
+      await updateBackgroundLocationCadence(TRIP_CADENCE);
+      mockStartUpdates.mockClear();
+      await updateBackgroundLocationCadence(IDLE_CADENCE);
+    }
+    const opts = mockStartUpdates.mock.calls[0][1];
+    // Backend presence expires after 90s. Leave room for scheduling/network
+    // delay, and never require the waiting driver to move to stay discoverable.
+    expect(opts.timeInterval).toBe(4_000);
+    expect(opts.deferredUpdatesInterval).toBe(os === 'ios' ? 4_000 : 0);
+    expect(opts.distanceInterval).toBe(0);
+    expect(opts.accuracy).toBe(Location.Accuracy.High);
+    expect(opts.pausesUpdatesAutomatically).toBe(false);
+    expect(opts.foregroundService).toBeDefined();
+  });
+
+  it('keeps the existing trip cadence and equally frequent idle requests', () => {
+    expect(TRIP_CADENCE.timeInterval).toBe(IDLE_CADENCE.timeInterval);
+    expect(TRIP_CADENCE).toEqual({ timeInterval: 4_000, distanceInterval: 10, accuracy: Location.Accuracy.High });
+  });
+
+  it.each([
     ['android', 'online', IDLE_CADENCE, 0],
     ['android', 'trip', TRIP_CADENCE, 0],
     ['ios', 'online', IDLE_CADENCE, 4000],
@@ -540,7 +821,7 @@ describe('updateBackgroundLocationCadence', () => {
       await updateBackgroundLocationCadence(cadence);
       expect(mockStartUpdates).toHaveBeenCalledWith('spinr-background-location', expect.objectContaining({
         timeInterval: 4000,
-        distanceInterval: 10,
+        distanceInterval: cadence === IDLE_CADENCE ? 0 : 10,
         deferredUpdatesInterval: deliveryInterval,
       }));
     },
@@ -555,7 +836,7 @@ describe('updateBackgroundLocationCadence', () => {
     await expect(updateBackgroundLocationCadence(TRIP_CADENCE)).rejects.toThrow('Native cadence update rejected');
     expect(runningOptions).toEqual(expect.objectContaining({
       timeInterval: 4000,
-      distanceInterval: 10,
+      distanceInterval: 0,
       deferredUpdatesInterval: 0,
     }));
   });
@@ -593,6 +874,31 @@ describe('reassertDispatchTask — Sentry noise suppression (Sentry issue 772629
       expect.any(Error),
       expect.objectContaining({ location: 'reassert_failed' }),
     );
+  });
+
+  it('keeps trip cadence when a running resume requests idle before trip hydration', async () => {
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    read.mockImplementation(async (key: string) => (
+      key === 'spinr_bg_trip_active' ? 'true' : null
+    ));
+    try {
+      await startBackgroundLocation(IDLE_CADENCE);
+      const cfg = mockStartUpdates.mock.calls.at(-1)?.[1];
+      expect(cfg).toEqual(expect.objectContaining({
+        timeInterval: TRIP_CADENCE.timeInterval,
+        distanceInterval: TRIP_CADENCE.distanceInterval,
+        accuracy: Location.Accuracy.High,
+      }));
+      read.mockImplementation(async (key: string) => {
+        if (key === 'spinr_bg_trip_active') throw new Error('Keychain temporarily unavailable');
+        return null;
+      });
+      await startBackgroundLocation(IDLE_CADENCE);
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(TRIP_CADENCE.distanceInterval);
+    } finally {
+      read.mockImplementation(previous);
+    }
   });
 });
 

@@ -1,5 +1,13 @@
 # Background driver discovery cadence
 
+## Merge resolution against main (2026-09-16)
+
+This section supersedes the original 10-second cadence and background-auth limitation below. Main added a user-approved four-second online cadence and coordinated background token renewal. Resolution preserves both, combines idle four-second timing with this PR's zero movement threshold and High accuracy, and retains the shared 90-second presence window. Android deferred delivery remains zero; iOS remains four seconds. Trip cadence stays four seconds/10 metres/High. Token renewal and native session-lock code are unchanged from main.
+
+Resolved files: driver-app/utils/backgroundLocation.ts and its utils/__tests__/backgroundLocation.test.ts. Updated driver-app/__tests__/utils/backgroundLocation.reassert.test.ts to distinguish trip/idle by movement threshold, since timing and accuracy now match. The extra idle sampling relative to the original ten-second PR raises battery/network load further; physical-device testing remains required. Rollback and consumer blast radius below still apply.
+
+Verification after merge: 124 tests passed in five suites covering background callbacks, reassert/recovery, socket lifecycle, background auth and native session locking; Android/iOS production Hermes exports passed. ESLint: zero errors, nine warnings in test code. Independent review confirmed upstream preservation. An additional authStore.refreshRace run reported two failures (delayed go-offline cleanup timeout and persisted-credential revocation assertion); that test and shared/store/authStore.ts match origin/main byte-for-byte, but these failures were not separately reproduced in a base checkout. No native release binary, phone validation, or deployment performed.
+
 | Field | Value |
 |---|---|
 | Date | 2026-09-16 |

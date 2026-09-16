@@ -44,7 +44,7 @@
     "react-native": ">=0.72.0"
   },
   "devDependencies": {
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "@types/react": "^19.3.0",
     "typescript": "~5.9.2"
   }

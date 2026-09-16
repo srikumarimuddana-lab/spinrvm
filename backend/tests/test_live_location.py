@@ -58,9 +58,9 @@ def test_live_position_without_idle_history(monkeypatch, online, age, enabled, s
         assert exc.value.status_code == status
     else:
         result = asyncio.run(call)
-        assert result["accepted"] == enabled
+        assert result["accepted"] is True
         asyncio.run(tasks())
-    assert apply.await_count == int(status is None and enabled)
+    assert apply.await_count == int(status is None)
     assert presence.await_count == int(status is None)
     if status is None:
         presence.assert_awaited_once_with("driver-1")
@@ -92,3 +92,35 @@ def test_live_presence_rejects_missing_driver_or_revoked_session(monkeypatch, re
     assert exc.value.status_code == status
     presence.assert_not_awaited()
     assert not tasks.tasks
+
+
+def test_live_endpoint_updates_marker_with_fanout_disabled(monkeypatch):
+    async def rows(table, filters, **kwargs):
+        return [{"id": "driver-1", "is_online": True}] if table == "drivers" else []
+
+    monkeypatch.setattr(location.db_supabase, "get_rows", rows)
+    monkeypatch.setattr("settings_loader.get_app_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
+    monkeypatch.setattr(location._deps, "mark_present", AsyncMock())
+    monkeypatch.setattr("utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, "ok")))
+    monkeypatch.setattr(location, "_newer_than_last_written_marker", AsyncMock(return_value=True))
+    write = AsyncMock()
+    send = AsyncMock()
+    monkeypatch.setattr(location, "_write_marker_if_due", write)
+    monkeypatch.setattr(location._deps.manager, "send_personal_message", send)
+    tasks = BackgroundTasks()
+    point = location.LiveLocationRequest(lat=50.45, lng=-104.6, captured_at=datetime.now(timezone.utc))
+    result = asyncio.run(
+        location.update_live_location(
+            point,
+            tasks,
+            current_user={"id": "user-1"},
+            token_session_id="session-1",
+        )
+    )
+    assert result["accepted"] is True
+    asyncio.run(tasks())
+    write.assert_awaited_once()
+    assert write.await_args.args[1]["lat"] == point.lat
+    assert write.await_args.args[1]["lng"] == point.lng
+    send.assert_not_awaited()

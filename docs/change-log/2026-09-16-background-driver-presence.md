@@ -1,5 +1,11 @@
 # Background driver discovery cadence
 
+## Review correction: marker writes independent of fanout
+
+The earlier heartbeat-only correction still left moving drivers at stale persisted coordinates with fanout disabled. The live endpoint now always queues the existing integrity/order/coalescing-protected marker helper after validation. That helper already gates rider messages internally. `accepted:true` means queued, not guaranteed persisted; invalid/offline/revoked fixes still fail validation. This supersedes earlier descriptions of flag-off accepted:false. Alternative of enabling fanout was rejected because nearby/dispatch coordinates must not depend on optional rider delivery.
+
+Files: backend/routes/drivers/location.py, backend/tests/test_live_location.py, this log. Blast radius: driver background live uploads and all nearby/dispatch readers of drivers.lat/lng. Risk: marker DB load with fanout off now uses the same existing write coalescing as enabled traffic. Rollback requires backend release rollback; do not use fanout=false to freeze markers. No historical-data or schema changes. Regression reproduced two failures before fix; endpoint test runs the real marker helper to assert coordinate write with no rider send. Focused test results recorded before PR completion; no live database or production latency test.
+
 ## Review correction: dashboard rollout control
 
 Added Stationary driver tracking under Settings > Operations. It reads the stored Boolean, defaults off when absent, and uses the existing Save Changes action. The control explains battery/network cost, cache propagation and foreground resume for enable/rollback. This completes the supported admin workflow rather than requiring production SQL access. Files: admin settings page (control), e2e/settings.spec.ts (enable/save/reload/disable/save/reload), this log.

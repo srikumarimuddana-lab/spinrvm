@@ -754,10 +754,6 @@ async def update_live_location(
     token_session_id: str | None = Depends(get_token_session_id),
 ):
     await _guard_revoked_session(token_session_id)
-    try:
-        from ...settings_loader import get_app_settings
-    except ImportError:
-        from settings_loader import get_app_settings
     drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     if not drivers:
         raise HTTPException(status_code=403, detail="Driver profile required")
@@ -770,8 +766,8 @@ async def update_live_location(
     # Fresh authenticated GPS is a heartbeat even when optional delivery/history
     # rollouts are off. Never renew from an offline driver or a stale fix.
     await _deps.mark_present(driver["id"])
-    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
-        return {"accepted": False}
+    # Keep discovery/dispatch coordinates fresh independently of rider fanout.
+    # The marker helper gates rider delivery internally.
     # Assignment is server-owned; never trust a caller's ride or driver ID.
     rides = await db_supabase.get_rows(
         "rides",

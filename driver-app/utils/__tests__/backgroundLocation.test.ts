@@ -114,9 +114,11 @@ import {
   stopBackgroundLocation,
   isSessionEnded,
   _resetGeofenceDebounce,
+  _resetForegroundUploadPacing,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../backgroundLocation';
+import { AppState } from 'react-native';
 import * as TaskManager from 'expo-task-manager';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
@@ -210,6 +212,7 @@ describe('background durable trip recording', () => {
     // The singleton recorder carries flush-backoff state across tests; a
     // failure test would otherwise make every later flush silently skip.
     tripLocationRecorder._resetUploadBackoff();
+    _resetForegroundUploadPacing();
     await tripLocationRecorder.startRide('ride-1');
   });
 
@@ -324,6 +327,193 @@ describe('background durable trip recording', () => {
       expect(live[1].signal).toBeDefined();
       expect(calls.some(([url]) => url.endsWith('/drivers/location-batch'))).toBe(false);
     } finally { capture.mockRestore(); }
+  });
+
+  it('keeps every iOS foreground sample durable while pacing live and history uploads', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } as any });
+      expect(global.fetch).toHaveBeenCalledTimes(2); // live + first durable batch
+
+      const second = handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      await jest.advanceTimersByTimeAsync(0);
+      await second;
+
+      // Native callbacks can arrive faster than iOS's requested cadence. Capture
+      // still happens immediately, while a callback inside the pacing window is
+      // coalesced into the next native callback.
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(3_999);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(1);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(2)] } } as any);
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(3);
+      expect(global.fetch).toHaveBeenCalledTimes(4); // third live + history
+    } finally {
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('does not let overlapping iOS foreground callbacks bypass the upload slot', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    let resolveNetwork!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const pendingNetwork = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>(resolve => {
+      resolveNetwork = resolve;
+    });
+    let started = 0;
+    let resolveFirstUploads!: () => void;
+    const firstUploads = new Promise<void>(resolve => { resolveFirstUploads = resolve; });
+    (global.fetch as jest.Mock).mockImplementation(() => {
+      started += 1;
+      if (started === 2) resolveFirstUploads();
+      return pendingNetwork;
+    });
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      const first = handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      await firstUploads;
+
+      const second = handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      await jest.advanceTimersByTimeAsync(0);
+      await second;
+
+      // The second sample is durable, but the in-flight live/history requests
+      // own both lanes; no queued callback may create a burst later.
+      expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      resolveNetwork({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      await first;
+    } finally {
+      resolveNetwork?.({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('keeps live uploads independent when an iOS history flush is slow', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'active';
+
+    let resolveHistory!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void;
+    const pendingHistory = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>(resolve => {
+      resolveHistory = resolve;
+    });
+    let networkCalls = 0;
+    let resolveFirstNetwork!: () => void;
+    const firstNetwork = new Promise<void>(resolve => { resolveFirstNetwork = resolve; });
+    let batchCalls = 0;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      networkCalls += 1;
+      if (networkCalls === 2) resolveFirstNetwork();
+      if (url.endsWith('/drivers/location-batch')) {
+        batchCalls += 1;
+        return pendingHistory;
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      const first = handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      // Let both first-lane requests reach fetch while the history request is held.
+      await firstNetwork;
+      expect(batchCalls).toBe(1);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+
+      await jest.advanceTimersByTimeAsync(4_000);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => url.endsWith('/drivers/location-live'))).toHaveLength(2);
+      expect(batchCalls).toBe(1); // history lane is still in flight
+
+      resolveHistory({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      await first;
+    } finally {
+      resolveHistory?.({ ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) });
+      _resetForegroundUploadPacing();
+      jest.useRealTimers();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  });
+
+  it('paces live requests from actual dispatch after slow App Check', async () => {
+    const platform = require('react-native').Platform;
+    const { getAppCheckToken } = require('@shared/services/firebase');
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    platform.OS = 'ios'; AppState.currentState = 'active';
+    let now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const capture = jest.spyOn(tripLocationRecorder, 'recordNativeFix').mockResolvedValue(null);
+    const flush = jest.spyOn(tripLocationRecorder, 'flushPending').mockResolvedValue(undefined);
+    let release!: (value: string) => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    getAppCheckToken.mockImplementationOnce(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+    const callback = () => handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: now }] } as any });
+    try {
+      _resetForegroundUploadPacing();
+      const first = callback();
+      await ready;
+      now += 5000;
+      release('app-check');
+      await first;
+      now += 1000;
+      await callback();
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      now += 3000;
+      await callback();
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      release?.('app-check'); clock.mockRestore(); capture.mockRestore(); flush.mockRestore();
+      _resetForegroundUploadPacing(); platform.OS = originalOS; AppState.currentState = originalState;
+    }
+  });
+
+  it('does not pace iOS background delivery', async () => {
+    const platform = require('react-native').Platform;
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    platform.OS = 'ios';
+    AppState.currentState = 'background';
+
+    try {
+      const freshLocation = (i: number) => ({ ...makeLocation(i), timestamp: Date.now() - 1_000 });
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(0)] } } as any);
+      await handleBackgroundLocationTask({ data: { locations: [freshLocation(1)] } } as any);
+      expect(global.fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      _resetForegroundUploadPacing();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
   });
 
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {

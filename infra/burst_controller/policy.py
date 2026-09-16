@@ -57,15 +57,15 @@ class Policy:
         ):
             self.high_since = None
             return Decision("invalid_metrics")
+        if not (running & ready):
+            self.high_since = None
+            return Decision("dependency_unready")
         stamp = min(s.timestamp for s in samples.values())
         if self.last_sample is not None and stamp <= self.last_sample:
             return Decision("awaiting_fresh_sample")
         if self.last_sample is not None and stamp - self.last_sample > 30:
             self.high_since = None
         self.last_sample = stamp
-        if not (running & ready):
-            self.high_since = None
-            return Decision("dependency_unready")
         high = any(s.memory >= 0.70 or s.cpu >= 0.80 for s in samples.values())
         critical = any(s.memory >= 0.85 for s in samples.values())
         self.high_since = (

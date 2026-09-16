@@ -80,6 +80,7 @@ class Controller:
     def __init__(self, fly, anchor, clock=time.time):
         self.fly, self.anchor, self.clock = fly, anchor, clock
         self.policy = Policy()
+        self.last_failed_at = 0
 
     def fence(self, lease):
         if (
@@ -125,6 +126,14 @@ class Controller:
         samples = {key: value for key, value in samples.items() if key in running}
         if dry_run:
             state = checked_journal(self.fly.journal(self.anchor), self.clock())
+            self.last_failed_at = max(
+                (
+                    a["at"]
+                    for a in state.get("attempts", [])
+                    if a["outcome"] == "failed"
+                ),
+                default=0,
+            )
             return self.policy.decide(machines, samples, ready, state, self.clock())
         with self.leased(self.anchor) as anchor:
             fresh = self.fly.machines()
@@ -133,6 +142,14 @@ class Controller:
                 self.policy = Policy()
                 raise ValueError("Fleet changed during observation")
             state = checked_journal(self.fly.journal(self.anchor), self.clock())
+            self.last_failed_at = max(
+                (
+                    a["at"]
+                    for a in state.get("attempts", [])
+                    if a["outcome"] == "failed"
+                ),
+                default=0,
+            )
             pending = state.get("pending")
             if pending:
                 succeeded = pending in running and pending in ready
@@ -145,6 +162,7 @@ class Controller:
                     self.fence(anchor)
                     self.fly.save(self.anchor, state, anchor["nonce"])
                     if not succeeded:
+                        self.last_failed_at = state["attempts"][-1]["at"]
                         return Decision("start_failed")
             decision = self.policy.decide(machines, samples, ready, state, self.clock())
             if not decision.target:

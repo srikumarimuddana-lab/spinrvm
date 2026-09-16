@@ -72,6 +72,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "aws_ses_secret_access_key",
         "aws_ses_sns_topic_arn",
         "branded_receipt_enabled",
+        "background_location_fanout_enabled",
         "cancellation_fee_admin",
         "cancellation_fee_driver",
         "company_address",

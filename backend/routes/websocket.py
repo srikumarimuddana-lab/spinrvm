@@ -957,6 +957,7 @@ async def websocket_endpoint(
                             logger.opt(exception=True).debug("Maps API key refresh failed; retaining stale key")
                         _maps_key_fetched_at = now_mono
 
+                    live_captured_at = parse_iso_utc(data.get("captured_at"))
                     location_update = {
                         "type": "driver_location_update",
                         "driver_id": driver_id,
@@ -964,6 +965,7 @@ async def websocket_endpoint(
                         "lng": lng,
                         "speed": data.get("speed"),
                         "heading": data.get("heading"),
+                        "captured_at": live_captured_at.isoformat() if live_captured_at else None,
                     }
 
                     # Forward to riders of confirmed rides (driver_accepted →
@@ -979,6 +981,7 @@ async def websocket_endpoint(
 
                         ride_status = ride.get("status", "")
                         rider_msg = location_update.copy()
+                        rider_msg["ride_id"] = ride["id"]
 
                         if ride_status in _ETA_PICKUP_STATUSES:
                             pickup_lat = ride.get("pickup_lat")
@@ -1187,6 +1190,7 @@ async def websocket_endpoint(
                                 },
                                 limit=10,
                             )
+                            _batch_captured_at = parse_iso_utc(last_pt.get("captured_at"))
                             _batch_loc_update = {
                                 "type": "driver_location_update",
                                 "driver_id": driver_id,
@@ -1194,11 +1198,13 @@ async def websocket_endpoint(
                                 "lng": _lng,
                                 "speed": last_pt.get("speed"),
                                 "heading": last_pt.get("heading"),
+                                "captured_at": _batch_captured_at.isoformat() if _batch_captured_at else None,
                             }
                             for _batch_ride in _batch_active_rides:
                                 if _batch_ride.get("status") not in _RIDER_LOCATION_STATUSES:
                                     continue
                                 _batch_rider_msg = _batch_loc_update.copy()
+                                _batch_rider_msg["ride_id"] = _batch_ride["id"]
                                 _batch_ride_status = _batch_ride.get("status", "")
                                 if _batch_ride_status in _ETA_PICKUP_STATUSES:
                                     _p_lat = _batch_ride.get("pickup_lat")

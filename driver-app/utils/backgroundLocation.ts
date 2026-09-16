@@ -275,6 +275,7 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     return;
   }
 
+  let latestLiveFix: Location.LocationObject | null = null;
   for (const location of data?.locations ?? []) {
     // CAPTURE BEFORE FILTER. Durable persistence comes first, unconditionally:
     // a fix that never reaches the outbox is route history lost forever
@@ -299,6 +300,9 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       console.warn(`[BgLocation] Untrusted sample kept for audit, hidden from display: ${integrity.reason}`);
       continue;
     }
+    const age = Date.now() - location.timestamp;
+    if (Number.isFinite(age) && age >= -5000 && age <= 60_000 &&
+        (!latestLiveFix || location.timestamp > latestLiveFix.timestamp)) latestLiveFix = location;
     // Feed the Android Auto map. This service already holds a foreground-service
     // notification, so while it runs the car needs no second one of its own —
     // carLocationTask.startCarLocationService() defers to it for exactly this
@@ -329,21 +333,36 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
   const token = await getBackgroundAuthToken();
   if (!token || !API_URL) return;
 
+  const postLocation = async (path: string, payload: unknown) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      await initFirebaseServices();
+      const appCheckToken = await getAppCheckToken();
+      return await fetch(`${API_URL}/api/v1/drivers/${path}`, {
+        method: 'POST', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
+          ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}) },
+        body: JSON.stringify(payload),
+      });
+    } finally { clearTimeout(timeout); }
+  };
+  // Live positions must not wait behind historical retries or depend on the
+  // opt-in idle-history queue. Persist above first; deliver the two independently.
+  const liveUpload = latestLiveFix ? postLocation('location-live', {
+    lat: latestLiveFix.coords.latitude, lng: latestLiveFix.coords.longitude,
+    heading: latestLiveFix.coords.heading, speed: latestLiveFix.coords.speed,
+    accuracy: latestLiveFix.coords.accuracy, mocked: latestLiveFix.mocked ?? false,
+    captured_at: new Date(latestLiveFix.timestamp).toISOString(),
+  }).then(response => {
+    if (!response.ok) throw new Error(`live location ${response.status}`);
+  }).catch(() => { console.warn('[BgLocation] Live position upload deferred'); }) : Promise.resolve();
+
   try {
     await tripLocationRecorder.flushPending(async (request: TripLocationBatchRequest) => {
       // App Check is enforced on /api/* in production. Initialize it
       // idempotently because this headless task does not mount the app shell.
-      await initFirebaseServices();
-      const appCheckToken = await getAppCheckToken();
-      const response = await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
-        },
-        body: JSON.stringify(request),
-      });
+      const response = await postLocation('location-batch', request);
       // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
       // this fetch previously threw on them, and because flushPending aborts
       // its whole loop on a transport throw, ONE permanently-rejected batch
@@ -363,6 +382,8 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     // each deferred upload would emit ~15 events/min/driver for the whole
     // duration of a backend or network outage.
     console.warn('[BgLocation] Durable upload deferred');
+  } finally {
+    await liveUpload;
   }
 }
 
@@ -446,7 +467,11 @@ export async function isBackgroundLocationRunning(): Promise<boolean> {
   }
 }
 
-export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
+export async function startBackgroundLocation(
+  config?: BgLocationConfig,
+  canStart: () => boolean = () => true,
+): Promise<boolean> {
+  if (!canStart()) return false;
   // A signed-out device must never (re)start location capture, from ANY
   // caller — go-online, geofence recovery, or the FCM location_health nudge
   // (which runs headless, where "the foreground auth store knows best" does
@@ -484,8 +509,11 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
   }
 
   return runExclusive('bg-start', async () => {
+    // A resume or permission wait may outlive its online/account lifecycle.
+    if (await isSessionEnded() || !canStart()) return false;
     // Re-probe under the lock — a queued car-task start may have raced us.
     if (await Location.hasStartedLocationUpdatesAsync(TASK_NAME)) return true;
+    if (!canStart()) return false;
 
     // SINGLE-WRITER, order matters: stop the car task BEFORE promoting this
     // one. expo-location runs ALL location tasks through ONE shared Android
@@ -508,6 +536,7 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
       // Android Auto layer absent — nothing to stand down.
     }
 
+    if (await isSessionEnded() || !canStart()) return false;
     await _applyTaskOptions(config);
     console.log('[BgLocation] Started');
     return true;

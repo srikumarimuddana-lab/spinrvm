@@ -90,6 +90,7 @@ export function useRiderSocket() {
             data.speed ?? null,
             data.heading ?? null,
             data.eta_seconds ?? null,
+            { rideId: data.ride_id, driverId: data.driver_id, capturedAt: data.captured_at },
           );
         }
         break;

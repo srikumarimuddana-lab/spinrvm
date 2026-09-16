@@ -3,6 +3,8 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { AppState } from 'react-native';
 import { ensureFreshToken } from '@shared/api/client';
 import { useDriverDashboard } from '../useDriverDashboard';
+import * as Location from 'expo-location';
+import { startBackgroundLocation, TRIP_CADENCE, IDLE_CADENCE } from '../../utils/backgroundLocation';
 
 const mockAppListeners = new Set<(state: string) => void>();
 const mockNetListeners = new Set<(state: object) => void>();
@@ -53,19 +55,23 @@ jest.mock('../useRideOfferSound', () => {
 });
 jest.mock('../../services/notifeeService', () => ({ dismissRideOfferNotification: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../../services/pendingRideOffer', () => ({ consumePendingRideOffer: jest.fn().mockResolvedValue(null) }));
-jest.mock('../../utils/backgroundLocation', () => Object.fromEntries([
+jest.mock('../../utils/backgroundLocation', () => ({ ...Object.fromEntries([
   'startBackgroundLocation', 'stopBackgroundLocation', 'startGeofenceRecovery', 'stopGeofenceRecovery',
   'setBackgroundTripActive', 'updateBackgroundLocationCadence', 'recoverTripLocation',
-].map(name => [name, jest.fn().mockResolvedValue(undefined)])));
-jest.mock('../../utils/sensorIntegrity', () => ({ startSensorMonitoring: jest.fn(), stopSensorMonitoring: jest.fn() }));
+].map(name => [name, jest.fn().mockResolvedValue(true)])), TRIP_CADENCE: { timeInterval: 4000 }, IDLE_CADENCE: { timeInterval: 30000 } }));
+jest.mock('../../utils/sensorIntegrity', () => ({ startSensorMonitoring: jest.fn(), stopSensorMonitoring: jest.fn(), checkMovementConsistency: () => ({ consistent: true }) }));
 jest.mock('../../utils/deviceIntegrity', () => ({ attestDeviceIntegrity: jest.fn() }));
 jest.mock('../../utils/tripLocationRecorder', () => ({ tripLocationRecorder: Object.fromEntries([
-  'flushPending', 'stopIdleSession', 'setIdleRecordingEnabled', 'startIdleSession',
+  'flushPending', 'stopIdleSession', 'setIdleRecordingEnabled', 'startIdleSession', 'startRide',
 ].map(name => [name, jest.fn().mockResolvedValue(undefined)])) }));
 jest.mock('expo-location', () => ({
   Accuracy: { High: 4, Balanced: 3 },
   getForegroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'denied' }),
   requestForegroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'denied' }),
+  hasServicesEnabledAsync: jest.fn().mockResolvedValue(true),
+  getLastKnownPositionAsync: jest.fn().mockResolvedValue(null),
+  getCurrentPositionAsync: jest.fn(),
+  getBackgroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
   watchPositionAsync: jest.fn().mockResolvedValue({ remove: jest.fn() }),
 }), { virtual: true });
 
@@ -88,7 +94,8 @@ class Socket {
 }
 let mounted: TestRenderer.ReactTestRenderer | undefined;
 const originalSocket = global.WebSocket;
-function Dashboard() { useDriverDashboard(); return null; }
+let dashboard: ReturnType<typeof useDriverDashboard>;
+function Dashboard() { dashboard = useDriverDashboard(); return null; }
 async function mount() { await act(async () => { mounted = TestRenderer.create(React.createElement(Dashboard)); }); }
 async function appState(state: string) {
   await act(async () => { (AppState as any).currentState = state; mockAppListeners.forEach(cb => cb(state)); });
@@ -104,6 +111,12 @@ beforeEach(() => {
   Socket.instances = [];
   global.WebSocket = Socket as any;
   (ensureFreshToken as jest.Mock).mockReset().mockResolvedValue(undefined);
+  (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied' });
+  (Location.getLastKnownPositionAsync as jest.Mock).mockResolvedValue(null);
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockReset().mockResolvedValue({ status: 'granted' });
+  mockAuth.driver.is_online = true;
+  mockDriver.rideState = 'idle';
+  mockDriver.activeRide = null;
 });
 afterEach(async () => {
   await act(async () => { mounted?.unmount(); }); mounted = undefined;
@@ -191,4 +204,94 @@ it('invalidates an old account attempt when the dashboard changes users', async 
   expect(Socket.instances[0].url).toContain('/ws/driver/driver-2');
   await act(async () => resolve());
   expect(Socket.instances).toHaveLength(1);
+});
+
+const fix = (timestamp = Date.now(), latitude = 50.45) => ({ timestamp,
+  coords: { latitude, longitude: -104.6, accuracy: 8, heading: 90, speed: 10, altitude: 0, altitudeAccuracy: 0 } });
+
+it('feeds a fresh resume measurement to the marker using its capture time', async () => {
+  (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted' });
+  (Location.getCurrentPositionAsync as jest.Mock).mockResolvedValue(fix());
+  await mount();
+  const received = jest.fn(); dashboard.markerFixFeed.subscribe(received);
+  await appState('background'); await advance(60_000);
+  const current = fix(Date.now() - 1000, 50.46);
+  (Location.getCurrentPositionAsync as jest.Mock).mockResolvedValue(current);
+  await appState('active');
+  expect(received).toHaveBeenLastCalledWith(expect.objectContaining({ latitude: 50.46, timestampMs: current.timestamp }));
+});
+
+it('does not create fresh marker measurements from an old cached coordinate', async () => {
+  await mount();
+  const received = jest.fn(); dashboard.markerFixFeed.subscribe(received);
+  const callback = (Location.watchPositionAsync as jest.Mock).mock.calls.at(-1)[1];
+  await act(async () => callback(fix()));
+  received.mockClear();
+  await advance(7500);
+  expect(received).not.toHaveBeenCalled();
+});
+
+it('does not label a stale last-known position healthy after resume failure', async () => {
+  (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted' });
+  (Location.getCurrentPositionAsync as jest.Mock).mockRejectedValue(new Error('GPS unavailable'));
+  (Location.getLastKnownPositionAsync as jest.Mock).mockResolvedValue(fix(Date.now() - 120_000));
+  await mount();
+  expect(dashboard.locationStatus).toBe('unavailable');
+});
+
+it('ensures native tracking for an already-online mount and foreground resume', async () => {
+  await mount();
+  expect(startBackgroundLocation).toHaveBeenCalledWith(IDLE_CADENCE, expect.any(Function));
+  (startBackgroundLocation as jest.Mock).mockClear();
+  await appState('background'); await appState('active');
+  expect(startBackgroundLocation).toHaveBeenCalledTimes(1);
+});
+
+it('restores active-trip native tracking at trip cadence', async () => {
+  mockDriver.rideState = 'trip_in_progress';
+  mockDriver.activeRide = { ride: { id: 'ride-1' } } as any;
+  await mount();
+  expect(startBackgroundLocation).toHaveBeenCalledWith(TRIP_CADENCE, expect.any(Function));
+});
+
+it('does not restart or prompt when offline or background permission is denied', async () => {
+  mockAuth.driver.is_online = false;
+  await mount(); await appState('background'); await appState('active');
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+  await act(async () => mounted!.unmount()); mounted = undefined;
+  mockAuth.driver.is_online = true;
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied' });
+  await mount(); await appState('background'); await appState('active');
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+});
+
+it('cancels recovery when permission lookup finishes after unmount', async () => {
+  let resolve!: (value: object) => void;
+  (Location.getBackgroundPermissionsAsync as jest.Mock).mockReturnValue(new Promise(done => { resolve = done; }));
+  await mount();
+  await act(async () => mounted!.unmount()); mounted = undefined;
+  await act(async () => resolve({ status: 'granted' }));
+  expect(startBackgroundLocation).not.toHaveBeenCalled();
+});
+
+it('replaces the foreground watcher on resume and removes a late subscription', async () => {
+  let resolve!: (value: object) => void;
+  const remove = jest.fn();
+  (Location.watchPositionAsync as jest.Mock).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  await mount(); await appState('background'); await appState('active');
+  expect(Location.watchPositionAsync).toHaveBeenCalledTimes(2);
+  await act(async () => resolve({ remove }));
+  expect(remove).toHaveBeenCalledTimes(1);
+});
+
+it('does not let a cached watcher callback rewind the fresh resume position', async () => {
+  (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted' });
+  const fresh = fix();
+  (Location.getCurrentPositionAsync as jest.Mock).mockResolvedValue(fresh);
+  await mount();
+  const received = jest.fn(); dashboard.markerFixFeed.subscribe(received);
+  const callback = (Location.watchPositionAsync as jest.Mock).mock.calls.at(-1)[1];
+  await act(async () => callback(fix(fresh.timestamp - 10_000, 50.44)));
+  expect(received).not.toHaveBeenCalled();
+  expect(dashboard.location?.coords.latitude).toBe(fresh.coords.latitude);
 });

@@ -400,10 +400,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // createFixFeed is a pure factory (allocates a Set); once-only via useRef.
   // eslint-disable-next-line react-hooks/purity
   const markerFixFeedRef = useRef(createFixFeed());
-  // Last coordinate/heading handed to the marker feed and when — read by the
-  // stationary heartbeat below, written every time a real fix is emitted.
-  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null; accuracyM?: number | null } | null>(null);
-  const lastMarkerFixEmitMsRef = useRef<number>(0);
+  const locationRefreshGenerationRef = useRef(0);
+  const [locationResumeEpoch, setLocationResumeEpoch] = useState(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
@@ -517,10 +515,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // AppState refresh the map would still point at home until
   // watchPositionAsync starts after Go Online).
   const refreshLocation = useCallback(async (useCache: boolean) => {
+    const generation = ++locationRefreshGenerationRef.current;
+    const isCurrent = () => generation === locationRefreshGenerationRef.current && AppState.currentState === 'active';
+    const displayFreshFix = (loc: Location.LocationObject | null) => {
+      if (!isCurrent() || !loc || !Number.isFinite(loc.timestamp) ||
+          Date.now() - loc.timestamp > 30_000 || loc.timestamp > Date.now() + 5_000 ||
+          (locationRef.current && loc.timestamp < locationRef.current.timestamp) ||
+          !fgIntegrity.check(loc).trusted ||
+          !shouldDisplayFix(loc.coords.accuracy, Date.now() - lastDisplayedFixMsRef.current)) return false;
+      setLocation(loc);
+      locationRef.current = loc;
+      setLocationStatus('ok');
+      lastDisplayedFixMsRef.current = Date.now();
+      markerFixFeedRef.current.emit({ latitude: loc.coords.latitude, longitude: loc.coords.longitude,
+        heading: loc.coords.heading, accuracyM: loc.coords.accuracy, timestampMs: loc.timestamp });
+      return true;
+    };
     setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
     if (useCache) {
       try {
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
+        if (!isCurrent()) return null;
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
           // heading -1 = "unknown" (expo-location convention) — a cached fix has
@@ -532,8 +547,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     let { status } = await Location.getForegroundPermissionsAsync();
+    if (!isCurrent()) return null;
     if (status !== 'granted') {
       const res = await Location.requestForegroundPermissionsAsync();
+      if (!isCurrent()) return null;
       status = res.status;
     }
     if (status !== 'granted') {
@@ -552,6 +569,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // just throw, so detect it up front. No fix will ever arrive in this
     // state, so a stale cached map would be misleading: clear it too.
     const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+    if (!isCurrent()) return null;
     if (!servicesOn) {
       setLocation(null);
       locationRef.current = null;
@@ -562,6 +580,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
+        if (!isCurrent()) return null;
         if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
       } catch {}
     }
@@ -571,29 +590,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // waiting for a fix (indoors, weak GPS) — race it so the driver
       // never sits on the spinner forever.
       const loc = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        Location.getCurrentPositionAsync({ accuracy: isOnlineRef.current ? Location.Accuracy.High : Location.Accuracy.Balanced }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location fix timeout')), 15000)),
       ]);
-      setLocation(loc);
-      locationRef.current = loc;
-      setLocationStatus('ok');
+      if (!isCurrent()) return null;
+      if (!displayFreshFix(loc)) throw new Error('No fresh display position');
       try {
         AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
       } catch {}
       return loc;
     } catch {
+      if (!isCurrent()) return null;
       // Fix failed or timed out — a coarse last-known position still lets
       // the map render; watchPositionAsync corrects it once a fix lands.
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          setLocation(lastKnown);
-          locationRef.current = lastKnown;
-          setLocationStatus('ok');
+        if (displayFreshFix(lastKnown)) {
           return lastKnown;
         }
       } catch {}
-      if (locationRef.current) {
+      if (!isCurrent()) return null;
+      if (locationRef.current && Date.now() - locationRef.current.timestamp <= 30_000) {
         // A real fix from this session (lastKnown/watcher) is still on the
         // map — keep it; the watcher corrects it once a fresh fix lands.
         setLocationStatus('ok');
@@ -616,10 +633,45 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     refreshLocation(true);
     const sub = AppState.addEventListener('change', (next) => {
       // Skip cache on resume — we want a fresh fix, not yesterday's.
-      if (next === 'active') refreshLocation(false);
+      if (next === 'active') {
+        setLocationResumeEpoch(value => value + 1);
+        refreshLocation(false);
+      }
     });
-    return () => sub.remove();
+    return () => { locationRefreshGenerationRef.current++; sub.remove(); };
   }, [refreshLocation]);
+
+  // Native registration belongs to the online lifecycle, not profile hydration.
+  // Resume can repair a missing task without sending the driver to Settings again.
+  useEffect(() => {
+    if (!isOnline || !user?.id) return;
+    let cancelled = false;
+    const accountId = user.id;
+    const canStart = () => !cancelled && isOnlineRef.current && !isTogglingRef.current &&
+      AppState.currentState === 'active' && useAuthStore.getState().user?.id === accountId;
+    const ensureTracking = async () => {
+      if (!canStart()) return;
+      try {
+        const permission = await Location.getBackgroundPermissionsAsync();
+        if (!canStart()) return;
+        if (permission.status !== 'granted') {
+          setWsError('Allow background location in Settings to keep your ride location updated.');
+          return;
+        }
+        const cadence = TRACKED_TRIP_PHASES.includes(useDriverStore.getState().rideState) ? TRIP_CADENCE : IDLE_CADENCE;
+        const started = await startBackgroundLocation(cadence, canStart);
+        if (!started && canStart()) setWsError('Background location unavailable. Check location permissions in Settings.');
+      } catch (error) {
+        if (!canStart()) return;
+        captureException(error instanceof Error ? error : new Error('Background tracking restart failed'),
+          { domain: 'drivers', location: 'resume_background_tracking' });
+        setWsError('Background location unavailable. Check location permissions in Settings.');
+      }
+    };
+    void ensureTracking();
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') void ensureTracking(); });
+    return () => { cancelled = true; sub.remove(); };
+  }, [isOnline, user?.id, rideState]);
 
   // ─── Durable trip-location upload ─────────────────────────────────
   // The recorder owns the only durable queue. This transport is deliberately
@@ -647,37 +699,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
 
-  // Marker stationary heartbeat: distanceInterval-gated watchPositionAsync
-  // (see LOCATION_CONFIGS above) goes fully quiet at a genuine standstill —
-  // Android does not fire a fix just because timeInterval elapsed if the
-  // device hasn't moved distanceInterval. With no new fixes, the CarMarker's
-  // playback buffer ran dry and dead-reckoned FORWARD along the last
-  // pre-stop segment's real velocity — the car visibly drove through a red
-  // light it was stopped at, then snapped back once a real fix finally
-  // landed (live-testing report 2026-08-30, screenshots of the reversal).
-  // Fix: while online, re-emit the last known coordinate with a FRESH
-  // timestamp into the marker feed every ~2.5s whenever no real fix has
-  // arrived — zero GPS cost (no poll, this is the cached coordinate) and
-  // zero network cost, purely a JS timer. This keeps the buffer's newest
-  // entry inside the playback/extrapolation window at all times, so a real
-  // stop is represented as a held position instead of an invented one.
-  // Covers every online state, not just trip phases — the report above was
-  // from online-idle, which the pre-existing 30s trip-only GPS watchdog
-  // below never reaches.
-  const MARKER_HEARTBEAT_MS = 2_500;
-  useEffect(() => {
-    if (!isOnline) return;
-    const id = setInterval(() => {
-      if (!lastMarkerFixRef.current) return;
-      if (Date.now() - lastMarkerFixEmitMsRef.current < MARKER_HEARTBEAT_MS) return;
-      lastMarkerFixEmitMsRef.current = Date.now();
-      markerFixFeedRef.current.emit({
-        ...lastMarkerFixRef.current,
-        timestampMs: Date.now(),
-      });
-    }, MARKER_HEARTBEAT_MS);
-    return () => clearInterval(id);
-  }, [isOnline]);
+  // Never manufacture measurements at rest: markerPlayback already caps
+  // extrapolation at 1.5s and then holds. Fake timestamps can make a genuine
+  // resume position look like an impossible jump from a just-measured fix.
 
   // GPS heartbeat: during a trip, if the recorder has captured nothing for
   // its 30s watchdog window (standstill under distanceInterval, provider
@@ -758,6 +782,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
     const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;
+    let cancelled = false;
     // Re-tune the *background* task to match the phase too. The foreground
     // watchPositionAsync below only fires while the app is foregrounded, so a
     // trip driven with the app backgrounded (driver in Maps / screen locked)
@@ -796,6 +821,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             distanceInterval: config.distanceInterval,
           },
           (loc) => {
+          if (cancelled) return;
           // CAPTURE BEFORE FILTER (SPR-PE7TTB): durable trip capture happens
           // first and unconditionally — a client-side integrity drop is route
           // history lost forever. The verdict below gates DISPLAY surfaces
@@ -844,6 +870,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           // ── Display trust gate — everything below moves markers/UI state. ──
+          // A re-created watcher can first return an older cached fix. Keep
+          // its durable capture above, but never rewind a fresh resume fix.
+          if (!Number.isFinite(loc.timestamp) || Date.now() - loc.timestamp > 60_000 ||
+              loc.timestamp > Date.now() + 5_000 ||
+              (locationRef.current && loc.timestamp < locationRef.current.timestamp)) return;
           if (!integrity.trusted) {
             console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
             return;
@@ -872,8 +903,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           // throttle below stretches inter-fix spacing past the 5 s playback
           // delay and starves the buffer (freeze-then-jump, live-testing
           // 2026-09-02). Zero re-renders: subscribers ingest via refs.
-          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading, accuracyM: loc.coords.accuracy };
-          lastMarkerFixEmitMsRef.current = Date.now();
           markerFixFeedRef.current.emit({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
@@ -928,20 +957,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         );
       } catch (e) {
+        if (cancelled) return;
         console.error('[Location] watchPositionAsync failed — driver is GPS-blind:', e);
         setWsError('Location unavailable. Check location permissions in Settings.');
         return;
       }
+      if (cancelled) { sub.remove(); return; }
       locationSubRef.current = sub;
     })();
 
     return () => {
+      cancelled = true;
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
-  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
+  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch, locationResumeEpoch]);
 
   // Period-1 idle durable recording: while online with no trip, keep ONE idle
   // outbox session open (the recorder throttles fixes to ≥30s/60s or 100m).
@@ -2040,11 +2072,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // stays entirely backend-owned.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOnline(!!serverOnline);
-    if (serverOnline) {
-      // Re-arm background tracking for a resumed-online session. Idempotent:
-      // startBackgroundLocation no-ops when the task is already running.
-      startBackgroundLocation().catch(() => {});
-    }
   }, [driverData?.is_online, isOnline]);
 
   // ─── Fetch earnings when online ─────────────────────────────────

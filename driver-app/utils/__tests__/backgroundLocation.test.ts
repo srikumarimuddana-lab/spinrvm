@@ -233,6 +233,23 @@ describe('background durable trip recording', () => {
     publishSpy.mockRestore();
   });
 
+  it('sends the newest live position even when there is no durable batch to upload', async () => {
+    const capture = jest.spyOn(tripLocationRecorder, 'recordNativeFix').mockResolvedValue(null);
+    const newest = { ...makeLocation(2), timestamp: Date.now() - 1000 };
+    const older = { ...makeLocation(1), timestamp: Date.now() - 3000 };
+    try {
+      await handleBackgroundLocationTask({ data: { locations: [newest, older] } as any });
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const live = calls.find(([url]) => url.endsWith('/drivers/location-live'));
+      expect(live).toBeDefined();
+      expect(JSON.parse(live[1].body)).toEqual(expect.objectContaining({
+        lat: newest.coords.latitude, captured_at: new Date(newest.timestamp).toISOString(),
+      }));
+      expect(live[1].signal).toBeDefined();
+      expect(calls.some(([url]) => url.endsWith('/drivers/location-batch'))).toBe(false);
+    } finally { capture.mockRestore(); }
+  });
+
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {
     const callOrder: string[] = [];
     mockedOutbox.enqueue.mockImplementation(async (fix) => {
@@ -383,6 +400,33 @@ describe('updateBackgroundLocationCadence', () => {
 
     expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');
     expect(mockStartUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resurrect tracking when the caller goes offline during permission lookup', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    (Location.getBackgroundPermissionsAsync as jest.Mock).mockImplementationOnce(async () => {
+      allowed = false;
+      return { status: 'granted' };
+    });
+    await expect(startBackgroundLocation(TRIP_CADENCE, () => allowed)).resolves.toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after the final asynchronous session-marker read', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    let allowed = true;
+    let reads = 0;
+    const storage = SecureStore.getItemAsync as jest.Mock;
+    const original = storage.getMockImplementation();
+    storage.mockImplementation(async (key: string) => {
+      if (key === 'spinr_session_ended' && ++reads === 3) allowed = false;
+      return null;
+    });
+    try {
+      await expect(startBackgroundLocation(TRIP_CADENCE, () => allowed)).resolves.toBe(false);
+      expect(mockStartUpdates).not.toHaveBeenCalled();
+    } finally { storage.mockImplementation(original); }
   });
 
   it('re-tunes the running task to dense TRIP_CADENCE using location-service liveness', async () => {

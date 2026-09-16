@@ -169,6 +169,45 @@ async def _apply_v2_live_marker_update(
             logger.error(
                 "location-batch v2: marker write failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
             )
+        # Live delivery must not depend on whether the DB write was coalesced.
+        if -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+            try:
+                try:
+                    from ...settings_loader import get_app_settings
+                except ImportError:
+                    from settings_loader import get_app_settings
+                settings = await get_app_settings() or {}
+                if settings.get("background_location_fanout_enabled", False):
+                    rides = await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver_id}, limit=1)
+                    ride = rides[0] if rides else {}
+                    if (
+                        ride.get("id") == ride_id
+                        and ride.get("driver_id") == driver_id
+                        and ride.get("status") in {"driver_accepted", "driver_arrived", "in_progress"}
+                        and ride.get("rider_id")
+                    ):
+                        await _deps.manager.send_personal_message(
+                            {
+                                "type": "driver_location_update",
+                                "driver_id": driver_id,
+                                "ride_id": ride_id,
+                                "lat": lat,
+                                "lng": lng,
+                                "heading": heading,
+                                "speed": speed,
+                                "accuracy": accuracy,
+                                "captured_at": captured_at.isoformat(),
+                            },
+                            f"rider_{ride['rider_id']}",
+                            durable=False,
+                        )
+            except Exception:
+                logger.error(
+                    "location-batch v2: rider delivery failed for driver_id=%s ride_id=%s",
+                    driver_id,
+                    ride_id,
+                    exc_info=True,
+                )
 
     if is_online:
         await _deps.mark_present(driver_id)
@@ -404,9 +443,10 @@ async def _persist_v2_location_batch(
         raise HTTPException(status_code=503, detail="Location persistence unavailable") from exc
 
     rejected_sequences = {rejection.sequence_number for rejection in result.ack.rejected}
-    latest = next(
-        (point for point in reversed(request.points) if point.sequence_number not in rejected_sequences),
-        None,
+    latest = max(
+        (point for point in request.points if point.sequence_number not in rejected_sequences),
+        key=lambda point: parse_iso_utc(point.captured_at.isoformat()),
+        default=None,
     )
     lat = lng = None
     if latest is not None:
@@ -440,7 +480,7 @@ async def _persist_v2_location_batch(
             latest.accuracy,
             latest.mocked,
             bool(driver.get("is_online")),
-            latest.captured_at,
+            parse_iso_utc(latest.captured_at.isoformat()),
         )
     elif driver.get("is_online"):
         background_tasks.add_task(_deps.mark_present, driver["id"])
@@ -684,6 +724,74 @@ async def _guard_revoked_session(token_session_id: str | None) -> None:
         # 401 (not 403): the credential is dead, so the client should re-auth
         # rather than retry. No session_id or driver_id in the message.
         raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+
+
+class LiveLocationRequest(BaseModel):
+    """Ephemeral position, independent of the durable history outbox."""
+
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    captured_at: datetime
+    heading: float | None = Field(default=None, allow_inf_nan=False)
+    speed: float | None = Field(default=None, allow_inf_nan=False)
+    accuracy: float | None = Field(default=None, allow_inf_nan=False)
+    mocked: bool = False
+
+    @model_validator(mode="after")
+    def _reject_missing_position(self):
+        if self.lat == 0 and self.lng == 0:
+            raise ValueError("A real position is required")
+        return self
+
+
+@router.post("/location-live")
+@location_update_limit
+async def update_live_location(
+    point: LiveLocationRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
+):
+    await _guard_revoked_session(token_session_id)
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
+        return {"accepted": False}
+    drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    if not drivers:
+        raise HTTPException(status_code=403, detail="Driver profile required")
+    driver = drivers[0]
+    if not driver.get("is_online"):
+        raise HTTPException(status_code=409, detail="Driver is not online")
+    captured_at = parse_iso_utc(point.captured_at.isoformat())
+    if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+        raise HTTPException(status_code=422, detail="A recent position is required")
+    # Assignment is server-owned; never trust a caller's ride or driver ID.
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "driver_id": driver["id"],
+            "status": {"$in": list(_V2_ACTIVE_RIDE_STATUSES)},
+        },
+        limit=1,
+    )
+    background_tasks.add_task(
+        _apply_v2_live_marker_update,
+        driver["id"],
+        rides[0]["id"] if rides else "",
+        point.lat,
+        point.lng,
+        point.heading,
+        point.speed,
+        point.accuracy,
+        point.mocked,
+        True,
+        captured_at,
+    )
+    return {"accepted": True}
 
 
 @router.post("/location-batch")

@@ -511,6 +511,33 @@ describe('updateBackgroundLocationCadence', () => {
     expect(mockStartUpdates).not.toHaveBeenCalled();
   });
 
+  it('refreshes stationary rollout on resume with no GPS callback or task restart', async () => {
+    platform.OS = 'ios';
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    read.mockResolvedValue(null);
+    try {
+      mockStationaryFlag.mockResolvedValue(false);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(10);
+      mockStationaryFlag.mockResolvedValue(true);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(0);
+      mockStationaryFlag.mockResolvedValue(false);
+      await startBackgroundLocation();
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(10);
+      await startBackgroundLocation(TRIP_CADENCE);
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].accuracy).toBe(Location.Accuracy.High);
+      let allowed = true;
+      mockStartUpdates.mockClear();
+      mockStationaryFlag.mockImplementationOnce(async () => { allowed = false; return true; });
+      await startBackgroundLocation(undefined, () => allowed);
+      expect(mockStartUpdates).not.toHaveBeenCalled();
+    } finally {
+      read.mockImplementation(previous);
+    }
+  });
+
   it('does not resurrect tracking when the caller goes offline during permission lookup', async () => {
     mockHasStartedLocationUpdates.mockResolvedValue(false);
     let allowed = true;

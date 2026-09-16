@@ -474,8 +474,10 @@ export async function startBackgroundLocation(
 
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
-    console.log('[BgLocation] Already running');
-    return true;
+    // Foreground resume reaches this path even without a GPS callback. Reapply
+    // options so a parked driver's remote rollout can change on resume.
+    await runExclusive('bg-resume', () => reassertDispatchTaskUnlocked(canStart, config));
+    return canStart();
   }
 
   // Permission flow stays OUTSIDE the arbiter lock: the request can hold a
@@ -565,8 +567,12 @@ function _isBackgroundedForegroundServiceRejection(e: unknown): boolean {
  * never throws. Composition primitive: callers already holding the arbiter
  * lock use this; everyone else uses reassertDispatchTask().
  */
-export async function reassertDispatchTaskUnlocked(): Promise<void> {
+export async function reassertDispatchTaskUnlocked(
+  canApply: () => boolean = () => true,
+  requestedCadence?: BgLocationConfig,
+): Promise<void> {
   try {
+    if (!canApply()) return;
     if (!(await Location.hasStartedLocationUpdatesAsync(TASK_NAME))) return;
     // Android refuses the re-promotion unless the activity is resumed:
     // expo-location's startLocationUpdatesAsync throws
@@ -594,15 +600,15 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
     } catch {
       // Still unknown — fall through to the last-applied cadence below.
     }
-    const cadence =
+    const cadence = requestedCadence ?? (
       tripActive === null
         ? (_lastAppliedCadence ?? IDLE_CADENCE)
         : tripActive
           ? TRIP_CADENCE
-          : IDLE_CADENCE;
+          : IDLE_CADENCE);
     // startLocationUpdatesAsync on a live task replaces options in place and
     // re-runs the native foreground promotion — the repair we're here for.
-    await _applyTaskOptions(cadence);
+    await _applyTaskOptions(cadence, canApply);
     console.log('[BgLocation] Dispatch task re-asserted');
   } catch (e) {
     if (_isBackgroundedForegroundServiceRejection(e)) {

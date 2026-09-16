@@ -1,5 +1,13 @@
 # Background driver discovery cadence
 
+## Review correction: refresh running tracking on foreground resume
+
+Issue/root cause: an already-running task returned immediately from startBackgroundLocation, so a parked driver without GPS callbacks never reapplied a changed rollout flag. Fix: that path now invokes the locked reassert helper, preserving persisted trip cadence and passing the caller's lifecycle cancellation guard through the asynchronous flag read. Before: running -> return. After: running -> guarded reassert -> return.
+
+Files: backgroundLocation.ts (resume path), its utils/__tests__/backgroundLocation.test.ts (no-callback enable/disable and cancellation regression), this log. Consumers: useDriverDashboard's existing online/resume effect, go-online, recoverTripLocation and geofence recovery. No new timer or listener; the existing resume effect supplies the independent trigger. A polling timer was rejected because it cannot reliably wake a suspended mobile process. Android still defers native reconfiguration while backgrounded. Flag cache can retain its value for 60 seconds, so a resume inside that cache window can require a later resume after expiry. Already-foreground parked drivers can resume the app to apply changes.
+
+Risk/UX: foreground resume now makes a serialized native option call for online tracking, without stopping the task. Offline/cancelled callers cannot apply after a flag read. Rollback: disable the stationary flag through settings and resume after cache expiry; no durable data changes. Verification: new regression failed before implementation; 109 tests passed across background recording, reassert and dashboard socket lifecycle. Phone behavior/battery and visual checks remain unverified; mobile has no visual snapshot tooling. Production exports are rerun for this correction before PR completion.
+
 ## Review correction: presence independent of delivery rollouts
 
 Issue/root cause: with fanout and idle history flags at their false defaults, location-live returned before renewing presence and idle history dropped no-ride points. Valid background callbacks therefore could not prevent expiry.

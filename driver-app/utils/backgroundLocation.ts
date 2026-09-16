@@ -33,6 +33,53 @@ const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
 
+// Expo's iOS location task consumer reports every native fix while the app is
+// active, even when `deferredUpdatesInterval` is configured. Keep capture
+// lossless, but pace network delivery so High-accuracy, zero-distance idle
+// tracking cannot turn into one request per native fix.
+const IOS_FOREGROUND_UPLOAD_INTERVAL_MS = 4_000;
+
+type ForegroundUploadLane = 'live' | 'history';
+type ForegroundUploadGate = { inFlight: boolean; lastStartedAt: number | null };
+type ForegroundUploadReservation = { release: () => void; markDispatched: () => void };
+const foregroundUploadGates: Record<ForegroundUploadLane, ForegroundUploadGate> = {
+  live: { inFlight: false, lastStartedAt: null },
+  history: { inFlight: false, lastStartedAt: null },
+};
+
+/** @internal Test-only — clear upload pacing state between cases. */
+export function _resetForegroundUploadPacing(): void {
+  for (const gate of Object.values(foregroundUploadGates)) {
+    gate.inFlight = false;
+    gate.lastStartedAt = null;
+  }
+}
+
+/**
+ * Reserve one bounded iOS foreground upload slot per delivery path. Captures
+ * happen before these gates, so a callback inside the pacing window can be
+ * dropped from network delivery without losing its durable sample; the next
+ * native callback carries the newest live fix and flushes the retained outbox.
+ * Reservations are synchronous, so overlapping callbacks cannot each observe
+ * the same free slot and then burst. Live and history remain independent, and
+ * background delivery keeps its existing timing.
+ */
+function reserveIOSForegroundUpload(lane: ForegroundUploadLane): ForegroundUploadReservation | null {
+  if (Platform.OS !== 'ios' || AppState.currentState !== 'active') return { release: () => {}, markDispatched: () => {} };
+  const gate = foregroundUploadGates[lane];
+  if (gate.inFlight) return null;
+  const now = Date.now();
+  const elapsed = gate.lastStartedAt === null ? null : now - gate.lastStartedAt;
+  // A backwards wall-clock correction should not suppress uploads forever.
+  if (elapsed !== null && elapsed >= 0 && elapsed < IOS_FOREGROUND_UPLOAD_INTERVAL_MS) return null;
+  gate.inFlight = true;
+  gate.lastStartedAt = now;
+  return {
+    release: () => { gate.inFlight = false; },
+    markDispatched: () => { gate.lastStartedAt = Date.now(); },
+  };
+}
+
 // Every value this module persists is read back from the HEADLESS background
 // task, which runs while the screen is locked — that is the whole point of it.
 // expo-secure-store defaults to WHEN_UNLOCKED (iOS kSecAttrAccessibleWhenUnlocked),
@@ -296,10 +343,28 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
   }
 
   if (captureSession === undefined) return;
-  const token = await getBackgroundAuthToken();
-  if (!token || !API_URL) return;
+  const liveReservation = latestLiveFix ? reserveIOSForegroundUpload('live') : null;
+  const historyReservation = reserveIOSForegroundUpload('history');
+  if (!liveReservation && !historyReservation) return;
 
-  const postLocation = async (path: string, payload: unknown) => {
+  // Reserve both slots before auth/network work so overlapping callbacks cannot
+  // each start their own delivery. Auth failures still propagate to the task
+  // caller; release the reservations before rethrowing so the next callback
+  // can retry.
+  let token: string | null;
+  try {
+    token = await getBackgroundAuthToken();
+  } catch (error) {
+    liveReservation?.release();
+    historyReservation?.release();
+    throw error;
+  }
+  if (!token || !API_URL) {
+    liveReservation?.release();
+    historyReservation?.release();
+    return;
+  }
+  const postLocation = async (token: string, path: string, payload: unknown, reservation: ForegroundUploadReservation) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
@@ -311,6 +376,9 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
           await SecureStore.getItemAsync(SESSION_GENERATION_KEY) !== captureSession) {
         throw new Error('Location upload cancelled after session change');
       }
+      // Auth/App Check may take longer than the pacing window. Start the
+      // cooldown at dispatch so the next callback cannot send a late burst.
+      reservation.markDispatched();
       return await fetch(`${API_URL}/api/v1/drivers/${path}`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
@@ -319,44 +387,54 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       });
     } finally { clearTimeout(timeout); }
   };
-  // Live positions must not wait behind historical retries or depend on the
-  // opt-in idle-history queue. Persist above first; deliver the two independently.
-  const liveUpload = latestLiveFix ? postLocation('location-live', {
-    lat: latestLiveFix.coords.latitude, lng: latestLiveFix.coords.longitude,
-    heading: latestLiveFix.coords.heading, speed: latestLiveFix.coords.speed,
-    accuracy: latestLiveFix.coords.accuracy, mocked: latestLiveFix.mocked ?? false,
-    captured_at: new Date(latestLiveFix.timestamp).toISOString(),
-  }).then(response => {
-    if (!response.ok) throw new Error(`live location ${response.status}`);
-  }).catch(() => { console.warn('[BgLocation] Live position upload deferred'); }) : Promise.resolve();
 
-  try {
-    await tripLocationRecorder.flushPending(async (request: TripLocationBatchRequest) => {
-      // App Check is enforced on /api/* in production. Initialize it
-      // idempotently because this headless task does not mount the app shell.
-      const response = await postLocation('location-batch', request);
-      // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
-      // this fetch previously threw on them, and because flushPending aborts
-      // its whole loop on a transport throw, ONE permanently-rejected batch
-      // (e.g. 422 outside the completed-ride retention window) blocked every
-      // other pending session's upload forever from the background path.
-      if (TERMINAL_STATUS_CODES.has(response.status)) {
-        console.warn(`[BgLocation] Draining terminally-rejected batch (${response.status})`);
-        return drainTerminalAck(request);
-      }
-      if (!response.ok) throw new Error(`location-batch ${response.status}`);
-      return response.json();
-    }, { force: true });
-  } catch {
-    // Degraded-but-recovered, so no Sentry (CLAUDE.md observability rules):
-    // points stay durable in SQLite and retry. At TRIP_CADENCE this catch runs
-    // every ~4s, and flushPending is called with { force: true }, so reporting
-    // each deferred upload would emit ~15 events/min/driver for the whole
-    // duration of a backend or network outage.
-    console.warn('[BgLocation] Durable upload deferred');
-  } finally {
-    await liveUpload;
-  }
+  const liveUpload = liveReservation ? (async () => {
+    try {
+      const response = await postLocation(token, 'location-live', {
+        lat: latestLiveFix!.coords.latitude, lng: latestLiveFix!.coords.longitude,
+        heading: latestLiveFix!.coords.heading, speed: latestLiveFix!.coords.speed,
+        accuracy: latestLiveFix!.coords.accuracy, mocked: latestLiveFix!.mocked ?? false,
+        captured_at: new Date(latestLiveFix!.timestamp).toISOString(),
+      }, liveReservation);
+      if (!response.ok) throw new Error(`live location ${response.status}`);
+    } catch {
+      console.warn('[BgLocation] Live position upload deferred');
+    } finally {
+      liveReservation.release();
+    }
+  })() : Promise.resolve();
+
+  const historyUpload = historyReservation ? (async () => {
+    try {
+      await tripLocationRecorder.flushPending(async (request: TripLocationBatchRequest) => {
+        // App Check is enforced on /api/* in production. Initialize it
+        // idempotently because this headless task does not mount the app shell.
+        const response = await postLocation(token, 'location-batch', request, historyReservation);
+        // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
+        // this fetch previously threw on them, and because flushPending aborts
+        // its whole loop on a transport throw, ONE permanently-rejected batch
+        // (e.g. 422 outside the completed-ride retention window) blocked every
+        // other pending session's upload forever from the background path.
+        if (TERMINAL_STATUS_CODES.has(response.status)) {
+          console.warn(`[BgLocation] Draining terminally-rejected batch (${response.status})`);
+          return drainTerminalAck(request);
+        }
+        if (!response.ok) throw new Error(`location-batch ${response.status}`);
+        return response.json();
+      }, { force: true });
+    } catch {
+      // Degraded-but-recovered, so no Sentry (CLAUDE.md observability rules):
+      // points stay durable in SQLite and retry. At TRIP_CADENCE this catch runs
+      // every ~4s, and flushPending is called with { force: true }, so reporting
+      // each deferred upload would emit ~15 events/min/driver for the whole
+      // duration of a backend or network outage.
+      console.warn('[BgLocation] Durable upload deferred');
+    } finally {
+      historyReservation.release();
+    }
+  })() : Promise.resolve();
+
+  await Promise.all([liveUpload, historyUpload]);
 }
 
 TaskManager.defineTask<LocationTaskData>(TASK_NAME, handleBackgroundLocationTask);

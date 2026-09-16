@@ -15,7 +15,7 @@ cordons, or restarts a running Machine.
   healthy one. Samples older than 90 seconds, future timestamps, incomplete
   series, invalid numbers, and duplicate instance series are rejected.
 - Require at least one running Machine's own `/ready` to report DB readiness.
-  All unready means inhibit blind scale-out and alert. This cannot distinguish
+  All unready means inhibit blind scale-out and report action-required metrics. This cannot distinguish
   every shared dependency outage from a completely overloaded application.
 - Minimum 120 seconds between controller attempts; at most eight attempts/hour.
   An attempted start is durably recorded **before** sending the request. Do not
@@ -50,9 +50,9 @@ must be included in the rollout budget. Provision it once, not per backend VM.
    controller Machine. `BURST_DRY_RUN=true` is the committed default: it reads
    inventory, metrics, readiness and the journal, but acquires no leases and
    writes nothing. It must remain observe-only until the gates below pass.
-5. Configure the two Grafana rules in
-   `metrics-agent/grafana/fleet-capacity-alert.yaml`. Configure and verify the
-   dedicated shared email contact point first. No mailbox is created by this PR.
+5. Email and Grafana are deferred at the user's request. Logs and private metrics
+   remain available, but no six-Machine or failure email is sent. Native Fly
+   platform metrics used by the controller do not require a Grafana installation.
 6. Verify the scenarios below in staging, including lease enforcement on metadata
    and start endpoints, retention of `spinr_burst_journal` across a deployment,
    and controller metrics ingestion. Observe at least one peak and a six-hour
@@ -64,7 +64,7 @@ must be included in the rollout budget. Provision it once, not per backend VM.
 
 Pause the controller around backend maintenance or anchor replacement; wait for
 its leases to expire and retain the journal. Never delete the journal just to
-bypass a cooldown or attempt budget. Keep the external Grafana rules active.
+bypass a cooldown or attempt budget.
 
 ## Failure matrix and limits
 
@@ -73,16 +73,16 @@ bypass a cooldown or attempt budget. Keep the external Grafana rules active.
 | One VM hot, fleet average low | Start from the worst individual pressure signal |
 | Brief spike / repeated or delayed samples | No false sustained-pressure decision |
 | Critical memory | Immediate decision once fresh telemetry arrives; boot still takes time |
-| Partial/stale/NaN metrics or API errors | No speculative start; monitoring alarm |
+| Partial/stale/NaN metrics or API errors | No speculative start; action-required metric |
 | Dependency outage on every running VM | Inhibit scale-out; retain serving processes |
 | Start reply lost / controller restarted | Reconcile durable pending; no immediate duplicate |
 | Competing controller / deploy | Lease or changed-inventory failure; no unfenced start |
 | Lease or telemetry expires mid-operation | No later start; retain pending if already journaled |
 | Failed boot / target not ready | Record failure after 180s; prefer another idle candidate |
 | Wrong group/region / anchor missing | Fail closed; never elect a new lock anchor silently |
-| All eight running / budget exhausted | Alert; no ninth backend Machine |
-| Controller fails | Grafana detects missing/stale controller telemetry |
-| Six or more running | First email on evaluation, repeat every15m, recover below six |
+| All eight running / budget exhausted | Action-required metric; no ninth backend Machine |
+| Controller fails | Pressure starts pause; external notification deferred |
+| Six or more running | Running count metric available; email deferred |
 | Pressure falls | Retain capacity during observation; no unsafe trip draining |
 
 Not guaranteed: an allocation spike faster than metric delivery/startup, a heap

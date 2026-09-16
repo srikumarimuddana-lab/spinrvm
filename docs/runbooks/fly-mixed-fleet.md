@@ -1,6 +1,6 @@
-# Fly mixed fleet and capacity email
+# Fly mixed fleet and burst protection
 
-Status: PR preparation; neither the fleet nor Grafana is changed by this document.
+Status: PR preparation; no production changes. Grafana and email alerts are deferred at the user's request.
 
 ## Scope and implementation sequence
 
@@ -13,7 +13,7 @@ Implement in separate commits, at most three files per task:
 1. Record this rollout and acceptance plan (this file).
 2. Add a read-only fleet preflight and its isolated regression tests.
 3. Configure two process groups and update both deployment workflows together.
-4. Add the external Grafana capacity rule and validate its query and routing.
+4. Defer Grafana and email delivery; retain controller logs and metrics for later integration.
 5. Implement pure burst decisions and deterministic failure-matrix tests (2 files).
 6. Implement bounded Fly/metrics clients and adapter tests (2 files).
 7. Implement the external controller, durable action guard and tests (up to 3 files).
@@ -73,39 +73,19 @@ seeds the declared groups without implicit HA extras; the following count step
 fills them to `app=2 burst=6`. Unexpected groups, regions, duplicate IDs or
 excess Machines fail closed. Nothing is automatically destroyed to fit the cap.
 
-## Independent capacity email
+## Notifications deferred
 
-`metrics-agent/grafana/fleet-capacity-alert.yaml` is a Grafana provisioning
-template, not an automatically installed rule. For Grafana Cloud, create the
-rule through its Alerting UI/API using these fields; a local provisioning file
-is not automatically loaded into Cloud.
-
-1. Create a shared inbox/distribution list such as **ops@spinr.ca** and verify
-   its delivery and monitoring membership. This is a suggestion, not an existing
-   verified recipient. Configure a dedicated `spinr-capacity-email` contact point
-   and test receipt. Complete any recipient verification required by the provider.
-2. Configure a server-side Prometheus datasource for Fly platform metrics using
-   the organization metrics endpoint and a scoped credential stored in Grafana.
-   The existing Alloy datasource only contains application metrics; it is not
-   enough. Never put credentials into this repository.
-3. Replace the template's datasource UID. Compare `fly_instance_up` instance IDs
-   and count against the live Machines API while Machines start and stop in staging.
-   Count Machines, not Python workers or healthy HTTP endpoints.
-4. Evaluate every minute, no pending period: notify when at least six are up,
-   then repeat every 15 minutes while the condition holds. Stop capacity reminders
-   below six. One resolved notification is permitted. Missing metrics/query errors
-   also alert, explicitly identifying unknown telemetry rather than inventing zero.
-   Allow for metric ingestion and the one-minute evaluation interval; delivery is
-   not instantaneous. Controller-health notifications repeat separately every15m.
-5. Use a staging/test rule to verify five/six/eight, six-to-five recovery,
-   duplicate series, missing telemetry, first receipt, a second receipt after
-   15 minutes, and no capacity reminders after recovery. Avoid production scale-up
-   just to test email. Record timestamps and evidence before marking alerts live.
+Grafana configuration and email delivery are excluded at the user's request.
+The earlier six-Machine / every-15-minute email requirement remains deferred.
+No mailbox, contact point, alert rule, or email sender is created or activated.
+Controller logs and metrics expose pressure, failure and capacity exhaustion;
+they do not send notifications. Fly native metrics remain a controller input
+and do not require installing Grafana.
 
 ## Verification and rollback
 
-Run the fleet guard unit tests, strict Fly config validation, and Prometheus
-expression fixtures. Confirm both workflows run the guard before mutations,
+Run the fleet guard unit tests, strict Fly config validation, and
+controller regression tests. Confirm both workflows run the guard before mutations,
 serialize against each other, and use explicit group counts.
 
 After rollout, observe per-Machine RAM, CPU throttling, DB queue wait, errors and
@@ -115,12 +95,10 @@ adding capacity cannot free a leaking worker's memory or repair a saturated DB.
 For application rollback, deploy the previous image with the **new mixed-group
 config**, keeping RAM and group membership. Do not blindly revert `fly.toml` or
 run the old bootstrap: removing `burst` can destroy six Machines and restoring
-1 GB recreates the incident conditions. Disable only the new Grafana rule if its
-notifications malfunction; preserve existing payment/dispatch alerts.
+1 GB recreates the incident conditions. Preserve existing payment/dispatch alerts.
 
 References: [Fly process groups](https://fly.io/docs/launch/processes/),
-[Machine sizing](https://fly.io/docs/machines/guides-examples/machine-sizing/),
-[Grafana provisioning](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/).
+[Machine sizing](https://fly.io/docs/machines/guides-examples/machine-sizing/).
 
 ## Expanded burst protection acceptance matrix
 
@@ -129,18 +107,17 @@ Thresholds are provisional and must be calibrated in staging: per-Machine memory
 Use fresh telemetry for every running Machine, not a fleet average. Start one
 existing idle burst Machine, wait for readiness, and allow at least two minutes
 between attempts. Connections can still trigger Fly proxy starts; only scale-in
-is disabled. At eight, alert; never create a ninth backend Machine.
+is disabled. At eight, report capacity exhaustion in logs/metrics; never create a ninth backend Machine.
 
 Cover normal/recovered pressure, short spikes, sudden critical memory, stale or
 missing partial telemetry, NaN/invalid readings, duplicate time series, API
 401/429/5xx/timeouts, uncertain start outcome, boot/readiness failure, concurrent
 controllers, concurrent deployment, unexpected inventory/regions, repeated start
-failures, all dependencies unready, controller restart, cap exhaustion, and email
-recovery/repeat semantics. Shared dependency failure inhibits blind scale-out.
+failures, all dependencies unready, controller restart and cap exhaustion. Shared dependency failure inhibits blind scale-out.
 Do not claim an OOM is prevented when allocation growth beats metric collection
 and boot time; heap leaks and already-running work need their own safeguards.
 
 Implementation and controller activation: `infra/burst_controller/README.md`.
 The controller remains observe-only by default; merging files does not provision
-Grafana or turn on active pressure scaling. Proxy autostart continues to respond
+email delivery or turn on active pressure scaling. Proxy autostart continues to respond
 to connections within the existing pool, independently of controller decisions.

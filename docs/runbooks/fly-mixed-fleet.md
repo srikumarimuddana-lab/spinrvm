@@ -14,6 +14,13 @@ Implement in separate commits, at most three files per task:
 2. Add a read-only fleet preflight and its isolated regression tests.
 3. Configure two process groups and update both deployment workflows together.
 4. Add the external Grafana capacity rule and validate its query and routing.
+5. Implement pure burst decisions and deterministic failure-matrix tests (2 files).
+6. Implement bounded Fly/metrics clients and adapter tests (2 files).
+7. Implement the external controller, durable action guard and tests (up to 3 files).
+8. Add controller packaging/config, ownership policy and activation instructions
+   (up to 3 files per commit); keep it observe-only until staging acceptance.
+9. Check local overload bounds, add a focused fix/test if needed, and document
+   gaps that scaling cannot address. Run review and verification before the PR.
 
 | Group | Count | VM | Workers | Idle policy |
 | --- | ---: | --- | ---: | --- |
@@ -29,8 +36,10 @@ There is no separate performance RAM selection.
 The workflows preserve this eight-Machine inventory. This is not a platform-wide
 quota: manual CLI changes or a separate controller can still create Machines.
 Deployments may start all eight temporarily. Proxy scaling uses connections,
-**not memory pressure**. Memory-triggered scaling, bounded DB admission, leak
-recovery, and failure-injection tests remain separate resilience work.
+**not memory pressure**. The expanded PR adds an external memory/CPU burst controller. Activation requires
+turning off proxy autostop so it cannot undo a memory-driven start. The initial
+controller only starts existing capacity; it never stops, destroys, creates or
+resizes backend Machines. Automatic drain/scale-in remains a later gate.
 
 ## One-time migration (operator, before first deployment)
 
@@ -109,3 +118,21 @@ notifications malfunction; preserve existing payment/dispatch alerts.
 References: [Fly process groups](https://fly.io/docs/launch/processes/),
 [Machine sizing](https://fly.io/docs/machines/guides-examples/machine-sizing/),
 [Grafana provisioning](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/).
+
+## Expanded burst protection acceptance matrix
+
+Thresholds are provisional and must be calibrated in staging: per-Machine memory
+>=70% for 30 seconds, >=85% immediately, or CPU pressure >=80% for 30 seconds.
+Use fresh telemetry for every running Machine, not a fleet average. Start one
+existing idle burst Machine, wait for readiness, and allow at least two minutes
+between attempts. Connections can still trigger Fly proxy starts; only scale-in
+is disabled. At eight, alert; never create a ninth backend Machine.
+
+Cover normal/recovered pressure, short spikes, sudden critical memory, stale or
+missing partial telemetry, NaN/invalid readings, duplicate time series, API
+401/429/5xx/timeouts, uncertain start outcome, boot/readiness failure, concurrent
+controllers, concurrent deployment, unexpected inventory/regions, repeated start
+failures, all dependencies unready, controller restart, cap exhaustion, and email
+recovery/repeat semantics. Shared dependency failure inhibits blind scale-out.
+Do not claim an OOM is prevented when allocation growth beats metric collection
+and boot time; heap leaks and already-running work need their own safeguards.

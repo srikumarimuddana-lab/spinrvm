@@ -95,11 +95,13 @@ jest.mock('../../../shared/api/client', () => ({
 
 const mockGet = apiClient.get as jest.Mock;
 const mockPost = apiClient.post as jest.Mock;
+const mockPut = apiClient.put as jest.Mock;
 const mockSetInMemoryToken = setInMemoryToken as jest.Mock;
 const mockSetRefreshCallback = setRefreshCallback as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  (SecureStore.getItemAsync as jest.Mock).mockReset().mockImplementation((key: string) => Promise.resolve(mockSecureStoreBacking[key] ?? null));
   (Platform as any).OS = 'android';
   Object.keys(mockSecureStoreBacking).forEach((k) => delete mockSecureStoreBacking[k]);
   mockGet.mockReset();
@@ -124,9 +126,11 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
   it('preserves the session when storage becomes unreadable during the 401 rotation check', async () => {
     mockSecureStoreBacking.refresh_token = 'persisted-refresh';
     useAuthStore.setState({ token: 'access', refreshToken: 'persisted-refresh' });
-    (SecureStore.getItemAsync as jest.Mock)
-      .mockResolvedValueOnce('persisted-refresh')
-      .mockRejectedValueOnce(new Error('Keychain unavailable'));
+    let reads = 0;
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'refresh_token' && ++reads === 2) return Promise.reject(new Error('Keychain unavailable'));
+      return Promise.resolve(mockSecureStoreBacking[key] ?? null);
+    });
     mockPost.mockRejectedValueOnce({ response: { status: 401 } });
     const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -143,15 +147,16 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
 
   it('keeps cold start recoverable when the final credential reread is unavailable', async () => {
     mockSecureStoreBacking.refresh_token = 'persisted-refresh';
-    (SecureStore.getItemAsync as jest.Mock)
-      .mockResolvedValueOnce('persisted-refresh')
-      .mockResolvedValueOnce('persisted-refresh')
-      .mockRejectedValueOnce(new Error('Keychain unavailable'));
+    let reads = 0;
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'refresh_token' && ++reads === 3) return Promise.reject(new Error('Keychain unavailable'));
+      return Promise.resolve(mockSecureStoreBacking[key] ?? null);
+    });
     mockPost.mockRejectedValueOnce({ response: { status: 503 } });
     const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await useAuthStore.getState().initialize();
-      expect(SecureStore.getItemAsync).toHaveBeenCalledTimes(3);
+      expect(reads).toBe(3);
       expect(SecureStore.deleteItemAsync).not.toHaveBeenCalled();
       expect(mockSecureStoreBacking.refresh_token).toBe('persisted-refresh');
       expect(useAuthStore.getState()).toMatchObject({

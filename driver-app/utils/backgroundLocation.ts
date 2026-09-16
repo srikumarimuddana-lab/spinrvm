@@ -1,4 +1,8 @@
 import { AppState, Platform } from 'react-native';
+import { installNativeSessionCoordination } from './nativeSessionLock';
+import { renewBackgroundAuthToken } from './backgroundAuth';
+import { SESSION_GENERATION_KEY } from '@shared/auth/sessionLock';
+
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
@@ -15,6 +19,9 @@ import { runExclusive } from './locationTaskArbiter';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
+
+// Also cover native task imports that do not mount the app shell.
+installNativeSessionCoordination();
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -199,60 +206,9 @@ export async function isSessionEnded(): Promise<boolean> {
   }
 }
 
-/**
- * Get a valid access token for the background task.
- *
- * Strategy: read the foreground-persisted access token from SecureStore.
- * The foreground proactive refresh (2-min buffer) keeps it fresh far more
- * often than the background cadence needs. If the foreground token is
- * expired or absent, return null — the caller defers the upload to the
- * durable SQLite outbox, which the foreground flushes on resume.
- *
- * The background task NEVER calls /auth/refresh itself. Two independent
- * refresh actors sharing one single-use rotating credential caused the
- * foreground/background rotation race that triggered driver sign-outs —
- * especially right after ride completion when both contexts fire
- * concurrently during the completion burst.
- */
+/** Read or renew credentials under the same native lock as foreground auth. */
 export async function getBackgroundAuthToken(): Promise<string | null> {
-  if (!API_URL) return null;
-
-  // 1. Try the background-cached access token (set by setTokens flow
-  //    or a prior successful read below).
-  try {
-    const cached = await SecureStore.getItemAsync('bg_access_token');
-    const cachedExpiry = await SecureStore.getItemAsync('bg_access_token_expires');
-    if (cached && cachedExpiry) {
-      const expiresAt = parseInt(cachedExpiry, 10);
-      if (Date.now() < expiresAt - 60_000) {
-        return cached;
-      }
-    }
-  } catch {
-    // SecureStore read failed — fall through
-  }
-
-  // 2. Read the foreground's persisted access token. The foreground writes
-  //    it on every setTokens() call (authStore.ts:245).
-  try {
-    const fgToken = await SecureStore.getItemAsync('fg_access_token');
-    const fgExpiry = await SecureStore.getItemAsync('token_expires_at');
-    if (fgToken && fgExpiry) {
-      const expiresAt = parseInt(fgExpiry, 10);
-      if (Date.now() < expiresAt - 30_000) {
-        // Cache it for subsequent background fires within this process
-        await SecureStore.setItemAsync('bg_access_token', fgToken, KEYCHAIN_BACKGROUND_READABLE);
-        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry, KEYCHAIN_BACKGROUND_READABLE);
-        return fgToken;
-      }
-    }
-  } catch {
-    // SecureStore read failed — fall through
-  }
-
-  // 3. No valid token available — defer the upload. Points stay in SQLite
-  //    and the foreground flushes them on resume or next interval.
-  return null;
+  return renewBackgroundAuthToken();
 }
 
 export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {
@@ -275,6 +231,14 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     return;
   }
 
+  // Snapshot ownership before capturing samples. A delayed callback must never
+  // obtain the next account's token after logout + another sign-in.
+  let captureSession: string | null | undefined;
+  try { captureSession = await SecureStore.getItemAsync(SESSION_GENERATION_KEY); }
+  catch (error) {
+    console.error('[BgLocation] Session ownership unavailable; upload deferred');
+    recordNonFatal(error, { domain: 'auth', surface: 'driver-app' });
+  }
   let latestLiveFix: Location.LocationObject | null = null;
   for (const location of data?.locations ?? []) {
     // CAPTURE BEFORE FILTER. Durable persistence comes first, unconditionally:
@@ -330,6 +294,7 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     await reassertDispatchTask().catch(() => {});
   }
 
+  if (captureSession === undefined) return;
   const token = await getBackgroundAuthToken();
   if (!token || !API_URL) return;
 
@@ -339,6 +304,12 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     try {
       await initFirebaseServices();
       const appCheckToken = await getAppCheckToken();
+      // Strict reads here: failed storage access must defer upload. Keep this
+      // after async App Check preparation and directly before network dispatch.
+      if (await SecureStore.getItemAsync(SESSION_ENDED_KEY) ||
+          await SecureStore.getItemAsync(SESSION_GENERATION_KEY) !== captureSession) {
+        throw new Error('Location upload cancelled after session change');
+      }
       return await fetch(`${API_URL}/api/v1/drivers/${path}`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,

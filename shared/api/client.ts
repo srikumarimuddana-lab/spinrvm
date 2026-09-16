@@ -954,6 +954,9 @@ const handleApiError = async (
   retryFn?: () => Promise<unknown>,
   isRetryAttempt = false,
 ): Promise<never> => {
+  // Session termination owns its cleanup. Recovering authentication here can
+  // recursively refresh while logout holds the native session lock.
+  if (url === '/auth/logout') return Promise.reject(response);
   // Set when this 401 went through the silent-refresh path below. Once
   // refreshTokens() has run, IT owns the logout decision (it logs out on a
   // definitive 401 and deliberately keeps the session on transient

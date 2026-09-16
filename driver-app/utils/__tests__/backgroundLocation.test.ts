@@ -40,8 +40,8 @@ jest.mock('@shared/auth/sessionMarker', () => ({
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn((key: string) => {
     if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
-    if (key === 'bg_access_token') return Promise.resolve('access-token');
-    if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
+    if (key === 'fg_access_token') return Promise.resolve('access-token');
+    if (key === 'token_expires_at') return Promise.resolve(String(Date.now() + 120_000));
     return Promise.resolve(null);
   }),
   setItemAsync: jest.fn(() => Promise.resolve()),
@@ -88,6 +88,12 @@ jest.mock('@shared/config/spinr.config', () => ({
 jest.mock('@shared/services/firebase', () => ({
   initFirebaseServices: jest.fn(() => Promise.resolve()),
   getAppCheckToken: jest.fn(() => Promise.resolve('app-check')),
+}));
+// Native exclusion is exercised with real SQLite in nativeSessionLock.test.ts.
+jest.mock('../nativeSessionLock', () => ({ installNativeSessionCoordination: jest.fn() }));
+jest.mock('expo-crypto', () => ({
+  CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+  digestStringAsync: async (_algorithm: string, value: string) => require('node:crypto').createHash('sha256').update(value).digest('hex'),
 }));
 
 jest.mock('../crashlytics', () => ({
@@ -203,6 +209,74 @@ describe('background durable trip recording', () => {
     // failure test would otherwise make every later flush silently skip.
     tripLocationRecorder._resetUploadBackoff();
     await tripLocationRecorder.startRide('ride-1');
+  });
+
+  it.each(['auth lock', 'App Check'])('drops captured work when login changes during %s', async stage => {
+    const { installSessionLock } = require('../../../shared/auth/sessionLock');
+    const { getAppCheckToken } = require('@shared/services/firebase');
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    let epoch = 'driver-a';
+    read.mockImplementation(async (key: string) => key === 'spinr_session_generation' ? epoch : previous!(key));
+    let resume!: () => void;
+    const paused = new Promise<void>(resolve => { resume = resolve; });
+    let reached!: () => void;
+    const ready = new Promise<void>(resolve => { reached = resolve; });
+    if (stage === 'auth lock') installSessionLock(async (work: () => Promise<unknown>) => { reached(); await paused; return work(); });
+    else getAppCheckToken.mockImplementation(async () => { reached(); await paused; return 'app-check'; });
+    try {
+      const task = handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: Date.now() }] } as any });
+      await ready;
+      // Logout purges A's queue; B's sign-in removes the ended marker but has a new epoch.
+      mockQueuedPoints.splice(0);
+      epoch = 'driver-b';
+      resume();
+      await task;
+      expect(global.fetch).not.toHaveBeenCalled();
+    } finally {
+      resume();
+      installSessionLock((work: () => Promise<unknown>) => work());
+      getAppCheckToken.mockImplementation(async () => 'app-check');
+      read.mockImplementation(previous);
+    }
+  });
+
+  it.each([1, 2])('preserves samples without uploading when ownership read %s fails', async failedRead => {
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    let reads = 0;
+    read.mockImplementation(async (key: string) => {
+      if (key === 'spinr_session_generation' && ++reads >= failedRead) throw new Error('keystore unavailable');
+      return previous!(key);
+    });
+    try {
+      await handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: Date.now() }] } as any });
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockQueuedPoints).toHaveLength(1);
+    } finally { read.mockImplementation(previous); }
+  });
+
+  it('keeps uploading live position and recorded history after the access token expires', async () => {
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    const saved: Record<string, string> = { refresh_token: 'refresh-old', fg_access_token: 'expired-access', token_expires_at: '1' };
+    read.mockImplementation(async (key: string) => saved[key] ?? null);
+    (global.fetch as jest.Mock).mockImplementation(async (url: string, options: any) => {
+      if (url.endsWith('/auth/refresh')) {
+        expect(mockedOutbox.enqueue).toHaveBeenCalled();
+        return { ok: true, status: 200, json: async () => ({ token: 'renewed-access', refresh_token: 'renewed-refresh', expires_in: 900 }) };
+      }
+      expect(options.headers.Authorization).toBe('Bearer renewed-access');
+      return { ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) };
+    });
+    try {
+      await handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: Date.now() }] } as any });
+      const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => url);
+      expect(urls).toContain('https://example.test/api/v1/auth/refresh');
+      expect(urls).toContain('https://example.test/api/v1/drivers/location-live');
+      expect(urls).toContain('https://example.test/api/v1/drivers/location-batch');
+      expect(mockQueuedPoints).toHaveLength(0);
+    } finally { read.mockImplementation(previous); }
   });
 
   it('captures EVERY sample durably; integrity gates only the car-marker display', async () => {
@@ -370,8 +444,8 @@ describe('geofence recovery task (NSRangeException guard)', () => {
     (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(false);
     (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
       if (key === 'spinr_bg_trip_active') return Promise.resolve(null);
-      if (key === 'bg_access_token') return Promise.resolve('access-token');
-      if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
+      if (key === 'fg_access_token') return Promise.resolve('access-token');
+      if (key === 'token_expires_at') return Promise.resolve(String(Date.now() + 120_000));
       return Promise.resolve(null);
     });
     mockBgPermission = 'granted';
@@ -786,8 +860,8 @@ describe('session gating', () => {
     (Location.stopLocationUpdatesAsync as jest.Mock).mockImplementation(() => Promise.resolve());
     (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
       if (key === 'spinr_session_ended') return Promise.resolve(mockSignedIn ? null : '1');
-      if (key === 'bg_access_token') return Promise.resolve('access-token');
-      if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
+      if (key === 'fg_access_token') return Promise.resolve('access-token');
+      if (key === 'token_expires_at') return Promise.resolve(String(Date.now() + 120_000));
       return Promise.resolve(null);
     });
     mockedOutbox.enqueue.mockClear();

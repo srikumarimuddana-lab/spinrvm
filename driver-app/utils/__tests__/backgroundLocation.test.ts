@@ -472,7 +472,11 @@ describe('background durable trip recording', () => {
     let now = Date.now();
     const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
     const capture = jest.spyOn(tripLocationRecorder, 'recordNativeFix').mockResolvedValue(null);
-    const flush = jest.spyOn(tripLocationRecorder, 'flushPending').mockResolvedValue(undefined);
+    const flush = jest.spyOn(tripLocationRecorder, 'flushPending').mockResolvedValue({
+      uploaded_points: 0,
+      acknowledged_points: 0,
+      skipped: false,
+    });
     let release!: (value: string) => void;
     let entered!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -870,6 +874,31 @@ describe('reassertDispatchTask — Sentry noise suppression (Sentry issue 772629
       expect.any(Error),
       expect.objectContaining({ location: 'reassert_failed' }),
     );
+  });
+
+  it('keeps trip cadence when a running resume requests idle before trip hydration', async () => {
+    const read = SecureStore.getItemAsync as jest.Mock;
+    const previous = read.getMockImplementation();
+    read.mockImplementation(async (key: string) => (
+      key === 'spinr_bg_trip_active' ? 'true' : null
+    ));
+    try {
+      await startBackgroundLocation(IDLE_CADENCE);
+      const cfg = mockStartUpdates.mock.calls.at(-1)?.[1];
+      expect(cfg).toEqual(expect.objectContaining({
+        timeInterval: TRIP_CADENCE.timeInterval,
+        distanceInterval: TRIP_CADENCE.distanceInterval,
+        accuracy: Location.Accuracy.High,
+      }));
+      read.mockImplementation(async (key: string) => {
+        if (key === 'spinr_bg_trip_active') throw new Error('Keychain temporarily unavailable');
+        return null;
+      });
+      await startBackgroundLocation(IDLE_CADENCE);
+      expect(mockStartUpdates.mock.calls.at(-1)?.[1].distanceInterval).toBe(TRIP_CADENCE.distanceInterval);
+    } finally {
+      read.mockImplementation(previous);
+    }
   });
 });
 

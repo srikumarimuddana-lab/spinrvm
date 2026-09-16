@@ -1,5 +1,11 @@
 # Background driver discovery cadence
 
+## Luna review: retain trip cadence during cold resume
+
+An online dashboard can initially request idle before ride-state hydration. Resume now prioritizes an explicit trip request, a persisted active trip, or last-known trip when persistence is unreadable, over that temporary idle request. Normal ride-phase transitions still retune through the existing cadence API. Files: backgroundLocation.ts (precedence), its test (persisted and unreadable trip regression plus typed flush mock), this log. Before: requested idle could override persisted trip; after: known trip remains at trip cadence. Alternative of waiting for dashboard hydration would delay rollout refresh and require broader hook changes.
+
+Blast radius: already-running task resume/reassert only. Risk: a stale true trip marker can retain trip cadence until state reconciliation; preserving trip history is preferable to temporarily downgrading a real trip. Rollback: previous mobile release; no durable data changes. New regression failed before fix, then 141 tests passed across six mobile suites. No cold-resume physical-device test was performed. Final typecheck and production exports are recorded in the PR validation.
+
 ## Luna review: bounded iOS foreground upload pacing
 
 Installed Expo iOS code bypasses deferred intervals while the app is active; Android-only timeInterval did not bound zero-distance foreground callbacks. Added separate synchronous four-second reservation gates for live uploads and history flushes while iOS is active. All native samples still persist before the gates. Extra callbacks skip network work and the next eligible callback sends the newest fix plus retained history; no delayed callback queue accumulates. Android and background iOS keep existing delivery behavior. Slow history cannot block fresh live uploads, and authentication errors still propagate while releasing reservations.

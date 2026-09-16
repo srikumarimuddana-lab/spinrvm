@@ -678,12 +678,13 @@ export async function reassertDispatchTaskUnlocked(
     } catch {
       // Still unknown — fall through to the last-applied cadence below.
     }
-    const cadence = requestedCadence ?? (
-      tripActive === null
-        ? (_lastAppliedCadence ?? IDLE_CADENCE)
-        : tripActive
-          ? TRIP_CADENCE
-          : IDLE_CADENCE);
+    // The dashboard initially reports idle before ride hydration. A known
+    // trip must survive that resume request; explicit trip also wins when
+    // persistence has not caught up. Normal phase transitions retune separately.
+    const knownTrip = requestedCadence === TRIP_CADENCE || tripActive === true ||
+      (tripActive === null && _lastAppliedCadence === TRIP_CADENCE);
+    const cadence = knownTrip ? TRIP_CADENCE : requestedCadence ?? (
+      tripActive === null ? (_lastAppliedCadence ?? IDLE_CADENCE) : IDLE_CADENCE);
     // startLocationUpdatesAsync on a live task replaces options in place and
     // re-runs the native foreground promotion — the repair we're here for.
     await _applyTaskOptions(cadence, canApply);

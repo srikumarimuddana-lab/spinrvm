@@ -90,6 +90,19 @@ leak in existing work, regional/provider failure, or recovery of every live ride
 from process loss. Scaling cannot move existing WebSockets or cure a saturated
 shared DB. Local bounded work and client reconnect/reconciliation remain required.
 
+## Local overload bound
+
+Backend DB admission permits `DB_THREAD_POOL_SIZE` running/worker slots (default
+64) plus `DB_THREAD_POOL_QUEUE_SIZE` retained queued calls (default 64). A full
+pool returns the existing database-unavailable 503 before submitting the call;
+reads and writes are not internally retried on admission rejection. Cancellation
+of a queued call keeps its slot until dequeued and prevents that call executing.
+Cancellation of running work does not stop the thread or undo a database write.
+Thread-creation failure closes/drains the executor; recovery requires a worker
+restart. These are per-worker limits, not a global database connection cap.
+Changing queue sizing requires a backend restart; stage and load-test it before
+rollout. Reverting the backend image must retain the new mixed-fleet config.
+
 ## Local verification
 
 `python -m unittest discover -s infra/burst_controller -p 'test_*.py'` from repo root.

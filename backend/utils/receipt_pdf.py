@@ -276,7 +276,9 @@ def generate_receipt_pdf(
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(30, 30, 30)
             pdf.cell(W, 6, "Actual route" if route_snapshot_is_actual else "Planned route", ln=True)
-            pdf.image(io.BytesIO(route_snapshot_bytes), x=left, w=W)
+            buf = io.BytesIO(route_snapshot_bytes)
+            buf.name = "route.png"
+            pdf.image(buf, x=left, w=W)
             pdf.ln(2)
         except Exception:
             # Image is supplemental; the printable text note below remains

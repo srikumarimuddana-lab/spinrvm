@@ -25,7 +25,7 @@ Implement in separate commits, at most three files per task:
 | Group | Count | VM | Workers | Idle policy |
 | --- | ---: | --- | ---: | --- |
 | `app` | 2 | shared CPU, 2 vCPU, 4 GB | 2 | Always running |
-| `burst` | 6 | shared CPU, 1 vCPU, 2 GB | 2 | Suspend; proxy resumes for connection demand |
+| `burst` | 6 | shared CPU, 1 vCPU, 2 GB | 2 | Start on pressure/demand; retain while observing |
 
 Both groups serve the same backend on ports 80/443. Sharing external ports is
 intentional: Fly Proxy balances across both groups. Keep their connection limits
@@ -64,8 +64,9 @@ preflight rejects that layout before deployment or secret staging.
    can destroy its Machines.
 5. Check every Machine's resulting size and services, both warm Machines'
    readiness, the deployed build SHA, and a rider/driver reconnect smoke test.
-   Verify the idle burst pool suspends and resumes under a controlled staging
-   load before relying on this topology unattended.
+   Verify a stopped burst Machine starts under controlled staging pressure.
+   Autostop is disabled during observation; all eight may remain running. Any
+   later reduction requires a verified drain, not force-stopping live trips.
 
 For a genuinely empty app, bootstrap permits an empty inventory. Deployment
 seeds the declared groups without implicit HA extras; the following count step
@@ -88,12 +89,14 @@ is not automatically loaded into Cloud.
    The existing Alloy datasource only contains application metrics; it is not
    enough. Never put credentials into this repository.
 3. Replace the template's datasource UID. Compare `fly_instance_up` instance IDs
-   and count against the live Machines API while Machines start and suspend.
+   and count against the live Machines API while Machines start and stop in staging.
    Count Machines, not Python workers or healthy HTTP endpoints.
 4. Evaluate every minute, no pending period: notify when at least six are up,
    then repeat every 15 minutes while the condition holds. Stop capacity reminders
    below six. One resolved notification is permitted. Missing metrics/query errors
-   produce a separate monitoring-failure notification, never an invented zero.
+   also alert, explicitly identifying unknown telemetry rather than inventing zero.
+   Allow for metric ingestion and the one-minute evaluation interval; delivery is
+   not instantaneous. Controller-health notifications repeat separately every15m.
 5. Use a staging/test rule to verify five/six/eight, six-to-five recovery,
    duplicate series, missing telemetry, first receipt, a second receipt after
    15 minutes, and no capacity reminders after recovery. Avoid production scale-up
@@ -136,3 +139,8 @@ failures, all dependencies unready, controller restart, cap exhaustion, and emai
 recovery/repeat semantics. Shared dependency failure inhibits blind scale-out.
 Do not claim an OOM is prevented when allocation growth beats metric collection
 and boot time; heap leaks and already-running work need their own safeguards.
+
+Implementation and controller activation: `infra/burst_controller/README.md`.
+The controller remains observe-only by default; merging files does not provision
+Grafana or turn on active pressure scaling. Proxy autostart continues to respond
+to connections within the existing pool, independently of controller decisions.

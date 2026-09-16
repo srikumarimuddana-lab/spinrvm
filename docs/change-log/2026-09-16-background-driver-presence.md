@@ -1,5 +1,13 @@
 # Background driver discovery cadence
 
+## Review correction: dashboard rollout control
+
+Added Stationary driver tracking under Settings > Operations. It reads the stored Boolean, defaults off when absent, and uses the existing Save Changes action. The control explains battery/network cost, cache propagation and foreground resume for enable/rollback. This completes the supported admin workflow rather than requiring production SQL access. Files: admin settings page (control), e2e/settings.spec.ts (enable/save/reload/disable/save/reload), this log.
+
+Blast radius: settings page's existing shared state/save payload and admin PUT; no shared component changes. Before: no control. After: authorized operators can toggle the new setting. Risk: accidental enablement increases sampling, so it remains false by default and the UI calls for device testing. Rollback: switch off, Save Changes, wait for settings caches then resume driver app. Existing backend/mobile caches each retain values for 60 seconds. No durable data or schema rollback required.
+
+Verification: final Android/iOS production Hermes exports passed after the resume correction; 109 focused mobile and 11 admin/public backend tests passed. Admin build/browser validation results are recorded before PR completion. Existing settings visual baseline covers the initial Integrations tab, not this Operations control; that baseline is unchanged. No physical-device test or live settings write performed.
+
 ## Review correction: supported admin rollout writes
 
 The new column was missing from SettingsUpdateRequest and its maintained schema snapshot, so admin PUT silently discarded rollout changes. Added the optional Boolean to the existing audited admin write path and drift snapshot, with enable/disable persistence and omission tests. No new endpoint or permission model. Consumers: dashboard settings save and any authenticated admin settings client; public/mobile readers remain unchanged. This supersedes the earlier SQL-only operational limitation. A custom SQL-only control was rejected because the existing admin settings path already provides access control, auditing and bounded cache expiry.

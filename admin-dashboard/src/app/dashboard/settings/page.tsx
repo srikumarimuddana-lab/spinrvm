@@ -1127,6 +1127,31 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base">Driver tracking rollout</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <Label htmlFor="driver-stationary-tracking-enabled">Stationary driver tracking</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Enables more frequent GPS updates while an online driver is parked.
+                                        May increase battery and network use. Enable after device testing.
+                                        Save changes, allow up to two minutes for settings to refresh, then
+                                        have the driver reopen the app. Turn off and repeat to restore baseline tracking.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="driver-stationary-tracking-enabled"
+                                    aria-label="Stationary driver tracking enabled"
+                                    checked={settings.driver_stationary_tracking_enabled === true}
+                                    onCheckedChange={(v) => update("driver_stationary_tracking_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Kill Switches (ACTION_ITEMS.md E5) */}
                     <Card className="border-border/50">
                         <CardHeader>

@@ -28,9 +28,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 try:
-    from utils.email_provider import send_transactional_email
+    from utils.email_provider import _cid_token, send_transactional_email
 except ImportError:
-    from backend.utils.email_provider import send_transactional_email  # type: ignore[no-redef]
+    from backend.utils.email_provider import _cid_token, send_transactional_email  # type: ignore[no-redef]
 
 
 _SES_SETTINGS = {
@@ -217,6 +217,149 @@ async def test_resend_attachment_base64():
     sent = post_kwargs["json"]["attachments"]
     assert sent[0]["filename"] == "receipt.pdf"
     assert base64.b64decode(sent[0]["content"]) == b"%PDF-1.4 fake"
+    assert "content_id" not in sent[0]
+
+
+@pytest.mark.anyio
+async def test_ses_inline_image_uses_related_mime_not_a_downloadable_attachment():
+    """A content_id attachment must render as a CID-related image, not paperclip."""
+    factory, ses_client = _boto3_mock()
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png"
+    att = [{"filename": "route.png", "content": png, "mime": "image/png", "content_id": "spinr-route-snapshot"}]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com",
+            subject="Receipt",
+            html='<img src="cid:spinr-route-snapshot" alt="route">',
+            text="hi",
+            attachments=att,
+        )
+    assert ok is True
+    _, send_kwargs = ses_client.send_raw_email.call_args
+    import email as _email
+
+    parsed = _email.message_from_string(send_kwargs["RawMessage"]["Data"])
+    assert parsed.get_content_type() == "multipart/related"
+    img_parts = [p for p in parsed.walk() if p.get_content_type() == "image/png"]
+    assert len(img_parts) == 1
+    disposition = (img_parts[0].get("Content-Disposition") or "").lower()
+    assert disposition.startswith("inline")
+    assert "attachment" not in disposition
+    assert "spinr-route-snapshot" in (img_parts[0].get("Content-ID") or "")
+    assert img_parts[0].get_payload(decode=True) == png
+
+
+@pytest.mark.anyio
+async def test_ses_inline_image_plus_pdf_wraps_related_inside_mixed():
+    factory, ses_client = _boto3_mock()
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png"
+    att = [
+        {"filename": "receipt.pdf", "content": b"%PDF-1.4 fake", "mime": "application/pdf"},
+        {"filename": "route.png", "content": png, "mime": "image/png", "content_id": "spinr-route-snapshot"},
+    ]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com",
+            subject="Receipt",
+            html='<img src="cid:spinr-route-snapshot">',
+            text="hi",
+            attachments=att,
+        )
+    assert ok is True
+    _, send_kwargs = ses_client.send_raw_email.call_args
+    import email as _email
+
+    parsed = _email.message_from_string(send_kwargs["RawMessage"]["Data"])
+    assert parsed.get_content_type() == "multipart/mixed"
+    related = [p for p in parsed.get_payload() if p.get_content_type() == "multipart/related"]
+    pdf_parts = [p for p in parsed.walk() if p.get_content_type() == "application/pdf"]
+    img_parts = [p for p in parsed.walk() if p.get_content_type() == "image/png"]
+    assert len(related) == 1
+    assert len(pdf_parts) == 1
+    assert len(img_parts) == 1
+    assert "attachment" in (pdf_parts[0].get("Content-Disposition") or "").lower()
+    assert (img_parts[0].get("Content-Disposition") or "").lower().startswith("inline")
+
+
+@pytest.mark.anyio
+async def test_resend_passes_content_id_for_inline_images():
+    import base64
+
+    resend_client = _async_client_mock()
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png"
+    att = [
+        {"filename": "receipt.pdf", "content": b"%PDF-1.4 fake", "mime": "application/pdf"},
+        {"filename": "route.png", "content": png, "mime": "image/png", "content_id": "spinr-route-snapshot"},
+    ]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_RESEND_SETTINGS)),
+        patch("httpx.AsyncClient", return_value=resend_client),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com", subject="Receipt", html="<p>hi</p>", attachments=att
+        )
+    assert ok is True
+    _, post_kwargs = resend_client.post.call_args
+    sent = post_kwargs["json"]["attachments"]
+    assert sent[0]["filename"] == "receipt.pdf"
+    assert "content_id" not in sent[0]
+    assert sent[1]["filename"] == "route.png"
+    assert sent[1]["content_id"] == "spinr-route-snapshot"
+    assert sent[1]["content_type"] == "image/png"
+    assert base64.b64decode(sent[1]["content"]) == png
+
+
+def test_cid_token_strips_angle_brackets():
+    assert _cid_token("spinr-route-snapshot") == "spinr-route-snapshot"
+    assert _cid_token("<spinr-route-snapshot>") == "spinr-route-snapshot"
+    assert _cid_token("  <spinr-route-snapshot>  ") == "spinr-route-snapshot"
+
+
+def test_cid_token_rejects_control_characters():
+    with pytest.raises(ValueError):
+        _cid_token("spinr\r\n-route")
+    with pytest.raises(ValueError):
+        _cid_token('spinr"route')
+    with pytest.raises(ValueError):
+        _cid_token("")
+
+
+@pytest.mark.anyio
+async def test_ses_invalid_content_id_skips_inline_and_still_sends_pdf():
+    """A malformed CID must not drop the receipt; the PDF still attaches."""
+    factory, ses_client = _boto3_mock()
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png"
+    att = [
+        {"filename": "receipt.pdf", "content": b"%PDF-1.4 fake", "mime": "application/pdf"},
+        {"filename": "route.png", "content": png, "mime": "image/png", "content_id": "bad\nid"},
+    ]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com",
+            subject="Receipt",
+            html="<p>hi</p>",
+            text="hi",
+            attachments=att,
+        )
+    assert ok is True
+    _, send_kwargs = ses_client.send_raw_email.call_args
+    import email as _email
+
+    parsed = _email.message_from_string(send_kwargs["RawMessage"]["Data"])
+    assert parsed.get_content_type() == "multipart/mixed"
+    img_parts = [p for p in parsed.walk() if p.get_content_type() == "image/png"]
+    pdf_parts = [p for p in parsed.walk() if p.get_content_type() == "application/pdf"]
+    assert img_parts == []
+    assert len(pdf_parts) == 1
 
 
 @pytest.mark.anyio

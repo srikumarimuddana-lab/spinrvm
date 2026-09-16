@@ -52,6 +52,13 @@ afterEach(() => {
 });
 
 describe('401 silent-refresh vs G2 logout backstop', () => {
+  it('does not recursively refresh or sign out when revocation itself is rejected', async () => {
+    const refresh = jest.fn(async () => false);
+    setRefreshCallback(refresh);
+    await expect(api.post('/auth/logout', { refresh_token: 'ending-session' })).rejects.toMatchObject({ status: 401 });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(mockLogout).not.toHaveBeenCalled();
+  });
   it('keeps the session when the refresh fails transiently (refresh returned false without logging out)', async () => {
     // Models refreshTokens() hitting a 503/timeout: resolves false, no logout.
     setRefreshCallback(jest.fn(async () => false));

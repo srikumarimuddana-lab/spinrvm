@@ -1,4 +1,8 @@
 import { AppState, Platform } from 'react-native';
+import { installNativeSessionCoordination } from './nativeSessionLock';
+import { renewBackgroundAuthToken } from './backgroundAuth';
+import { SESSION_GENERATION_KEY } from '@shared/auth/sessionLock';
+
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
@@ -15,6 +19,9 @@ import { runExclusive } from './locationTaskArbiter';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
+
+// Also cover native task imports that do not mount the app shell.
+installNativeSessionCoordination();
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -199,60 +206,9 @@ export async function isSessionEnded(): Promise<boolean> {
   }
 }
 
-/**
- * Get a valid access token for the background task.
- *
- * Strategy: read the foreground-persisted access token from SecureStore.
- * The foreground proactive refresh (2-min buffer) keeps it fresh far more
- * often than the background cadence needs. If the foreground token is
- * expired or absent, return null — the caller defers the upload to the
- * durable SQLite outbox, which the foreground flushes on resume.
- *
- * The background task NEVER calls /auth/refresh itself. Two independent
- * refresh actors sharing one single-use rotating credential caused the
- * foreground/background rotation race that triggered driver sign-outs —
- * especially right after ride completion when both contexts fire
- * concurrently during the completion burst.
- */
+/** Read or renew credentials under the same native lock as foreground auth. */
 export async function getBackgroundAuthToken(): Promise<string | null> {
-  if (!API_URL) return null;
-
-  // 1. Try the background-cached access token (set by setTokens flow
-  //    or a prior successful read below).
-  try {
-    const cached = await SecureStore.getItemAsync('bg_access_token');
-    const cachedExpiry = await SecureStore.getItemAsync('bg_access_token_expires');
-    if (cached && cachedExpiry) {
-      const expiresAt = parseInt(cachedExpiry, 10);
-      if (Date.now() < expiresAt - 60_000) {
-        return cached;
-      }
-    }
-  } catch {
-    // SecureStore read failed — fall through
-  }
-
-  // 2. Read the foreground's persisted access token. The foreground writes
-  //    it on every setTokens() call (authStore.ts:245).
-  try {
-    const fgToken = await SecureStore.getItemAsync('fg_access_token');
-    const fgExpiry = await SecureStore.getItemAsync('token_expires_at');
-    if (fgToken && fgExpiry) {
-      const expiresAt = parseInt(fgExpiry, 10);
-      if (Date.now() < expiresAt - 30_000) {
-        // Cache it for subsequent background fires within this process
-        await SecureStore.setItemAsync('bg_access_token', fgToken, KEYCHAIN_BACKGROUND_READABLE);
-        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry, KEYCHAIN_BACKGROUND_READABLE);
-        return fgToken;
-      }
-    }
-  } catch {
-    // SecureStore read failed — fall through
-  }
-
-  // 3. No valid token available — defer the upload. Points stay in SQLite
-  //    and the foreground flushes them on resume or next interval.
-  return null;
+  return renewBackgroundAuthToken();
 }
 
 export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {
@@ -275,6 +231,14 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     return;
   }
 
+  // Snapshot ownership before capturing samples. A delayed callback must never
+  // obtain the next account's token after logout + another sign-in.
+  let captureSession: string | null | undefined;
+  try { captureSession = await SecureStore.getItemAsync(SESSION_GENERATION_KEY); }
+  catch (error) {
+    console.error('[BgLocation] Session ownership unavailable; upload deferred');
+    recordNonFatal(error, { domain: 'auth', surface: 'driver-app' });
+  }
   let latestLiveFix: Location.LocationObject | null = null;
   for (const location of data?.locations ?? []) {
     // CAPTURE BEFORE FILTER. Durable persistence comes first, unconditionally:
@@ -330,6 +294,7 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     await reassertDispatchTask().catch(() => {});
   }
 
+  if (captureSession === undefined) return;
   const token = await getBackgroundAuthToken();
   if (!token || !API_URL) return;
 
@@ -339,6 +304,12 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     try {
       await initFirebaseServices();
       const appCheckToken = await getAppCheckToken();
+      // Strict reads here: failed storage access must defer upload. Keep this
+      // after async App Check preparation and directly before network dispatch.
+      if (await SecureStore.getItemAsync(SESSION_ENDED_KEY) ||
+          await SecureStore.getItemAsync(SESSION_GENERATION_KEY) !== captureSession) {
+        throw new Error('Location upload cancelled after session change');
+      }
       return await fetch(`${API_URL}/api/v1/drivers/${path}`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
@@ -395,17 +366,13 @@ export interface BgLocationConfig {
   accuracy?: Location.Accuracy;
 }
 
-// Idle fixes also renew the backend's 30s presence lease after the socket
-// closes in background. Request updates well inside that window, without a
-// movement threshold: a parked driver waiting for an offer must stay visible.
-// High accuracy keeps native GPS sampling active rather than relying on coarse
-// position changes. Trip cadence: dense + high accuracy
-// so a trip stays well-sampled even while the app is backgrounded (driver in
-// Google Maps / screen locked) — exactly when the foreground watchPositionAsync
-// stops firing. Billed distance is settled from these breadcrumbs, so
-// under-sampling here directly undercounts km and the SGI per-period audit.
+// Keep online and trip timing equally frequent: Android can reject a trip
+// retune while backgrounded, so the existing online options must not leave
+// live updates waiting 30 seconds. Idle fixes renew the 90s presence window;
+// use High accuracy and no movement threshold so parked drivers keep sampling.
+// Trips retain their route-recording distance filter. OS scheduling still applies.
 export const IDLE_CADENCE: BgLocationConfig = {
-  timeInterval: 10_000,
+  timeInterval: 4_000,
   distanceInterval: 0,
   accuracy: Location.Accuracy.High,
 };
@@ -434,7 +401,9 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
     accuracy: config?.accuracy ?? IDLE_CADENCE.accuracy!,
     timeInterval: interval,
     distanceInterval: distance,
-    deferredUpdatesInterval: interval,
+    // Android already applies timeInterval. iOS ignores it, so keep its
+    // delivery interval to avoid distance-only callbacks flooding live uploads.
+    deferredUpdatesInterval: Platform.OS === 'ios' ? interval : 0,
     showsBackgroundLocationIndicator: true,
     // iOS: prevent CoreLocation from silently pausing updates when the
     // driver appears stationary (red light, loading zone, traffic jam).
@@ -668,8 +637,8 @@ export function _resetDeferredReassert(): void {
 
 /**
  * Re-tune the cadence/accuracy of the *already-running* background task —
- * tighten to TRIP_CADENCE while a ride is active so a backgrounded trip is
- * still sampled densely, relax to IDLE_CADENCE when idle. No-op if the task
+ * use TRIP_CADENCE's movement filter during a ride, allow stationary updates
+ * via IDLE_CADENCE when idle. Both request High accuracy and four-second timing. No-op if the task
  * isn't registered (go-online hasn't started it yet) or permission was
  * revoked. Calling startLocationUpdatesAsync on a live task replaces its
  * options in place — the task identity and handler are unchanged.
@@ -687,8 +656,8 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
       // is backgrounded — which is exactly when this call matters most, because
       // the trip-phase tighten fires from a driver who has just put the phone
       // down or handed the screen to Android Auto. The throw leaves the running
-      // task on its PREVIOUS cadence (idle), so swallowing it silently costs the
-      // whole trip its dense sampling. Park a foreground replay so it self-heals
+      // task on its PREVIOUS movement filter, with High accuracy and
+      // four-second timing retained. Park a foreground replay so it self-heals
       // the moment the activity resumes, and let the caller see the failure.
       if (_isBackgroundedForegroundServiceRejection(e)) {
         console.warn('[BgLocation] Cadence change blocked while backgrounded — deferred to next foreground');

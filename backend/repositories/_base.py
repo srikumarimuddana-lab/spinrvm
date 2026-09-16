@@ -15,7 +15,6 @@ import random as _random
 import re as _re
 import time as _time
 import traceback
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from contextvars import ContextVar as _ContextVar
 from datetime import date, datetime
 from decimal import Decimal
@@ -41,6 +40,7 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 try:
+    from ..utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from ..utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from ..utils.deadline import remaining_seconds as _remaining_seconds
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
@@ -50,6 +50,7 @@ try:
     from ..utils.pii import geohash as _geohash  # type: ignore
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
+    from utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from utils.deadline import remaining_seconds as _remaining_seconds
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
@@ -162,7 +163,11 @@ _breaker = _CircuitBreaker()
 # was capped at 32 while ops believed 64).
 
 _DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ.get("DB_THREAD_POOL_MAX") or "64")
-_DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
+# Bound retained call closures as well as active threads during a DB stall.
+_DB_THREAD_POOL_QUEUE_SIZE = int(_os.environ.get("DB_THREAD_POOL_QUEUE_SIZE", "64"))
+_DB_EXECUTOR = BoundedExecutor(
+    max_workers=_DB_THREAD_POOL_SIZE, queue_size=_DB_THREAD_POOL_QUEUE_SIZE, thread_name_prefix="spinr-db"
+)
 
 # Default row cap for get_rows when no explicit limit is provided.
 # Prevents accidental full-table scans. Callers that genuinely need
@@ -439,7 +444,15 @@ async def run_sync(
                 finally:
                     _metric_observe("spinr_db_run_sync_exec_ms", (_time.monotonic() - _thread_start) * 1000.0)
 
-            future = loop.run_in_executor(_DB_EXECUTOR, _timed_func)  # type: ignore
+            try:
+                future = loop.run_in_executor(_DB_EXECUTOR, _timed_func)
+            except ExecutorSaturated:
+                _breaker.release_probe()
+                _metric_inc("spinr_db_calls_rejected_total", {"reason": "pool_full"})
+                logger.bind(reason="pool_full", retry_policy=retry_policy).error(
+                    "[DB] Executor capacity exhausted; call rejected before submission"
+                )
+                raise ServiceUnavailableException("database") from None
             _record_db_queue_depth()
             try:
                 if remaining is None:

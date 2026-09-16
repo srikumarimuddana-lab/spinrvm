@@ -1,0 +1,42 @@
+name: Fly resilience checks
+
+on:
+  pull_request:
+    paths:
+      - 'infra/burst_controller/**'
+      - 'scripts/*fly_fleet_preflight.py'
+      - 'backend/utils/bounded_executor.py'
+      - 'backend/tests/test_bounded_executor.py'
+      - 'backend/fly.toml'
+      - '.github/workflows/*fly*.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/burst_controller/**'
+      - 'scripts/*fly_fleet_preflight.py'
+      - 'backend/utils/bounded_executor.py'
+      - 'backend/tests/test_bounded_executor.py'
+      - 'backend/fly.toml'
+      - '.github/workflows/*fly*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Controller, fleet guard and real-thread cancellation tests
+        run: |
+          python -m unittest discover -s infra/burst_controller -p 'test_*.py'
+          python -m unittest discover -s scripts -p test_fly_fleet_preflight.py
+          python -m unittest discover -s backend/tests -p test_bounded_executor.py
+      - name: Build standalone controller
+        run: docker build -t spinr-burst-controller:test infra/burst_controller
+      - name: Import smoke without credentials or network
+        run: docker run --rm --network none spinr-burst-controller:test python -c 'import runtime'

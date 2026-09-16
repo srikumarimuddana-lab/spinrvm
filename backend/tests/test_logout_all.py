@@ -194,6 +194,107 @@ class TestLogoutAllRiderDriver:
         # is meaningless if access tokens are still alive.
         revoke_all.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_takes_idle_driver_offline(self):
+        """Sign-out-all used to PUT /drivers/{id}/status from the client
+        AFTER token_version was bumped. That second call 401'd. Fold the
+        go-offline into this request so the client has one round trip.
+        Idle driver (no assigned ride) → is_online/is_available false +
+        Period 0 + presence clear."""
+        from backend.routes.auth import logout_all
+
+        update_one = AsyncMock(return_value={})
+        get_rows = AsyncMock(
+            side_effect=[
+                [{"id": "drv-1", "user_id": "user-drv-1", "is_online": True}],
+                [],  # no obligated ride
+            ]
+        )
+        revoke_all = AsyncMock(return_value=1)
+        period = AsyncMock()
+        clear_presence = AsyncMock()
+
+        with (
+            patch("backend.routes.auth.db.update_one", update_one),
+            patch("backend.routes.auth.db.get_rows", get_rows),
+            patch("backend.routes.auth.revoke_all_for_user", revoke_all),
+            patch("backend.routes.auth.record_period_transition", period),
+            patch("backend.routes.auth.clear_presence", clear_presence),
+            patch("backend.socket_manager.manager.kick_user", AsyncMock(return_value=0)),
+            patch("backend.routes.auth._revoke_firebase_refresh_tokens", MagicMock()),
+        ):
+            inner = _resolve_inner(logout_all)
+            result = await inner(MagicMock(), MagicMock(), current_user={"id": "user-drv-1", "token_version": 0})
+
+        assert result == {"success": True, "revoked_refresh_tokens": 1}
+        driver_writes = [c for c in update_one.await_args_list if c.args[0] == "drivers"]
+        assert len(driver_writes) == 1
+        driver_payload = driver_writes[0].args[2]
+        assert driver_payload["is_online"] is False
+        assert driver_payload["is_available"] is False
+        period.assert_awaited_once_with("drv-1", 0)
+        clear_presence.assert_awaited_once_with("drv-1")
+
+    @pytest.mark.asyncio
+    async def test_skips_go_offline_when_driver_is_on_an_obligated_ride(self):
+        """Period 2/3 must not close to Period 0 while a ride is still
+        assigned — same rule as PUT /drivers/{id}/status 409. Sessions
+        still die; insurance stays on the ride."""
+        from backend.routes.auth import logout_all
+
+        update_one = AsyncMock(return_value={})
+        get_rows = AsyncMock(
+            side_effect=[
+                [{"id": "drv-2", "user_id": "user-drv-2", "is_online": True}],
+                [{"id": "ride-1", "status": "in_progress"}],
+            ]
+        )
+        period = AsyncMock()
+        clear_presence = AsyncMock()
+
+        with (
+            patch("backend.routes.auth.db.update_one", update_one),
+            patch("backend.routes.auth.db.get_rows", get_rows),
+            patch("backend.routes.auth.revoke_all_for_user", AsyncMock(return_value=0)),
+            patch("backend.routes.auth.record_period_transition", period),
+            patch("backend.routes.auth.clear_presence", clear_presence),
+            patch("backend.socket_manager.manager.kick_user", AsyncMock(return_value=0)),
+            patch("backend.routes.auth._revoke_firebase_refresh_tokens", MagicMock()),
+        ):
+            inner = _resolve_inner(logout_all)
+            result = await inner(MagicMock(), MagicMock(), current_user={"id": "user-drv-2", "token_version": 3})
+
+        assert result["success"] is True
+        assert all(c.args[0] != "drivers" for c in update_one.await_args_list)
+        period.assert_not_awaited()
+        clear_presence.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_driver_offline_failure_does_not_fail_logout_all(self):
+        """Token kill is the contract. A driver-row write failure must
+        not roll it back or 500 the button."""
+        from backend.routes.auth import logout_all
+
+        update_one = AsyncMock(side_effect=[{"id": "user-drv-3"}, RuntimeError("drivers 503")])
+        get_rows = AsyncMock(
+            side_effect=[
+                [{"id": "drv-3", "user_id": "user-drv-3", "is_online": True}],
+                [],
+            ]
+        )
+
+        with (
+            patch("backend.routes.auth.db.update_one", update_one),
+            patch("backend.routes.auth.db.get_rows", get_rows),
+            patch("backend.routes.auth.revoke_all_for_user", AsyncMock(return_value=1)),
+            patch("backend.socket_manager.manager.kick_user", AsyncMock(return_value=0)),
+            patch("backend.routes.auth._revoke_firebase_refresh_tokens", MagicMock()),
+        ):
+            inner = _resolve_inner(logout_all)
+            result = await inner(MagicMock(), MagicMock(), current_user={"id": "user-drv-3", "token_version": 1})
+
+        assert result == {"success": True, "revoked_refresh_tokens": 1}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /admin/auth/logout-all

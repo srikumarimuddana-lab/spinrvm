@@ -1,0 +1,31 @@
+# Separate management Machine, outside the eight-backend-Machine cap.
+# Provisioning/activation are manual gates; see README.md. No public service.
+app = "spinr-burst-controller-yyz"
+primary_region = "yyz"
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  BACKEND_APP = "spinr-backend-yyz"
+  FLY_ORG = "spinr_backend"
+  BURST_DRY_RUN = "true"
+  # Required via Fly secrets: BURST_ANCHOR_ID (fixed warm Machine ID),
+  # FLY_API_TOKEN (backend app-scoped deploy token, full Authorization value),
+  # PROMETHEUS_TOKEN (org read-only token, full Authorization value).
+
+[deploy]
+  strategy = "rolling"
+
+[metrics]
+  port = 9090
+  path = "/metrics"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[[restart]]
+  policy = "always"

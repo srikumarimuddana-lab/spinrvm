@@ -44,6 +44,8 @@ jest.mock('expo-location', () => ({
   requestBackgroundPermissionsAsync: jest.fn(),
 }));
 jest.mock('expo-task-manager', () => ({ defineTask: jest.fn() }));
+jest.mock('expo-sqlite', () => ({ openDatabaseAsync: jest.fn() }));
+jest.mock('expo-crypto', () => ({ CryptoDigestAlgorithm: { SHA256: 'SHA-256' }, digestStringAsync: jest.fn() }));
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn().mockResolvedValue('true'),
   setItemAsync: jest.fn(),
@@ -201,12 +203,14 @@ describe('reassertDispatchTaskUnlocked cadence selection', () => {
   it('applies trip cadence while the flag reports an active ride', async () => {
     await reassertDispatchTaskUnlocked();
     expect(appliedInterval(0)).toBe(TRIP_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[0][1].accuracy).toBe(TRIP_CADENCE.accuracy);
   });
 
   it('applies idle cadence when the flag is definitively absent', async () => {
     readFlag.mockResolvedValue(null);
     await reassertDispatchTaskUnlocked();
     expect(appliedInterval(0)).toBe(IDLE_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[0][1].accuracy).toBe(IDLE_CADENCE.accuracy);
   });
 
   it('never downgrades a live trip to idle when the flag cannot be read', async () => {
@@ -219,7 +223,9 @@ describe('reassertDispatchTaskUnlocked cadence selection', () => {
     await reassertDispatchTaskUnlocked();
 
     expect(appliedInterval(1)).toBe(TRIP_CADENCE.timeInterval);
-    expect(appliedInterval(1)).not.toBe(IDLE_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[1][1].accuracy).toBe(TRIP_CADENCE.accuracy);
+    expect(mockStartUpdates.mock.calls[1][1].distanceInterval).toBe(TRIP_CADENCE.distanceInterval);
+    expect(mockStartUpdates.mock.calls[1][1].distanceInterval).not.toBe(IDLE_CADENCE.distanceInterval);
   });
 
   it('repeated unreadable heals keep re-asserting trip cadence, not drifting to idle', async () => {

@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
+import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
 import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -63,6 +64,10 @@ type RNFormFile = { uri: string; name: string; type: string };
 // failed"). Safe to call even when nothing is stored — deleteItem is a
 // no-op on missing keys.
 async function clearAuthStorage(): Promise<void> {
+  return withSessionLock(clearAuthStorageUnlocked);
+}
+
+async function clearAuthStorageUnlocked(): Promise<void> {
   try {
     if (Platform.OS === 'web') {
       sessionStorage.removeItem('auth_token');
@@ -86,7 +91,7 @@ async function clearAuthStorage(): Promise<void> {
     // Record the end of the session so the headless contexts can see it. They
     // have no access to this store, and cannot infer it from missing tokens —
     // see shared/auth/sessionMarker.ts.
-    await SecureStore.setItemAsync(SESSION_ENDED_KEY, '1');
+    await SecureStore.setItemAsync(SESSION_ENDED_KEY, '1', sessionKeychainOptions);
   } catch (e) {
     // Best-effort — never let a storage error block the login screen.
     if (__DEV__) console.log('[Auth] clearAuthStorage failed:', e);
@@ -111,7 +116,7 @@ const storage = {
   async setItem(key: string, value: string): Promise<void> {
     try {
       if (Platform.OS === 'web') return;
-      return await SecureStore.setItemAsync(key, value);
+      return await SecureStore.setItemAsync(key, value, sessionKeychainOptions);
     } catch (e) {
       console.error('[Auth] Secure storage write failed');
       captureMessage('Secure storage write failed', 'error', { tags: { domain: 'auth' } });
@@ -246,6 +251,81 @@ interface AuthState {
   clearError: () => void;
 }
 
+// Only explicit sign-in increments this generation. A delayed go-offline request
+// must not clear a new foreground login. Headless contexts never sign in.
+let loginGeneration = 0;
+async function publishTokensUnlocked(token: string, refreshToken: string, expiresIn: number,
+  csrfToken: string | null | undefined, newSession: boolean): Promise<void> {
+  const expiresAt = Date.now() + expiresIn * 1000;
+  // A live session exists again — clear the end-of-session marker before
+  // writing tokens, so a headless task that fires mid-write can never see
+  // fresh tokens alongside a stale "signed out" marker and tear itself down.
+  if (newSession) {
+    // This is an ownership fence, not an authentication secret. Publish before
+    // clearing the ended marker so delayed GPS callbacks cannot adopt a login.
+    await storage.setItem(SESSION_GENERATION_KEY, `${Date.now()}:${Math.random()}`);
+    await storage.deleteItem(SESSION_ENDED_KEY);
+  }
+  await storage.setItem('refresh_token', refreshToken);
+  await storage.setItem('token_expires_at', String(expiresAt));
+  // Persist the access token so the background location task (which runs
+  // in a separate JS context with no shared memory) can read it directly
+  // instead of independently rotating the shared refresh token.
+  await storage.setItem('fg_access_token', token);
+  // Remove any previously-persisted access token from older app versions.
+  await storage.deleteItem('auth_token');
+  // Publish the session only after its credentials have been persisted.
+  // A failed Keychain write must not look like a successful sign-in.
+  setInMemoryToken(token);
+  if (csrfToken !== undefined) setCsrfToken(csrfToken);
+  useAuthStore.setState({ token, refreshToken, tokenExpiresAt: expiresAt });
+}
+
+// Caller holds the session lock. Never invoke authenticated HTTP from here.
+async function clearLocalSessionUnlocked(): Promise<void> {
+  setInMemoryToken(null);
+  setCsrfToken(null);
+  await storage.deleteItem('auth_token');
+  await storage.deleteItem('fg_access_token');
+  await storage.deleteItem('refresh_token');
+  await storage.deleteItem('token_expires_at');
+  // Positive evidence that this session ended, for the headless contexts that
+  // cannot read this store (see shared/auth/sessionMarker.ts). Written before
+  // the logout callbacks below so the driver-app teardown — and any headless
+  // task that fires while it runs — both observe it.
+  try {
+    await storage.setItem(SESSION_ENDED_KEY, '1');
+  } catch (e) {
+    // storage.setItem() has already logged and captureMessage'd the raw
+    // write failure (see the wrapper above). Report the logout-specific
+    // CONSEQUENCE separately, because it differs from a generic write
+    // failure: headless contexts that cannot read this store rely on this
+    // marker to know the session ended, so a missing marker can leave
+    // background location tracking armed after sign-out. See
+    // shared/auth/sessionMarker.ts.
+    //
+    // Deliberately does NOT rethrow. Rejecting here protected nothing — the
+    // teardown below and _runLogoutCallbacks() (which tears down driver
+    // location) run either way via the finally — while ~7 callers do
+    // `await logout(); router.replace('/login')` with no catch, so a throw
+    // skipped the navigation and stranded the user on a screen whose store
+    // had just been nulled. The failure stays visible in logs and Sentry,
+    // which is where it is actionable; it is not visible by breaking
+    // sign-out.
+    console.error('[Auth] session-ended marker write failed; headless tracking may remain armed:', e);
+    captureMessage('session-ended marker write failed', 'error', { tags: { domain: 'auth' } });
+  } finally {
+    // A failed marker write must surface, but cannot skip local teardown.
+    useAuthStore.setState({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
+    try {
+      await appCache.clearUserCache();
+    } finally {
+      // Reset all registered per-session stores even if cache clearing fails.
+      await _runLogoutCallbacks();
+    }
+  }
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   driver: null,
@@ -260,28 +340,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
-  setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
-    const expiresAt = Date.now() + expiresIn * 1000;
-    // A live session exists again — clear the end-of-session marker before
-    // writing tokens, so a headless task that fires mid-write can never see
-    // fresh tokens alongside a stale "signed out" marker and tear itself down.
-    await storage.deleteItem(SESSION_ENDED_KEY);
-    await storage.setItem('refresh_token', refreshToken);
-    await storage.setItem('token_expires_at', String(expiresAt));
-    // Persist the access token so the background location task (which runs
-    // in a separate JS context with no shared memory) can read it directly
-    // instead of independently rotating the shared refresh token.
-    await storage.setItem('fg_access_token', token);
-    // Remove any previously-persisted access token from older app versions.
-    await storage.deleteItem('auth_token');
-    // Publish the session only after its credentials have been persisted.
-    // A failed Keychain write must not look like a successful sign-in.
-    setInMemoryToken(token);
-    if (csrfToken !== undefined) setCsrfToken(csrfToken);
-    set({ token, refreshToken, tokenExpiresAt: expiresAt });
-  },
+  setTokens: (token, refreshToken, expiresIn, csrfToken) => withSessionLock(async () => {
+    loginGeneration++;
+    await publishTokensUnlocked(token, refreshToken, expiresIn, csrfToken, true);
+  }),
 
-  refreshTokens: async (): Promise<boolean> => {
+  refreshTokens: (): Promise<boolean> => withSessionLock(async () => {
+    const ended = await storage.getItem(SESSION_ENDED_KEY);
+    if (ended === undefined) return false;
+    if (ended !== null) { await clearLocalSessionUnlocked(); return false; }
+
     // Prefer the freshest persisted refresh token over the in-memory copy.
     // On the driver app a headless background location task rotates the shared
     // SecureStore `refresh_token` independently of this foreground context;
@@ -293,20 +361,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // credential could not be read (the headless context may have rotated it).
     if (storedCandidate === undefined) return false;
     let candidate = storedCandidate ?? get().refreshToken ?? null;
+    const persistedAccess = await storage.getItem('fg_access_token');
+    const storedExpiry = await storage.getItem('token_expires_at');
+    if (persistedAccess === undefined || storedExpiry === undefined) return false;
+    const persistedExpiry = Number(storedExpiry);
+    if (candidate && persistedAccess && persistedAccess !== get().token && persistedExpiry > Date.now() + 60_000) {
+      await publishTokensUnlocked(persistedAccess, candidate, (persistedExpiry - Date.now()) / 1000, undefined, false);
+      return true;
+    }
     if (!candidate) {
       // No refresh token but an active session: the session cannot be
       // recovered, so tear it down here — the interceptor's G2 backstop no
       // longer fires once a refresh was attempted, and without this the user
       // would sit in auth limbo (API calls 401ing behind a live-looking UI).
-      // NOT awaited: logout()'s go-offline PUT can itself 401 and queue
-      // behind the interceptor's in-flight _refreshPromise — which is this
-      // very call — so awaiting would deadlock every queued request.
+      // Local cleanup only: an authenticated go-offline/logout call here
+      // could wait on this same in-flight refresh and deadlock.
       // Cold-start initialize() is unaffected (it only refreshes when a
       // stored refresh token exists).
       if (get().token || get().user) {
         // Credential is already unusable (no refresh token) — skip the server
         // revoke so it can't 401 into the interceptor's in-flight refresh.
-        void get().logout({ revokeServerSession: false });
+        await clearLocalSessionUnlocked();
       }
       return false;
     }
@@ -324,7 +399,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
           const res = await api.post('/auth/refresh', { refresh_token: candidate });
           const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
-          await get().setTokens(token, newRefresh, expires_in, csrf_token);
+          await publishTokensUnlocked(token, newRefresh, expires_in, csrf_token, false);
           return true;
         } catch (e: unknown) {
           // The /auth/refresh path rejects with a raw fetch Response (HTTP
@@ -373,7 +448,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           // the session is dead — revoked, expired, or post-cascade. Clear it.
           console.log('[Auth] Refresh token rejected (401) — logging out');
           // Backend already rejected this credential; nothing left to revoke.
-          await get().logout({ revokeServerSession: false });
+          await clearLocalSessionUnlocked();
           return false;
         }
       }
@@ -381,7 +456,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       setSuppressRefreshSignOut(false);
     }
-  },
+  }),
 
   initialize: async () => {
     // Register the silent-refresh callback with the API client once (SEC-014)
@@ -661,99 +736,56 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async (options) => {
-    // Uber/Lyft-style: a driver explicitly signing out must flip offline
-    // before the socket drops and tokens get wiped. Without this, the
-    // admin live-monitoring map (and any rider mid-match) would keep
-    // seeing the driver as online until their presence TTL expired. We
-    // swallow errors — a flaky network shouldn't block the user from
-    // signing out — and fall through to the normal cleanup.
+    const generation = loginGeneration;
     const { driver, token } = get();
-    if (driver?.id && token) {
-      try {
-        await api.put(`/drivers/${driver.id}/status`, { is_online: false });
-      } catch (error) {
-        if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
-      }
-    }
+    // Skip remote flips when the credential is already dead (logoutAll,
+    // interceptor 401, refresh rejected). A PUT/POST here 401s and queues
+    // behind a doomed refresh — hanging sign-out so router.replace('/login')
+    // never runs. /auth/logout-all now takes the driver offline itself.
+    const liveCredential = options?.revokeServerSession !== false && !!token;
 
-    // End the session server-side. Without this the refresh token stayed valid
-    // for its full 30 days after a sign-out, so the session could be resurrected
-    // from a stolen token, and the access token was trusted for its remaining
-    // ~15 minutes — which is what let a signed-out driver app keep uploading GPS.
-    // The backend also tombstones the session so opt-in ingest paths can reject
-    // that still-valid access token.
-    //
-    // Ordered after the go-offline PUT and before the token wipe, because it
-    // needs the live credential to authenticate.
-    //
-    // Skipped via revokeServerSession:false on the paths where the credential is
-    // already known-dead (refresh rejected, interceptor backstop) or already
-    // revoked (logoutAll). Calling it there would 401 and queue behind the
-    // interceptor's in-flight refresh — the same deadlock the go-offline PUT
-    // comment above warns about — for no benefit.
-    if (options?.revokeServerSession !== false && token) {
-      try {
-        // F02 (2026-09-08 AI security assessment): this used to POST with no
-        // body. The server revokes a refresh token only if one arrives in a
-        // cookie or the body, and native clients do not reliably send the
-        // cookie — so a probe confirmed logout succeeding with NO refresh
-        // revocation at all, leaving a 30-day credential live. Send it
-        // explicitly rather than depending on cookie transport.
-        //
-        // Read from the store rather than storage: the wipe below has not run
-        // yet, and `get()` is the same source the rest of this function uses.
-        const currentRefreshToken = get().refreshToken ?? (await storage.getItem('refresh_token'));
-        await api.post('/auth/logout', currentRefreshToken ? { refresh_token: currentRefreshToken } : {});
-      } catch (error) {
-        // Best-effort: the local session still ends. A failure here leaves the
-        // refresh token live until its own expiry, which is the pre-existing
-        // behaviour, so it must not block the user from signing out.
-        if (__DEV__) console.log('[Auth] server logout failed (non-fatal):', error);
-      }
-    }
+    // Start go-offline immediately so it overlaps /auth/logout rather than
+    // blocking it. Swallow errors — a flaky network must not block sign-out.
+    const goOffline =
+      liveCredential && driver?.id
+        ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
+            if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
+          })
+        : Promise.resolve();
 
-
-    setInMemoryToken(null);
-    setCsrfToken(null);
-    await storage.deleteItem('auth_token');
-    await storage.deleteItem('fg_access_token');
-    await storage.deleteItem('refresh_token');
-    await storage.deleteItem('token_expires_at');
-    // Positive evidence that this session ended, for the headless contexts that
-    // cannot read this store (see shared/auth/sessionMarker.ts). Written before
-    // the logout callbacks below so the driver-app teardown — and any headless
-    // task that fires while it runs — both observe it.
-    try {
-      await storage.setItem(SESSION_ENDED_KEY, '1');
-    } catch (e) {
-      // storage.setItem() has already logged and captureMessage'd the raw
-      // write failure (see the wrapper above). Report the logout-specific
-      // CONSEQUENCE separately, because it differs from a generic write
-      // failure: headless contexts that cannot read this store rely on this
-      // marker to know the session ended, so a missing marker can leave
-      // background location tracking armed after sign-out. See
-      // shared/auth/sessionMarker.ts.
-      //
-      // Deliberately does NOT rethrow. Rejecting here protected nothing — the
-      // teardown below and _runLogoutCallbacks() (which tears down driver
-      // location) run either way via the finally — while ~7 callers do
-      // `await logout(); router.replace('/login')` with no catch, so a throw
-      // skipped the navigation and stranded the user on a screen whose store
-      // had just been nulled. The failure stays visible in logs and Sentry,
-      // which is where it is actionable; it is not visible by breaking
-      // sign-out.
-      console.error('[Auth] session-ended marker write failed; headless tracking may remain armed:', e);
-      captureMessage('session-ended marker write failed', 'error', { tags: { domain: 'auth' } });
-    } finally {
-      // A failed marker write must surface, but cannot skip local teardown.
-      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
-      try {
-        await appCache.clearUserCache();
-      } finally {
-        // Reset all registered per-session stores even if cache clearing fails.
-        await _runLogoutCallbacks();
+    return withSessionLock(async () => {
+      if (generation !== loginGeneration) {
+        await goOffline;
+        return;
       }
-    }
+      // Background refresh may have replaced BOTH credentials while the UI slept.
+      const persistedAccess = await storage.getItem('fg_access_token');
+      if (persistedAccess) setInMemoryToken(persistedAccess);
+
+      const serverLogout = (async () => {
+        if (!(liveCredential && (persistedAccess || token))) return;
+        try {
+          // F02 (2026-09-08 AI security assessment): this used to POST with no
+          // body. The server revokes a refresh token only if one arrives in a
+          // cookie or the body, and native clients do not reliably send the
+          // cookie — so a probe confirmed logout succeeding with NO refresh
+          // revocation at all, leaving a 30-day credential live. Send it
+          // explicitly rather than depending on cookie transport.
+          //
+          // Read the winning rotation from storage while holding the session lock.
+          const currentRefreshToken = (await storage.getItem('refresh_token')) ?? get().refreshToken;
+          await api.post('/auth/logout', currentRefreshToken ? { refresh_token: currentRefreshToken } : {});
+        } catch (error) {
+          // Best-effort: the local session still ends. A failure here leaves the
+          // refresh token live until its own expiry, which is the pre-existing
+          // behaviour, so it must not block the user from signing out.
+          if (__DEV__) console.log('[Auth] server logout failed (non-fatal):', error);
+        }
+      })();
+
+      await Promise.all([goOffline, serverLogout]);
+      await clearLocalSessionUnlocked();
+    });
   },
 
   // "Sign out of all devices" — closes B-P1-13. Backend bumps
@@ -773,8 +805,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (error: unknown) {
       if (__DEV__) console.log('logout-all backend call failed:', isApiError(error) ? (error.message ?? error) : String(error));
     } finally {
-      // /auth/logout-all already bumped token_version and revoked every refresh
-      // token row, so a second per-session revoke would be redundant.
+      // /auth/logout-all already bumped token_version, revoked every refresh
+      // token row, and took an idle driver offline. Skip both the per-session
+      // POST /auth/logout and the go-offline PUT — either would 401.
       await get().logout({ revokeServerSession: false });
     }
     return { revoked_refresh_tokens: revoked };

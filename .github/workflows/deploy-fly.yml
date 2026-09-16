@@ -8,6 +8,8 @@ on:
       - 'backend/**'
       - 'backend/fly.toml'
       - '.github/workflows/deploy-fly.yml'
+      - 'scripts/fly_fleet_preflight.py'
+      - 'scripts/test_fly_fleet_preflight.py'
   workflow_dispatch:
 
 # Serialize deploys: rapid successive merges to main (or a manual dispatch racing
@@ -16,7 +18,7 @@ on:
 # Queue instead of cancel — never abort an in-flight production rollout, and never
 # skip a commit's deploy (cancel-in-progress would drop the queued newer commit).
 concurrency:
-  group: deploy-fly-${{ github.ref }}
+  group: deploy-fly-spinr-backend-yyz
   cancel-in-progress: false
 
 # Fly.io runs the backend in yyz (Toronto) alongside Railway. Both providers
@@ -68,6 +70,15 @@ jobs:
       - name: Show flyctl version
         run: flyctl version
 
+      # Check before staging secrets or deploying; legacy app=8 needs migration.
+      - name: Validate mixed fleet inventory
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p test_fly_fleet_preflight.py
+          flyctl machine list -a "${FLY_APP}" --json | python3 scripts/fly_fleet_preflight.py
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Verify SENTRY_DSN is set
         run: |
           if [ -z "${SENTRY_DSN}" ]; then
@@ -112,23 +123,14 @@ jobs:
       # COPYs a root requirements.txt that does not exist (only backend/ has one).
       - name: Deploy to Fly.io
         working-directory: backend
-        run: flyctl deploy --remote-only --config fly.toml
+        run: flyctl deploy --remote-only --config fly.toml --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      # Machine count and fly.toml's concurrency limits are ONE capacity
-      # decision and must never ship apart. fly.toml deploys automatically on
-      # every push to main, so if the pool size lived only in the manual
-      # bootstrap workflow, a merge would raise soft/hard limits to 750/1000
-      # while the app still ran on 2 machines — admitting 4x the connections on
-      # the same two shared-cpu-1x/1gb VMs with no burst pool behind them, which
-      # is strictly worse than the 200/250 it replaced.
-      #
-      # `scale count` is idempotent: it is a no-op when the app already has 8
-      # machines, so running it on every deploy simply keeps the two halves in
-      # sync. See docs/runbooks/capacity-scaling.md §2.
-      - name: Ensure burst machine pool (2 warm + 6 suspended)
-        run: flyctl scale count 8 --region yyz -a "${FLY_APP}" --yes
+      # Explicit group counts preserve VM sizes across deployments. Preflight
+      # rules out excess capacity so this step only fills missing Machines.
+      - name: Ensure mixed pool (2 warm 4 GB + 6 burst 2 GB)
+        run: flyctl scale count app=2 burst=6 --region yyz -a "${FLY_APP}" --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

@@ -1,5 +1,25 @@
 # Background driver discovery cadence
 
+## Review correction: presence independent of delivery rollouts
+
+Issue/root cause: with fanout and idle history flags at their false defaults, location-live returned before renewing presence and idle history dropped no-ride points. Valid background callbacks therefore could not prevent expiry.
+
+Fix and user effect: the location-live endpoint now renews presence after checking session revocation, driver ownership/online state and GPS freshness, before checking the optional fanout flag. Accepted remains false when delivery is disabled; this means no marker/history delivery, not a failed heartbeat. Drivers sending fresh authenticated updates can remain discoverable independently of those rollouts. Stationary callbacks still depend on native sampling and the separately gated stationary mode.
+
+Alternative: enabling both delivery/history flags was rejected because presence must not require optional history collection. Blast radius: backgroundLocation.ts is the production location-live caller; shared presence is read by nearby, estimates, matching, admin monitoring and surge supply. Existing batch and WebSocket paths are unchanged. The disabled endpoint now performs the same online/freshness validation as the enabled endpoint, returning 403/409/422 for invalid requests instead of an unconditional accepted:false. Enabled delivery also retains its existing later renewal; the extra Redis write is bounded by existing location rate limits.
+
+| File | Change | Reason |
+|---|---|---|
+| backend/routes/drivers/location.py | Validate and renew before fanout gate | Keep presence independent of delivery |
+| backend/tests/test_live_location.py | Flag-off and rejection regression cases | Prevent missing or unauthorized renewal |
+| This change log | Impact and verification | Record rollout boundary |
+
+Before: `fanout off -> accepted:false`. After: `session + owned online driver + fresh fix -> mark_present -> fanout gate`.
+
+Rollback: restore the previous backend release; no durable data/schema changes or cleanup are needed for this correction. Existing leases expire naturally. Delivery flags intentionally do not disable heartbeat renewal. Risk: one driver lookup and Redis renewal now occur for valid requests even with fanout disabled; production latency has not been measured.
+
+Verification: regression first failed (6 failures), then 27 tests passed across live-location, WebSocket live-location and disconnect-presence suites. No live Supabase/Redis or physical-device test was performed; no mobile code changed in this correction. Prior production bundle exports remain the mobile build evidence.
+
 ## Review correction: default-off remote rollout
 
 This section supersedes earlier statements that no feature flag/schema change exists. Migration 428 adds `settings.driver_stationary_tracking_enabled BOOLEAN NOT NULL DEFAULT FALSE`; public GET /settings exposes it, defaulting false when missing. Operations controls it through the Supabase SQL settings row, not the admin settings form. No migration or production enablement has been performed.

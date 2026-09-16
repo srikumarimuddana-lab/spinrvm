@@ -758,8 +758,6 @@ async def update_live_location(
         from ...settings_loader import get_app_settings
     except ImportError:
         from settings_loader import get_app_settings
-    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
-        return {"accepted": False}
     drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     if not drivers:
         raise HTTPException(status_code=403, detail="Driver profile required")
@@ -769,6 +767,11 @@ async def update_live_location(
     captured_at = parse_iso_utc(point.captured_at.isoformat())
     if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
         raise HTTPException(status_code=422, detail="A recent position is required")
+    # Fresh authenticated GPS is a heartbeat even when optional delivery/history
+    # rollouts are off. Never renew from an offline driver or a stale fix.
+    await _deps.mark_present(driver["id"])
+    if not (await get_app_settings() or {}).get("background_location_fanout_enabled", False):
+        return {"accepted": False}
     # Assignment is server-owned; never trust a caller's ride or driver ID.
     rides = await db_supabase.get_rows(
         "rides",

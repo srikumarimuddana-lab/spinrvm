@@ -24,6 +24,9 @@ def test_live_position_rejects_zero_sentinel():
         (True, 61, True, 422),
         (True, -10, True, 422),
         (True, 0, False, None),
+        (False, 0, False, 409),
+        (True, 61, False, 422),
+        (True, -10, False, 422),
     ],
 )
 def test_live_position_without_idle_history(monkeypatch, online, age, enabled, status):
@@ -39,6 +42,8 @@ def test_live_position_without_idle_history(monkeypatch, online, age, enabled, s
         AsyncMock(return_value={"background_location_fanout_enabled": enabled, "idle_location_v2_enabled": False}),
     )
     apply = AsyncMock()
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
     monkeypatch.setattr(location, "_apply_v2_live_marker_update", apply)
     guard = AsyncMock()
     monkeypatch.setattr(location, "_guard_revoked_session", guard)
@@ -56,4 +61,34 @@ def test_live_position_without_idle_history(monkeypatch, online, age, enabled, s
         assert result["accepted"] == enabled
         asyncio.run(tasks())
     assert apply.await_count == int(status is None and enabled)
+    assert presence.await_count == int(status is None)
+    if status is None:
+        presence.assert_awaited_once_with("driver-1")
     guard.assert_awaited_once_with("session-1")
+
+
+@pytest.mark.parametrize("revoked,status", [(False, 403), (True, 401)])
+def test_live_presence_rejects_missing_driver_or_revoked_session(monkeypatch, revoked, status):
+    monkeypatch.setattr(location.db_supabase, "get_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr("settings_loader.get_app_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        location,
+        "_guard_revoked_session",
+        AsyncMock(side_effect=HTTPException(status_code=401) if revoked else None),
+    )
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
+    tasks = BackgroundTasks()
+    point = location.LiveLocationRequest(lat=50.45, lng=-104.6, captured_at=datetime.now(timezone.utc))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            location.update_live_location(
+                point,
+                tasks,
+                current_user={"id": "user-1"},
+                token_session_id="session-1",
+            )
+        )
+    assert exc.value.status_code == status
+    presence.assert_not_awaited()
+    assert not tasks.tasks

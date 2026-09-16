@@ -7,6 +7,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { setupAdminMocks } from './admin-mocks';
+import { TEST_ADMIN_JWT } from './auth-fixture';
 
 async function mockSettings(page: any) {
   await setupAdminMocks(page, {
@@ -27,6 +28,13 @@ test.describe('admin dashboard: settings — interaction', () => {
       extra: async (route, url, method, json) => {
         if (url.includes('/ai/catalog')) return json(200, { providers: [] });
         if (url.includes('/auth/mfa/status')) return json(200, { mfa_enabled: false, available: true });
+        if (url.includes('/auth/refresh')) {
+          return json(200, {
+            token: TEST_ADMIN_JWT,
+            access_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            csrf_token: 'test-csrf',
+          });
+        }
         if (method === 'PUT' && url.endsWith('/settings')) {
           enabled = route.request().postDataJSON().driver_stationary_tracking_enabled;
           return json(200, { message: 'Saved' });
@@ -42,7 +50,7 @@ test.describe('admin dashboard: settings — interaction', () => {
     for (const value of [true, false]) {
       await toggle.click();
       const saved = page.waitForResponse(r => r.url().endsWith('/settings') && r.request().method() === 'PUT');
-      await page.getByRole('button', { name: /^save$|save changes/i }).click();
+      await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
       await saved;
       expect(enabled).toBe(value);
       await page.reload();

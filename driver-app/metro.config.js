@@ -3,6 +3,7 @@ const { getDefaultConfig } = require("expo/metro-config");
 const os = require('os');
 const path = require('path');
 const { FileStore } = require('metro-cache');
+const { resolvePosthogCoreSubpath } = require('../shared/metro/resolvePosthogCoreSubpath');
 const config = getDefaultConfig(__dirname);
 
 // Use a stable on-disk store (shared across web/android)
@@ -114,6 +115,14 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Skip @types packages during bundling — TypeScript-only, never bundled.
   if (moduleName.startsWith('@types/')) {
     return { type: 'empty' };
+  }
+
+  // Keep package-exports OFF (Sentry CJS / Hermes). PostHog's @posthog/core
+  // subpaths only exist via exports; map them onto dist/*.js. Same helper
+  // as rider-app/metro.config.js.
+  const posthogCore = resolvePosthogCoreSubpath(__dirname, moduleName);
+  if (posthogCore) {
+    return posthogCore;
   }
 
   if (moduleName === '@tanstack/react-query') {

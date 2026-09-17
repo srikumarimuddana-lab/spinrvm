@@ -80,18 +80,17 @@ jobs:
         env:
           BUILD_ID: ${{ inputs.build_id }}
         run: |
-          # Current EAS CLI uses --build-id and chooses the output filename.
-          # It does not support a --path flag for build:download.
-          eas build:download --build-id "$BUILD_ID" --non-interactive
+          # build:download currently treats the artifact as an archive and
+          # cannot reliably extract store AABs. Fetch the direct artifact URL
+          # returned by build:view instead.
+          eas build:view "$BUILD_ID" --json > build-info.json
+          AAB_URL=$(jq -er '.artifacts.buildUrl' build-info.json)
 
-          AAB_PATH=$(find . -maxdepth 1 -type f -name '*.aab' -print -quit)
-          if [ -z "$AAB_PATH" ]; then
-            echo "::error::EAS did not download an Android AAB."
-            exit 1
-          fi
+          curl --fail --location --retry 3 --silent --show-error \
+            "$AAB_URL" --output rider-build.aab
 
-          mv "$AAB_PATH" rider-build.aab
           test -s rider-build.aab
+          unzip -t rider-build.aab > /dev/null
           echo "Downloaded AAB size: $(stat -c '%s' rider-build.aab) bytes"
       - name: Print actual AAB certificate
         run: |

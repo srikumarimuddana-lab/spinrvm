@@ -63,6 +63,10 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 // force-reconnect after this window instead of waiting out the server's ~30s
 // auth timeout, which otherwise leaves the driver stuck on "Reconnecting…".
 const AUTH_WATCHDOG_MS = 10000;
+// Cap the pre-connect token refresh so a hung SecureStore/refresh cannot
+// hold wsConnectingRef forever and leave the driver on a dead Connection lost
+// chip after a long background. Matches shared/api/client.ts REQUEST_TIMEOUT.
+const TOKEN_REFRESH_WAIT_MS = 15_000;
 
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
   // Idle-online raised Balanced/10s/30m → High/4s/10m (2026-08-28): Balanced
@@ -141,6 +145,7 @@ interface UseDriverDashboardReturn {
 
   // Actions
   toggleOnline: () => Promise<void>;
+  retryConnection: () => void;
   openNavigation: (lat: number, lng: number, label: string) => void;
   uploadLocationBatch: () => Promise<void>;
   refreshLocation: (useCache: boolean) => Promise<Location.LocationObject | null>;
@@ -1247,12 +1252,29 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
   // leaving the banner stuck on "Reconnecting…".
   const openWebSocket = useCallback(async (attempt: object) => {
+    // Paint 'reconnecting' before the token refresh. After a long background
+    // the 15-min JWT is dead and ensureFreshToken can take seconds (or hang).
+    // Leaving connectionState at 'disconnected' that whole time is the red
+    // "Connection lost" chip with nothing to tap.
+    setConnectionState('reconnecting');
     // Ensure the access token is fresh before opening the socket. Without
     // this, a driver returning from a long background period opens a WS
     // with an expired token — the server rejects auth and the socket
     // immediately closes, burning a reconnect cycle.
     try {
-      await ensureFreshToken();
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          // Swallow a late reject after the 15s cap wins — otherwise the
+          // orphaned ensureFreshToken() becomes an unhandled RN rejection.
+          ensureFreshToken().catch(() => {}),
+          new Promise<void>((resolve) => {
+            timeoutId = setTimeout(resolve, TOKEN_REFRESH_WAIT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
     } catch (err) {
       // Token refresh failed — the stored token may still be valid (short
       // background period) so we proceed. If it's truly expired, the server
@@ -1270,6 +1292,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     const token = useAuthStore.getState().token;
     if (!token) {
+      setConnectionState('disconnected');
       return;
     }
 
@@ -1295,14 +1318,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const useSecure = baseUrl.startsWith('https');
     const wsBaseUrl = `${baseUrl.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     const wsUrl = lastSeqRef.current > 0 ? `${wsBaseUrl}?last_seq=${lastSeqRef.current}` : wsBaseUrl;
-    // Flip the banner to 'reconnecting' the moment we start connecting.
-    // The initial state is 'disconnected', which renders as the red
-    // "Connection Lost" banner — if we leave it there during the TLS +
-    // auth-handshake window (easily 1–2 s on Railway cold starts), the
-    // driver sees an alarming banner while the socket is actually coming
-    // up fine. 'reconnecting' renders as the amber "Reconnecting…" state
-    // which correctly signals work-in-progress.
-    setConnectionState('reconnecting');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -1594,6 +1609,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setWsError(null);
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          // Release a hung connect (ensureFreshToken never returned) so resume
+          // can start a new attempt. Foreground used to leave that mutex set,
+          // which made every later connectWebSocket a no-op.
+          wsConnectingRef.current = null;
+          setConnectionState('reconnecting');
           if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
@@ -1637,6 +1657,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // listener is registered exactly once per hook instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const retryConnection = useCallback(() => {
+    if (!isOnlineRef.current || !userRef.current) return;
+    reconnectAttemptRef.current = 0;
+    setWsError(null);
+    setConnectionState('reconnecting');
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    const ws = wsRef.current;
+    // Don't abort a live handshake or authenticated socket — mash-tapping
+    // Connection lost used to close(4000) every time and restart auth.
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    wsConnectingRef.current = null;
+    connectWebSocket();
+  }, [connectWebSocket]);
 
   // ─── Reconnect on network regain ─────────────────────────────────
   // "Connectivity came back" is the other signal that should reset the
@@ -2236,6 +2275,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     // Actions
     toggleOnline,
+    retryConnection,
     openNavigation,
     uploadLocationBatch,
     refreshLocation,

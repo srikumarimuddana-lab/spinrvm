@@ -155,6 +155,56 @@ it('does not open a socket when token refresh completes in background, then resu
   expect(Socket.instances).toHaveLength(1);
 });
 
+it('shows reconnecting before token refresh finishes after a background close', async () => {
+  let resolve!: () => void;
+  await mount();
+  await act(async () => Socket.instances[0].authenticate());
+  await appState('background'); await advance(3000);
+  await act(async () => Socket.instances[0].finishClose());
+  expect(dashboard.connectionState).toBe('disconnected');
+  (ensureFreshToken as jest.Mock).mockReturnValueOnce(new Promise<void>(done => { resolve = done; }));
+  await appState('active');
+  expect(dashboard.connectionState).toBe('reconnecting');
+  expect(Socket.instances).toHaveLength(1);
+  await act(async () => resolve());
+  expect(Socket.instances).toHaveLength(2);
+});
+
+it('manual retry opens a new socket when token refresh is still hung', async () => {
+  await mount();
+  await act(async () => Socket.instances[0].authenticate());
+  await appState('background'); await advance(3000);
+  await act(async () => Socket.instances[0].finishClose());
+  (ensureFreshToken as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
+  await appState('active');
+  expect(dashboard.connectionState).toBe('reconnecting');
+  expect(Socket.instances).toHaveLength(1);
+  (ensureFreshToken as jest.Mock).mockResolvedValue(undefined);
+  await act(async () => { dashboard.retryConnection(); });
+  expect(Socket.instances).toHaveLength(2);
+});
+
+it('opens a socket after the token-refresh cap if refresh never returns', async () => {
+  await mount();
+  await act(async () => Socket.instances[0].authenticate());
+  await appState('background'); await advance(3000);
+  await act(async () => Socket.instances[0].finishClose());
+  (ensureFreshToken as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
+  await appState('active');
+  expect(Socket.instances).toHaveLength(1);
+  await advance(15_000);
+  expect(Socket.instances).toHaveLength(2);
+});
+
+it('does not abort an in-flight handshake when retry is tapped', async () => {
+  await mount();
+  await act(async () => Socket.instances[0].authenticate());
+  const live = Socket.instances[0];
+  await act(async () => { dashboard.retryConnection(); });
+  expect(live.close).not.toHaveBeenCalled();
+  expect(Socket.instances).toHaveLength(1);
+});
+
 it('retains the socket during a short background transition and iOS inactive state', async () => {
   await mount();
   await act(async () => Socket.instances[0].authenticate());

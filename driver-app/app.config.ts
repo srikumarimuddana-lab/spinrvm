@@ -418,6 +418,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See docs/carplay-android-auto.md.
         '@logrocket/react-native',
         'posthog-react-native/expo',
+        // Undo PostHog's posthog-cli sourcemap upload (Gradle + xcode.sh).
+        // Must sit immediately after the PostHog plugin. Session replay stays.
+        './plugins/withSkipPostHogCliUpload',
         // Meta (Facebook) app events. Same posture as the rider app: Advanced
         // Matching is sent SERVER-side via the Conversions API, so no IDFA is
         // collected, no advertiser tracking happens on-device, and

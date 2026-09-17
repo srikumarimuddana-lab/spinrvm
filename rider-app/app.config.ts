@@ -294,6 +294,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         './plugins/withKspVersion',
         '@logrocket/react-native',
         'posthog-react-native/expo',
+        // Undo PostHog's posthog-cli sourcemap upload (Gradle + xcode.sh).
+        // Must sit immediately after the PostHog plugin. Session replay stays.
+        './plugins/withSkipPostHogCliUpload',
         // Meta (Facebook) app events — install/activation attribution and the
         // client half of CompleteRegistration. See shared/analytics/meta.ts
         // and META_EVENTS.md.

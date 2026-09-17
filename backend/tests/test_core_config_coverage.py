@@ -284,6 +284,37 @@ class TestProperties:
 
 
 # ---------------------------------------------------------------------------
+# app_check_enforced — ENV default with APP_CHECK_ENFORCEMENT override
+# ---------------------------------------------------------------------------
+
+
+class TestAppCheckEnforced:
+    def test_production_default_enforces(self):
+        s = _make_settings(_PROD_BASE)
+        assert s.app_check_enforced() is True
+
+    def test_production_off_disables(self):
+        s = _make_settings(_PROD_BASE, APP_CHECK_ENFORCEMENT="off")
+        assert s.app_check_enforced() is False
+
+    def test_production_false_disables(self):
+        s = _make_settings(_PROD_BASE, APP_CHECK_ENFORCEMENT="false")
+        assert s.app_check_enforced() is False
+
+    def test_development_default_does_not_enforce(self):
+        s = _make_settings(_DEV_BASE)
+        assert s.app_check_enforced() is False
+
+    def test_development_on_enforces(self):
+        s = _make_settings(_DEV_BASE, APP_CHECK_ENFORCEMENT="on")
+        assert s.app_check_enforced() is True
+
+    def test_blank_follows_env(self):
+        s = _make_settings(_PROD_BASE, APP_CHECK_ENFORCEMENT="  ")
+        assert s.app_check_enforced() is True
+
+
+# ---------------------------------------------------------------------------
 # _is_valid_review_otp (module-level helper, exercised directly)
 # ---------------------------------------------------------------------------
 

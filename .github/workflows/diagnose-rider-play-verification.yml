@@ -76,10 +76,19 @@ jobs:
         env:
           BUILD_ID: ${{ inputs.build_id }}
         run: |
-          eas build:download --id "$BUILD_ID" --platform android --path rider-build.aab
+          # Current EAS CLI uses --build-id and chooses the output filename.
+          # It does not support a --path flag for build:download.
+          eas build:download --build-id "$BUILD_ID" --non-interactive
+
+          AAB_PATH=$(find . -maxdepth 1 -type f -name '*.aab' -print -quit)
+          if [ -z "$AAB_PATH" ]; then
+            echo "::error::EAS did not download an Android AAB."
+            exit 1
+          fi
+
+          mv "$AAB_PATH" rider-build.aab
           test -s rider-build.aab
           echo "Downloaded AAB size: $(stat -c '%s' rider-build.aab) bytes"
-
       - name: Print actual AAB certificate
         run: |
           echo "===== AAB certificate fingerprint ====="

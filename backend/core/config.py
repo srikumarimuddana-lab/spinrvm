@@ -278,6 +278,16 @@ class Settings(BaseSettings):
     #   Example: "+13065550100:4821,+13065550101:4821"
     REVIEW_LOGIN_ACCOUNTS: str = ""
 
+    # Firebase App Check enforcement override. Empty = follow ENV (on in
+    # production, off otherwise). Set to "off" to keep ENV=production (secret
+    # guards, no global 1234 OTP) while DeviceCheck / Play Integrity are not
+    # yet registered — missing X-Firebase-AppCheck then logs and continues
+    # instead of 401. Set to "on" to force enforcement in non-production.
+    # Flip back to empty/"on" once Firebase Console App Check is configured
+    # and store builds can mint tokens. Not an app_settings flag: a
+    # compromised admin must not be able to disable device attestation.
+    APP_CHECK_ENFORCEMENT: str = ""
+
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
@@ -445,6 +455,19 @@ class Settings(BaseSettings):
     @property
     def debug(self) -> bool:
         return self.ENV.lower() == "development"
+
+    def app_check_enforced(self) -> bool:
+        """Whether Firebase App Check 401s on a missing/invalid token.
+
+        Explicit ``off``/``false``/``0``/``no`` disables; ``on``/``true``/``1``/``yes``
+        enables. Anything else (including blank) follows ``ENV == production``.
+        """
+        raw = (self.APP_CHECK_ENFORCEMENT or "").strip().lower()
+        if raw in {"0", "false", "off", "no"}:
+            return False
+        if raw in {"1", "true", "on", "yes"}:
+            return True
+        return self.ENV.lower() == "production"
 
     def review_login_map(self) -> dict[str, str]:
         """Parse REVIEW_LOGIN_ACCOUNTS into {phone: fixed_otp}.

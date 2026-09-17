@@ -1,4 +1,5 @@
 import { Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { formatAppCheckError } from '../utils/appCheckDiagnostics';
 
 /**
  * Firebase Services — FCM, Crashlytics, App Check
@@ -467,7 +468,14 @@ export async function getAppCheckToken(): Promise<string | null> {
     const result = await appCheckApi.getToken(_appCheckInstance, false);
     return result?.token ?? null;
   } catch (e) {
-    console.log('[Firebase] App Check token fetch error:', e);
+    const diagnostics = formatAppCheckError(e);
+    console.error('[Firebase] App Check token fetch error:', diagnostics);
+    if (crashlyticsApi) {
+      crashlyticsApi.recordError(
+        crashlyticsApi.getCrashlytics(),
+        new Error(`[AppCheck] token fetch failed: ${diagnostics}`),
+      );
+    }
     return null;
   }
 }

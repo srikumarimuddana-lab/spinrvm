@@ -293,10 +293,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
         '@logrocket/react-native',
-        'posthog-react-native/expo',
-        // Undo PostHog's posthog-cli sourcemap upload (Gradle + xcode.sh).
-        // Must sit immediately after the PostHog plugin. Session replay stays.
-        './plugins/withSkipPostHogCliUpload',
+        // Do not add 'posthog-react-native/expo': that plugin always applies
+        // posthog.gradle / posthog-xcode.sh, which exec posthog-cli during
+        // release bundling. EAS has no usable CLI (versionCode 26–28 failed
+        // on createBundleReleaseJsAndAssets_PostHogUpload). Autolinking still
+        // ships the JS SDK + native replay module from package.json.
         // Meta (Facebook) app events — install/activation attribution and the
         // client half of CompleteRegistration. See shared/analytics/meta.ts
         // and META_EVENTS.md.

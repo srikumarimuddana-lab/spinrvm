@@ -184,6 +184,7 @@ function DriverDashboard() {
     wsError,
     wsLatency,
     refreshLocation,
+    retryConnection,
   } = useDriverDashboard();
 
   // Own-vehicle presence ring — colors mirror the insurance-period grouping
@@ -1785,7 +1786,7 @@ function DriverDashboard() {
       )}
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} onRetryConnection={retryConnection} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
       {/* SOS / Safety — visible during active ride. Flag-gated (ACTION_ITEMS.md
           B16): discreetSosEnabled off (default) renders the unmodified

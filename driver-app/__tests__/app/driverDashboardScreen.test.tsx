@@ -367,6 +367,7 @@ function resetState() {
     wsError: null,
     wsLatency: null,
     refreshLocation: mockRefreshLocation,
+    retryConnection: jest.fn(),
   };
   mockDiscreetSosEnabled = false;
   mockHeatmapState = {

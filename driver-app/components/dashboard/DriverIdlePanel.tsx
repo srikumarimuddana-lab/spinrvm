@@ -112,11 +112,13 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   // eslint-disable-next-line react-hooks/refs
   const collapsedPillScale = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.9] });
 
-  // Only drivers with status='active' can go online. The button stays
-  // pressable in every state so toggleOnline can surface a specific toast
-  // for each ineligible case (missing vehicle, documents pending, etc.).
+  // Grey GO only when the driver is offline and not eligible. A long
+  // background can briefly lose `driver.status` during refreshProfile; if we
+  // grey STOP while they are still locally online, they look locked out
+  // (screenshot: white STOP + Connection lost) even though going offline
+  // must stay available.
   const driverStatus = (driver as any)?.status || 'pending';
-  const canGoOnline = driverStatus === 'active';
+  const canGoOnline = isOnline || driverStatus === 'active';
 
   // Vehicle shown as persistent text — reads from the auth store, which is
   // hydrated from cache on cold start / offline, so it stays visible instead

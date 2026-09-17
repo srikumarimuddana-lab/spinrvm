@@ -858,7 +858,7 @@ async def verify_company_email_otp(
     if not otp_record or not verify_otp_hash(str(otp_record.get("code_hash", "")), code):
         await _record_otp_failure(lockout_key)
         raise SpinrException(
-            message="ERR_OTP_INVALID",
+            message="That code didn't match. Please try again.",
             error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
@@ -888,7 +888,7 @@ async def verify_company_email_otp(
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) > expires_at:
         raise SpinrException(
-            message="ERR_OTP_EXPIRED",
+            message="That code has expired. Please request a new one.",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,
@@ -952,7 +952,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
         raise SpinrException(
-            message="ERR_OTP_INVALID",
+            message="That code didn't match. Please try again.",
             error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
@@ -1001,7 +1001,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 exc_info=True,
             )
         raise SpinrException(
-            message="ERR_OTP_EXPIRED",
+            message="That code has expired. Please request a new one.",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,

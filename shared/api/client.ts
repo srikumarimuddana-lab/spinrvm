@@ -550,6 +550,15 @@ export { clampToastMessage, TOAST_MESSAGE_MAX };
 // already filtered below by name, alongside its JSON-parse message shapes.
 const ENGINE_ERROR_NAMES = new Set(['TypeError', 'ReferenceError', 'RangeError']);
 
+// Backend SpinrException `message` for some auth errors is a machine
+// sentinel (ERR_OTP_INVALID, ERROR_OTP_INVALID, ERR_OTP_EXPIRED) meant
+// for client i18n via `message_key`, not a sentence to show the user.
+const MACHINE_ERROR_SENTINEL = /^(?:ERR|ERROR)_[A-Z0-9_]+$/;
+
+function isMachineErrorSentinel(message: string): boolean {
+  return MACHINE_ERROR_SENTINEL.test(message.trim());
+}
+
 // Message shapes the engines produce, for errors that reach us with `name`
 // stripped — anything crossing a serialization boundary (a rethrow as a plain
 // object, a worker/bridge hop) keeps `message` but loses `name`. Covers
@@ -624,7 +633,9 @@ export function getApiErrorMessage(
   // doubles and cross-realm instances match too.
   if (anyErr?.name === 'RateLimitError') {
     const raw = anyErr.message;
-    if (raw && raw !== 'Request failed') return clampToastMessage(raw);
+    if (raw && raw !== 'Request failed' && !isMachineErrorSentinel(raw)) {
+      return clampToastMessage(raw);
+    }
     const retryAfter = anyErr.retryAfterSeconds;
     if (typeof retryAfter === 'number' && retryAfter > 0) {
       return `Too many requests — please try again in ${retryAfter}s.`;
@@ -636,7 +647,9 @@ export function getApiErrorMessage(
     const { message } = extractError(data, anyErr?.response?.status);
     // extractError returns the default 'Request failed' when the body had no
     // recognizable detail — treat that as "no useful message" and fall back.
-    if (message && message !== 'Request failed') return clampToastMessage(message);
+    if (message && message !== 'Request failed' && !isMachineErrorSentinel(message)) {
+      return clampToastMessage(message);
+    }
   }
   // No usable response body. Some callers (e.g. authStore.createProfile) extract
   // the backend detail themselves and re-throw `new Error(detail)`, so a
@@ -655,6 +668,7 @@ export function getApiErrorMessage(
     !isEngineError(anyErr) &&
     anyErr?.name !== 'SyntaxError' &&
     raw !== 'Request failed' && // extractError's no-detail sentinel
+    !isMachineErrorSentinel(raw) &&
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw) &&

@@ -106,12 +106,13 @@ jobs:
           {
             echo "## Rider Play verification diagnostic"
             echo ""
-            echo "- Package: `com.spinr.user`"
-            echo "- EAS build: `$BUILD_ID`"
-            echo "- Service account: `$(jq -r '.client_email' play-service-account.json)`"
-            echo "- Cloud project: `$(jq -r '.project_id' play-service-account.json)`"
+            echo "Package: com.spinr.user"
+            echo "EAS build: $BUILD_ID"
+            echo "Service account: $(jq -r '.client_email' play-service-account.json)"
+            echo "Cloud project: $(jq -r '.project_id' play-service-account.json)"
             echo ""
-            echo "The certificate fingerprint is printed in the previous step. Compare it with the key registered under Android developer verification."
+            echo "The actual AAB certificate fingerprint is printed in the previous step."
+            echo "Compare it with the key registered under Android developer verification."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Submit exact build to internal track

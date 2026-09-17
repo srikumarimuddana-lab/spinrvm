@@ -65,6 +65,15 @@ test.describe('admin dashboard: settings — interaction', () => {
     await expect(page.locator('body')).toBeVisible();
   });
 
+  test('"PostHog session replay enabled" toggle is present and clickable', async ({ page }) => {
+    await mockSettings(page);
+    await page.goto('/dashboard/settings');
+    const toggle = page.getByLabel('PostHog session replay enabled');
+    await expect(toggle).toBeVisible({ timeout: 20000 });
+    await toggle.click();
+    await expect(page.locator('body')).toBeVisible();
+  });
+
   test('Save button is clickable', async ({ page }) => {
     await mockSettings(page);
     await page.goto('/dashboard/settings');

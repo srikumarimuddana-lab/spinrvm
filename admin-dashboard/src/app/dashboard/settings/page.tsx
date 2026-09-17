@@ -422,6 +422,65 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* PostHog session replay — dark-launched, default off.
+                        Does not replace LogRocket. Apps fail closed until
+                        the switch is on AND a project API key is saved. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">PostHog session replay</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Records rider-app and driver-app sessions for debugging. Off by
+                                default. Sensitive screens (payments, documents, SOS) already
+                                pause capture. Does not replace LogRocket.
+                            </p>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label htmlFor="posthog-session-replay-enabled">Enable session replay</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Takes effect on the next app launch. Leave off until the
+                                        project key is set and privacy sign-off is done.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="posthog-session-replay-enabled"
+                                    aria-label="PostHog session replay enabled"
+                                    checked={!!settings.posthog_session_replay_enabled}
+                                    onCheckedChange={(v) => update("posthog_session_replay_enabled", v)}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="posthog-api-key">Project API key</Label>
+                                <Input
+                                    id="posthog-api-key"
+                                    value={settings.posthog_api_key || ""}
+                                    onChange={(e) => update("posthog_api_key", e.target.value)}
+                                    placeholder="phc_..."
+                                    autoComplete="off"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Project API key from PostHog (phc_…), not a personal API key.
+                                    Changing the key or host requires a super admin; any settings
+                                    admin can still turn replay off.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="posthog-host">Host</Label>
+                                <Input
+                                    id="posthog-host"
+                                    value={settings.posthog_host || ""}
+                                    onChange={(e) => update("posthog_host", e.target.value)}
+                                    placeholder="https://us.i.posthog.com"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    US Cloud: https://us.i.posthog.com. EU Cloud: https://eu.i.posthog.com.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Telephony / Twilio */}
                     <Card className="border-border/50">
                         <CardHeader>

@@ -417,6 +417,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Apple-granted entitlement plus scene-delegate wiring not present here.
         // See docs/carplay-android-auto.md.
         '@logrocket/react-native',
+        'posthog-react-native/expo',
         // Meta (Facebook) app events. Same posture as the rider app: Advanced
         // Matching is sent SERVER-side via the Conversions API, so no IDFA is
         // collected, no advertiser tracking happens on-device, and

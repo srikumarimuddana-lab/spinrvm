@@ -68,6 +68,13 @@ async def get_public_settings():
         # MapViewDirections call site keeps calling Google Directions
         # directly from the device with the bundled key, unchanged.
         "directions_proxy_enabled": bool(settings.get("directions_proxy_enabled", False)),
+        # PostHog session replay (rider-app + driver-app). Default off.
+        # Project API key is client-safe (phc_...), same class as
+        # stripe_publishable_key. Apps fail closed if the flag is on but
+        # the key is empty.
+        "posthog_session_replay_enabled": bool(settings.get("posthog_session_replay_enabled", False)),
+        "posthog_api_key": settings.get("posthog_api_key", "") or "",
+        "posthog_host": (settings.get("posthog_host") or "").strip() or "https://us.i.posthog.com",
         # Safety panel — global config. Only the LOCAL AUTHORITY varies per
         # service area (migration 316); the Spinr-side contacts and tile
         # toggles are the same everywhere, so keeping them here means changing

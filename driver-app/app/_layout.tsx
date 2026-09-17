@@ -12,7 +12,7 @@ import { AlertDialog } from '../components/AlertDialog';
 import { toastConfig } from '../components/toastConfig';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { initMetaSdk } from '@shared/analytics/meta';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
@@ -40,15 +40,27 @@ import {
   getInitialNotification,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
+import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 import { setLogRocketInstance } from '@shared/services/logRocketInstance';
+import {
+  identifyPostHogUser,
+  initPostHogReplayFromSettings,
+  resetPostHogReplay,
+  tryCreateNativePostHogClient,
+} from '@shared/services/posthogReplay';
 import { routePushNotificationTap } from '../utils/pushNotificationRouting';
 
 // Arm the sign-out location teardown at module scope, before any screen mounts:
 // the API client's 401 interceptor can trigger a logout before the dashboard
 // ever renders, and a hook-based registration would miss it.
 registerDriverSessionTeardown();
+
+// Same timing as location teardown: 401 logout can fire before this layout
+// mounts, and a previous rider/driver must not stay identified on PostHog.
+registerLogoutCallback(() => {
+  void resetPostHogReplay();
+});
 
 // LogBox's notification container uses a codegen native component that's
 // broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
@@ -432,6 +444,29 @@ function RootLayout() {
     }
   }, []);
 
+  // PostHog session replay — fail closed until GET /settings says the
+  // admin flag is on and a project API key is present. Does not replace
+  // LogRocket. Native module is missing in Expo Go / web.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    (async () => {
+      try {
+        const res = await api.get<{
+          posthog_session_replay_enabled?: boolean;
+          posthog_api_key?: string;
+          posthog_host?: string;
+        }>('/settings');
+        const factory = tryCreateNativePostHogClient();
+        if (!factory) return;
+        await initPostHogReplayFromSettings(res.data, factory);
+        const uid = useAuthStore.getState().user?.id;
+        if (uid) identifyPostHogUser(uid, 'driver');
+      } catch (e) {
+        console.log('[PostHog] init skipped:', e);
+      }
+    })();
+  }, []);
+
   // Android Auto is registered at JS bundle load in index.js (registerAutoPlay,
   // @iternio/react-native-auto-play) — nothing for the phone layout to do here.
   // iOS CarPlay is dormant (needs an Apple entitlement + scene wiring not present).
@@ -575,6 +610,7 @@ function RootLayout() {
           if (LogRocket) {
             try { LogRocket.identify(uid, { role: 'driver' }); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
+          identifyPostHogUser(uid, 'driver');
         }
         console.log('[Push] FCM token registered with backend');
       } catch (e) {

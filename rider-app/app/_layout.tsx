@@ -13,7 +13,7 @@ import * as Updates from 'expo-updates';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
@@ -48,6 +48,12 @@ import {
 } from '@shared/services/firebase';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 import { setLogRocketInstance } from '@shared/services/logRocketInstance';
+import {
+  identifyPostHogUser,
+  initPostHogReplayFromSettings,
+  resetPostHogReplay,
+  tryCreateNativePostHogClient,
+} from '@shared/services/posthogReplay';
 
 import { clearLegacyScheduledReminders, handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
@@ -82,6 +88,12 @@ export const DirectionsProxyEnabledContext = React.createContext<boolean>(false)
 // fired.
 SplashScreen.preventAutoHideAsync().catch(() => {
   // Already hidden (fast boot, or a reload in dev). Nothing to keep up.
+});
+
+// Module scope so a 401-driven logout (before this layout's effects) still
+// drops the previous PostHog distinct id.
+registerLogoutCallback(() => {
+  void resetPostHogReplay();
 });
 
 // One-shot, module-scope so a re-render can never hide twice.
@@ -379,6 +391,9 @@ function RootLayout() {
           track_base_url?: string;
           rideless_sos_enabled?: boolean;
           directions_proxy_enabled?: boolean;
+          posthog_session_replay_enabled?: boolean;
+          posthog_api_key?: string;
+          posthog_host?: string;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -386,6 +401,12 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        const posthogFactory = tryCreateNativePostHogClient();
+        if (posthogFactory) {
+          await initPostHogReplayFromSettings(res.data, posthogFactory);
+          const uid = useAuthStore.getState().user?.id;
+          if (uid) identifyPostHogUser(uid, 'rider');
+        }
       } catch (e) {
         console.log('[Settings] Failed to fetch public settings:', e);
       }
@@ -510,6 +531,7 @@ function RootLayout() {
           if (LogRocket) {
             try { LogRocket.identify(uid); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
+          identifyPostHogUser(uid, 'rider');
         }
         Analytics.login();
         console.log('[Push] Rider FCM token registered with backend');

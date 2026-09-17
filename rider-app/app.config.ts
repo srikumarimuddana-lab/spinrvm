@@ -293,6 +293,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
         '@logrocket/react-native',
+        'posthog-react-native/expo',
         // Meta (Facebook) app events — install/activation attribution and the
         // client half of CompleteRegistration. See shared/analytics/meta.ts
         // and META_EVENTS.md.

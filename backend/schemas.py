@@ -661,6 +661,15 @@ class AppSettings(BaseModel):
     # behavior, never to no route line. Both apps. Not a credential/
     # destination field, no masking/super-admin gate needed.
     directions_proxy_enabled: bool = False
+    # ── PostHog session replay (rider-app + driver-app) ──────────────────
+    # Dark-launched. Off (default) = neither app initialises PostHog.
+    # On + a non-empty posthog_api_key = each app inits session replay on
+    # the next cold start. Does not replace LogRocket. Project API key
+    # (phc_...) is client-safe like stripe_publishable_key; not a personal
+    # API key. Not a credential for _CREDENTIAL_FIELDS masking.
+    posthog_session_replay_enabled: bool = False
+    posthog_api_key: str = ""
+    posthog_host: str = "https://us.i.posthog.com"
     # ── Legacy/re-consent notice (2026-08-19 legacy-migration audit) ─────
     # Dark-launch gate for GET/POST /consent/* (routes/legacy_consent.py).
     # Off (default): endpoint reports needs_notice=false unconditionally and

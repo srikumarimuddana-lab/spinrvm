@@ -72,6 +72,10 @@ jobs:
           echo "Play service account: $(jq -r '.client_email' play-service-account.json)"
           echo "Cloud project: $(jq -r '.project_id' play-service-account.json)"
 
+      - name: Install locked app dependencies
+        timeout-minutes: 20
+        run: yarn install --frozen-lockfile --non-interactive
+
       - name: Download exact EAS AAB
         env:
           BUILD_ID: ${{ inputs.build_id }}

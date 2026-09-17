@@ -209,6 +209,46 @@ describe('getApiErrorMessage', () => {
     };
     expect(getApiErrorMessage(err, FALLBACK)).toContain('valid email address');
   });
+
+  // Live-testing: a wrong OTP toasted "ERR_OTP_INVALID" (and on some
+  // surfaces "ERROR_OTP_INVALID") because SpinrException.message is a
+  // machine sentinel for i18n via message_key, not a sentence for the user.
+  describe('machine error sentinels never become toast copy', () => {
+    const OTP_FALLBACK = "That code didn't match. Check the SMS and try again.";
+
+    it.each(['ERR_OTP_INVALID', 'ERROR_OTP_INVALID', 'ERR_OTP_EXPIRED', 'ERR_OTP_LOCKED'])(
+      'falls back instead of leaking %p from the response body',
+      (sentinel) => {
+        const err = {
+          response: {
+            status: 400,
+            data: { error: { message: sentinel, message_key: 'errors.auth.otp_invalid', code: 1008 } },
+          },
+        };
+        expect(getApiErrorMessage(err, OTP_FALLBACK)).toBe(OTP_FALLBACK);
+      },
+    );
+
+    it('falls back when the sentinel arrives as FastAPI detail', () => {
+      const err = { response: { status: 400, data: { detail: 'ERR_OTP_INVALID' } } };
+      expect(getApiErrorMessage(err, OTP_FALLBACK)).toBe(OTP_FALLBACK);
+    });
+
+    it('falls back when the sentinel is rethrown as err.message', () => {
+      expect(getApiErrorMessage(new Error('ERR_OTP_INVALID'), OTP_FALLBACK)).toBe(OTP_FALLBACK);
+      expect(getApiErrorMessage(new Error('ERROR_OTP_INVALID'), OTP_FALLBACK)).toBe(OTP_FALLBACK);
+    });
+
+    it('still surfaces a real English backend message', () => {
+      const err = {
+        response: {
+          status: 400,
+          data: { error: { message: "That code didn't match. Please try again.", code: 1008 } },
+        },
+      };
+      expect(getApiErrorMessage(err, OTP_FALLBACK)).toBe("That code didn't match. Please try again.");
+    });
+  });
 });
 
 describe('clampToastMessage', () => {

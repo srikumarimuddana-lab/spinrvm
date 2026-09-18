@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { messageForSentinel } from '../errors/sentinelMessages';
 import SpinrConfig from '../config/spinr.config';
 import { addBreadcrumb } from '../services/errorReporting';
 import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
@@ -645,6 +646,10 @@ export function getApiErrorMessage(
   const data = anyErr?.response?.data;
   if (data) {
     const { message } = extractError(data, anyErr?.response?.status);
+    // A bare ERR_* sentinel is not copy, but for the ones we have a sentence
+    // for it beats the caller's generic fallback — see sentinelMessages.ts.
+    const mapped = messageForSentinel(message);
+    if (mapped) return clampToastMessage(mapped);
     // extractError returns the default 'Request failed' when the body had no
     // recognizable detail — treat that as "no useful message" and fall back.
     if (message && message !== 'Request failed' && !isMachineErrorSentinel(message)) {
@@ -659,6 +664,8 @@ export function getApiErrorMessage(
   // on Hermes, "Unexpected token …" on V8/web) — technical noise, not a
   // message for the user.
   const raw = anyErr?.message;
+  const mappedRaw = messageForSentinel(raw);
+  if (mappedRaw) return clampToastMessage(mappedRaw);
   if (
     raw &&
     // An engine crash carries no reason a user can act on, and leaking it

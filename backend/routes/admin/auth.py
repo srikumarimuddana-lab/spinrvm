@@ -1394,7 +1394,7 @@ async def admin_unlock(
     - 200 {"unlocked": true} on success.
     """
     if actor.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="role_required:super_admin")
+        raise HTTPException(status_code=403, detail="This action requires super admin access.")
 
     target_email = (body.email or "").strip().lower()
     if not target_email:

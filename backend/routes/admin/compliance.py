@@ -63,7 +63,7 @@ def _require_super_admin(admin: dict) -> None:
     re-mount or refactor, not depend solely on where this router happens
     to be included today."""
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Compliance reports require super_admin")
+        raise HTTPException(status_code=403, detail="Compliance reports require super admin access.")
 
 
 def _d(v) -> Decimal:

@@ -119,7 +119,7 @@ def _require_super_admin(admin: dict) -> None:
     dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Legacy wallet import requires super_admin")
+        raise HTTPException(status_code=403, detail="Legacy wallet import requires super admin access.")
 
 
 async def _read_all(

@@ -987,10 +987,16 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
     try:
         data = await request.json()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+        raise HTTPException(
+            status_code=400,
+            detail="We couldn't read that request. Please try again.",
+        ) from exc
 
     if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+        raise HTTPException(
+            status_code=400,
+            detail="We couldn't read that request. Please try again.",
+        )
 
     forbidden = _RAW_CARD_FIELDS.intersection(data.keys())
     if forbidden:
@@ -1001,10 +1007,14 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         )
         raise HTTPException(
             status_code=400,
+            # The client contract (tokenize with Stripe.js /
+            # @stripe/stripe-react-native, then send only payment_method_id)
+            # is documented on the endpoint and logged above. The person
+            # reading this is a cardholder, not the integrator.
             detail=(
-                "Raw card data is not accepted. Tokenize card details "
-                "client-side using Stripe.js / @stripe/stripe-react-native "
-                "and submit only {'payment_method_id': 'pm_...'}."
+                "For your security, card details have to be entered in the "
+                "secure card form. Please add your card again from the "
+                "payment screen."
             ),
         )
 
@@ -1022,7 +1032,7 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
-            detail="Invalid request payload.",
+            detail="We couldn't read that card. Please check the details and try again.",
         ) from exc
 
     payment_method_id = body.payment_method_id

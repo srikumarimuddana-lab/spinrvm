@@ -94,7 +94,7 @@ async def admin_send_test_push(body: TestPushRequest, admin: dict = Depends(get_
     """
     target_user_id = body.user_id or admin.get("id")
     if not target_user_id:
-        raise HTTPException(status_code=400, detail="No user_id and admin has no id claim")
+        raise HTTPException(status_code=400, detail="We couldn't tell which user to send this to.")
 
     user = await db.find_one("users", {"id": target_user_id})
     if not user:

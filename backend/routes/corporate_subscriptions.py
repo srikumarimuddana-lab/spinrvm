@@ -115,8 +115,10 @@ async def assign_company_subscription(
     if not billing_enabled:
         raise HTTPException(
             status_code=403,
-            detail="Corporate subscription billing is not yet enabled — turn on "
-            "corporate_subscription_billing_enabled in Settings once verified in staging.",
+            # Staff enable this via the `corporate_subscription_billing_enabled`
+            # toggle in admin Settings; the person hitting this endpoint is a
+            # corporate admin who cannot action that, so they get support.
+            detail=("Subscription billing is not available for your account yet. Please contact Spinr support."),
         )
 
     try:

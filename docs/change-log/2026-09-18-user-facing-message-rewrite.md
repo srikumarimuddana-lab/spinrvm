@@ -107,6 +107,11 @@ change.**
 | `rider-app/__tests__/getApiErrorMessage.test.ts` | 6 new regression tests | F6 |
 | `backend/tests/*` (6 files) | 7 assertions updated to the new strings | keep suite green |
 | `backend/routes/auth.py` | comment only (quoted the old 5xx phrase) | doc accuracy |
+| `backend/routes/admin/staff.py` | `require_role` factory no longer returns `role_required:{role}` | admin pass |
+| `backend/routes/admin/rides.py` | 3 × `role_required:finance` | admin pass |
+| `backend/routes/admin/*.py` (25 files) | `requires super_admin` → `requires super admin access`; 2 SIN messages no longer name the handler | admin pass |
+| `backend/routes/admin/driver_statements.py` | import re-sort + dict reformat (pre-existing, forced by the ruff gate) | gate |
+| `backend/tests/*` (3 more files) | 5 assertions moved from `"super_admin"` to `"super admin"` | keep suite green |
 
 ## 7. Before / after
 
@@ -185,7 +190,15 @@ its failure mode is benign: a wrong sentence where the user previously saw "Some
       old strings as a standalone fixture input and is unaffected.
 - [x] Reviewed against CLAUDE.md conventions: ride state machine (unchanged), money (`Decimal`
       untouched), Stripe idempotency (untouched), PIPEDA (no new PII in any message).
-- [x] `spinr-security-auditor` run against the full branch diff.
+- [x] `spinr-security-auditor` run against the branch diff (through the docs commit). Verdict: no
+      blockers, no warnings. It independently confirmed behaviour preservation at every changed raise
+      site, that the PCI raw-card guard still logs before rejecting and never echoes the offending
+      keys, that `_should_sanitize_5xx_detail` and the `ERR_*` pass-through are logically identical,
+      that the sentinel map is additive with no import cycle and cannot render a raw token, and that
+      no assertion was weakened to a looser check. It also noted the 403-vs-404 split in
+      `routes/payments.py` is a pre-existing enumeration oracle, unchanged by this diff.
+- [x] The later admin commit (`require_role`, `role_required:*`) was verified by hand, not by the
+      agent: same `admin.get("role") != role` condition, same 403, detail string only.
 - [ ] Manual repro in staging — not performed.
 - [ ] Feature-flagged — no, justified above.
 
@@ -195,6 +208,20 @@ its failure mode is benign: a wrong sentence where the user previously saw "Some
 - [x] Blast radius is stated, not assumed
 - [x] No silent behavior change to an already-shipped flow — §5 filled in; this is a copy change and
       is described as one
+
+## Final state
+
+A re-run of the sweep leaves 36 non-sentinel flags, all accounted for:
+
+- **31 admin-only** — field names that match the label on the admin's own form (`date_from`,
+  `expiry_date`, `discount_value`, `period_type`), which read correctly in context, plus two
+  extractor false positives (`admin001_detail` and `detail` are variables holding real sentences).
+- **2 rider** — the deliberate `status_reason` passthrough (F5).
+- **2 shared** — `routes/webhooks.py`, called by Stripe rather than a human.
+- **1 rider** — a parser artifact in `rider-app/app/promotions.tsx:55`; the rendered string is
+  "20% off — will apply on your next ride."
+
+The 32 remaining `ERR_*` rows are the mapped sentinels, which the client never renders.
 
 ## Residual risk
 

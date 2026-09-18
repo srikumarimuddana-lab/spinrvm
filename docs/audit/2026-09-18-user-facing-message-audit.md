@@ -26,7 +26,7 @@ and all of it came from the **backend 4xx layer**, which the apps print verbatim
 | Driver-app | 6 | 1 (mapped `ERR_*`) |
 | Shared / either app | 34 | 23 (all mapped `ERR_*`) |
 | Corporate portal | 5 | 1 (mapped `ERR_*`) |
-| Admin (internal staff) | 65 | 65 (out of scope, see §5) |
+| Admin (internal staff) | 65 | 31 (form-field names, see §5) |
 
 The remaining rows are all `ERR_*` sentinels, which the client never renders — they now resolve to
 real copy via `shared/errors/sentinelMessages.ts`. See F6.
@@ -173,8 +173,11 @@ Sanitising itself is untouched.
 
 ## 5. Deliberately not changed
 
-- **Admin-dashboard's 65 flagged rows.** Internal staff are a different audience and `driver_id` is
-  their working vocabulary. Worth a separate pass, not folded into a rider/driver copy fix.
+- **Most of admin-dashboard's flagged rows.** Internal staff are a different audience and `driver_id`
+  is their working vocabulary. The bare identifiers *were* fixed — `require_role`'s
+  `role_required:{role}`, the 3 `role_required:finance` guards, 27 `requires super_admin` messages and
+  the 2 that named the SIN handlers. What remains (31 rows) is field names that match the label on the
+  admin's own form (`date_from`, `expiry_date`, `discount_value`), which read correctly in context.
 - **`routes/webhooks.py`'s `Invalid payload` / `invalid JSON`.** Stripe calls those endpoints, not a
   human. Correctly technical.
 - **The `ERR_*` raises themselves** — see F6.

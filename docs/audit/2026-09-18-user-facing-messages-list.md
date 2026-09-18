@@ -2113,12 +2113,12 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/auth.py:960` |
 | ☐ | HTTP 400 | Super admin cannot force-logout here. Rotate ADMIN_PASSWORD in the environment to kill all super-admin sessions. | FLAG | constant: ADMIN_PASSWORD | `backend/routes/admin/auth.py:622` |
 | ☐ | HTTP 422 | TOTP code required to change password on an MFA-enrolled account | OK |  | `backend/routes/admin/auth.py:709` |
+| ☐ | HTTP 403 | This action requires super admin access. | OK |  | `backend/routes/admin/auth.py:1397` |
 | ☐ | HTTP 429 | Too many failed codes — try again later | OK |  | `backend/routes/admin/auth.py:1133` |
 | ☐ | HTTP 404 | admin not found | OK |  | `backend/routes/admin/auth.py:1408` |
 | ☐ | HTTP 400 | admin001_detail | FLAG | code identifier: admin001_detail; bare machine token, not a sentence | `backend/routes/admin/auth.py:877` |
 | ☐ | HTTP 422 | email required | OK |  | `backend/routes/admin/auth.py:1401` |
 | ☐ | HTTP 400 | justification must be at least 10 characters | OK |  | `backend/routes/admin/auth.py:1226` |
-| ☐ | HTTP 403 | role_required:super_admin | FLAG | code identifier: role_required, super_admin | `backend/routes/admin/auth.py:1397` |
 
 ### `auto-payouts-panel`  (2)
 
@@ -2131,7 +2131,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Legacy booking import requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/booking_import.py:130` |
+| ☐ | HTTP 403 | Legacy booking import requires super admin access. | OK |  | `backend/routes/admin/booking_import.py:130` |
 | ☐ | HTTP 400 | detail | FLAG | bare machine token, not a sentence | `backend/routes/admin/booking_import.py:160` |
 | ☐ | HTTP 413 | {label} CSV exceeds the {MAX_CSV_BYTES // 1000000} MB limit | OK |  | `backend/routes/admin/booking_import.py:100` |
 | ☐ | HTTP 422 | {label} CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import | OK |  | `backend/routes/admin/booking_import.py:115` |
@@ -2154,7 +2154,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Compliance reports require super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/compliance.py:66` |
+| ☐ | HTTP 403 | Compliance reports require super admin access. | OK |  | `backend/routes/admin/compliance.py:66` |
 | ☐ | HTTP 422 | date_from must be on or before date_to | FLAG | code identifier: date_from, date_to | `backend/routes/admin/compliance.py:107` |
 | ☐ | HTTP 422 | date_from/date_to must be YYYY-MM-DD | FLAG | code identifier: date_from, date_to | `backend/routes/admin/compliance.py:105` |
 
@@ -2171,7 +2171,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Data Transfer export requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/data_transfer_export.py:61` |
+| ☐ | HTTP 403 | Data Transfer export requires super admin access. | OK |  | `backend/routes/admin/data_transfer_export.py:61` |
 | ☐ | HTTP 400 | No entities selected | OK |  | `backend/routes/admin/data_transfer_export.py:328` |
 | ☐ | HTTP 422 | {len(body.entities)} entities requested; the limit is {MAX_ENTITIES_PER_EXPORT} per export | OK |  | `backend/routes/admin/data_transfer_export.py:330` |
 
@@ -2179,7 +2179,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Data Transfer import requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/data_transfer_import.py:45` |
+| ☐ | HTTP 403 | Data Transfer import requires super admin access. | OK |  | `backend/routes/admin/data_transfer_import.py:45` |
 | ☐ | HTTP 413 | ZIP exceeds the {MAX_ZIP_BYTES // 1000000} MB limit | OK |  | `backend/routes/admin/data_transfer_import.py:51` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/data_transfer_import.py:85` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/data_transfer_import.py:112` |
@@ -2188,7 +2188,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Data Transfer jobs require super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/data_transfer_jobs.py:41` |
+| ☐ | HTTP 403 | Data Transfer jobs require super admin access. | OK |  | `backend/routes/admin/data_transfer_jobs.py:41` |
 | ☐ | HTTP 404 | Job not found | OK |  | `backend/routes/admin/data_transfer_jobs.py:93` |
 | ☐ | HTTP 404 | Job not found | OK |  | `backend/routes/admin/data_transfer_jobs.py:119` |
 | ☐ | HTTP 409 | Job status is {job.get('status')}, not completed | OK |  | `backend/routes/admin/data_transfer_jobs.py:124` |
@@ -2198,7 +2198,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Data Transfer search requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/data_transfer_search.py:42` |
+| ☐ | HTTP 403 | Data Transfer search requires super admin access. | OK |  | `backend/routes/admin/data_transfer_search.py:42` |
 
 ### `dispute_evidence_submission`  (4)
 
@@ -2341,7 +2341,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Driver dormancy flagging requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/driver_dormancy.py:57` |
+| ☐ | HTTP 403 | Driver dormancy flagging requires super admin access. | OK |  | `backend/routes/admin/driver_dormancy.py:57` |
 
 ### `driver_import`  (6)
 
@@ -2358,11 +2358,11 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 400 | Driver has no email address on file | OK |  | `backend/routes/admin/driver_statements.py:212` |
+| ☐ | HTTP 400 | Driver has no email address on file | OK |  | `backend/routes/admin/driver_statements.py:216` |
 | ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/admin/driver_statements.py:74` |
 | ☐ | HTTP 422 | Provide both start and end for a date range | OK |  | `backend/routes/admin/driver_statements.py:100` |
 | ☐ | HTTP 422 | Provide period_type+period_start or start+end dates | FLAG | code identifier: period_start, period_type | `backend/routes/admin/driver_statements.py:113` |
-| ☐ | HTTP 403 | Recomputing statement totals requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/driver_statements.py:288` |
+| ☐ | HTTP 403 | Recomputing statement totals requires super admin access. | OK |  | `backend/routes/admin/driver_statements.py:292` |
 | ☐ | HTTP 422 | period_type must be weekly or monthly | FLAG | code identifier: period_type | `backend/routes/admin/driver_statements.py:106` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/driver_statements.py:112` |
 | ☐ | HTTP 422 | {field} must be YYYY-MM-DD | OK |  | `backend/routes/admin/driver_statements.py:68` |
@@ -2371,7 +2371,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Bulk KYC refresh requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/drivers.py:3875` |
+| ☐ | HTTP 403 | Bulk KYC refresh requires super admin access. | OK |  | `backend/routes/admin/drivers.py:3875` |
 | ☐ | HTTP 400 | Driver has no Stripe Connect account on file. They must complete payout setup first. | OK |  | `backend/routes/admin/drivers.py:3490` |
 | ☐ | HTTP 400 | Driver has no linked user account | OK |  | `backend/routes/admin/drivers.py:1625` |
 | ☐ | HTTP 422 | Driver has no linked user account | OK |  | `backend/routes/admin/drivers.py:2025` |
@@ -2405,14 +2405,14 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 400 | Reason is required when banning | OK |  | `backend/routes/admin/drivers.py:2154` |
 | ☐ | HTTP 400 | Reason is required when rejecting | OK |  | `backend/routes/admin/drivers.py:2134` |
 | ☐ | HTTP 400 | Reason is required when suspending | OK |  | `backend/routes/admin/drivers.py:2144` |
-| ☐ | HTTP 403 | Stripe payout refresh requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/drivers.py:3477` |
-| ☐ | HTTP 403 | Stripe payout refresh requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/drivers.py:3735` |
+| ☐ | HTTP 403 | Revealing a SIN requires super admin access. | OK |  | `backend/routes/admin/drivers.py:3955` |
+| ☐ | HTTP 403 | Stripe payout refresh requires super admin access. | OK |  | `backend/routes/admin/drivers.py:3477` |
+| ☐ | HTTP 403 | Stripe payout refresh requires super admin access. | OK |  | `backend/routes/admin/drivers.py:3735` |
 | ☐ | HTTP 400 | Unknown action: {req.action} | OK |  | `backend/routes/admin/drivers.py:2179` |
+| ☐ | HTTP 403 | Updating a SIN requires super admin access. | OK |  | `backend/routes/admin/drivers.py:4038` |
 | ☐ | HTTP 400 | date must be YYYY-MM-DD | OK |  | `backend/routes/admin/drivers.py:4237` |
 | ☐ | HTTP 400 | missing_license cannot be combined with search | FLAG | code identifier: missing_license | `backend/routes/admin/drivers.py:666` |
-| ☐ | HTTP 403 | reveal_sin requires super_admin role | FLAG | code identifier: reveal_sin, super_admin | `backend/routes/admin/drivers.py:3955` |
 | ☐ | HTTP 422 | str(exc) | OK |  | `backend/routes/admin/drivers.py:4054` |
-| ☐ | HTTP 403 | update_sin requires super_admin role | FLAG | code identifier: super_admin, update_sin | `backend/routes/admin/drivers.py:4038` |
 
 ### `efficiency-panel`  (1)
 
@@ -2426,7 +2426,7 @@ completeness in the audit CSV rather than here.
 |---|---|---|---|---|---|
 | ☐ | HTTP 404 | Export approval request not found | OK |  | `backend/routes/admin/export_approvals.py:67` |
 | ☐ | HTTP 404 | Export approval request not found | OK |  | `backend/routes/admin/export_approvals.py:95` |
-| ☐ | HTTP 403 | Export approvals require super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/export_approvals.py:40` |
+| ☐ | HTTP 403 | Export approvals require super admin access. | OK |  | `backend/routes/admin/export_approvals.py:40` |
 | ☐ | HTTP 403 | You cannot approve your own export request | OK |  | `backend/routes/admin/export_approvals.py:71` |
 | ☐ | HTTP 403 | You cannot deny your own export request | OK |  | `backend/routes/admin/export_approvals.py:99` |
 | ☐ | HTTP 409 | str(e) | OK |  | `backend/routes/admin/export_approvals.py:69` |
@@ -2479,13 +2479,13 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Duration-estimated marker backfill requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/legacy_duration_estimated_backfill.py:69` |
+| ☐ | HTTP 403 | Duration-estimated marker backfill requires super admin access. | OK |  | `backend/routes/admin/legacy_duration_estimated_backfill.py:69` |
 
 ### `legacy_id_crosswalk`  (1)
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Legacy ID crosswalk backfill requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/legacy_id_crosswalk.py:55` |
+| ☐ | HTTP 403 | Legacy ID crosswalk backfill requires super admin access. | OK |  | `backend/routes/admin/legacy_id_crosswalk.py:55` |
 
 ### `legacy_saved_address_backfill`  (5)
 
@@ -2504,7 +2504,7 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 413 | CSV exceeds the {MAX_CSV_BYTES // 1000000} MB limit | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:103` |
 | ☐ | HTTP 422 | CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:113` |
 | ☐ | HTTP 422 | CSV must be UTF-8 encoded | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:107` |
-| ☐ | HTTP 403 | Legacy SIN/DOB backfill requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/legacy_sin_dob_backfill.py:85` |
+| ☐ | HTTP 403 | Legacy SIN/DOB backfill requires super admin access. | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:85` |
 | ☐ | HTTP 400 | Validate these CSVs before committing (or re-validate — a file or batch changed): {e} | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:207` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/legacy_sin_dob_backfill.py:111` |
 
@@ -2584,19 +2584,19 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Migration data-quality scan requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/migration_data_quality.py:55` |
+| ☐ | HTTP 403 | Migration data-quality scan requires super admin access. | OK |  | `backend/routes/admin/migration_data_quality.py:55` |
 
 ### `migration_driver_repair`  (1)
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Driver-repair pass requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/migration_driver_repair.py:53` |
+| ☐ | HTTP 403 | Driver-repair pass requires super admin access. | OK |  | `backend/routes/admin/migration_driver_repair.py:53` |
 
 ### `migration_status`  (1)
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Migration status requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/migration_status.py:38` |
+| ☐ | HTTP 403 | Migration status requires super admin access. | OK |  | `backend/routes/admin/migration_status.py:38` |
 
 ### `monitoring`  (2)
 
@@ -3088,7 +3088,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Pre-launch legacy data flagging requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/pre_launch_flag.py:56` |
+| ☐ | HTTP 403 | Pre-launch legacy data flagging requires super admin access. | OK |  | `backend/routes/admin/pre_launch_flag.py:56` |
 
 ### `promotions`  (4)
 
@@ -3206,12 +3206,12 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 409 | Ride total is $0 — nothing to invoice | OK |  | `backend/routes/admin/rides.py:1992` |
 | ☐ | HTTP 422 | Rider has no email address on file | OK |  | `backend/routes/admin/rides.py:1975` |
 | ☐ | HTTP 422 | Rider has no email address on file. Provide an email to send the receipt to. | OK |  | `backend/routes/admin/rides.py:1869` |
+| ☐ | HTTP 403 | This action requires super admin access. | OK |  | `backend/routes/admin/rides.py:4000` |
+| ☐ | HTTP 403 | This action requires super admin access. | OK |  | `backend/routes/admin/rides.py:4228` |
+| ☐ | HTTP 403 | This action requires the finance role. | OK |  | `backend/routes/admin/rides.py:3726` |
+| ☐ | HTTP 403 | This action requires the finance role. | OK |  | `backend/routes/admin/rides.py:3791` |
+| ☐ | HTTP 403 | This action requires the finance role. | OK |  | `backend/routes/admin/rides.py:3913` |
 | ☐ | HTTP 413 | Too many matching drivers. Narrow the filters and export again. | OK |  | `backend/routes/admin/rides.py:3105` |
-| ☐ | HTTP 403 | role_required:finance | FLAG | code identifier: role_required | `backend/routes/admin/rides.py:3726` |
-| ☐ | HTTP 403 | role_required:finance | FLAG | code identifier: role_required | `backend/routes/admin/rides.py:3791` |
-| ☐ | HTTP 403 | role_required:finance | FLAG | code identifier: role_required | `backend/routes/admin/rides.py:3913` |
-| ☐ | HTTP 403 | role_required:super_admin | FLAG | code identifier: role_required, super_admin | `backend/routes/admin/rides.py:4000` |
-| ☐ | HTTP 403 | role_required:super_admin | FLAG | code identifier: role_required, super_admin | `backend/routes/admin/rides.py:4228` |
 
 ### `safety`  (5)
 
@@ -3277,7 +3277,7 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 404 | None of the requested drivers could be found | OK |  | `backend/routes/admin/sgi_forms.py:360` |
 | ☐ | HTTP 404 | None of the requested drivers could be found | OK |  | `backend/routes/admin/sgi_forms.py:394` |
 | ☐ | HTTP 404 | None of the requested drivers could be found | OK |  | `backend/routes/admin/sgi_forms.py:531` |
-| ☐ | HTTP 403 | SGI compliance forms require super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/sgi_forms.py:71` |
+| ☐ | HTTP 403 | SGI compliance forms require super admin access. | OK |  | `backend/routes/admin/sgi_forms.py:71` |
 | ☐ | HTTP 422 | {len(body.driver_ids)} drivers requested; the document bundle is limited to {MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Split the selection into smaller batches. | OK |  | `backend/routes/admin/sgi_forms.py:350` |
 | ☐ | HTTP 422 | {len(body.driver_ids)} drivers requested; the submission package is limited to {MAX_DOCUMENT_BUNDLE_DRIVERS} per download. Split the selection into smaller batches. | OK |  | `backend/routes/admin/sgi_forms.py:521` |
 | ☐ | HTTP 422 | {len(body.driver_ids)} drivers requested; the {body.form_type} form has {max_rows} rows | OK |  | `backend/routes/admin/sgi_forms.py:142` |
@@ -3296,26 +3296,26 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 401 | Actor not found | OK |  | `backend/routes/admin/staff.py:159` |
-| ☐ | HTTP 400 | Cannot delete your own account | OK |  | `backend/routes/admin/staff.py:458` |
-| ☐ | HTTP 400 | Cannot demote the last active super admin | OK |  | `backend/routes/admin/staff.py:318` |
-| ☐ | HTTP 400 | Email already registered as staff | OK |  | `backend/routes/admin/staff.py:218` |
-| ☐ | HTTP 401 | Incorrect password — request denied | OK |  | `backend/routes/admin/staff.py:162` |
-| ☐ | HTTP 400 | MFA is not enabled for this staff member | OK |  | `backend/routes/admin/staff.py:415` |
-| ☐ | HTTP 403 | Only super admins can update staff members | OK |  | `backend/routes/admin/staff.py:305` |
-| ☐ | HTTP 400 | Password is required. | OK |  | `backend/routes/admin/staff.py:209` |
-| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:294` |
-| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:308` |
-| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:413` |
-| ☐ | HTTP 400 | Use Settings → Disable MFA (or a backup code at login) for your own account | OK |  | `backend/routes/admin/staff.py:407` |
-| ☐ | HTTP 422 | password_confirmation required for {reason} | FLAG | code identifier: password_confirmation | `backend/routes/admin/staff.py:152` |
-| ☐ | HTTP 403 | role_required:{role} | FLAG | code identifier: role_required | `backend/routes/admin/staff.py:32` |
+| ☐ | HTTP 401 | Actor not found | OK |  | `backend/routes/admin/staff.py:162` |
+| ☐ | HTTP 400 | Cannot delete your own account | OK |  | `backend/routes/admin/staff.py:461` |
+| ☐ | HTTP 400 | Cannot demote the last active super admin | OK |  | `backend/routes/admin/staff.py:321` |
+| ☐ | HTTP 400 | Email already registered as staff | OK |  | `backend/routes/admin/staff.py:221` |
+| ☐ | HTTP 401 | Incorrect password — request denied | OK |  | `backend/routes/admin/staff.py:165` |
+| ☐ | HTTP 400 | MFA is not enabled for this staff member | OK |  | `backend/routes/admin/staff.py:418` |
+| ☐ | HTTP 403 | Only super admins can update staff members | OK |  | `backend/routes/admin/staff.py:308` |
+| ☐ | HTTP 400 | Password is required. | OK |  | `backend/routes/admin/staff.py:212` |
+| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:297` |
+| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:311` |
+| ☐ | HTTP 404 | Staff member not found | OK |  | `backend/routes/admin/staff.py:416` |
+| ☐ | HTTP 403 | This action requires the {role.replace('_', ' ')} role. | OK |  | `backend/routes/admin/staff.py:32` |
+| ☐ | HTTP 400 | Use Settings → Disable MFA (or a backup code at login) for your own account | OK |  | `backend/routes/admin/staff.py:410` |
+| ☐ | HTTP 422 | password_confirmation required for {reason} | FLAG | code identifier: password_confirmation | `backend/routes/admin/staff.py:155` |
 
 ### `stripe_connect_ledger`  (1)
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Connect ledger sync requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/stripe_connect_ledger.py:53` |
+| ☐ | HTTP 403 | Connect ledger sync requires super admin access. | OK |  | `backend/routes/admin/stripe_connect_ledger.py:53` |
 
 ### `stripe_events`  (7)
 
@@ -3336,7 +3336,7 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 413 | CSV exceeds the {MAX_CSV_BYTES // 1000} KB limit | OK |  | `backend/routes/admin/stripe_import.py:79` |
 | ☐ | HTTP 422 | CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import | OK |  | `backend/routes/admin/stripe_import.py:89` |
 | ☐ | HTTP 422 | CSV must be UTF-8 encoded | OK |  | `backend/routes/admin/stripe_import.py:83` |
-| ☐ | HTTP 403 | Stripe mapping import requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/stripe_import.py:69` |
+| ☐ | HTTP 403 | Stripe mapping import requires super admin access. | OK |  | `backend/routes/admin/stripe_import.py:69` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/stripe_import.py:87` |
 
 ### `stripe_mode_audit`  (1)
@@ -3349,7 +3349,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Stripe payout sync requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/stripe_payout_sync.py:54` |
+| ☐ | HTTP 403 | Stripe payout sync requires super admin access. | OK |  | `backend/routes/admin/stripe_payout_sync.py:54` |
 
 ### `subscriptions`  (6)
 
@@ -3411,7 +3411,7 @@ completeness in the audit CSV rather than here.
 | ☐ | HTTP 422 | CSV must be UTF-8 encoded | OK |  | `backend/routes/admin/tax_id_import.py:137` |
 | ☐ | HTTP 422 | CSV must be UTF-8 encoded | OK |  | `backend/routes/admin/tax_id_import.py:277` |
 | ☐ | HTTP 422 | No rows with a SIN or GST/HST BN matched a driver by phone | OK |  | `backend/routes/admin/tax_id_import.py:472` |
-| ☐ | HTTP 403 | Tax ID import requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/tax_id_import.py:108` |
+| ☐ | HTTP 403 | Tax ID import requires super admin access. | OK |  | `backend/routes/admin/tax_id_import.py:108` |
 | ☐ | HTTP 400 | Validate these CSVs before committing (or re-validate — a file or batch changed): {e} | OK |  | `backend/routes/admin/tax_id_import.py:514` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/tax_id_import.py:141` |
 | ☐ | HTTP 422 | str(e) | OK |  | `backend/routes/admin/tax_id_import.py:281` |
@@ -3496,7 +3496,7 @@ completeness in the audit CSV rather than here.
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Legacy wallet import requires super_admin | FLAG | code identifier: super_admin | `backend/routes/admin/wallet_import.py:122` |
+| ☐ | HTTP 403 | Legacy wallet import requires super admin access. | OK |  | `backend/routes/admin/wallet_import.py:122` |
 | ☐ | HTTP 413 | {label} CSV exceeds the {MAX_CSV_BYTES // 1000000} MB limit | OK |  | `backend/routes/admin/wallet_import.py:92` |
 | ☐ | HTTP 422 | {label} CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import | OK |  | `backend/routes/admin/wallet_import.py:107` |
 | ☐ | HTTP 422 | {label} CSV is empty | OK |  | `backend/routes/admin/wallet_import.py:97` |

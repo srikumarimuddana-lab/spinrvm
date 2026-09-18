@@ -158,7 +158,7 @@ async def set_subscription_pilot(
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     company = await db_supabase.get_corporate_account_by_id(normalized_id)
     if not company:
-        raise HTTPException(status_code=404, detail="company_not_found")
+        raise HTTPException(status_code=404, detail="We couldn't find that company account.")
 
     updated = await db_supabase.update_corporate_account(
         normalized_id, {"subscription_billing_pilot_enabled": body.enabled}

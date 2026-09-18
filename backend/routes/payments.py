@@ -624,7 +624,10 @@ async def confirm_payment(
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
         if ride["rider_id"] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(
+                status_code=403,
+                detail="This ride belongs to a different account, so you can't pay for it.",
+            )
 
         # C-3: Idempotency check — if a prior webhook already settled this payment,
         # return early with a clear signal rather than re-entering the Stripe flow.
@@ -658,7 +661,10 @@ async def confirm_payment(
     if ride_id:
         claimed = await db_supabase.claim_ride_payment_processing(ride_id)
         if not claimed:
-            raise HTTPException(status_code=409, detail="payment_already_processing")
+            raise HTTPException(
+                status_code=409,
+                detail="This payment is already being processed. Give it a moment before trying again.",
+            )
 
     # Mock-payment shortcut (non-production only; production rejected above).
     if is_mock:

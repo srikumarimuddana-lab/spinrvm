@@ -2,6 +2,7 @@
 notifications.py – In-app notification system for Spinr.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -23,6 +24,12 @@ except ImportError:
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
+
+# Holds strong references to in-flight fire-and-forget WS-push tasks so the
+# event loop can't garbage-collect one mid-run (a documented asyncio gotcha —
+# a Task with no other reference may be collected before it completes).
+# Self-cleaning via the done_callback below.
+_background_ws_tasks: set = set()
 
 api_router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -566,7 +573,17 @@ async def create_notification(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("notifications", notification)
-    await _emit_new_notification_ws(user_id, notification)
+    # Fire-and-forget: create_notification() is called synchronously from
+    # many request-handling paths across the codebase, some latency-
+    # sensitive (see CLAUDE.md's anti-pattern note on awaiting a slow
+    # side-effect inline in a request handler). Scheduling this as a task
+    # instead of awaiting it means a slow/stuck socket send can never add
+    # latency to the caller — the notification DB row (the durable,
+    # required side effect) is already committed by the time this line
+    # runs either way.
+    ws_task = asyncio.create_task(_emit_new_notification_ws(user_id, notification))
+    _background_ws_tasks.add(ws_task)
+    ws_task.add_done_callback(_background_ws_tasks.discard)
     return notification
 
 

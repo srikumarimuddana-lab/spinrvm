@@ -13,6 +13,7 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ USER_ID = "user-delete-test"
 OTHER_USER_ID = "someone-else"
 
 try:
+    import routes.notifications as notifications_module
     from routes.notifications import (
         clear_notifications,
         create_notification,
@@ -31,6 +33,7 @@ try:
 
     _MOD = "routes.notifications"
 except ImportError:  # pragma: no cover
+    import backend.routes.notifications as notifications_module  # type: ignore
     from backend.routes.notifications import (  # type: ignore
         clear_notifications,
         create_notification,
@@ -38,6 +41,16 @@ except ImportError:  # pragma: no cover
     )
 
     _MOD = "backend.routes.notifications"
+
+
+async def _flush_ws_push_tasks() -> None:
+    """create_notification() now fires its WS push as a background
+    asyncio.create_task (non-blocking for the caller) rather than awaiting
+    it inline — wait for whatever it scheduled to finish before asserting
+    on the mocked send call."""
+    pending = list(notifications_module._background_ws_tasks)
+    if pending:
+        await asyncio.gather(*pending)
 
 
 def _notif(nid: str = "notif-1", user_id: str = USER_ID, is_read: bool = False) -> dict:
@@ -107,6 +120,7 @@ class TestNewNotificationWSPush:
             patch("socket_manager.manager.send_personal_message", AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             notif = await create_notification(USER_ID, "Title", "Body", "general")
+            await _flush_ws_push_tasks()
 
         insert_mock.assert_awaited_once()
         assert notif["user_id"] == USER_ID
@@ -120,6 +134,7 @@ class TestNewNotificationWSPush:
             patch("socket_manager.manager.send_personal_message", send_mock),
         ):
             await create_notification(USER_ID, "Title", "Body", "general")
+            await _flush_ws_push_tasks()
 
         assert send_mock.await_count == 2
         sent_client_ids = {call.args[1] for call in send_mock.await_args_list}
@@ -137,6 +152,7 @@ class TestNewNotificationWSPush:
             patch("socket_manager.manager.send_personal_message", AsyncMock(return_value=None)) as send_mock,
         ):
             notif = await create_notification(USER_ID, "Title", "Body", "general")
+            await _flush_ws_push_tasks()
 
         assert notif["user_id"] == USER_ID
         for call in send_mock.await_args_list:

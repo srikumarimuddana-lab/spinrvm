@@ -61,6 +61,8 @@ jest.mock('../../store/languageStore', () => ({
 
 const mockMarkReadMutate = jest.fn();
 const mockMarkAllReadMutate = jest.fn();
+const mockDeleteMutate = jest.fn();
+const mockClearMutate = jest.fn();
 const mockRefetch = jest.fn();
 let mockNotifData: any = { unread_count: 0, notifications: [] };
 let mockIsFetching = false;
@@ -72,6 +74,17 @@ jest.mock('@shared/hooks/queries', () => ({
   }),
   useMarkNotificationRead: () => ({ mutate: mockMarkReadMutate }),
   useMarkAllNotificationsRead: () => ({ mutate: mockMarkAllReadMutate }),
+  useDeleteNotification: () => ({ mutate: mockDeleteMutate }),
+  useClearNotifications: () => ({ mutate: mockClearMutate }),
+}));
+
+// showAlert (driver-app's cross-platform confirm dialog) is a Zustand-store
+// trigger, not react-native's own Alert — mock it directly and invoke the
+// destructive button's onPress synchronously so delete/clear-all tests don't
+// need to render <AlertDialog/> itself.
+const mockShowAlert = jest.fn();
+jest.mock('../../components/AlertDialog', () => ({
+  showAlert: (...args: any[]) => mockShowAlert(...args),
 }));
 
 function notif(overrides: Partial<any> = {}) {
@@ -214,7 +227,62 @@ it('shows the loading spinner while isPending', () => {
 it('pull-to-refresh calls refetch', () => {
   mockNotifData = { unread_count: 0, notifications: [] };
   const screen = render(<NotificationsScreen />);
-  const list = screen.UNSAFE_getByType(require('react-native').FlatList);
+  // Two FlatLists now render (the outer inbox list + the category tabs row
+  // inside its ListHeaderComponent) — find the one with a refreshControl.
+  const lists = screen.UNSAFE_getAllByType(require('react-native').FlatList);
+  const list = lists.find((l: any) => l.props.refreshControl);
   list.props.refreshControl.props.onRefresh();
   expect(mockRefetch).toHaveBeenCalled();
+});
+
+describe('delete + clear all', () => {
+  it('per-item delete opens the confirm dialog and deletes on confirm', () => {
+    mockNotifData = { unread_count: 1, notifications: [notif({ type: 'general' })] };
+    const screen = render(<NotificationsScreen />);
+    fireEvent.press(screen.getByLabelText('notifications.deleteTitle'));
+
+    expect(mockShowAlert).toHaveBeenCalled();
+    const buttons = mockShowAlert.mock.calls[0][2];
+    const deleteBtn = buttons.find((b: any) => b.style === 'destructive');
+    deleteBtn.onPress();
+    expect(mockDeleteMutate).toHaveBeenCalledWith('n-1');
+  });
+
+  it('"Clear all" is hidden when the inbox is empty', () => {
+    mockNotifData = { unread_count: 0, notifications: [] };
+    const screen = render(<NotificationsScreen />);
+    expect(screen.queryByLabelText('notifications.clearAllTitle')).toBeNull();
+  });
+
+  it('"Clear all" opens the confirm dialog and clears on confirm', () => {
+    mockNotifData = { unread_count: 1, notifications: [notif()] };
+    const screen = render(<NotificationsScreen />);
+    fireEvent.press(screen.getByLabelText('notifications.clearAllTitle'));
+
+    expect(mockShowAlert).toHaveBeenCalled();
+    const buttons = mockShowAlert.mock.calls[0][2];
+    const clearBtn = buttons.find((b: any) => b.style === 'destructive');
+    clearBtn.onPress();
+    expect(mockClearMutate).toHaveBeenCalledWith(false);
+  });
+});
+
+describe('category tabs', () => {
+  it('filters the visible list by category', () => {
+    mockNotifData = {
+      unread_count: 2,
+      notifications: [
+        notif({ id: 'n-ride', title: 'Ride Title', type: 'ride_offer' }),
+        notif({ id: 'n-promo', title: 'Promo Title', type: 'promotion' }),
+      ],
+    };
+    const screen = render(<NotificationsScreen />);
+    expect(screen.getByText('Ride Title')).toBeTruthy();
+    expect(screen.getByText('Promo Title')).toBeTruthy();
+
+    fireEvent.press(screen.getByText('Promotions'));
+
+    expect(screen.getByText('Promo Title')).toBeTruthy();
+    expect(screen.queryByText('Ride Title')).toBeNull();
+  });
 });

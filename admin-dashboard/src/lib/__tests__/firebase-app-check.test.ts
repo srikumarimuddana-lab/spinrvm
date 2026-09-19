@@ -23,7 +23,7 @@ vi.mock("firebase/app", () => ({
 vi.mock("firebase/app-check", () => ({
   initializeAppCheck: initializeAppCheckMock,
   getToken: getTokenMock,
-  ReCaptchaV3Provider: vi.fn(function (this: unknown, siteKey: string) {
+  ReCaptchaEnterpriseProvider: vi.fn(function (this: unknown, siteKey: string) {
     return { siteKey };
   }),
 }));

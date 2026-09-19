@@ -2,7 +2,7 @@ import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import {
   initializeAppCheck,
   getToken,
-  ReCaptchaV3Provider,
+  ReCaptchaEnterpriseProvider,
   type AppCheck,
 } from "firebase/app-check";
 
@@ -37,7 +37,14 @@ function getAppCheckInstance(): AppCheck | null {
 
   try {
     appCheckInstance = initializeAppCheck(app, {
-      provider: new ReCaptchaV3Provider(siteKey),
+      // reCAPTCHA v3 (ReCaptchaV3Provider) is what this originally used, but
+      // Firebase disabled new classic-reCAPTCHA App Check registrations for
+      // this project — the "reCAPTCHA" option in Firebase Console's App Check
+      // UI is greyed out, Enterprise is the only registerable provider now.
+      // Enterprise needs no separate secret key wired into Firebase: it
+      // verifies tokens via the reCAPTCHA Enterprise API using this same GCP
+      // project's own credentials, so only the site key ships here.
+      provider: new ReCaptchaEnterpriseProvider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });
     return appCheckInstance;

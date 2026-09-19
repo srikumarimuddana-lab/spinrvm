@@ -115,4 +115,18 @@ describe("appCheckHeader (web)", () => {
 
     expect(initializeAppMock).not.toHaveBeenCalled();
   });
+
+  it("fails open — returns {} rather than hanging when getToken never resolves", async () => {
+    vi.useFakeTimers();
+    setFirebaseEnv();
+    getTokenMock.mockReturnValue(new Promise(() => {})); // never resolves
+    const { appCheckHeader } = await import("../firebase-app-check");
+
+    const headerPromise = appCheckHeader();
+    await vi.advanceTimersByTimeAsync(5000); // past the internal timeout
+    const header = await headerPromise;
+
+    expect(header).toEqual({});
+    vi.useRealTimers();
+  });
 });

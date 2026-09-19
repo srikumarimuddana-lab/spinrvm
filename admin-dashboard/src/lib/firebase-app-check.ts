@@ -46,6 +46,27 @@ function getAppCheckInstance(): AppCheck | null {
   }
 }
 
+// getToken() talks to Google's reCAPTCHA servers; a stalled request must not
+// hang the upload flow forever. On timeout we fail open, same as any other
+// getToken() failure — the backend enforcement is the real gate either way.
+const GET_TOKEN_TIMEOUT_MS = 4000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("appCheckHeader: getToken timed out")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * Mirrors shared/api/client.ts's appCheckHeader() for the mobile apps: fails
  * open (returns {}) whenever App Check isn't configured for this environment
@@ -58,7 +79,7 @@ export async function appCheckHeader(): Promise<Record<string, string>> {
   const instance = getAppCheckInstance();
   if (!instance) return {};
   try {
-    const { token } = await getToken(instance, /* forceRefresh */ false);
+    const { token } = await withTimeout(getToken(instance, /* forceRefresh */ false), GET_TOKEN_TIMEOUT_MS);
     return token ? { "X-Firebase-AppCheck": token } : {};
   } catch {
     return {};

@@ -70,6 +70,12 @@ function buildCsp(nonce: string): string {
     // worker is blocked and the map canvas stays blank.
     "worker-src blob: 'self'",
     "frame-ancestors 'none'",
+    // Google reCAPTCHA v3 (Firebase App Check on the public /register/driver
+    // page) runs its risk-scoring in an invisible iframe from these origins —
+    // Google's own documented CSP requirement for reCAPTCHA. Without this,
+    // default-src 'self' silently blocks the iframe and App Check tokens can
+    // never be minted, with no CSP-violation telemetry to reveal why.
+    "frame-src https://www.google.com https://recaptcha.google.com",
   ].join("; ");
 }
 

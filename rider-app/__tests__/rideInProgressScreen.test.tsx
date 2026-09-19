@@ -150,7 +150,14 @@ const mockSetActiveRideRouteCoords = jest.fn();
 const mockSetLastEtaMin = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({
-  useRideStore: Object.assign((...a: any[]) => mockRideState, { getState: () => mockRideState }),
+  // useRideLocationFallback reads via the selector form (useRideStore(s =>
+  // s.fetchRide)) — the mock must apply the selector instead of always
+  // returning the whole state object, or `fetchRide` ends up bound to
+  // mockRideState itself (TypeError: fetchRide is not a function).
+  useRideStore: Object.assign(
+    (selector?: (s: any) => any) => (selector ? selector(mockRideState) : mockRideState),
+    { getState: () => mockRideState },
+  ),
 }));
 
 import RideInProgressScreen from '../app/ride-in-progress';

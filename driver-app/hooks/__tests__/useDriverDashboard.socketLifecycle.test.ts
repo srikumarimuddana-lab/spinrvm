@@ -37,6 +37,17 @@ jest.mock('@shared/api/client', () => ({ __esModule: true,
   ensureFreshToken: jest.fn().mockResolvedValue(undefined), getApiErrorMessage: jest.fn(),
 }));
 jest.mock('@shared/hooks/queries', () => ({ useDriverConfig: () => ({ data: undefined }) }));
+// useDriverDashboard now imports queryClient/queryKeys directly (for the
+// WS `new_notification` cache merge) — shared/api/queryClient.ts has a
+// module-load-time AppState.addEventListener side effect (RN focusManager
+// wiring) that this file's minimal virtual `react-native` mock above isn't
+// built to support; mock it out the same way @shared/hooks/queries is
+// already mocked above, since real TanStack Query behavior isn't under
+// test here.
+jest.mock('@shared/api/queryClient', () => ({
+  queryClient: { setQueriesData: jest.fn() },
+  queryKeys: { notifications: { list: ['notifications', 'list'] } },
+}));
 jest.mock('@shared/config', () => ({ API_URL: 'https://example.test' }));
 jest.mock('@shared/config/spinr.config', () => ({ __esModule: true, default: { api: { baseUrl: 'https://example.test' } } }));
 jest.mock('@shared/services/firebase', () => ({ onForegroundMessage: () => jest.fn() }));

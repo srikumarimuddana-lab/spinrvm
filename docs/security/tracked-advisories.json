@@ -1,0 +1,13 @@
+[
+  {
+    "advisory_id": "GHSA-jrc7-96c5-q579",
+    "module": "maplibre-gl",
+    "ecosystem": "npm",
+    "surface": "admin-dashboard",
+    "severity": "critical",
+    "status": "needs_decision",
+    "first_seen": "2026-09-19",
+    "decision_owner": null,
+    "reasoning": "Surfaced during PR #5512's CI run (G4c/G4b npm/yarn audit failures) via threat_watch.py's first real dry-run. Not researched yet -- see docs/security/decision-requests/decision-request-GHSA-jrc7-96c5-q579.md for the open research checklist. This PR did not introduce the finding (no admin-dashboard files touched) and does not attempt to fix or allowlist it -- recording it here so it's tracked instead of silently re-appearing unexplained on every future scan."
+  }
+]

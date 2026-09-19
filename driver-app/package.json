@@ -103,7 +103,7 @@
     "jest": "30.3.0",
     "jest-expo": "~57.0.4",
     "patch-package": "^8.0.1",
-    "react-test-renderer": "19.2.3",
+    "react-test-renderer": "19.3.0",
     "serve": "^14.2.6",
     "typescript": "~5.9.2"
   },
@@ -118,7 +118,7 @@
     "react-dom": "19.2.3",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",
-    "react-test-renderer": "19.2.3",
+    "react-test-renderer": "19.3.0",
     "@xmldom/xmldom": "^0.8.15",
     "protobufjs": "^7.6.1",
     "@react-native-community/netinfo": "12.0.1",

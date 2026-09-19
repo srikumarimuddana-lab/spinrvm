@@ -188,7 +188,7 @@ async def main(dry_run: bool = False) -> None:
             # line on every ride-detail map — see migration 313.
             update_data["planned_route_polyline"] = json.dumps([[p[0], p[1]] for p in polyline])
         try:
-            await db_supabase.update_one("rides", r["id"], update_data)
+            await db_supabase.update_one("rides", {"id": r["id"]}, update_data)
             updated += 1
         except Exception as e:
             logger.error("Failed to update ride %s: %s", r["id"][:8], e)

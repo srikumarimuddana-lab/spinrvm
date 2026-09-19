@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { appCheckHeader } from "@/lib/firebase-app-check";
 
 export default function DriverRegistrationPage() {
     const router = useRouter();
@@ -140,10 +141,15 @@ export default function DriverRegistrationPage() {
         const res = await fetch("/api/v1/upload", {
             method: "POST",
             body: data,
-            headers: token ? {
-                'Authorization': `Bearer ${token}`,
-            } : {},
             // Note: Content-Type header is auto-set by browser with boundary for FormData
+            headers: {
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                // This page is public (no admin session) and unauthenticated by
+                // design — App Check is the only attestation this upload gets.
+                // Without it, enforcing FirebaseAppCheckMiddleware in production
+                // 401s every document upload on this registration flow.
+                ...(await appCheckHeader()),
+            },
         });
         if (!res.ok) throw new Error("Upload failed");
         const json = await res.json();

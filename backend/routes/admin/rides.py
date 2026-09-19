@@ -3723,7 +3723,7 @@ async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_use
     """
     allowed_roles = {"finance", "super_admin"}
     if admin.get("role") not in allowed_roles:
-        raise HTTPException(status_code=403, detail="role_required:finance")
+        raise HTTPException(status_code=403, detail="This action requires the finance role.")
 
     payout = await db.find_one("payouts", {"id": payout_id})
     if not payout:
@@ -3788,7 +3788,7 @@ async def admin_bulk_retry_payouts(
     """
     allowed_roles = {"finance", "super_admin"}
     if admin.get("role") not in allowed_roles:
-        raise HTTPException(status_code=403, detail="role_required:finance")
+        raise HTTPException(status_code=403, detail="This action requires the finance role.")
 
     if body.payout_ids and body.since:
         raise HTTPException(
@@ -3910,7 +3910,7 @@ async def admin_close_payout_period(
     """
     allowed_roles = {"finance", "super_admin"}
     if admin.get("role") not in allowed_roles:
-        raise HTTPException(status_code=403, detail="role_required:finance")
+        raise HTTPException(status_code=403, detail="This action requires the finance role.")
 
     # Build month bounds in UTC. Using exclusive end so the half-open
     # interval matches how Python's calendar arithmetic generally works
@@ -3997,7 +3997,7 @@ async def admin_regenerate_imported_snapshots(
     Restricted to super_admin.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="role_required:super_admin")
+        raise HTTPException(status_code=403, detail="This action requires super admin access.")
 
     import asyncio
     import functools
@@ -4225,7 +4225,7 @@ async def admin_regenerate_imported_routes(
     Super_admin only, matching every other bulk-write tool on this page.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="role_required:super_admin")
+        raise HTTPException(status_code=403, detail="This action requires super admin access.")
 
     import asyncio
 

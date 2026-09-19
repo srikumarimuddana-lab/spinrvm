@@ -127,7 +127,7 @@ def _require_super_admin(admin: dict) -> None:
     a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Legacy booking import requires super_admin")
+        raise HTTPException(status_code=403, detail="Legacy booking import requires super admin access.")
 
 
 async def _build_plan(

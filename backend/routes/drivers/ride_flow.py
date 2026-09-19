@@ -597,7 +597,9 @@ async def decline_ride(
     if ride.get("status") not in ("searching", "driver_assigned"):
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot decline ride in status '{ride.get('status')}'",
+            detail=(
+                "This ride can no longer be declined — it has already moved on to another driver or been cancelled."
+            ),
         )
 
     # WS-18: ownership guard — only a driver who was actually offered (or
@@ -927,7 +929,12 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
         },
     )
     if guard is None:
-        raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This ride has already moved on, so we couldn't mark you as arrived. Refresh to see its current status."
+            ),
+        )
 
     # 2026-08-18 fleet audit: no ride-state-transition metric existed for any
     # transition after offer-acceptance, leaving the match-rate/cancellation-
@@ -1064,7 +1071,13 @@ async def verify_pickup_otp(
         },
     )
     if guard is None:
-        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "We couldn't start this trip. Make sure you've marked yourself as "
+                "arrived, then refresh to see the ride's current status."
+            ),
+        )
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)
@@ -1132,7 +1145,13 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         },
     )
     if guard is None:
-        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "We couldn't start this trip. Make sure you've marked yourself as "
+                "arrived, then refresh to see the ride's current status."
+            ),
+        )
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)

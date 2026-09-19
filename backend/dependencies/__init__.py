@@ -802,7 +802,7 @@ def require_module(module: str):
         if module not in modules:
             raise HTTPException(
                 status_code=403,
-                detail=f"Access denied — module '{module}' not in your role permissions",
+                detail=("You don't have access to this section. Ask a super admin to grant it."),
             )
         return current_user
 
@@ -821,7 +821,7 @@ async def require_super_admin(current_user: dict = Depends(get_admin_user)) -> d
         admin_router.include_router(some_router, dependencies=[Depends(require_super_admin)])
     """
     if current_user.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="This module requires super_admin")
+        raise HTTPException(status_code=403, detail="This section is restricted to super admins.")
     return current_user
 
 

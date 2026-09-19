@@ -165,7 +165,7 @@ def validate_admin_password(password: str) -> None:
     if len(password) < 20:
         raise HTTPException(
             status_code=422,
-            detail="password_too_short: admin passwords must be at least 20 characters",
+            detail="Admin passwords must be at least 20 characters long.",
         )
 
     has_upper = any(c.isupper() for c in password)
@@ -175,11 +175,11 @@ def validate_admin_password(password: str) -> None:
     if not (has_upper and has_digit and has_symbol):
         raise HTTPException(
             status_code=422,
-            detail="password_complexity_required: must contain at least one uppercase letter, one digit, and one symbol",
+            detail=("Include at least one uppercase letter, one number, and one symbol."),
         )
 
     if password.lower() in _COMMON:
         raise HTTPException(
             status_code=422,
-            detail="password_too_common: choose a less predictable password",
+            detail="That password is too easy to guess. Please choose a less predictable one.",
         )

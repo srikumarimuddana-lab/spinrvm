@@ -82,7 +82,7 @@ def _require_super_admin(admin: dict) -> None:
     uses, so the guard survives a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Legacy SIN/DOB backfill requires super_admin")
+        raise HTTPException(status_code=403, detail="Legacy SIN/DOB backfill requires super admin access.")
 
 
 # Guardrails for a synchronous request handler, one per uploaded file. The

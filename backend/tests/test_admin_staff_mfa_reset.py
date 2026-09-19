@@ -211,7 +211,7 @@ class TestMfaResetHttp:
             app.dependency_overrides.pop(dep_key, None)
 
         assert response.status_code == 403
-        assert "super_admin" in response.json().get("detail", "")
+        assert "super admin" in response.json().get("detail", "")
 
     def test_module_gate_rejects_admin_without_staff_module(self):
         """An admin missing the `staff` module claim entirely is rejected at

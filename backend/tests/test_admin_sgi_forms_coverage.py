@@ -125,9 +125,9 @@ def test_vehicle_details_fill_failure_returns_502(admin_client):
     # B-P2-1 (utils/error_handling.py): 5xx HTTPException details are
     # sanitized to a generic message unless they match the ERR_* sentinel
     # pattern — "Could not generate the SGI form" isn't a sentinel, so the
-    # client sees "Internal server error" even though the route raised the
+    # client sees the generic 5xx sentence even though the route raised the
     # more specific message (which still hits the server log).
-    assert resp.json()["detail"] == "Internal server error"
+    assert resp.json()["detail"] == "Something went wrong on our end. Please try again in a moment."
     record.assert_called_once_with("vehicle_details", "failed")
     capture.assert_called_once()
     # contexts payload (positional arg 3) carries the admin id, form type,

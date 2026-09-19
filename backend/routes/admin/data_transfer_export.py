@@ -58,7 +58,7 @@ def _require_super_admin(admin: dict) -> None:
     the guard survives a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Data Transfer export requires super_admin")
+        raise HTTPException(status_code=403, detail="Data Transfer export requires super admin access.")
 
 
 # A batch that's too large would tie up the background task for a long time;

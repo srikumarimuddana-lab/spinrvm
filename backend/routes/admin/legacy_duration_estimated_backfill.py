@@ -66,7 +66,7 @@ router = APIRouter()
 
 def _require_super_admin(admin: dict) -> None:
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Duration-estimated marker backfill requires super_admin")
+        raise HTTPException(status_code=403, detail="Duration-estimated marker backfill requires super admin access.")
 
 
 async def _build_plan() -> svc.DurationEstimatedBackfillPlan:

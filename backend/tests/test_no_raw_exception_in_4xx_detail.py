@@ -60,7 +60,7 @@ _KNOWN_OFFENDERS = frozenset(
         "routes/admin/legacy_vehicle_history_backfill.py",
         "routes/admin/rider_import.py",
         # 5xx only (admin Stripe-event replay). The wholesale 5xx sanitiser in
-        # error_handling.py already replaces this with "Internal server error"
+        # error_handling.py already replaces this with the generic 5xx sentence
         # before it reaches a client, so it is not a live leak — it is listed
         # because this guard matches the pattern, not the status code.
         "routes/admin/stripe_events.py",

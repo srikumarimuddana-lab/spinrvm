@@ -50,7 +50,7 @@ router = APIRouter()
 
 def _require_super_admin(admin: dict) -> None:
     if (admin or {}).get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Connect ledger sync requires super_admin")
+        raise HTTPException(status_code=403, detail="Connect ledger sync requires super admin access.")
 
 
 class ConnectLedgerSyncRequest(BaseModel):

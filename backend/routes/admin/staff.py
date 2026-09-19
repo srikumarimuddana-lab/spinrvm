@@ -29,7 +29,10 @@ def require_role(role: str):
 
     async def _dep(admin: dict = Depends(get_admin_user)) -> dict:
         if admin.get("role") != role:
-            raise HTTPException(status_code=403, detail=f"role_required:{role}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"This action requires the {role.replace('_', ' ')} role.",
+            )
         return admin
 
     return _dep

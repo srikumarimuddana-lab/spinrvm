@@ -53,7 +53,7 @@ router = APIRouter()
 
 def _require_super_admin(admin: dict) -> None:
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Pre-launch legacy data flagging requires super_admin")
+        raise HTTPException(status_code=403, detail="Pre-launch legacy data flagging requires super admin access.")
 
 
 async def _build_plan() -> svc.PreLaunchFlagPlan:

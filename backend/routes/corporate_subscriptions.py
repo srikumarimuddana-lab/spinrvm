@@ -115,8 +115,10 @@ async def assign_company_subscription(
     if not billing_enabled:
         raise HTTPException(
             status_code=403,
-            detail="Corporate subscription billing is not yet enabled — turn on "
-            "corporate_subscription_billing_enabled in Settings once verified in staging.",
+            # Staff enable this via the `corporate_subscription_billing_enabled`
+            # toggle in admin Settings; the person hitting this endpoint is a
+            # corporate admin who cannot action that, so they get support.
+            detail=("Subscription billing is not available for your account yet. Please contact Spinr support."),
         )
 
     try:
@@ -158,7 +160,7 @@ async def set_subscription_pilot(
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     company = await db_supabase.get_corporate_account_by_id(normalized_id)
     if not company:
-        raise HTTPException(status_code=404, detail="company_not_found")
+        raise HTTPException(status_code=404, detail="We couldn't find that company account.")
 
     updated = await db_supabase.update_corporate_account(
         normalized_id, {"subscription_billing_pilot_enabled": body.enabled}

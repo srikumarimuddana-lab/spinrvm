@@ -38,7 +38,22 @@ push path to piggyback on.
   "new_notification", "notification": {...}, "unread_count": N}`) to both `rider_{user_id}` and
   `driver_{user_id}` connection keys via `socket_manager.manager.send_personal_message` — the
   same targeted-send primitive `broadcast_ride_status` already uses, not a new transport. The DB
-  write always happens first and is never rolled back or blocked by a WS-send failure.
+  write always happens first and is never rolled back or blocked by a WS-send failure. The push
+  itself is scheduled via `asyncio.create_task` (fire-and-forget), not awaited inline — see the
+  "Post-implementation self-review catch" note below.
+
+**Post-implementation self-review catch**: the first version of this change `await`ed the WS
+push inline inside `create_notification()`. Since that function is called synchronously from many
+request-handling paths across the codebase (some latency-sensitive), a slow/stuck socket send
+(up to ~2s per candidate connection key, two keys tried per notification) could have added
+latency to any of those callers — the opposite of "best-effort," and the same class of anti-
+pattern CLAUDE.md's Performance SLAs section flags (awaiting a slow side-effect inline in a
+request handler). Fixed before this branch was reported done: the push is now scheduled via
+`asyncio.create_task`, with a strong reference held in a module-level set
+(`_background_ws_tasks`, discarded via `add_done_callback` on completion) so the event loop
+can't garbage-collect it mid-run — a documented asyncio footgun for a fire-and-forget task with
+no other reference. Tests updated accordingly (await the tracked task before asserting on the
+mocked send).
 
 **Shared** (`shared/hooks/queries/notificationQueries.ts`): `useDeleteNotification()` and
 `useClearNotifications(readOnly)`, same optimistic-update + `refetchType:'none'` pattern as the

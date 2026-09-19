@@ -217,7 +217,8 @@ function DriverDashboard() {
   // reconciliation fallback for whenever the socket isn't connected — was a
   // fixed 60s poll with no WS fast path, now widened to 5 minutes since WS
   // covers the fast path.
-  const { data: notifData, refetch: refetchNotifications } = useNotifications(1);
+  const { data: rawNotifData, refetch: refetchNotifications } = useNotifications(1);
+  const notifData = rawNotifData as { unread_count?: number } | undefined;
   const unreadNotifCount = notifData?.unread_count ?? 0;
   useEffect(() => {
     const timer = setInterval(() => { refetchNotifications(); }, 5 * 60 * 1000);

@@ -98,7 +98,8 @@ export default function NotificationsScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const { data, isLoading, isError, isFetching, refetch } = useNotifications(50);
+  const { data: rawData, isLoading, isError, isFetching, refetch } = useNotifications(50);
+  const data = rawData as { notifications?: AppNotification[]; unread_count?: number } | undefined;
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
   const deleteNotification = useDeleteNotification();

@@ -231,7 +231,8 @@ it('pull-to-refresh calls refetch', () => {
   // inside its ListHeaderComponent) — find the one with a refreshControl.
   const lists = screen.UNSAFE_getAllByType(require('react-native').FlatList);
   const list = lists.find((l: any) => l.props.refreshControl);
-  list.props.refreshControl.props.onRefresh();
+  expect(list).toBeDefined();
+  list!.props.refreshControl.props.onRefresh();
   expect(mockRefetch).toHaveBeenCalled();
 });
 

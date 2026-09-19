@@ -89,7 +89,8 @@ export default function HomeScreen() {
   // raw api.get with no fixed interval; now: at most every 3 minutes via
   // this timer, plus instant on WS push, plus the query's own
   // refetchOnWindowFocus/refetchOnReconnect defaults).
-  const { data: notifData, refetch: refetchNotifications } = useNotifications(1);
+  const { data: rawNotifData, refetch: refetchNotifications } = useNotifications(1);
+  const notifData = rawNotifData as { unread_count?: number } | undefined;
   const unreadNotifCount = notifData?.unread_count ?? 0;
   useEffect(() => {
     const timer = setInterval(() => { refetchNotifications(); }, 3 * 60 * 1000);

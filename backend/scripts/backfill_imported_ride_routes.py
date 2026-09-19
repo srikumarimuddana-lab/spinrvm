@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Backfill OSRM road routes for all 224 imported rides.
+"""Backfill OSRM road routes for all imported rides.
 
 Run from the backend server where OSRM_URL is accessible:
 
     cd backend
-    python scripts/backfill_imported_ride_routes.py [--dry-run]
+    python scripts/backfill_imported_ride_routes.py [--apply]
+
+Dry run is the default (matches every other script in this file's family —
+see backfill_legacy_driver_sin_dob.py, backfill_statement_totals.py, etc.);
+pass --apply to actually write.
 
 For each imported ride (legacy_import_metadata != '{}'):
   1. Calls OSRM /route to get the road-following route geometry
@@ -14,6 +18,13 @@ For each imported ride (legacy_import_metadata != '{}'):
 
 Falls back to the public OSRM (OSRM_FALLBACK_URL) when
 OSRM_URL is not set.
+
+Reads are paged (PAGE_SIZE) rather than a single capped select — an
+unbounded single read silently caps at the requested limit and would leave
+rides beyond it un-backfilled with a summary line ("Updated N/N") that looks
+complete. If more rows remain beyond a --limit, the run logs a warning and
+the caller should re-run to finish (same convention as
+backfill_statement_totals.py / backfill_stripe_customer_emails.py).
 """
 
 from __future__ import annotations
@@ -55,6 +66,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 _TIMEOUT_S = 10.0
 _BATCH_DELAY_S = 0.3
+_PAGE_SIZE = 500
 
 
 async def _get_osrm_url() -> str:
@@ -112,22 +124,42 @@ async def _fetch_osrm_route(
         return None
 
 
-async def main(dry_run: bool = False) -> None:
+async def _fetch_imported_rides(limit: int | None = None) -> tuple[list[dict], bool]:
+    """Page through imported rides. Returns (rides, has_more)."""
+    rides: list[dict] = []
+    offset = 0
+    while True:
+        page = (
+            await db_supabase.get_rows(
+                "rides",
+                {"legacy_import_metadata": {"$ne": "{}"}},
+                columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,distance_km,planned_route_polyline",
+                limit=_PAGE_SIZE,
+                offset=offset,
+            )
+            or []
+        )
+        rides.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return rides, False
+        if limit and len(rides) >= limit:
+            return rides[:limit], True
+        offset += _PAGE_SIZE
+
+
+async def main(dry_run: bool = True, limit: int | None = None) -> None:
     osrm_url = await _get_osrm_url()
     logger.info("Using OSRM at: %s", osrm_url)
 
-    # Fetch all imported rides
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"legacy_import_metadata": {"$ne": "{}"}},
-        columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,distance_km,planned_route_polyline",
-        limit=500,
-    )
+    # Fetch all imported rides (paged — see module docstring on why)
+    rides, has_more = await _fetch_imported_rides(limit)
     if not rides:
         logger.info("No imported rides found.")
         return
 
     logger.info("Found %d imported rides to backfill", len(rides))
+    if has_more:
+        logger.warning("more imported rides remain beyond --limit; re-run to continue")
 
     # Deduplicate by coordinate pairs
     coord_key_map: dict[str, tuple[float, float, float, float]] = {}
@@ -197,7 +229,8 @@ async def main(dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true", help="Preview without writing to DB")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--apply", action="store_true", help="write to the DB (default: dry run)")
+    parser.add_argument("--limit", type=int, default=None, help="cap the rides considered (default: all)")
     args = parser.parse_args()
-    asyncio.run(main(dry_run=args.dry_run))
+    asyncio.run(main(dry_run=not args.apply, limit=args.limit))

@@ -383,6 +383,24 @@ jobs:
           print("SR-03 money gate: 0 findings.")
           PY
 
+      # Additive, non-blocking: makes the raw Spinr-rules findings available
+      # to the downstream security-report.yml summary job (Phase 2 of the
+      # 2026-09-19 security automation roadmap). Never fails this job even
+      # if spinr-rules.json wasn't produced (e.g. the scan step above hit
+      # its own error branch and exited first).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        # continue-on-error, same rationale as the codeql-action/upload-sarif
+        # step right below (C94): a transient artifact-service failure here
+        # must never flip this job from a real pass to a reported failure —
+        # this is a best-effort feed for the downstream report generator,
+        # not a gate.
+        continue-on-error: true
+        with:
+          name: spinr-rules-report
+          path: spinr-rules.json
+          if-no-files-found: ignore
+
       - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
         # C94: fails on every run with "Code scanning is not enabled for this
@@ -527,6 +545,19 @@ jobs:
         run: |
           npm audit --audit-level=high --json > /tmp/npm-audit-admin.json || true
           python3 "${GITHUB_WORKSPACE}/scripts/security/check_npm_audit_allowlist.py" /tmp/npm-audit-admin.json
+
+      # Additive, non-blocking: same rationale as the semgrep upload above —
+      # feeds the downstream security-report.yml summary job.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        # continue-on-error: best-effort feed for the downstream report
+        # generator, not a gate — same rationale as the semgrep job's upload
+        # step above.
+        continue-on-error: true
+        with:
+          name: npm-audit-admin-report
+          path: /tmp/npm-audit-admin.json
+          if-no-files-found: ignore
 
   # G5 — Secret scanning (git history)
   gitleaks:

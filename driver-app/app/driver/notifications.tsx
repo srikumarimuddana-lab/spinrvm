@@ -216,6 +216,7 @@ function NotificationsScreen() {
                     style={styles.notifCardTouchable}
                     onPress={() => handleNotificationPress(item)}
                     activeOpacity={0.7}
+                    accessibilityLabel={`${item.title}${item.is_read ? '' : ', unread'}`}
                 >
                     <View style={[styles.notifIcon, { backgroundColor: `${icon.color}12` }]}>
                         <Ionicons name={icon.name as any} size={20} color={icon.color} />
@@ -284,6 +285,7 @@ function NotificationsScreen() {
                                 <TouchableOpacity
                                     onPress={handleClearAll}
                                     style={styles.clearAllBtn}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                     accessibilityRole="button"
                                     accessibilityLabel={t('notifications.clearAllTitle')}
                                 >
@@ -302,13 +304,14 @@ function NotificationsScreen() {
                         keyExtractor={(tab) => tab.key}
                         style={styles.tabsRow}
                         contentContainerStyle={styles.tabsContent}
+                        accessibilityRole="tablist"
                         renderItem={({ item: tab }) => {
                             const active = category === tab.key;
                             return (
                                 <TouchableOpacity
-                                    style={[styles.tab, active && { backgroundColor: colors.primary }]}
+                                    style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
                                     onPress={() => setCategory(tab.key)}
-                                    accessibilityRole="button"
+                                    accessibilityRole="tab"
                                     accessibilityState={{ selected: active }}
                                 >
                                     <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
@@ -423,7 +426,7 @@ function createStyles(colors: ThemeColors) {
         headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
         markAllBtn: { padding: SPACING.sm },
         markAllText: { color: colors.primary, fontSize: FONT.bodySm, fontWeight: '600' },
-        clearAllBtn: { padding: SPACING.sm, minWidth: 36, alignItems: 'center' },
+        clearAllBtn: { padding: SPACING.sm, minWidth: 36, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
         unreadCountText: {
             color: colors.textDim,
             fontSize: 12,
@@ -435,6 +438,7 @@ function createStyles(colors: ThemeColors) {
         tab: {
             paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
             backgroundColor: colors.surfaceLight, marginRight: 8,
+            minHeight: 44, justifyContent: 'center',
         },
         tabText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },
         tabTextActive: { color: '#fff' },

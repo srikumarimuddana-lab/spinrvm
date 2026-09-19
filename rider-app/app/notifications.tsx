@@ -199,6 +199,7 @@ export default function NotificationsScreen() {
           style={styles.cardTouchable}
           onPress={() => handleNotificationPress(item)}
           activeOpacity={0.7}
+          accessibilityLabel={`${item.title}${item.is_read ? '' : ', unread'}`}
         >
           {!item.is_read && <View style={[styles.unreadBar, { backgroundColor: colors.primary }]} />}
           <View style={[styles.iconWrap, { backgroundColor: !item.is_read ? `${iconColor}18` : colors.surfaceLight }]}>
@@ -244,6 +245,7 @@ export default function NotificationsScreen() {
             <TouchableOpacity
               style={styles.headerActionBtn}
               onPress={handleClearAll}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityRole="button"
               accessibilityLabel="Clear all notifications"
             >
@@ -253,7 +255,7 @@ export default function NotificationsScreen() {
         </View>
       </View>
 
-      <View style={styles.tabsRow}>
+      <View style={styles.tabsRow} accessibilityRole="tablist">
         <FlatList
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -264,9 +266,9 @@ export default function NotificationsScreen() {
             const active = category === item.key;
             return (
               <TouchableOpacity
-                style={[styles.tab, active && { backgroundColor: colors.primary }]}
+                style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
                 onPress={() => setCategory(item.key)}
-                accessibilityRole="button"
+                accessibilityRole="tab"
                 accessibilityState={{ selected: active }}
               >
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>{item.label}</Text>
@@ -387,7 +389,7 @@ function createStyles(colors: ThemeColors) {
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    headerActionBtn: { paddingHorizontal: SPACING.xs, paddingVertical: 6, minWidth: 36, alignItems: 'center' },
+    headerActionBtn: { paddingHorizontal: SPACING.xs, paddingVertical: 6, minWidth: 36, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
     headerActionText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.primary },
 
     tabsRow: {
@@ -398,6 +400,7 @@ function createStyles(colors: ThemeColors) {
     tab: {
       paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
       backgroundColor: colors.surfaceLight, marginRight: 8,
+      minHeight: 44, justifyContent: 'center',
     },
     tabText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },
     tabTextActive: { color: '#fff' },

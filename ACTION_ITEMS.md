@@ -7,6 +7,28 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
+> **Known duplicate IDs (do not renumber):** this file has accumulated items
+> sharing one ID number, each filed independently by a different session the
+> same day and each already carrying its own "kept as-is" note at the
+> collision site — renumbering would break existing cross-references, which
+> is why every prior instance chose not to. Consolidated here so a reader (or
+> an agent grepping for one ID) doesn't have to rediscover each collision
+> piecemeal: **C13** (two items — "Required `pull_request`-triggered
+> workflows silently never fire" / "`tsc --noEmit` false-positives"),
+> **C100** (two items — "`driver-app/__tests__/.../CarMarker.test.tsx` —
+> 7 tests broken" / "`driver-app-test` is red on `main`'s own tip"),
+> **C111** (two items — "`driver_matching_algorithm`/`min_driver_rating`/
+> `search_radius_km` may lack a settings-table column" / "`emergency_contacts`
+> has no admin/super_admin override policy"), **C112** (two items —
+> "`audit_logs`' migration-57 trigger silently breaks migration-56's
+> retention DELETE" / "`admin_create_ride`'s FCM push sent `rider_name`
+> with zero PII filtering"), **C118** (two items — "`ride_distance_*`
+> tables claim immutability with no DB-level trigger" / "Open Change
+> Requests were never cross-referenced here"). When filing a new item, check
+> this list and the surrounding numeric range before reusing a number, and
+> add an entry here (not just at the collision site) if a new collision is
+> unavoidable.
+
 _Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
 (product owner: reconcile, not just delete). Ported `migrate.py`'s tested
 CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which

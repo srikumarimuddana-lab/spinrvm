@@ -602,9 +602,11 @@ async def _emit_new_notification_ws(user_id: str, notification: Dict[str, Any]) 
     using, so it best-effort-tries both keys via the same
     ``manager.send_personal_message`` targeted-send path the ride-event
     code uses (``socket_manager.ConnectionManager.broadcast_ride_status``) —
-    not a new transport. A disconnected key is a normal no-op there, not an
-    exception, so failures logged here are genuine send errors, not missed
-    connections; either way this must never raise.
+    not a new transport. ``send_personal_message`` and everything it
+    delegates to (local delivery, Redis pub/sub) already catch and log
+    their own failures internally and never raise, so the try/except below
+    is defensive belt-and-suspenders against a future change to that
+    contract, not a path that currently ever triggers.
     """
     try:
         from ..socket_manager import manager
@@ -613,9 +615,10 @@ async def _emit_new_notification_ws(user_id: str, notification: Dict[str, Any]) 
 
     try:
         unread_count = await db_supabase.count_documents("notifications", {"user_id": user_id, "is_read": False})
-    except Exception:
+    except Exception as e:
         # Best-effort push on an already best-effort path — fall back to a
         # non-zero placeholder rather than skip the push over a count error.
+        logger.debug(f"new_notification unread_count fallback for user {user_id}: {e}")
         unread_count = 1
 
     ws_payload = {

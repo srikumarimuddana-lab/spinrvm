@@ -696,6 +696,78 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "56_audit_logs_delete_lockdown.sql").read_text())
     cur.execute((migrations_dir / "57_audit_logs_schema_standardization.sql").read_text())
 
+    # --- cloud_messages / push_tokens (ACTION_ITEMS.md C123 phase 1, migration
+    # 432): same migration-06 file as audit_logs above, reusing migration_06_sql
+    # already loaded. Neither table was built by this harness before now --
+    # C123 phase 1 needed real RLS coverage for their admin policies, which
+    # had zero test coverage of any kind.
+    # cloud_messages: "Admin full access" (FOR ALL, broken role check, no
+    # WITH CHECK -- the policy 432 fixes) + service-role bypass. No owner-row
+    # policy -- this is an admin-broadcast table, not user-writable.
+    # push_tokens: "Users manage own push tokens" (legitimate, untouched by
+    # 432) + "Admin read push_tokens" (FOR SELECT, broken check -- the policy
+    # 432 fixes) + service-role bypass.
+    # push_tokens.id and document_requirements.id (below) both default to
+    # uuid_generate_v4() -- backend/supabase_schema.sql creates the uuid-ossp
+    # extension that provides it, but this harness only ever extracts named
+    # CREATE TABLE blocks out of that file (see the users/drivers/rides
+    # extraction above), never runs its CREATE EXTENSION line, so it has to
+    # be created explicitly here. ---
+    cur.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    cur.execute(_extract_create_table(migration_06_sql, "cloud_messages"))
+    cur.execute("ALTER TABLE cloud_messages ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin full access cloud_messages"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass cloud_messages"'))
+
+    cur.execute(_extract_create_table(migration_06_sql, "push_tokens"))
+    cur.execute("ALTER TABLE push_tokens ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Users manage own push tokens"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin read push_tokens"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass push_tokens"'))
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON cloud_messages, push_tokens TO anon, authenticated, service_role"
+    )
+
+    # --- document_requirements (migration 02, ACTION_ITEMS.md C123 phase 1):
+    # "Public read access for requirements" (intentional -- unauthenticated
+    # driver-doc-requirements lookup, untouched by 432) + "Admin full access
+    # for requirements" (the older role='admin'-only form 432 fixes).
+    # Extracted up to the ALTER TABLE driver_documents statement -- this
+    # harness doesn't build driver_documents and that ALTER is irrelevant to
+    # document_requirements' own RLS behavior under test.
+    #
+    # The original "Admin full access for requirements" policy is
+    # deliberately NOT created here. Its USING clause compares
+    # `public.users.id = auth.uid()` with no ::text cast -- `users.id` is
+    # `text` and `auth.uid()` returns `uuid`, and CREATE POLICY fails outright
+    # against that type pairing (confirmed by reproducing the exact error,
+    # `operator does not exist: text = uuid`, against a fresh `users(id
+    # text)` table locally). Production's live copy of this policy still
+    # exists and evaluates without error today -- Postgres binds a policy's
+    # operators once, at CREATE POLICY time, from whatever the qual's already
+    # -parsed expression tree resolved to then, and does not re-typecheck
+    # that stored tree against the column's *current* type on every query;
+    # it only breaks if something forces a fresh parse of the same text
+    # today, which this harness's fresh schema does. So the fixed end state
+    # (migration 432's replacement policy) is real and correct, but the
+    # broken original cannot be replayed verbatim here -- migration 432's own
+    # `DROP POLICY IF EXISTS "Admin full access for requirements"` is
+    # therefore a safe no-op in this harness, same precedent as migration
+    # 431's no-op DROP for the corporate_accounts stray policy above. ---
+    migration_02_sql = (migrations_dir / "02_dynamic_documents.sql").read_text()
+    cur.execute(_extract_create_table(migration_02_sql, "public.document_requirements"))
+    cur.execute("ALTER TABLE public.document_requirements ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_02_sql, 'CREATE POLICY "Public read access for requirements"'))
+    cur.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON document_requirements TO anon, authenticated, service_role")
+
+    # ACTION_ITEMS.md C123 phase 1: replaces the unreachable/broken admin
+    # policies built above (audit_logs already applied earlier via 51) with
+    # an explicit USING (false) deny, same shape as migration 430. Does NOT
+    # touch safety_incidents / driver_insurance_periods -- see migration
+    # 432's own header comment for why those two need a different fix.
+    cur.execute((migrations_dir / "432_admin_role_rls_unreachable_phase1.sql").read_text())
+
     # --- driver_insurance_period_corrections (migration 355) / -- 355 references
     # driver_insurance_periods(id) (migration 64, already applied above);
     # driver_period_distances (migration 249) -- both self-contained

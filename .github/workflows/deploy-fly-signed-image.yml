@@ -72,7 +72,7 @@ jobs:
 
       - name: Verify FLY_API_TOKEN is set
         run: |
-          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+          if [ -z "${FLY_API_TOKEN}" ]; then
             echo "::error title=Missing secret::FLY_API_TOKEN is not set."
             exit 1
           fi
@@ -91,12 +91,15 @@ jobs:
       - name: Resolve image reference
         id: image
         run: |
-          TAG="${{ inputs.image_sha }}"
+          TAG="${IMAGE_SHA_INPUT}"
           if [ -z "$TAG" ]; then
             TAG="${GITHUB_SHA}"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ref=ghcr.io/${{ github.repository }}/spinr-backend:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${REPO}/spinr-backend:${TAG}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_SHA_INPUT: ${{ inputs.image_sha }}
+          REPO: ${{ github.repository }}
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
@@ -119,9 +122,9 @@ jobs:
       - name: Wait for signed image to exist in GHCR
         env:
           COSIGN_EXPERIMENTAL: "1"
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: |
           set -uo pipefail
-          IMAGE_REF="${{ steps.image.outputs.ref }}"
           echo "Waiting for ${IMAGE_REF} to exist and be cosign-signed"
           echo "(ci.yml's docker-image-scan job: backend-test ~13-14 min, then build+push+sign) ..."
           for i in $(seq 1 30); do
@@ -152,9 +155,10 @@ jobs:
       # changed to stamp it too.
       - name: Deploy signed image to Fly.io
         working-directory: backend
-        run: flyctl deploy --image "${{ steps.image.outputs.ref }}" --config fly.toml --ha=false
+        run: flyctl deploy --image "${IMAGE_REF}" --config fly.toml --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
 
       - name: Ensure mixed pool (2 warm 4 GB + 6 burst 2 GB)
         run: flyctl scale count app=2 burst=6 --region yyz -a "${FLY_APP}" --yes

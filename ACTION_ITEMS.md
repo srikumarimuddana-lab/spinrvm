@@ -27978,6 +27978,62 @@ as evidence that the thing it configures exists.
 - **Files:** the 8 files listed above, `backend/scripts/run_migrations.py`
   (`NEVER_APPLY` skip-list, for the 4 correctly-excluded ones).
 
+### C126. `backend-test`'s 20-minute CI timeout was raised to 30 as a stopgap (CR #5541) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
+
+- [ ] **Status:** OPEN — found 2026-09-20 while driving PR #5536/#5537 to
+  green: the job's three real steps (mocked-DB pytest suite with coverage,
+  a direct-pool real-Postgres suite, an RLS role-level real-Postgres suite)
+  share one 20-minute budget. One run passed with 12 seconds to spare;
+  a near-identical diff was killed by the timeout mid-suite (`cancelled`,
+  not a real test failure). `.github/workflows/ci.yml`'s `backend-test`
+  `timeout-minutes` was bumped 20→30 in CR #5541 to restore real margin.
+  `docs/audit/2026-09-05-engineering-director-review-round3.md:782`
+  predicted this exact failure mode two weeks earlier ("No pytest-xdist on
+  a 20-minute job; the suite will hit the timeout").
+- **Why this matters:** 30 minutes is evidence-based headroom, not a
+  permanent fix — if the suite's runtime keeps growing run over run, the
+  new ceiling gets eaten the same way the old one did, and without this
+  entry that repeats as a fresh "mystery CI red" investigation instead of
+  a known, prioritized item (per the `spinr-cicd-infra-reviewer` review
+  that flagged this gap on CR #5541's PR).
+- **Action:** a human or future session should decide between (1) adding
+  `pytest-xdist` for parallel execution — parallel-safety of the
+  direct-pool/RLS suites' real-Postgres fixtures is unverified and would
+  need checking first — or (2) extracting `Run RLS role-level tests (real
+  Postgres)` into its own job with its own Postgres service container and
+  timeout, reviewing interaction with `needs: [backend-test]` dependents
+  (`ci.yml` lines ~522, ~598, ~1082, ~1213, ~1330). Both were considered
+  and deliberately deferred in CR #5541 as higher-risk than a timeout bump
+  for an urgent-reliability fix, not overlooked.
+- **Files:** `.github/workflows/ci.yml` (`backend-test` job).
+
+### C127. `deploy-fly-signed-image.yml`'s hardcoded 30-minute image-wait budget no longer has margin against the worst-case `backend-test` → `docker-image-scan` chain
+
+- [ ] **Status:** OPEN — found 2026-09-20 by the `spinr-cicd-infra-reviewer`
+  review of CR #5541 (see C126). This experimental, `workflow_dispatch`-only
+  workflow (not wired to `push`, not on the production deploy path — see
+  C121) polls for a GHCR-signed image with a 30-attempt × 60s = 30-minute
+  budget, sized against a comment estimate of "backend-test ~13-14 min,
+  then build+push+sign." The real worst-case chain it depends on is
+  `backend-test` (now `timeout-minutes: 30`, C126) →
+  `docker-image-scan` (`timeout-minutes: 10`, `needs: [backend-test]`) = 40
+  minutes worst case, i.e. the poll can now time out 10 minutes before a
+  slow-but-successful `backend-test` run even finishes. This coupling was
+  already unverified before C126's change (the workflow's own comments
+  note the wait has never been exercised end-to-end against a real run);
+  C126 makes the gap wider, not new.
+- **Why this matters:** low severity today because the workflow is
+  manual/opt-in only, but whoever eventually promotes
+  `deploy-fly-signed-image.yml` off manual-dispatch-only needs to revisit
+  this budget first, or a legitimate slow-but-passing deploy will be
+  reported as a poll timeout.
+- **Action:** before promoting this workflow to any automatic trigger,
+  raise its image-wait budget to match the current worst-case chain (40+
+  min) or make it read the actual upstream job timeouts instead of a
+  hardcoded estimate.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
+  poll, ~line 129).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

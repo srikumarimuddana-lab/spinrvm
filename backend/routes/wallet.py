@@ -193,9 +193,7 @@ async def top_up_wallet(
                 )
             )
 
-        stripe_customer_id, ephemeral_key = await with_customer_repair(
-            current_user["id"], stripe_secret, _ephemeral
-        )
+        stripe_customer_id, ephemeral_key = await with_customer_repair(current_user["id"], stripe_secret, _ephemeral)
 
         intent = await asyncio.to_thread(
             lambda: stripe.PaymentIntent.create(
@@ -243,7 +241,17 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
     if ride.get("status") != "completed":
         raise HTTPException(status_code=400, detail="ERR_RIDE_NOT_PAYABLE")
-    server_fare = _d(ride.get("total_fare", 0))
+    # The authoritative amount owed is grand_total (total_fare + area fees +
+    # tax − discount, see services/fare_service.py); total_fare is the PRE-TAX
+    # subtotal. This band used to be pinned to total_fare while the RPC guard
+    # it calls below reads COALESCE(grand_total, total_fare, 0) with a 0.02
+    # tolerance (migrations/111), so on any ride carrying tax the endpoint was
+    # unsatisfiable: sending grand_total tripped ERR_FARE_EXCEEDED here, and
+    # sending total_fare tripped the RPC's fare_underpaid. Mirror the RPC's
+    # COALESCE exactly — an explicit None check, not `or`, so a legitimately
+    # zero grand_total is not treated as missing.
+    _grand = ride.get("grand_total")
+    server_fare = _d(_grand if _grand is not None else ride.get("total_fare", 0))
     debit_amount = _d(req.amount)
     if debit_amount > server_fare + _d("0.01"):
         raise HTTPException(status_code=400, detail="ERR_FARE_EXCEEDED")

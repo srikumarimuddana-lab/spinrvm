@@ -96,24 +96,30 @@ jobs:
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
-    # CR #5579 -- STOPGAP, not a fix. Raised 20 -> 35.
+    # STOPGAP, not a fix -- raised 20 -> 35. Two independent CRs landed on
+    # this same job within days of each other, each observing a near-miss
+    # timeout-kill on an unrelated diff:
+    #   - CR #5541 (PR #5536/#5537): ~12s slack on a pass, one real kill at
+    #     20:05 -- proposed 30.
+    #   - CR #5579 (PR #5571, this branch): 16s slack on `main` itself (run
+    #     35524206539, 19m 44s), then a kill at 20m 15s from 26 new tests
+    #     worth ~1.3s -- proposed 35.
+    # Both point at the same root cause: a 20-minute budget with single-digit
+    # seconds of real headroom, so which PR happens to pass is closer to a
+    # coin flip than a verdict on what that PR changed. Taking the larger of
+    # the two proposed values rather than re-litigating which CR "wins" --
+    # 35 buys real headroom now (confirmed: this PR's own run finished in
+    # 16m45s under the new budget).
     #
-    # At 20 this job was running at ~99% of its own limit on `main`: run
-    # 35524206539 (`be8fa96`) succeeded in 19m 44s, i.e. 16 seconds of
-    # headroom. Runner variance is far larger than 16s, so whether any given
-    # PR passed this blocking gate was close to a coin flip, independent of
-    # what the PR changed -- PR #5571 was killed at 20m 15s having added 26
-    # tests worth ~1.3s. A blocking gate that cannot distinguish 1.3s from
-    # noise trains people to re-run rather than read, which is how a real
-    # failure eventually gets waved through.
-    #
-    # 35 buys real headroom now. It does NOT address why the suite takes ~20
-    # minutes (15,623 tests; the main pytest step is ~16m 33s of the total,
-    # with the RLS tier ~1m 53s and direct-pool ~5s). CR #5579 keeps the
-    # structural work open and recommends profiling (`--durations=50`) BEFORE
-    # choosing between splitting the RLS/direct-pool steps into their own job
-    # or sharding the main step across a matrix -- a number picked here
-    # without that data would just be guessing again in a few months.
+    # Neither number is a structural fix. The job takes ~20 minutes because
+    # it runs three real tiers (mocked-DB suite + direct-pool + real-Postgres
+    # RLS; ~15,623 tests, ~16m33s/1m53s/~5s respectively) in sequence. CR
+    # #5579 stays open and recommends profiling (`--durations=50`) BEFORE
+    # choosing between splitting those tiers into their own job or sharding
+    # the main step across a matrix -- a number picked without that data
+    # would just be guessing again in a few months. If runtime keeps
+    # climbing run over run even at 35, that's the same open perf
+    # investigation, not another timeout bump.
     timeout-minutes: 35
     needs: [detect-changes]
     if: |

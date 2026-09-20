@@ -29,7 +29,7 @@ Three separate, real bugs in `shared/store/authStore.ts`'s `logout`/`setTokens` 
 - Introduced `revokeAllowed = options?.revokeServerSession !== false` (the caller's *intent* only, no token check) as the gate for the server-side `/auth/logout` call, combined with whichever credential (persisted or in-memory) is actually known by the time the locked callback runs. `liveCredential` (unchanged definition) is still used only to decide whether to fire the go-offline PUT, which still legitimately needs an in-memory token.
 - `setTokens()` now increments `loginGeneration` synchronously, before calling `withSessionLock(...)`, mirroring how `logout()` already captures its own generation synchronously.
 - Post-fix, `spinr-security-auditor` flagged that fully decoupling the go-offline PUT from the lock (fix #1) introduced a new *operational* risk: `logout()` could now resolve — and its caller navigate away / the app background — before that PUT completes, silently leaving `drivers.is_online = true` stuck server-side. Addressed by racing the PUT against `sessionWork` and a 3-second timeout (outside the lock, so it still can't reintroduce the deadlock), with the timer cleared as soon as anything settles so it never lingers.
-- `driver-app/app/driver/(tabs)/profile.tsx`'s `handleLogoutAll` now always navigates to `/login` in a `finally`, even if `logoutAll()` throws — matching the test's documented intent for a "sign out of all devices" (lost/stolen-phone) flow: never leave the user sitting on an authenticated screen because a network error occurred, given `logoutAll()` itself already falls through to a local `logout()` on failure regardless.
+- **Correction (post-push, while resolving a merge conflict against `main`):** this entry originally said `handleLogoutAll` was changed to always navigate to `/login` in a `finally`, even on failure. That was wrong and has been reverted. `main` had independently landed the identical `authStore.ts` diagnosis (a second team member/session reached the same three root causes), and while resolving the resulting merge conflict it surfaced that `handleLogoutAll`'s try/catch-with-toast-and-stay-on-screen behavior was itself a **deliberate, dated product decision** — commit `d1c106e3` ("fix(driver): report failed session cleanup before navigating", 2026-09-15) intentionally replaced an earlier always-navigate `finally` with exactly this catch-and-toast pattern. The failing test this task set out to fix was stale relative to that decision, not the source code — `main`'s independent fix corrected this by splitting the one "even on failure" test into a success-path test and a separate failure-path test asserting `router.replace` is **not** called and the error toast **is** shown, which is what shipped here instead. No source change to `handleLogoutAll` remains in this diff; the file is back to its pre-CR-2026-035 state.
 
 ## 4. Risk & impact on existing functionality
 
@@ -45,7 +45,7 @@ Three separate, real bugs in `shared/store/authStore.ts`'s `logout`/`setTokens` 
 ## 5. User-experience effect
 
 - Rider and driver: sign-out (single-device and "sign out of all devices") now completes without occasionally hanging when a slow network call for driver go-offline status overlaps a fresh login elsewhere (rare, session-management edge case — no normal-path UX change for a user who isn't actively racing a login against a logout).
-- Driver-specific: "Sign out of all devices" now always lands on the login screen, even if the network revoke call fails — previously it would show an error toast and leave the driver on the profile screen while still nominally logged out locally in some failure paths. This is a safety-relevant fix for the lost/stolen-phone use case this button exists for.
+- `handleLogoutAll`'s own UX is unchanged by this diff (see the correction in §3) — it still shows an error toast and stays on the profile screen on failure, per the deliberate 2026-09-15 product decision in `d1c106e3`.
 - Not visible mid-session to someone already using the app in a normal flow — this only changes behavior during the sign-out/sign-in actions themselves.
 
 ## 6. Files modified
@@ -53,8 +53,9 @@ Three separate, real bugs in `shared/store/authStore.ts`'s `logout`/`setTokens` 
 | File path | What changed | Why |
 |---|---|---|
 | `shared/store/authStore.ts` | `logout()`: go-offline PUT no longer awaited inside the session lock (now raced with a bounded timeout outside it); `revokeAllowed` replaces the stale `liveCredential` gate for the `/auth/logout` call. `setTokens()`: `loginGeneration++` moved to before `withSessionLock(...)` is called. | Fix the deadlock, the missed server-side revoke, and the generation-ordering race — root causes of CR-2026-035's 3 failing tests. |
-| `driver-app/app/driver/(tabs)/profile.tsx` | `handleLogoutAll`'s `onPress` now navigates to `/login` in a `finally`, not only on the success path of a `try`. | Match the lost/stolen-phone safety intent the failing test documents: never strand the user on an authenticated screen because the revoke-all network call failed. |
 | `docs/change-log/2026-09-20-auth-logout-race-fixes-cr-2026-035.md` | This file. | Mandatory Change Impact Log for a live-tested auth surface. |
+
+Note: `driver-app/app/driver/(tabs)/profile.tsx` was touched and then reverted during this task (see the correction in §3) — it carries no net change in the final diff.
 
 ## 7. Before / after
 
@@ -107,30 +108,7 @@ if (goOffline) {
 return sessionWork;
 ```
 
-```tsx
-// Before — driver-app profile.tsx handleLogoutAll
-onPress: async () => {
-  try {
-    await logoutAll();
-    router.replace('/login' as any);
-  } catch {
-    showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
-  }
-},
-```
-
-```tsx
-// After
-onPress: async () => {
-  try {
-    await logoutAll();
-  } catch {
-    showToast('error', 'Sign Out Failed', 'Your other sessions may not have been fully revoked, but you have been signed out on this device.');
-  } finally {
-    router.replace('/login' as any);
-  }
-},
-```
+`driver-app/app/driver/(tabs)/profile.tsx`'s `handleLogoutAll` has no before/after here — it was edited and then reverted to its original form during this task; see the correction in §3.
 
 ## 8. Rollback plan
 
@@ -138,7 +116,7 @@ onPress: async () => {
 
 ## 9. Verification performed
 
-- [x] Automated tests run: targeted (`driverProfileScreen.test.tsx`, `authStore.refreshRace.test.ts`, `authStore.initialize.test.ts` — 63/63 pass) and full suite for both apps after a clean `yarn install --frozen-lockfile` reinstall — driver-app 156/156 suites (1833 tests), rider-app 156/156 suites (2148 tests), zero regressions.
+- [x] Automated tests run: targeted (`driverProfileScreen.test.tsx`, `authStore.refreshRace.test.ts`, `authStore.initialize.test.ts` — 63/63 pass pre-merge) and full suite for both apps, re-run again after merging `main` (which had independently landed the same `authStore.ts` fix plus unrelated changes) and after a clean `yarn install --frozen-lockfile` reinstall — driver-app 156/156 suites (1834 tests), rider-app 157/157 suites (2153 tests), zero regressions.
 - [x] `tsc --noEmit` clean on both apps.
 - [ ] Manual repro steps followed in staging — **not done**; no real device/staging environment available in this sandbox. All verification is via the Jest suites above (mocked `apiClient`/SecureStore), not a real backend or real SecureStore.
 - [x] Blast-radius grep performed: every `logout()`/`setTokens()`/`logoutAll()` call site across rider-app, driver-app, and `shared/` (listed in §4).

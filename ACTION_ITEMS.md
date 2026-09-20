@@ -26545,6 +26545,12 @@ how much they de-risk a public launch._
   finding from this entry's own C108 below — filed separately as C123 (after three numbering
   collisions: first with the real C108, then with an unrelated, concurrently-filed C116, then
   with a third, unrelated, concurrently-filed C121).**
+  **Applied to production (2026-09-20), later same day:** migration 430 merged via #5539 and was
+  applied directly to production the same session, with explicit user sign-off. While confirming
+  the rollout, found and fixed a second, unrelated issue on `corporate_accounts` — an out-of-band
+  admin RLS policy no migration file ever created — see **C124** for the full writeup. Also found
+  8 other genuinely-pending migrations unrelated to this work, deliberately left untouched and
+  filed as **C125** rather than silently applied.
 - **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
   `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
   RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
@@ -27623,6 +27629,89 @@ as evidence that the thing it configures exists.
 - **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
   `driver-app/utils/locationIntegrity.ts` (not yet inspected for this
   issue).
+
+### C124. `corporate_accounts` carried a second, out-of-band admin RLS policy that no migration file ever created — CLOSED same day
+
+- [x] **Status:** CLOSED (2026-09-20) — found while verifying migration 430's
+  production rollout, fixed same session. See
+  `docs/change-log/2026-09-20-c124-stray-corporate-accounts-admin-policy.md`
+  for the full writeup.
+- **What was wrong:** production's `corporate_accounts` had a policy named
+  `"Admin full access for corporate accounts"` (FOR ALL, TO authenticated,
+  `USING (users.role = 'admin')`, no WITH CHECK) that `git log --all -S`
+  across every branch/commit confirms no migration file in this repo's
+  history ever created. Migration 17 (checksum-verified unedited since
+  application) creates a *differently*-named policy
+  (`"Admin full access corporate_accounts"` — no "for", underscore not
+  space); migration 416 correctly dropped that exact one. The stray policy
+  is untracked drift, most likely created out-of-band via Supabase's
+  dashboard/SQL editor at some point outside this table's migration history.
+- **Why it mattered:** RLS ORs permissive policies together for the same
+  command, so this policy independently granted `SELECT` to any
+  `role = 'admin'` JWT regardless of migration 430's `USING (false)` deny
+  policy on the same table — a real, if currently dormant, access path
+  migration 430 didn't know to close because nothing in the repo's history
+  referenced it. Currently unreachable for the same reason everything else
+  in this family is (migration 256's CHECK constraint blocks
+  `role = 'admin'` from ever existing), and the write half was already
+  independently blocked at the grant layer by migration 416's REVOKE.
+- **Fix:** `backend/migrations/431_drop_stray_corporate_accounts_admin_policy.sql`
+  — `DROP POLICY IF EXISTS` on the exact stray name, verified byte-exact via
+  `pg_get_expr` before dropping. New regression test
+  `test_stray_admin_policy_removed_by_431` in
+  `test_corporate_accounts_super_admin_fix.py` manufactures the drifted
+  state directly (the RLS test harness never had it, since it only builds
+  schema by replaying migration files) and proves both the hole and the fix.
+  Checked all 10 sibling tables migration 430 touched for the same kind of
+  drift — none found; isolated to `corporate_accounts`.
+- **Applied to production same session**, with explicit user sign-off,
+  alongside migration 430 — see the change-log entry's "Verification
+  performed" section for the exact apply path (this sandbox has no
+  `DATABASE_URL`, so `run_migrations.py` couldn't be used directly; applied
+  via a verified, direct SQL path instead with the tracking row inserted to
+  match). Verified post-apply: `corporate_accounts` now shows exactly one
+  policy, migration 430's.
+- **Files:** `backend/migrations/431_drop_stray_corporate_accounts_admin_policy.sql`,
+  `backend/tests/rls/conftest.py`,
+  `backend/tests/rls/test_corporate_accounts_super_admin_fix.py`.
+
+### C125. Production is missing 8 pending migrations beyond 430/431 — unreviewed, none applied
+
+- [ ] **Status:** OPEN — found 2026-09-20 while confirming migration 430 was
+  actually applied to production. Comparing the full `backend/migrations/`
+  file list against production's `schema_migrations` table (by filename, not
+  the misleading lexicographic `ORDER BY ... DESC`) found 13 files never
+  applied. 4 of those are correctly, deliberately excluded forever via
+  `run_migrations.py`'s own `NEVER_APPLY` skip-list (`70_fix_financial_events_rls.sql`,
+  `78_fix_pii_function_search_path.sql`, `137_fix_pii_encrypt_pgsodium_perms.sql`,
+  `26_rls_coverage_gap.sql` — see that constant's own inline reasons). The
+  remaining 9 are genuinely pending, unreviewed by this session: one is
+  migration 430 itself (now applied, see C107/C124), the other 8 are not:
+  - `379_enable_rls_settings_document_files_driver_imports.sql`
+  - `424_settings_minimal_fcm_offer_payload_enabled.sql`
+  - `425_route_interleaved_capture_flag.sql`
+  - `426_service_area_scheduled_rides.sql`
+  - `427_background_location_delivery_flag.sql`
+  - `428_driver_stationary_tracking_flag.sql`
+  - `428_posthog_session_replay.sql`
+  - `429_agent_action_log.sql`
+- **Why this matters:** none of these 8 have been read, reviewed, or applied
+  by this session — filed here explicitly instead of silently applying or
+  silently ignoring them, per the user's explicit choice (asked via
+  `AskUserQuestion`: apply only 430, leave the rest for separate review) when
+  this was discovered. Names suggest settings/feature flags and a scheduled-
+  rides feature, not obviously risky, but that's an inference from filenames
+  alone, not a review.
+- **Action:** a human or a future session should (1) read each of these 8
+  files in full, (2) confirm none depend on something only a skipped/never-
+  applied migration would have provided, (3) apply them via the normal
+  `run_migrations.py --dry-run` then real-run path (needs `DATABASE_URL`,
+  which this sandbox doesn't have) rather than the manual direct-SQL path
+  used for 430/431, since that path is a deliberate one-off for an
+  already-reviewed, already-merged fix — not a substitute for the real
+  runner on a batch of unreviewed files.
+- **Files:** the 8 files listed above, `backend/scripts/run_migrations.py`
+  (`NEVER_APPLY` skip-list, for the 4 correctly-excluded ones).
 
 ## Recently completed (do not redo)
 

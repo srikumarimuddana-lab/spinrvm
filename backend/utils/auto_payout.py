@@ -76,6 +76,7 @@ except ImportError:  # pragma: no cover - dual-import pattern
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
     from utils.money import dollars_to_cents  # type: ignore
+    from utils.payment_collection import payable_ride_filter  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 try:

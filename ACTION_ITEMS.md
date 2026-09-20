@@ -28081,6 +28081,42 @@ as evidence that the thing it configures exists.
 - **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
   poll, ~line 129).
 
+### C128. Self-hosted tile server has no OSM data for Riyadh — a real, product-confirmed international service area — so its admin map will render roadless even after the basemap-URL fix
+
+- [ ] **Status:** OPEN — found 2026-09-20 while diagnosing and fixing the
+  Heat Map / Live Monitoring "Failed to load map style" report
+  (admin-dashboard).
+- **Issue/gap:** `deploy/tiles/Dockerfile`'s `REGION_URL`/`EXTRA_REGION_URLS`
+  bake in only Saskatchewan and Alberta OSM extracts
+  (`saskatchewan-latest.osm.pbf`, `alberta-latest.osm.pbf`) at image build
+  time — no other region is loaded. `riyadh`/`riyadh airport` are real,
+  product-confirmed `service_areas` rows (`backend/tests/test_service_areas_public.py`,
+  migrations 263/265 — already noted elsewhere in this file as
+  "intentional (international market), not a data-hygiene concern,
+  confirmed with product"). Since `docs/change-log/2026-09-14-self-hosted-basemap-only.md`,
+  the self-hosted tile server is the *only* basemap hop for every admin
+  map when `NEXT_PUBLIC_MAP_STYLE_URL` is set — no third-party fallback.
+  So even with the map-style URL itself resolving correctly (the bug this
+  session fixed via a production redeploy), any admin map centered on
+  Riyadh will render a basemap with no roads, building outlines, or place
+  labels — the tile server has never ingested that region's data — while
+  every Saskatchewan/Alberta-area map renders normally.
+- **Why this matters:** Heat Map and Live Monitoring are the two admin
+  surfaces most likely to be viewed per-service-area. An admin filtering
+  to Riyadh will see a plausible-looking but road-less/label-less map and
+  may reasonably read that as "still broken," reopening the same report
+  this session just closed for the SK/AB areas.
+- **Action:** add a Riyadh/Saudi Arabia OSM extract to
+  `EXTRA_REGION_URLS` in `deploy/tiles/Dockerfile` and rebuild the
+  `TilesServer` Railway image, or confirm with product whether Riyadh
+  should instead fall back to a third-party basemap specifically — which
+  would need a per-service-area override, not currently supported by
+  `primaryMapStyle()`/`basemapChain()` — rather than being lumped into the
+  single self-hosted-only chain.
+- **Files:** `deploy/tiles/Dockerfile` (`REGION_URL`/`EXTRA_REGION_URLS`),
+  `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
+  `selfHostedStyleUrl()`, `primaryMapStyle()`).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

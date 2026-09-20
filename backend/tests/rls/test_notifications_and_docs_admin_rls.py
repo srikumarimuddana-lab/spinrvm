@@ -93,6 +93,37 @@ def test_admin_cannot_insert_cloud_messages(pg_cur):
         _seed_cloud_message(pg_cur, _uuid())
 
 
+def test_admin_cannot_update_cloud_messages(pg_cur):
+    """Unlike INSERT's WITH CHECK (which raises), the UPDATE-side USING
+    filter just excludes the row from the update set silently: 0 rows
+    affected, no exception -- same RLS default-deny-as-empty-set behavior
+    as test_audit_and_insurance_correction_rls.py's
+    test_authenticated_cannot_update_correction."""
+    admin = _uuid()
+    message_id = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    as_role(pg_cur, "service_role", None)
+    _seed_cloud_message(pg_cur, message_id)
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    pg_cur.execute("UPDATE cloud_messages SET title = 'changed' WHERE id = %s", (message_id,))
+    assert pg_cur.rowcount == 0
+
+
+def test_admin_cannot_delete_cloud_messages(pg_cur):
+    """Same RLS default-deny-as-empty-set behavior as UPDATE above, for
+    DELETE's USING filter."""
+    admin = _uuid()
+    message_id = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    as_role(pg_cur, "service_role", None)
+    _seed_cloud_message(pg_cur, message_id)
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    pg_cur.execute("DELETE FROM cloud_messages WHERE id = %s", (message_id,))
+    assert pg_cur.rowcount == 0
+
+
 def test_rider_cannot_select_cloud_messages(pg_cur):
     rider = _uuid()
     message_id = _uuid()
@@ -223,6 +254,35 @@ def test_admin_cannot_insert_document_requirements(pg_cur):
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         _seed_document_requirement(pg_cur, _uuid())
+
+
+def test_admin_cannot_update_document_requirements(pg_cur):
+    """Unlike INSERT's WITH CHECK (which raises), the UPDATE-side USING
+    filter just excludes the row from the update set silently: 0 rows
+    affected, no exception -- same pattern as cloud_messages above."""
+    admin = _uuid()
+    req_id = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    as_role(pg_cur, "service_role", None)
+    _seed_document_requirement(pg_cur, req_id)
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    pg_cur.execute("UPDATE document_requirements SET name = 'changed' WHERE id = %s", (req_id,))
+    assert pg_cur.rowcount == 0
+
+
+def test_admin_cannot_delete_document_requirements(pg_cur):
+    """Same RLS default-deny-as-empty-set behavior as UPDATE above, for
+    DELETE's USING filter."""
+    admin = _uuid()
+    req_id = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    as_role(pg_cur, "service_role", None)
+    _seed_document_requirement(pg_cur, req_id)
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    pg_cur.execute("DELETE FROM document_requirements WHERE id = %s", (req_id,))
+    assert pg_cur.rowcount == 0
 
 
 def test_service_role_can_write_document_requirements(pg_cur):

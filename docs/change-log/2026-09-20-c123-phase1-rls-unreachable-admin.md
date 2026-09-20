@@ -28,30 +28,49 @@ New migration `432_admin_role_rls_unreachable_phase1.sql`, applying C107's fix p
 - `audit_logs`, `push_tokens`: both `SELECT`-only, same shape as migration 430's 11 tables —
   replaced with an explicit `USING (false)` deny.
 - `cloud_messages`, `document_requirements`: both `FOR ALL` with no `WITH CHECK` — the same
-  missing-`WITH CHECK` write gap migration 416 fixed on `corporate_accounts`. Replaced with
+  missing-`WITH CHECK` shape migration 416 fixed on `corporate_accounts`. Replaced with
   `FOR ALL ... USING (false)`, which Postgres also applies as the (absent) `WITH CHECK` for
-  INSERT/UPDATE, closing that gap in this migration rather than as a separate follow-up.
+  INSERT/UPDATE. Precision note: since migration 256 already makes the admin-role predicate
+  permanently false, the write path was already just as unreachable as the read path before this
+  migration — there wasn't a live write-side gap distinct from the read-side unreachability. The
+  explicit `false` is still an improvement (clearer/more honest than an implicit fallback through
+  a broken `EXISTS`), just not literally "closing a gap that was open."
 
 Verified against live production `pg_policies` for all 4 tables immediately before writing the
 migration — text matches each table's migration file exactly, no out-of-band drift (unlike C124's
 `corporate_accounts` finding).
 
-**Genuine finding, not part of the fix itself:** `document_requirements`'s original "Admin full
-access for requirements" policy compares `public.users.id = auth.uid()` with no cast — `users.id`
-is `text`, `auth.uid()` returns `uuid`. Reproduced directly (both against a local Postgres 16
-sandbox and against production's own Postgres 17.6 via a bare `SELECT 'x'::text = gen_random_uuid()`)
-that this comparison has no valid operator and a fresh `CREATE POLICY` with this exact text fails
-outright (`operator does not exist: text = uuid`). Yet production's live copy of this policy exists
-today and evaluates without error — confirmed with a real `SET LOCAL ROLE authenticated` + `SELECT`
-against production, which returned rows cleanly. Working explanation: Postgres binds a policy's
-operators once, at whatever historical `CREATE POLICY` time actually occurred (most likely when
-`users.id` had a different type), and does not re-typecheck the already-parsed expression tree
-against a column's *current* type on ordinary reads — it only breaks if something forces a fresh
-parse of the same policy text today, which a fresh schema (like this repo's RLS test harness) does.
-This was not traced further (which migration originally changed `users.id`'s type is unconfirmed)
-since it doesn't change the fix: the policy is dropped and replaced regardless of whether it errors
-or silently no-ops today. It does mean the *original* policy cannot be replayed verbatim in the RLS
-test harness — see the harness changes below.
+**Genuine finding, not part of the fix's correctness (but it does affect the documented rollback —
+see §8):** `document_requirements`'s original "Admin full access for requirements" policy compares
+`public.users.id = auth.uid()` with no cast — `users.id` is `text`, `auth.uid()` returns `uuid`.
+Reproduced directly (both against a local Postgres 16 sandbox and against production's own
+Postgres 17.6 via a bare `SELECT 'x'::text = gen_random_uuid()`) that this comparison has no valid
+operator and a fresh `CREATE POLICY` with this exact text fails outright (`operator does not
+exist: text = uuid`).
+
+Production's live `pg_policies` has this exact text stored, and an initial `SET LOCAL ROLE
+authenticated` + `SELECT` test against production returned rows without error — but the mandatory
+`spinr-migration-reviewer` pass that reviewed this change showed that test doesn't actually prove
+the clause itself is sound: `EXPLAIN (VERBOSE, COSTS OFF)` confirms Postgres constant-folds
+`(true) OR (EXISTS(<this clause>))` down to no filter at all, because `document_requirements`'
+other policy ("Public read access for requirements") is an unconditional `USING (true)` — so a
+plain `SELECT` never actually reaches the broken clause. Isolating it would need an authenticated
+UPDATE/DELETE/INSERT attempt instead, which the Public-read policy doesn't cover; that wasn't run
+against production (out of caution — no destructive test against production's live table).
+
+An initial working theory ("Postgres binds a policy's operators once at `CREATE POLICY` time and
+doesn't re-typecheck the stored expression tree against a column's later-changed type") was also
+tested by the reviewer and ruled out in its most literal form: both `ALTER TABLE users ALTER
+COLUMN id TYPE text` and `DROP TABLE users` (against a reproduction with a dependent policy in
+place) are refused outright by Postgres, which names the dependent policy in the error. So the
+divergence did not happen via ordinary ALTER/DROP DDL; the actual mechanism (a Supabase-side
+restore/fork/`pg_upgrade`-style catalog carryover, or direct catalog surgery, are the remaining
+candidates) is unresolved and not traced further here — the finding is flagged as unresolved, not
+guessed at. None of this changes the fix's correctness: `DROP POLICY IF EXISTS` doesn't require
+re-parsing the stored qual, only re-creating it does, so dropping this policy works regardless of
+which explanation is right. It does mean the *original* policy cannot be replayed verbatim in the
+RLS test harness, and cannot be used as a literal rollback step — see the harness changes below
+and §8.
 
 **Deliberately not touched in this PR:** `safety_incidents` and `driver_insurance_periods` (C123's
 other 2 tables) — both safety/regulatory-sensitive per the owner's explicit choice (2026-09-20,
@@ -79,6 +98,16 @@ single real backend request. Defense-in-depth correctness fix, not a live-traffi
   path, `USING (true)` for `anon` + `authenticated`) is untouched — only "Admin full access for
   requirements" is replaced.
 
+**Accepted risk, explicit rather than an oversight:** unlike `audit_logs` (migration 51) and
+`corporate_accounts` (migration 416), which each pair their RLS narrowing with a grant-layer
+`REVOKE INSERT, UPDATE, DELETE, TRUNCATE ... FROM authenticated` as a second layer of protection,
+`cloud_messages` and `document_requirements` get no such REVOKE in this migration —
+`authenticated` still holds the full baseline INSERT/UPDATE/DELETE grant, and the RLS policy is
+the *only* thing stopping a write. This is a deliberate scope decision (C123 is about the broken
+role-check pattern, not a grant-narrowing pass across every table that lacks one) flagged here so
+a future reader knows it was considered, not missed — a reasonable phase-2-or-later candidate if
+the added defense-in-depth layer is wanted.
+
 No interaction with the ride state machine or money/wallet deltas. No background loop reads or
 writes any of these 4 tables' RLS policies directly.
 
@@ -87,8 +116,10 @@ other concurrent-session test files in the last change per C107's own log): this
 fixture setup (building `cloud_messages`, `push_tokens`, `document_requirements`, none of which
 existed in the harness before) rather than modifying any existing table's fixture setup, so it
 carries none of C107's "migration 256 broke 49 unrelated tests" risk. Ran the full
-`backend/tests/rls` suite after the change: 389/389 passing (377 pre-existing + 12 new), including
-every file added by other concurrent sessions.
+`backend/tests/rls` suite after the change: 393/393 passing (377 pre-existing + 16 new — 12 from
+the initial pass, plus 4 UPDATE/DELETE tests for `cloud_messages`/`document_requirements` added
+after the mandatory review flagged that gap), including every file added by other concurrent
+sessions.
 
 ## 5. User-experience effect
 None. No rider/driver/corporate-admin/internal-admin-facing behavior change — these are all
@@ -101,7 +132,7 @@ backend-only Supabase RLS policies never reached by real traffic (service-role b
 | `backend/migrations/432_admin_role_rls_unreachable_phase1.sql` | New migration: replaces `audit_logs`/`push_tokens`'s `SELECT`-only and `cloud_messages`/`document_requirements`'s `FOR ALL` unreachable admin policies with an explicit `USING (false)` deny | Core fix |
 | `backend/tests/rls/conftest.py` | Adds fixture setup for `cloud_messages`, `push_tokens`, `document_requirements` (none built by the harness before); adds the `uuid-ossp` extension (needed by `push_tokens`/`document_requirements`'s `uuid_generate_v4()` default, never previously created by the harness); applies migration 432. Deliberately does **not** build `document_requirements`'s original admin policy (see the type-mismatch finding above) | These tables need real RLS coverage for the first time; migration 432 needs them to exist to apply |
 | `backend/tests/rls/test_audit_and_insurance_correction_rls.py` | Renamed `test_admin_authenticated_can_select_audit_logs` → `_cannot_select_`, rewritten to assert an empty result instead of a returned row; module docstring updated | Migration 432 makes the old "admin can select" assertion false, same as C107's precedent for `corporate_accounts` |
-| `backend/tests/rls/test_notifications_and_docs_admin_rls.py` | New file: first-ever RLS coverage for `cloud_messages` (admin denied SELECT+INSERT, rider denied, service-role bypass), `push_tokens` (own-token access preserved, admin denied, service-role bypass), `document_requirements` (public read preserved for anon+authenticated, admin denied INSERT, service-role bypass) | These 3 tables had zero RLS test coverage before this change |
+| `backend/tests/rls/test_notifications_and_docs_admin_rls.py` | New file: first-ever RLS coverage for `cloud_messages` (admin denied SELECT+INSERT+UPDATE+DELETE, rider denied, service-role bypass), `push_tokens` (own-token access preserved, admin denied, service-role bypass), `document_requirements` (public read preserved for anon+authenticated, admin denied INSERT+UPDATE+DELETE, service-role bypass) | These 3 tables had zero RLS test coverage before this change; UPDATE/DELETE coverage added after the mandatory review flagged INSERT-only as an incomplete pin of the FOR-ALL write-path claim |
 | `ACTION_ITEMS.md` | C123 marked phase-1-resolved / phase-2-open; corrected the item's own "7 tables" vs. 6-item list ambiguity (document_requirements has 2 independent problems, not 2 tables); phase 2's scope (including the `driver_insurance_periods` tailored-fix requirement) spelled out explicitly for whoever picks it up | Keep the backlog item accurate and actionable rather than stale once phase 1 lands |
 
 ## 7. Before/after
@@ -126,15 +157,29 @@ CREATE POLICY "cloud_messages admin RLS unreachable (service role only)"
 ```
 
 ## 8. Rollback plan
-`DROP POLICY "<table> admin RLS unreachable (service role only)"` on each of the 4 tables and
-re-create the original policy verbatim — exact text for all 4 (including
-`document_requirements`'s, confirmed byte-exact against production via a live `pg_policies` query
-before this migration ran) is in migration 432's own header comment. Zero data changes — pure RLS
-policy swap, instantly reversible via `psql`, no PITR or second deploy needed.
+For `audit_logs`, `push_tokens`, `cloud_messages`: `DROP POLICY "<table> admin RLS unreachable
+(service role only)"` and re-create the original policy verbatim — exact text (confirmed against
+production's live `pg_policies`) is in migration 432's own header comment. Verified executable.
+
+For `document_requirements`: the original policy's text cannot be replayed — see §3's finding
+above. Its rollback is `DROP POLICY "document_requirements admin RLS unreachable (service role
+only)" ON document_requirements;` alone, which leaves the table on RLS's implicit default-deny for
+that policy slot. This is functionally identical to the original (the original could never grant
+access either, whatever the mechanism that let its mismatched text persist), and
+`document_requirements`' separate "Public read access for requirements" policy is untouched by
+either the migration or this rollback step, so the driver app's actual read path is unaffected
+either way. **Correction from an earlier draft of this document:** that draft described all 4
+rollback statements as "confirmed byte-exact ... instantly reversible via psql" — true for 3 of
+the 4, but the `document_requirements` restore statement, taken literally, does not execute (the
+same type-mismatch bug §3 describes bites here too; caught by the mandatory
+`spinr-migration-reviewer` pass, which reproduced the failure directly). Corrected above rather
+than left standing.
+
+Zero data changes in either case — pure RLS policy swap, no PITR or second deploy needed.
 
 ## 9. Verification performed
 - [x] Automated tests run: full `backend/tests/rls` suite against a real local Postgres 16
-      (`TEST_DATABASE_URL` pointed at localhost) — **389/389 passed**.
+      (`TEST_DATABASE_URL` pointed at localhost) — **393/393 passed**.
 - [x] Blast-radius grep performed: every backend reader of `audit_logs`/`push_tokens`/
       `cloud_messages`/`document_requirements` (all go through the service-role Supabase client);
       every RLS test file for existing seeding of `role="admin"`/`"super_admin"` that might be
@@ -153,8 +198,9 @@ policy swap, instantly reversible via `psql`, no PITR or second deploy needed.
       admin-dashboard/rider-app/driver-app change, so `npm run build` is not applicable.
 
 ## 10. Sign-off
-- [x] Rollback plan is concrete and testable (exact original policy text confirmed byte-exact
-      against production before this migration ran).
+- [x] Rollback plan is concrete and testable (3 of 4 tables: exact original policy text confirmed
+      byte-exact against production and independently verified executable; `document_requirements`:
+      a corrected, verified-executable single-DROP rollback — see §8).
 - [x] Blast radius is stated, not assumed (grep results above, not "checked, looks fine").
 - [x] No silent behavior change to an already-shipped flow (none of these policies gate live
       traffic; explicitly confirmed via the service-role grep, not assumed).

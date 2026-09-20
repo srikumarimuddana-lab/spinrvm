@@ -743,18 +743,29 @@ def pg_conn(pg_test_dbname):
     # `text` and `auth.uid()` returns `uuid`, and CREATE POLICY fails outright
     # against that type pairing (confirmed by reproducing the exact error,
     # `operator does not exist: text = uuid`, against a fresh `users(id
-    # text)` table locally). Production's live copy of this policy still
-    # exists and evaluates without error today -- Postgres binds a policy's
-    # operators once, at CREATE POLICY time, from whatever the qual's already
-    # -parsed expression tree resolved to then, and does not re-typecheck
-    # that stored tree against the column's *current* type on every query;
-    # it only breaks if something forces a fresh parse of the same text
-    # today, which this harness's fresh schema does. So the fixed end state
-    # (migration 432's replacement policy) is real and correct, but the
-    # broken original cannot be replayed verbatim here -- migration 432's own
-    # `DROP POLICY IF EXISTS "Admin full access for requirements"` is
-    # therefore a safe no-op in this harness, same precedent as migration
-    # 431's no-op DROP for the corporate_accounts stray policy above. ---
+    # text)` table locally). Production's live pg_policies has this exact
+    # text stored, and a plain SELECT against the table as `authenticated`
+    # doesn't error -- but that's confounded, not proof the clause itself is
+    # sound: `EXPLAIN (VERBOSE, COSTS OFF)` shows Postgres constant-folds
+    # `(true) OR (EXISTS(<this clause>))` down to no filter at all, because
+    # the table's other policy ("Public read access for requirements") is an
+    # unconditional `USING (true)` -- so a plain SELECT never actually
+    # reaches this clause (verified by a spinr-migration-reviewer pass; the
+    # only way to exercise it directly would be an authenticated UPDATE/
+    # DELETE/INSERT attempt, which the Public-read policy doesn't cover).
+    # Ordinary DDL that could explain the divergence -- ALTER COLUMN TYPE on
+    # users.id, or DROP TABLE users -- is also ruled out: Postgres refuses
+    # both outright while a dependent policy exists, naming the policy in
+    # the error. How this policy's stored text ended up mismatched with the
+    # current schema is unresolved (see
+    # docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md for
+    # the full writeup); what's certain is that replaying it verbatim fails
+    # today. So the fixed end state (migration 432's replacement policy) is
+    # real and correct, but the broken original cannot be replayed verbatim
+    # here -- migration 432's own `DROP POLICY IF EXISTS "Admin full access
+    # for requirements"` is therefore a safe no-op in this harness, same
+    # precedent as migration 431's no-op DROP for the corporate_accounts
+    # stray policy above. ---
     migration_02_sql = (migrations_dir / "02_dynamic_documents.sql").read_text()
     cur.execute(_extract_create_table(migration_02_sql, "public.document_requirements"))
     cur.execute("ALTER TABLE public.document_requirements ENABLE ROW LEVEL SECURITY")

@@ -36,8 +36,8 @@
 --
 -- Rollback plan: drop each replacement policy and re-create the original
 -- verbatim (text below, taken directly from each table's own migration
--- file — 06/51/02 — and confirmed to match production via the pg_policies
--- check above):
+-- file — 06/51 — and confirmed to match production via the pg_policies
+-- check above). This is verified executable for 3 of the 4 tables:
 --
 --   DROP POLICY IF EXISTS "audit_logs admin RLS unreachable (service role only)" ON audit_logs;
 --   CREATE POLICY "Admin read audit_logs" ON audit_logs FOR SELECT TO authenticated
@@ -54,13 +54,31 @@
 --       USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text
 --                        AND users.role IN ('admin', 'super_admin')));
 --
---   DROP POLICY IF EXISTS "document_requirements admin RLS unreachable (service role only)" ON document_requirements;
---   CREATE POLICY "Admin full access for requirements" ON document_requirements FOR ALL TO authenticated
---       USING (EXISTS (SELECT 1 FROM public.users WHERE public.users.id = auth.uid()
---                        AND public.users.role = 'admin'));
+-- document_requirements is the exception: its original policy text
+-- (`public.users.id = auth.uid()`, comparing text to uuid with no cast) does
+-- NOT execute if replayed today — reproduced directly, both by a
+-- spinr-migration-reviewer pass and independently beforehand: a fresh
+-- `CREATE POLICY` with this exact text raises `operator does not exist: text
+-- = uuid` against the current schema, even though this text matches what's
+-- stored in production's own pg_policies right now (see
+-- docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md for the
+-- full investigation; the mechanism that let it reach production in this
+-- state is unresolved). Restoring it byte-for-byte is therefore not a valid
+-- rollback step, and restoring it would add nothing anyway — that clause
+-- could never grant access even when it could be created. The correct
+-- rollback for this one table is simply:
 --
--- Zero data changes — pure RLS policy swap, instantly reversible via psql,
--- no PITR or second deploy needed.
+--   DROP POLICY IF EXISTS "document_requirements admin RLS unreachable (service role only)" ON document_requirements;
+--
+-- which leaves the table on RLS's implicit default-deny for that policy
+-- slot — functionally identical to the original (unreachable either way),
+-- and the table's separate "Public read access for requirements" policy
+-- (untouched by this migration) continues to work exactly as before.
+--
+-- Zero data changes — pure RLS policy swap. 3 of the 4 statements above are
+-- instantly reversible via psql; document_requirements' rollback is the
+-- one-line DROP above, not a restore. No PITR or second deploy needed for
+-- any of the 4.
 -- =============================================================================
 
 DROP POLICY IF EXISTS "Admin read audit_logs" ON audit_logs;

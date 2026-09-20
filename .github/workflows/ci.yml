@@ -96,7 +96,25 @@ jobs:
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # CR #5579 -- STOPGAP, not a fix. Raised 20 -> 35.
+    #
+    # At 20 this job was running at ~99% of its own limit on `main`: run
+    # 35524206539 (`be8fa96`) succeeded in 19m 44s, i.e. 16 seconds of
+    # headroom. Runner variance is far larger than 16s, so whether any given
+    # PR passed this blocking gate was close to a coin flip, independent of
+    # what the PR changed -- PR #5571 was killed at 20m 15s having added 26
+    # tests worth ~1.3s. A blocking gate that cannot distinguish 1.3s from
+    # noise trains people to re-run rather than read, which is how a real
+    # failure eventually gets waved through.
+    #
+    # 35 buys real headroom now. It does NOT address why the suite takes ~20
+    # minutes (15,623 tests; the main pytest step is ~16m 33s of the total,
+    # with the RLS tier ~1m 53s and direct-pool ~5s). CR #5579 keeps the
+    # structural work open and recommends profiling (`--durations=50`) BEFORE
+    # choosing between splitting the RLS/direct-pool steps into their own job
+    # or sharding the main step across a matrix -- a number picked here
+    # without that data would just be guessing again in a few months.
+    timeout-minutes: 35
     needs: [detect-changes]
     if: |
       always() && (

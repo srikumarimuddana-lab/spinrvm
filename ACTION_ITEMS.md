@@ -19571,6 +19571,45 @@ how much they de-risk a public launch._
     only then does a recurring/periodic "keep `staging` in sync with
     `main`" task make sense — that is future work gated on E1, not
     something to build today against the current stray branch.
+  - **Correction (2026-09-20, same day): the "unrelated histories" premise
+    above was wrong — it was a shallow-clone artifact.** The session that
+    wrote the entry above ran `git merge-base origin/staging origin/main`
+    against a **shallow** local clone (`git rev-parse
+    --is-shallow-repository` → `true`), which had truncated `main`'s
+    history at commit `ec7d497b0` (2026-09-15) — a normal, non-root commit
+    that only *looked* like a history root because its real parent object
+    wasn't fetched. After `git fetch --unshallow`, the real picture is:
+    - `git merge-base origin/staging origin/main` returns a real common
+      ancestor: `1aa13f805186b5d12fc6dbdc8fc63890fb99bf46` (2026-02-11).
+      `main` has 8,029 commits since that point; `staging` has 7,183 —
+      both grew independently after a genuine divergence, not from two
+      unrelated projects.
+    - `staging`'s commit authors are the same team as `main`'s:
+      `ittalenthireca-sketch`, `srikumarimuddana-lab`/Kiran Kumar,
+      dependabot, and Claude Code sessions (3,530 of `staging`'s commits).
+    - `staging`'s own history contains **141 merge commits pulling `main`
+      into it** ("Merge origin/main into staging" and equivalents),
+      running steadily through **2026-09-04**, after which the syncing
+      simply stopped — this reads as a deliberately-maintained
+      integration branch (almost certainly early prep for E1's staging
+      environment) that went stale when whatever kept syncing it stopped
+      running, not a stray/leftover artifact.
+    - **Corrected recommendation: do not delete `origin/staging`.** A
+      `git push origin --delete staging` was attempted before this
+      correction was written and **failed** (403 from this session's git
+      write path — no branch-delete permission here), so nothing was
+      lost. The real open decision for a human is whether to (a) properly
+      reconcile `staging` with `main` via a reviewed merge PR now that a
+      common ancestor exists (mechanically possible, unlike the original
+      false premise), or (b) make a documented decision to retire it in
+      favor of a fresh `staging` cut once E1's real infra lands — either
+      way, a conscious choice, not a deletion made on the wrong premise.
+    - **Root-cause note for future sessions**: `git merge-base` returning
+      empty and `git merge` refusing "unrelated histories" is not proof
+      the histories are actually unrelated — check
+      `git rev-parse --is-shallow-repository` first, and `git fetch
+      --unshallow` before drawing that conclusion, especially on this
+      repo's very large history.
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated

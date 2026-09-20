@@ -2,6 +2,7 @@
 notifications.py – In-app notification system for Spinr.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -23,6 +24,12 @@ except ImportError:
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
+
+# Holds strong references to in-flight fire-and-forget WS-push tasks so the
+# event loop can't garbage-collect one mid-run (a documented asyncio gotcha —
+# a Task with no other reference may be collected before it completes).
+# Self-cleaning via the done_callback below.
+_background_ws_tasks: set = set()
 
 api_router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -426,6 +433,50 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
     return {"success": True}
 
 
+@api_router.delete("/{notification_id}")
+async def delete_notification(notification_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a single notification owned by the requesting user.
+
+    Ownership check mirrors mark_as_read/mark_all_read above: every filter
+    is scoped to {"id": ..., "user_id": current_user["id"]} so a caller can
+    never delete someone else's row. 404 (not a silent no-op) when the id
+    doesn't exist or isn't owned by this user, so the client can tell "gone"
+    apart from "not yours" without leaking which case it was.
+    """
+    existing = await db_supabase.get_rows(
+        "notifications",
+        {"id": notification_id, "user_id": current_user["id"]},
+        limit=1,
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await db_supabase.delete_many(
+        "notifications",
+        {"id": notification_id, "user_id": current_user["id"]},
+    )
+    return {"success": True}
+
+
+@api_router.delete("")
+async def clear_notifications(
+    read_only: bool = Query(False),
+    current_user: dict = Depends(get_current_user),
+):
+    """Clear notifications for the requesting user.
+
+    Default (no ``read_only``) clears every notification for this user.
+    ``?read_only=true`` clears only already-read ones, so the app can offer
+    both a non-destructive "clear read" and a destructive "clear all" from
+    one endpoint. Always scoped to ``user_id == current_user["id"]`` — a
+    single filtered DELETE, no loop over rows (no N+1 here).
+    """
+    filters: Dict[str, Any] = {"user_id": current_user["id"]}
+    if read_only:
+        filters["is_read"] = True
+    await db_supabase.delete_many("notifications", filters)
+    return {"success": True}
+
+
 async def _global_throttle_info() -> Dict[str, Any]:
     """Read-only quiet-hours/cap info for a future settings screen.
 
@@ -545,4 +596,64 @@ async def create_notification(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("notifications", notification)
+    # Fire-and-forget: create_notification() is called synchronously from
+    # many request-handling paths across the codebase, some latency-
+    # sensitive (see CLAUDE.md's anti-pattern note on awaiting a slow
+    # side-effect inline in a request handler). Scheduling this as a task
+    # instead of awaiting it means a slow/stuck socket send can never add
+    # latency to the caller — the notification DB row (the durable,
+    # required side effect) is already committed by the time this line
+    # runs either way.
+    ws_task = asyncio.create_task(_emit_new_notification_ws(user_id, notification))
+    _background_ws_tasks.add(ws_task)
+    ws_task.add_done_callback(_background_ws_tasks.discard)
     return notification
+
+
+async def _emit_new_notification_ws(user_id: str, notification: Dict[str, Any]) -> None:
+    """Best-effort WS push for a freshly-created notification.
+
+    The DB row above is the durable side effect and is already written by
+    the time this runs — a WS-send failure (or the very common case of the
+    recipient simply not being connected right now) must never surface as
+    an error from create_notification, since callers throughout the
+    codebase treat it as a fire-and-forget DB write.
+
+    The connection registry keys on client type ("rider_{user_id}" /
+    "driver_{user_id}", see CLAUDE.md's WebSocket-auth convention) and this
+    helper has no reliable signal for which app surface the recipient is
+    using, so it best-effort-tries both keys via the same
+    ``manager.send_personal_message`` targeted-send path the ride-event
+    code uses (``socket_manager.ConnectionManager.broadcast_ride_status``) —
+    not a new transport. ``send_personal_message`` and everything it
+    delegates to (local delivery, Redis pub/sub) already catch and log
+    their own failures internally and never raise, so the try/except below
+    is defensive belt-and-suspenders against a future change to that
+    contract, not a path that currently ever triggers.
+    """
+    try:
+        from ..socket_manager import manager
+    except ImportError:  # pragma: no cover
+        from socket_manager import manager  # type: ignore
+
+    try:
+        unread_count = await db_supabase.count_documents("notifications", {"user_id": user_id, "is_read": False})
+    except Exception as e:
+        # Best-effort push on an already best-effort path — fall back to a
+        # non-zero placeholder rather than skip the push over a count error.
+        logger.debug(f"new_notification unread_count fallback for user {user_id}: {e}")
+        unread_count = 1
+
+    ws_payload = {
+        "type": "new_notification",
+        "notification": notification,
+        "unread_count": unread_count,
+    }
+    for client_type in ("rider", "driver"):
+        client_id = f"{client_type}_{user_id}"
+        try:
+            await manager.send_personal_message(ws_payload, client_id)
+        except Exception as e:
+            # Debug, not error/warning: an offline recipient is the expected
+            # common case for a WS push, not a fault to surface loudly.
+            logger.debug(f"new_notification WS push skipped for {client_id}: {e}")

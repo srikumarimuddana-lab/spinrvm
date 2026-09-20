@@ -50,7 +50,8 @@ import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
 import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
 import { SPACING, FONT } from '@shared/utils/responsive';
-import api, { isAppCheckTokenReady } from '@shared/api/client';
+import api from '@shared/api/client';
+import { useNotifications } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { SOSTriggerResult } from '@shared/types/safety';
@@ -209,23 +210,20 @@ function DriverDashboard() {
     ? { color: colors.primary, pulsing: false }
     : null;
 
-  // Unread notification count — fetched on mount, refreshed every 60s
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  // Unread notification count — sourced from the shared notifications query
+  // cache (useNotifications, App-Check-gated internally). useDriverDashboard's
+  // WS handler merges a `new_notification` push straight into this same
+  // cache for an instant badge update; the interval below is now a periodic
+  // reconciliation fallback for whenever the socket isn't connected — was a
+  // fixed 60s poll with no WS fast path, now widened to 5 minutes since WS
+  // covers the fast path.
+  const { data: rawNotifData, refetch: refetchNotifications } = useNotifications(1);
+  const notifData = rawNotifData as { unread_count?: number } | undefined;
+  const unreadNotifCount = notifData?.unread_count ?? 0;
   useEffect(() => {
-    let cancelled = false;
-    const fetchUnread = async () => {
-      // /api/v1/notifications is App-Check-enforced in prod; polling before the
-      // App Check token is minted 401s. Skip until ready — the 60s interval
-      // retries, so the badge loads once App Check is up.
-      if (!(await isAppCheckTokenReady())) return;
-      api.get('/notifications?limit=1').then((res: any) => {
-        if (!cancelled) setUnreadNotifCount(res.data?.unread_count ?? 0);
-      }).catch(() => {});
-    };
-    fetchUnread();
-    const timer = setInterval(fetchUnread, 60 * 1000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+    const timer = setInterval(() => { refetchNotifications(); }, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [refetchNotifications]);
 
   // Speed-chip staleness tick: `location` only changes when a new GPS fix
   // arrives, but the chip needs to clamp to 0 once the CURRENT fix ages past

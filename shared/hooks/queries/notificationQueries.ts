@@ -176,6 +176,96 @@ export const useMarkAllNotificationsRead = () => {
 };
 
 /**
+ * DELETE /notifications/{id} — remove a single notification.
+ *
+ * Same optimistic-update / non-refetching-settle shape as
+ * useMarkNotificationRead: the row disappears from the cached list
+ * immediately, and unread_count is decremented only if the deleted row was
+ * unread. onError restores the previous cache snapshot(s).
+ */
+export const useDeleteNotification = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (notificationId: string) => {
+            const res = await api.delete(`/notifications/${notificationId}`);
+            return res.data;
+        },
+        onMutate: async (notificationId: string) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    const target = old.notifications.find((n: any) => n.id === notificationId);
+                    if (!target) return old;
+                    return {
+                        ...old,
+                        notifications: old.notifications.filter((n: any) => n.id !== notificationId),
+                        unread_count: target.is_read
+                            ? old.unread_count ?? 0
+                            : Math.max(0, (old.unread_count ?? 0) - 1),
+                    };
+                },
+            );
+            return { previous };
+        },
+        onError: (_err, _notificationId, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
+        },
+    });
+};
+
+/**
+ * DELETE /notifications — clear notifications for the current user.
+ * Pass `readOnly: true` to only clear already-read notifications ("clear
+ * old"); omit/false clears everything ("clear all").
+ *
+ * Same optimistic-update / non-refetching-settle shape as the other
+ * mutations in this file.
+ */
+export const useClearNotifications = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (readOnly: boolean = false) => {
+            const res = await api.delete(`/notifications${readOnly ? '?read_only=true' : ''}`);
+            return res.data;
+        },
+        onMutate: async (readOnly: boolean = false) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    if (readOnly) {
+                        return {
+                            ...old,
+                            notifications: old.notifications.filter((n: any) => !n.is_read),
+                        };
+                    }
+                    return { ...old, notifications: [], unread_count: 0 };
+                },
+            );
+            return { previous };
+        },
+        onError: (_err, _readOnly, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
+        },
+    });
+};
+
+/**
  * GET /notifications/preferences — toggle state for push/email/sms etc.
  * Long staleTime; user rarely changes these.
  */

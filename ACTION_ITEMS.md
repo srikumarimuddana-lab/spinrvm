@@ -29,7 +29,20 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — B43 ADDED (open): `dashboard-settings`
+_Last updated: 2026-09-20 — C122 ADDED (open): `locationIntegrity.test.ts`'s
+mock-GPS-detection test failed in CI on PR #5538 (an infra-only diff) but
+passed locally on the identical commit — filed as a suspected flake since
+re-running to confirm hit a 403 (no permission). Prior: C121 ADDED (open, partial): Fly deploys a
+source rebuild rather than the signed GHCR image `ci.yml` already
+builds/scans/signs. Investigated per the 2026-09-20 CI/CD audit's task 4
+("make Fly deploy the signed image directly"); found 3 concrete gaps
+(cross-workflow race condition, unverified GHCR/Fly registry auth,
+missing build-provenance stamp on the GHCR image) that make an automatic
+switchover risky on this live-tested production surface. Added
+`deploy-fly-signed-image.yml` as an opt-in, `workflow_dispatch`-only
+alternative (zero risk to the existing automatic `deploy-fly.yml` path)
+rather than rewiring production deploy while those gaps are open — see
+C121 for the promotion checklist. Prior: B43 ADDED (open): `dashboard-settings`
 visual-regression baseline is stale on `main`, merge-blocking every
 admin-dashboard PR regardless of diff — a regression of the gate B38
 closed 2026-09-04, not a new gap in the gate itself. Found while
@@ -27440,6 +27453,102 @@ as evidence that the thing it configures exists.
   implementation.
 - **Files:** `driver-app/__tests__/store/authStore.refreshRace.test.ts`,
   `driver-app/store/authStore.ts` (not yet inspected for this issue).
+
+### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 3 unresolved gaps
+
+- [ ] **Status: OPEN (partial), filed 2026-09-20.**
+- **What's wrong:** `deploy-fly.yml` has Fly's remote builder independently
+  rebuild the backend from `backend/Dockerfile` on every push to `main`,
+  while `ci.yml`'s `docker-image-scan` job separately builds, scans,
+  pushes-to-GHCR, and cosign-signs its own copy of the same image. The two
+  are same-Dockerfile rebuilds, not the same bits — what Fly actually runs
+  is never the exact artifact that was scanned and signed.
+- **Root cause:** the two workflows were built independently (image
+  signing added as a supply-chain hardening step, deploy predates it) with
+  no `needs:`/`workflow_run:` link between them.
+- **What was done:** `.github/workflows/deploy-fly-signed-image.yml` added
+  — a `workflow_dispatch`-only workflow that polls/retries for the signed
+  GHCR image (`cosign verify` in a loop, up to 30 min) and deploys it via
+  `flyctl deploy --image`. It shares `deploy-fly.yml`'s concurrency group
+  so the two can never race the same Fly app. It is **not** wired to the
+  `push: branches: [main]` trigger — `deploy-fly.yml` is unchanged and
+  remains the production path.
+- **Why not fully automatic yet — 3 concrete gaps found, none resolved:**
+  1. **Race condition:** `docker-image-scan` needs `backend-test`
+     (~13-14 min) plus build/push/sign time; a push-triggered deploy would
+     very likely fire before the image exists. The new workflow's polling
+     wait covers this in theory but has never been exercised end-to-end.
+  2. **Unverified registry auth:** no prior art in this repo for `flyctl
+     deploy --image` against a private, non-Fly registry. The
+     `docker/login-action` GHCR login step is a best-effort guess at how
+     flyctl picks up pull credentials — unproven from this sandbox
+     (egress-restricted, no live Fly credentials).
+  3. **Missing build provenance:** `docker-image-scan` builds without
+     `deploy-fly.yml`'s "Stamp build info" step, so the GHCR image ships
+     with the committed `backend/build_info.json` placeholder
+     (`"sha": null"`), not the real commit SHA. `deploy-fly.yml`'s
+     "Verify the deployed build SHA is serving" check would always fail
+     against it — deliberately omitted from the new workflow rather than
+     left in to fail every run.
+- **Risk & impact if promoted to automatic without closing the gaps:**
+  every `main` push would risk a failed/stalled production deploy (gap 1),
+  a deploy that can't authenticate to pull the image at all (gap 2), or a
+  standby-parity monitor (ACTION_ITEMS C5) that can never confirm Fly's
+  running SHA (gap 3). `deploy-fly.yml`'s rolling strategy means a failed
+  deploy fails safe (old release keeps serving) — but a systematically
+  broken deploy path is still an operational outage waiting to happen.
+- **Action to promote to automatic:** (a) manually dispatch
+  `deploy-fly-signed-image.yml` and confirm it succeeds end-to-end against
+  a real Fly app; (b) add a build-info stamp step to `ci.yml`'s
+  `docker-image-scan` job (own blast-radius review — that job is the
+  shared, always-on CVE-scan/publish path); (c) once both are proven,
+  either link the two workflows with `workflow_run:` or fold the polling
+  wait into `deploy-fly.yml` directly and retire the separate file.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (new),
+  `.github/workflows/ci.yml` (cosign-verify doc-comment accuracy fix —
+  the example referenced `:latest`, which is pushed but never signed;
+  corrected to the sha tag that's actually signed).
+
+### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
+
+- [ ] **Status: OPEN, filed 2026-09-20.**
+- **What's wrong:** `driver-app-test` failed on PR #5538 (head `f0ffbb9a1`,
+  a `.github/workflows/`-only + `ACTION_ITEMS.md` change — zero
+  driver-app files touched) with one failure:
+  `createLocationIntegrityChecker › rejects mocked, impossible-speed, and
+  teleport fixes` — `expect(c.check(fix(52.1, -106.6, 1000, { mocked:
+  true })).reason).toBe('mock_location_detected')`, got `undefined`
+  (i.e. the checker didn't flag a mocked-location fix as mocked).
+- **Why this looks like a flake, not a regression:** ran
+  `npx jest utils/__tests__/locationIntegrity.test.ts` locally against
+  the exact same commit (`f0ffbb9a1`) — all 4 tests in the suite passed,
+  including this one. A test that fails in CI and passes locally on the
+  identical commit, with a non-timeout assertion mismatch (not a hang),
+  points to timing/ordering sensitivity in the checker's mock/speed
+  logic rather than a real logic bug — but this has not been proven,
+  only inferred from one data point.
+- **Not re-run to confirm** — attempted `rerun_failed_jobs` on the CI
+  run, got `403 Resource not accessible by integration`; this session's
+  GitHub integration lacks the permission. Per CLAUDE.md's flake-handling
+  rule, re-running is the correct next step and remains undone.
+- **Not investigated further here** — out of scope for the CI/CD-audit
+  PR that surfaced it (infra-only diff); `locationIntegrity.ts` is
+  fraud/safety-adjacent (mock-GPS and impossible-speed detection feeds
+  `spinr-fraud-auditor`'s "GPS plausibility between consecutive location
+  pings" domain), so a real fix needs its own session with the time to
+  read `driver-app/utils/locationIntegrity.ts`'s mock-detection branch
+  and determine whether it's genuinely non-deterministic (e.g. depends on
+  `Date.now()`/wall-clock deltas between the two `fix()` calls in the
+  test) or a real bug that only manifests under CI's slower/loaded
+  runner.
+- **Action:** get CI re-run permission or have a human re-run the failed
+  job to confirm reproducibility before spending time on a fix; if it
+  reproduces, read the mock-detection branch in
+  `driver-app/utils/locationIntegrity.ts` against the test's `fix()`
+  helper to find the timing dependency.
+- **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
+  `driver-app/utils/locationIntegrity.ts` (not yet inspected for this
+  issue).
 
 ## Recently completed (do not redo)
 

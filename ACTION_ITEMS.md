@@ -26262,6 +26262,20 @@ how much they de-risk a public launch._
 - **Owner / follow-up:** unassigned — needs the user to name a person. This entry exists so the
   next audit of this surface finds one open item with a clear ask, not five (now six)
   independently-discovered symptoms of the same access gap.
+- **Update (2026-09-20):** partial, real change to the root cause — Railway MCP access to the
+  actual `spinrvm` production service (project `cooperative-harmony`, Railway workspace "My
+  Projects") is now available in-session, where no prior session had any Fly.io/Railway
+  CLI/dashboard access at all. This does **not** close item 4 (C97 #1) or this entry overall:
+  attempting to actually read `FIREBASE_SERVICE_ACCOUNT_JSON`'s value via
+  `mcp__Railway__list-variables` was denied outright by this session's own safety classifier
+  ("Credential Materialization") — the tool can only return env vars in plaintext, with no
+  presence-only/redacted mode, so confirming "is it set" and reading the secret are the same
+  action from this session's tooling perspective. Fly.io access, physical
+  Android/iOS/Android-Auto-DHU devices, and GitHub Actions-dispatch remain completely
+  unavailable, unchanged from this entry's original filing. Whoever is eventually named as
+  device-verification owner (see Action item 2 above) should know Railway dashboard/CLI access
+  to this specific project is real and reachable now — only the credential-read step needs a
+  human to actually look at the value.
 - **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
   carSurface.tsx`, `shared/components/CarMarker.tsx`, `admin-dashboard/e2e/visual-regression.
   spec.ts`, `.github/workflows/update-visual-baselines.yml`, `backend/core/security.py`,
@@ -26495,6 +26509,28 @@ how much they de-risk a public launch._
   can hold an admin-shaped role value, not just a one-time manual check. Both actions
   verified: a follow-up `count(*)` query confirmed zero rows remain with any of the six
   admin-shaped role strings before running `VALIDATE CONSTRAINT`.
+  **Additional hardening (2026-09-20), layered on top of the above, not a re-decision of it:**
+  a separate, parallel session reached this same entry independently (before seeing this
+  closure) and built migration `430_admin_role_rls_unreachable_service_role_only.sql` —
+  replaces the "Admin read <table>" policy on all 10 tables below **plus `disputes`**
+  (migration 142's own 10th table, sharing the identical pattern in the same file but not
+  counted in this entry's original "10" tally) with an explicit `USING (false)` policy, rather
+  than leaving the misleading `role IN (...)` text in place as the closure above chose to do.
+  Does not conflict with or revert anything above — the CHECK-constraint VALIDATE and legacy-row
+  reset stand unchanged; this is purely a policy-text clarity change on top, motivated by the
+  same "documentation vs. self-documenting code" tradeoff this closure weighed and chose
+  differently. Also adds direct RLS test coverage pinning this policy behavior for all 11 tables
+  (`test_admin_cannot_select`/`test_super_admin_cannot_select` and table-specific equivalents) —
+  the closure above didn't touch test files. **Migration 256 is deliberately NOT added to the
+  shared RLS test fixture** (an earlier draft tried this and broke 49 unrelated tests in other
+  files that seed `role="admin"`/`"super_admin"` for their own scenarios — migration 430's
+  `USING (false)` policy doesn't need 256 present to be correct, since it denies unconditionally
+  regardless of whether that role value can be seeded in the test DB). Verification (376/376
+  real-Postgres RLS tests passing, full suite) and full writeup in
+  `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`. **7 more tables found with the
+  identical `role IN ('admin','super_admin')` pattern during this review — a different, unrelated
+  finding from this entry's own C108 below — filed separately as C121 (after two numbering
+  collisions: first with the real C108, then with an unrelated, concurrently-filed C116).**
 - **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
   `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
   RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
@@ -27440,6 +27476,42 @@ as evidence that the thing it configures exists.
   implementation.
 - **Files:** `driver-app/__tests__/store/authStore.refreshRace.test.ts`,
   `driver-app/store/authStore.ts` (not yet inspected for this issue).
+
+### C121. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 7 more tables — safety/regulatory-sensitive, deliberately not fixed alongside C107
+- [ ] **Status:** OPEN — found during C107's review (2026-09-20) by grepping every migration for
+  the same pattern, rather than trusting C107's own "10 tables" scope as complete. Deliberately
+  **not** fixed in the same pass as C107 — two of these tables are safety/regulatory-critical and
+  warrant their own review rather than folding into a fix for an unrelated, lower-stakes surface.
+  (Filed as C121 after two numbering collisions: an initial "C108" collided with the real,
+  pre-existing C108 about `auth.users`; the next pick, "C116", then collided with a second,
+  unrelated, concurrently-filed C116 about `driver-map.tsx`.)
+- **Affected tables and their migrations:**
+  1. `audit_logs` (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
+  2. `safety_incidents` (migration 94, `94_safety_incidents.sql`, 2 policies: "Admin read/update"
+     + "Admin update") — **safety-critical**.
+  3. `driver_insurance_periods` (migration 64, `64_driver_insurance_periods.sql`) — **regulatory-
+     critical**: 7-year TNC insurance audit retention (CLAUDE.md's regulatory-sk.md). Its own
+     `test_admin_can_select_any_insurance_period` RLS test is untouched and still passing —
+     migration 256 was deliberately kept out of the shared RLS test fixture specifically to avoid
+     breaking this and other unrelated tests' ability to seed `role="admin"` (see
+     `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS policy
+     is untouched.
+  4. `cloud_messages` (migration 06, `06_cloud_messaging.sql`) — notifications.
+  5. `push_tokens` (migration 06, same file, "Admin read push_tokens") — notifications.
+  6. `document_requirements` (migration 02, `02_dynamic_documents.sql`) — driver docs. Uses the
+     older `role = 'admin'` form (no `super_admin` at all — the same excludes-super_admin bug
+     migration 142/416 already fixed elsewhere), so this one has two independent problems, not one.
+- **Same root cause as C107, same real-world risk profile:** production data cleanup + migration
+  256 already ensure `users.role` holds neither value today; the backend's only Supabase client
+  always uses service-role (bypasses RLS entirely), so none of these policies gate any live
+  request today — defense-in-depth correctness gaps, not active vulnerabilities.
+- **Action:** apply C107's exact fix pattern (migration 430) to these 7 tables in a follow-up
+  migration — but get explicit sign-off given `safety_incidents`/`driver_insurance_periods`'
+  sensitivity, and audit each table's existing test coverage (only `driver_insurance_periods` has
+  any RLS tests today) before touching them, per the same process C107 followed.
+- **Files:** `backend/migrations/02_dynamic_documents.sql`, `06_cloud_messaging.sql`,
+  `51_audit_logs_lockdown.sql`, `64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
+  `backend/tests/rls/test_money_and_safety_rls.py`.
 
 ## Recently completed (do not redo)
 

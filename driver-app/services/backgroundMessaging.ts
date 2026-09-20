@@ -211,6 +211,39 @@ export function registerBackgroundMessageHandlers(): void {
 
     if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return;
 
+    // #1231 finding 15 (remaining half): when the backend's
+    // minimal_fcm_offer_payload_enabled flag is on, `data.offer_minimal` is
+    // set and precise pickup/dropoff coordinates + rider_rating are stripped
+    // from `data` — hydrated instead via the new authenticated
+    // GET /drivers/rides/{ride_id}/offer fetch below. Every other field in
+    // `data` (addresses, fare, incentives, ...) is unaffected by the flag
+    // and is still read straight from `data`, exactly as before.
+    const isMinimalOffer = data.offer_minimal === 'true';
+    let fetchedOffer: Record<string, any> | null = null;
+    if (isMinimalOffer) {
+      const result = await _fetchOfferHeadless(String(data.ride_id));
+      if (result === 'gone') {
+        // Offer already claimed/expired/not-for-this-driver by fetch time —
+        // nothing live to show. Mirrors _declineHeadless's own terminal-
+        // status handling: don't retry, don't display, don't persist.
+        return;
+      }
+      fetchedOffer = result; // null on a retryable failure (network/5xx/401/403)
+      if (!fetchedOffer) {
+        // Never leave the driver with zero notification for a live offer:
+        // fall through and build the best offer we can from what `data`
+        // still has (addresses, fare, incentives, ...) — everything except
+        // the precise pin and rating, which stay undefined rather than a
+        // fabricated 0,0 (see pickup_lat below). The dashboard's own
+        // fetchActiveRide() on mount (unrelated to this fetch, always
+        // full-detail) fills those in within moments regardless.
+        console.warn(
+          '[Push] minimal-offer fetch failed for a live offer — showing a degraded offer from the FCM push alone:',
+          data.ride_id,
+        );
+      }
+    }
+
     const fare = toNum(data.fare) ?? 0;
     const totalBonus = toNum(data.total_bonus) ?? 0;
     const surgeMultiplier = toNum(data.surge_multiplier);
@@ -225,17 +258,28 @@ export function registerBackgroundMessageHandlers(): void {
       booking_id: data.booking_id || data.ride_id,
       pickup_address: data.pickup_address || '',
       dropoff_address: data.dropoff_address || '',
-      pickup_lat: toNum(data.pickup_lat) ?? 0,
-      pickup_lng: toNum(data.pickup_lng) ?? 0,
-      dropoff_lat: toNum(data.dropoff_lat) ?? 0,
-      dropoff_lng: toNum(data.dropoff_lng) ?? 0,
+      // Precise coordinates: `data` only ever carries these when the flag is
+      // off (isMinimalOffer=false). When it's on, they come ONLY from a
+      // successful fetchedOffer — deliberately left undefined rather than
+      // defaulted to 0 on a degraded/failed fetch, since a fake (0,0) pin
+      // would silently point the map at the Gulf of Guinea (see the
+      // backend's own missing-coordinate dispatch guard, routes/rides/
+      // matching.py).
+      pickup_lat: isMinimalOffer ? toNum(fetchedOffer?.pickup_lat) : (toNum(data.pickup_lat) ?? 0),
+      pickup_lng: isMinimalOffer ? toNum(fetchedOffer?.pickup_lng) : (toNum(data.pickup_lng) ?? 0),
+      dropoff_lat: isMinimalOffer ? toNum(fetchedOffer?.dropoff_lat) : (toNum(data.dropoff_lat) ?? 0),
+      dropoff_lng: isMinimalOffer ? toNum(fetchedOffer?.dropoff_lng) : (toNum(data.dropoff_lng) ?? 0),
       fare,
       distance_km: toNum(data.distance_km),
       duration_minutes: toNum(data.duration_minutes),
       rider_name: data.rider_name || undefined,
-      rider_rating: toNum(data.rider_rating),
+      // Same reasoning as the coordinates above: only ever in `data` with
+      // the flag off; otherwise only from a successful fetchedOffer.
+      rider_rating: isMinimalOffer ? toNum(fetchedOffer?.rider_rating) : toNum(data.rider_rating),
       requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
       quiet_mode: data.quiet_mode === 'true' || data.quiet_mode === 'True',
+      is_scheduled: fetchedOffer?.is_scheduled ?? (String(data.is_scheduled).toLowerCase() === 'true'),
+      scheduled_time: fetchedOffer?.scheduled_time ?? data.scheduled_time,
       countdown_seconds: toNum(data.countdown_seconds),
       offer_expires_at: data.offer_expires_at || undefined,
       surge_multiplier: surgeMultiplier,
@@ -269,6 +313,14 @@ export function registerBackgroundMessageHandlers(): void {
       try {
         const offer = offerDisplayDataFromFcm(data);
         if (offer) {
+          // offerDisplayDataFromFcm reads rider_rating straight from `data`,
+          // which is absent when isMinimalOffer is true — patch in the
+          // fetched value here rather than changing that function's own
+          // signature/shape (it has its own dedicated unit tests and one
+          // other purpose: the pure FCM-payload -> Notifee-content mapping).
+          if (typeof fetchedOffer?.rider_rating === 'number') {
+            offer.rider_rating = fetchedOffer.rider_rating;
+          }
           // Headless launch: the alert-prefs store hasn't hydrated, so read
           // it explicitly before ringing. muted kills audio only — the
           // heads-up card and full-screen wake still fire.
@@ -406,5 +458,74 @@ async function _declineHeadless(rideId: string): Promise<boolean> {
   } catch (e) {
     console.warn('[Notifee] headless decline network error:', e);
     return false;
+  }
+}
+
+// Authenticated fetch-by-ride_id for #1231 finding 15 (remaining half): when
+// the backend's minimal_fcm_offer_payload_enabled flag drops precise
+// pickup/dropoff coordinates and rider_rating from the FCM `data` payload
+// (data.offer_minimal === 'true'), this hydrates them from
+// GET /drivers/rides/{ride_id}/offer instead. Reuses the EXACT auth pattern
+// _declineHeadless above already proves works from this same headless/
+// killed-app execution context — getBackgroundAuthToken() for the driver's
+// background-persisted access token, initFirebaseServices() +
+// getAppCheckToken() for the required X-Firebase-AppCheck header — rather
+// than the issue's own suggestion of a new short-lived offer-scoped token:
+// same execution context, zero new token-signing surface, smaller blast
+// radius.
+//
+// Returns the parsed offer object on success, 'gone' when the backend says
+// there is definitively nothing left to show (404/410 — offer expired,
+// claimed, or not for this driver), or null for every other, retryable
+// failure (network error, timeout, 401/403, 5xx) so the caller can fall back
+// to a degraded-but-still-visible offer built from `data` alone instead of
+// leaving the driver with no notification at all for a live offer.
+async function _fetchOfferHeadless(rideId: string): Promise<Record<string, any> | null | 'gone'> {
+  if (!API_URL) return null;
+  let token: string | null = null;
+  try {
+    token = await getBackgroundAuthToken();
+  } catch {
+    return null;
+  }
+  if (!token) return null;
+
+  // Bounded wait: this runs on the offer-notification critical path (P95 <
+  // 2s dispatch-to-driver-phone SLA), so a hung network call must not leave
+  // the driver's phone silent indefinitely. _declineHeadless has no such
+  // bound because a slow decline only delays a background retry, not a
+  // user-visible notification.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    // App Check is enforced on /api/* in production. This headless task doesn't
+    // mount _layout, so initialize App Check here first (idempotent) — otherwise
+    // its provider is unconfigured and getAppCheckToken() returns null.
+    await initFirebaseServices();
+    const appCheckToken = await getAppCheckToken();
+    const resp = await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/offer`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
+      },
+      signal: controller.signal,
+    });
+    if (resp.ok) {
+      try {
+        return await resp.json();
+      } catch (e) {
+        console.warn('[Push] offer fetch returned an unparseable body:', e);
+        return null;
+      }
+    }
+    if (resp.status === 404 || resp.status === 410) return 'gone';
+    console.warn(`[Push] headless offer fetch returned ${resp.status}`);
+    return null;
+  } catch (e) {
+    console.warn('[Push] headless offer fetch failed:', e);
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }

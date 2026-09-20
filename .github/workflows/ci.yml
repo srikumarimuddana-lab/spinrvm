@@ -96,7 +96,31 @@ jobs:
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # STOPGAP, not a fix -- raised 20 -> 35. Two independent CRs landed on
+    # this same job within days of each other, each observing a near-miss
+    # timeout-kill on an unrelated diff:
+    #   - CR #5541 (PR #5536/#5537): ~12s slack on a pass, one real kill at
+    #     20:05 -- proposed 30.
+    #   - CR #5579 (PR #5571, this branch): 16s slack on `main` itself (run
+    #     35524206539, 19m 44s), then a kill at 20m 15s from 26 new tests
+    #     worth ~1.3s -- proposed 35.
+    # Both point at the same root cause: a 20-minute budget with single-digit
+    # seconds of real headroom, so which PR happens to pass is closer to a
+    # coin flip than a verdict on what that PR changed. Taking the larger of
+    # the two proposed values rather than re-litigating which CR "wins" --
+    # 35 buys real headroom now (confirmed: this PR's own run finished in
+    # 16m45s under the new budget).
+    #
+    # Neither number is a structural fix. The job takes ~20 minutes because
+    # it runs three real tiers (mocked-DB suite + direct-pool + real-Postgres
+    # RLS; ~15,623 tests, ~16m33s/1m53s/~5s respectively) in sequence. CR
+    # #5579 stays open and recommends profiling (`--durations=50`) BEFORE
+    # choosing between splitting those tiers into their own job or sharding
+    # the main step across a matrix -- a number picked without that data
+    # would just be guessing again in a few months. If runtime keeps
+    # climbing run over run even at 35, that's the same open perf
+    # investigation, not another timeout bump.
+    timeout-minutes: 35
     needs: [detect-changes]
     if: |
       always() && (
@@ -914,8 +938,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # eas-version: latest below always pulls eas-cli's current dependency
-      # tree, and @oclif/plugin-autocomplete bumped its own engines.node to
+      # Node 22, not 20: eas-cli's own dependency tree pulls in
+      # @oclif/plugin-autocomplete, which bumped its own engines.node to
       # >=22.0.0 in 3.3.0, independent of eas-cli's own (unchanged) >=20.0.0
       # requirement — yarn classic hard-fails the "Setup EAS" step's install
       # under any older Node. This job previously had no setup-node step at
@@ -932,7 +956,8 @@ jobs:
       - name: Setup EAS
         uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
 
       # Was previously omitted entirely, deliberately held back (ACTION_ITEMS.md
@@ -1151,9 +1176,12 @@ jobs:
 
       # INF-006: Sign the image with cosign (keyless, OIDC-based Sigstore).
       # Only runs on main so feature-branch builds don't require GHCR push
-      # permissions. The signature is written to the registry alongside the
-      # image and can be verified with:
-      #   cosign verify ghcr.io/${{ github.repository }}/spinr-backend:latest \
+      # permissions. Only the :${{ github.sha }} tag is signed below (see the
+      # "Sign image with cosign" step) — :latest is pushed but never signed,
+      # so `cosign verify` against :latest always fails. The signature is
+      # written to the registry alongside the sha-tagged image and can be
+      # verified with:
+      #   cosign verify ghcr.io/${{ github.repository }}/spinr-backend:<sha> \
       #     --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign

@@ -249,8 +249,9 @@ async def test_concurrent_claim_attempts_only_one_sends():
 
     push_calls: list[str] = []
 
-    async def record_push(user_id: str, *args, **kwargs) -> None:
+    async def record_push(user_id: str, *args, **kwargs) -> bool:
         push_calls.append(user_id)
+        return True
 
     ride = _ride("r1", "u1")
 
@@ -294,6 +295,58 @@ async def test_tick_releases_claim_on_push_failure_so_retry_is_possible():
 
     release.assert_awaited_once()
     assert "safety:checkin:sent:r1" in release.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_tick_releases_claim_when_push_returns_false_without_raising():
+    """Claim won but send_push_notification returns False (its normal,
+    fail-closed contract for a time-critical priority — it does not raise)
+    → the claim must still be released for retry, not treated as sent.
+    Regression guard: checking only for a raised exception previously let
+    this exact case look like a success and silently stop retrying."""
+    release = AsyncMock()
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
+        patch("utils.safety_checkin_loop.redis_delete", release),
+        patch("utils.safety_checkin_loop.send_push_notification", AsyncMock(return_value=False)),
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()
+
+    release.assert_awaited_once()
+    assert "safety:checkin:sent:r1" in release.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_tick_push_uses_safety_priority_and_rider_target_app():
+    """Regression guard: the check-in push must pass priority="safety"
+    (guaranteed-delivery tier, bypasses opt-out, falls back to the retry
+    queue on failure) and target_app="rider" (so the Android channel
+    picked matches a channel rider-app actually registers) — omitting
+    either previously meant a failed send was silently dropped rather
+    than retried."""
+    push = AsyncMock(return_value=True)
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
+        patch("utils.safety_checkin_loop.send_push_notification", push),
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()
+
+    push.assert_awaited_once()
+    _, kwargs = push.call_args
+    assert kwargs.get("priority") == "safety"
+    assert kwargs.get("target_app") == "rider"
 
 
 # ── _tick: escalation path ────────────────────────────────────────────────

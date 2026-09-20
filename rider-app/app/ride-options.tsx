@@ -38,7 +38,7 @@ import { Button } from '@shared/components/Button';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
-import { useResponsive, SPACING } from '@shared/utils/responsive';
+import { useResponsive, SPACING, FONT } from '@shared/utils/responsive';
 import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
 import { Analytics } from '@shared/analytics';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -970,7 +970,7 @@ function RideOptionsScreenContent() {
               </TouchableOpacity>
             </View>
           ) : isLoading ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            <View style={{ paddingHorizontal: SPACING.md, paddingTop: SPACING.sm }}>
               {[0, 1, 2].map((i) => (
                 <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 14, marginBottom: 6,
                   backgroundColor: colors.surface, borderRadius: 12 }}>
@@ -1111,7 +1111,7 @@ function RideOptionsScreenContent() {
                 </View>
               </TouchableOpacity>
               {fareBreakdownOpen && (
-                <View style={{ marginTop: 8 }}>
+                <View style={{ marginTop: SPACING.sm }}>
                   {selectedEstimate.fare_breakdown.map((line, i) => (
                     line.amount != null ? (
                       <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
@@ -1449,7 +1449,7 @@ function RideOptionsScreenContent() {
                   <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : colors.success} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.sm }}>
                     <Text style={[styles.promoRowCode, isIneligible && { color: '#9CA3AF' }]}>{promo.code}</Text>
                     <View style={[styles.promoSavingPill, isIneligible && { backgroundColor: '#F3F4F6' }]}>
                       <Text style={[styles.promoSavingPillText, isIneligible && { color: '#9CA3AF' }]}>{discountLabel}</Text>
@@ -1459,7 +1459,7 @@ function RideOptionsScreenContent() {
                     <Text style={styles.promoRowDesc}>{promo.description}</Text>
                   ) : null}
                   {isIneligible && promo.min_ride_fare > 0 && (
-                    <Text style={{ fontSize: 11, color: colors.error, marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
+                    <Text style={{ fontSize: FONT.label, color: colors.error, marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
                   )}
                 </View>
                 {isSelected

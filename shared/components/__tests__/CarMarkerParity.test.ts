@@ -43,6 +43,14 @@ const COMMON_PROPS = [
   'coordinate',
   'heading?',
   'fixTimestampMs?',
+  // Added 2026-09-14 with the Android Auto tracking work. All three are
+  // deliberately COMMON, not driver-only: the fork's whole premise is that only
+  // the course-up-camera props diverge, and a rider-side producer for any of
+  // these can be wired later without re-porting the ingest logic. rider-app
+  // passes none of them today, so its behaviour is unchanged.
+  'fixAccuracyM?',
+  'trackingV2?',
+  'courseReference?',
   'fixFeed?',
   'size?',
   'zIndex?',

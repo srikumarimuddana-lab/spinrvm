@@ -29,6 +29,7 @@ boto3 is synchronous, so the SES call runs in a worker thread via
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
@@ -39,6 +40,9 @@ except ImportError:
     from utils.pii import redact_email  # type: ignore
 
 logger = logging.getLogger(__name__)
+# RFC 2822 msg-id token (local-part / domain-ish). Rejects CR/LF and spaces so
+# a malformed content_id cannot break MIME serialization or drop the send.
+_CID_TOKEN_RE = re.compile(r"^[A-Za-z0-9@._-]+$")
 
 
 class EmailDeliveryStatus(str, Enum):
@@ -219,7 +223,8 @@ def _send_ses_sync(
     common ``AmazonSesSendingAccess`` IAM policy, which grants only
     ``ses:SendRawEmail``. We build a MIME message ourselves: a
     multipart/alternative when both text and html are supplied, otherwise a
-    single text or html part.
+    single text or html part. Attachments with a ``content_id`` become
+    ``multipart/related`` inline images (CID), not downloadable files.
 
     Runs inside asyncio.to_thread — keep it free of awaitables.
     """
@@ -254,6 +259,41 @@ def _send_ses_sync(
     return resp.get("MessageId", "")
 
 
+def _cid_token(raw: Any) -> str:
+    """Strip optional angle brackets so MIME Content-ID and HTML cid: match.
+
+    Raises ValueError if the token is empty or contains characters that
+    cannot appear in a Content-ID (CR/LF, quotes, spaces, etc.).
+    """
+    token = str(raw or "").strip().strip("<>")
+    if not _CID_TOKEN_RE.fullmatch(token):
+        raise ValueError("invalid content_id")
+    return token
+
+
+def _inline_related_part(att: Dict[str, Any]):
+    """Build a CID-related MIME part that clients render in the HTML body."""
+    from email.mime.image import MIMEImage
+
+    content = att["content"]
+    mime = (att.get("mime") or "image/png").lower()
+    subtype = mime.partition("/")[2]
+    if subtype in ("", "octet-stream"):
+        subtype = "png"
+    if subtype == "jpg":
+        subtype = "jpeg"
+    cid = _cid_token(att.get("content_id"))
+    filename = att.get("filename") or f"{cid or 'image'}.{subtype}"
+    part = MIMEImage(content, _subtype=subtype)
+    # Assign, don't add_header: add_header can quote/bracket the value so the
+    # HTML ``cid:`` token no longer matches.
+    if part["Content-ID"]:
+        del part["Content-ID"]
+    part["Content-ID"] = f"<{cid}>"
+    part.add_header("Content-Disposition", "inline", filename=filename)
+    return part
+
+
 def _build_mime(
     *,
     source: str,
@@ -267,8 +307,9 @@ def _build_mime(
     """Build the MIME message SES SendRawEmail expects.
 
     The body is multipart/alternative when both text+html are present (clients
-    prefer html, fall back to text), or a single MIMEText. When attachments are
-    supplied the whole thing is wrapped in multipart/mixed.
+    prefer html, fall back to text), or a single MIMEText. Attachments with a
+    ``content_id`` wrap that body in multipart/related (inline CID images).
+    Remaining file attachments wrap the result in multipart/mixed.
 
     ``extra_headers`` adds top-level headers (e.g. ``List-Unsubscribe`` for
     marketing mail). Subject/From/To are set here and take precedence.
@@ -287,15 +328,28 @@ def _build_mime(
     else:
         body = MIMEText(text or "", "plain", "utf-8")
 
-    if attachments:
+    inline = [a for a in (attachments or []) if a.get("content") and a.get("content_id")]
+    files = [a for a in (attachments or []) if a.get("content") and not a.get("content_id")]
+
+    if inline:
+        related = MIMEMultipart("related")
+        related.attach(body)
+        attached_inline = False
+        for att in inline:
+            try:
+                related.attach(_inline_related_part(att))
+                attached_inline = True
+            except ValueError:
+                logger.error("skipping inline attachment with invalid content_id")
+        if attached_inline:
+            body = related
+
+    if files:
         msg: Any = MIMEMultipart("mixed")
         msg.attach(body)
-        for att in attachments:
-            content = att.get("content")
-            if not content:
-                continue
+        for att in files:
             subtype = (att.get("mime") or "application/octet-stream").partition("/")[2] or "octet-stream"
-            part = MIMEApplication(content, _subtype=subtype)
+            part = MIMEApplication(att["content"], _subtype=subtype)
             part.add_header("Content-Disposition", "attachment", filename=att.get("filename", "attachment"))
             msg.attach(part)
     else:
@@ -432,12 +486,27 @@ async def _try_resend(
     if text:
         payload["text"] = text
     if attachments:
-        # Resend wants base64-encoded content per attachment.
-        payload["attachments"] = [
-            {"filename": a.get("filename", "attachment"), "content": base64.b64encode(a["content"]).decode()}
-            for a in attachments
-            if a.get("content")
-        ]
+        # Resend wants base64-encoded content per attachment. ``content_id``
+        # marks an inline CID image (HTML ``<img src="cid:...">``), not a
+        # downloadable file.
+        resend_atts = []
+        for a in attachments:
+            if not a.get("content"):
+                continue
+            item: Dict[str, Any] = {
+                "filename": a.get("filename", "attachment"),
+                "content": base64.b64encode(a["content"]).decode(),
+            }
+            if a.get("content_id"):
+                try:
+                    item["content_id"] = _cid_token(a["content_id"])
+                except ValueError:
+                    logger.error("skipping inline attachment with invalid content_id")
+                    continue
+            if a.get("mime"):
+                item["content_type"] = a["mime"]
+            resend_atts.append(item)
+        payload["attachments"] = resend_atts
 
     try:
         import httpx

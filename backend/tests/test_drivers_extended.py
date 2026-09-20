@@ -23,6 +23,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 
 USER_ID = "user_drv_ext"
 DRIVER_ID = "driver_drv_ext"
@@ -1038,7 +1039,9 @@ class TestUpdateLocationBatch:
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
             patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         ):
-            result = asyncio.run(drv.update_location_batch(batch=points, current_user={"id": USER_ID}))
+            result = asyncio.run(drv.update_location_batch(
+                batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID}
+            ))
 
         assert result == {"success": True}
 
@@ -1053,20 +1056,26 @@ class TestUpdateLocationBatch:
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
             patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         ):
-            result = asyncio.run(drv.update_location_batch(batch=batch, current_user={"id": USER_ID}))
+            result = asyncio.run(
+                drv.update_location_batch(batch=batch, background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+            )
 
         assert result == {"success": True}
 
     def test_empty_batch_returns_success(self):
         from backend.routes import drivers as drv
 
-        result = asyncio.run(drv.update_location_batch(batch=[], current_user={"id": USER_ID}))
+        result = asyncio.run(
+            drv.update_location_batch(batch=[], background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+        )
         assert result == {"success": True}
 
     def test_empty_dict_returns_success(self):
         from backend.routes import drivers as drv
 
-        result = asyncio.run(drv.update_location_batch(batch={}, current_user={"id": USER_ID}))
+        result = asyncio.run(
+            drv.update_location_batch(batch={}, background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+        )
         assert result == {"success": True}
 
     def test_offline_driver_skips_mark_present(self):
@@ -1080,7 +1089,9 @@ class TestUpdateLocationBatch:
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[offline_driver])),
             patch("backend.routes.drivers._deps.mark_present", AsyncMock()) as mp,
         ):
-            asyncio.run(drv.update_location_batch(batch=points, current_user={"id": USER_ID}))
+            asyncio.run(
+                drv.update_location_batch(batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+            )
 
         mp.assert_not_awaited()
 

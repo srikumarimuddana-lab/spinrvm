@@ -88,6 +88,49 @@ def test_html_never_calls_a_legacy_planned_snapshot_an_actual_route() -> None:
     assert "Actual route" not in html
 
 
+def test_html_cid_src_overrides_the_hotlinked_snapshot_url() -> None:
+    html = generate_receipt_html(
+        {
+            **RIDE,
+            "route_schema_version": 2,
+            "route_revision": 4,
+            "snapshot_revision": 4,
+            "route_snapshot_url": "https://maps.example/route-v4.png",
+            "route_quality": {"coverage_ratio": 0.91},
+        },
+        RIDER,
+        include_route_snapshot=False,
+        route_snapshot_src="cid:spinr-route-snapshot",
+    )
+
+    assert "https://maps.example/route-v4.png" not in html
+    assert 'src="cid:spinr-route-snapshot"' in html
+    assert "Actual route (revision 4)" in html
+    assert "A permanent map copy is attached" not in html
+
+
+def test_html_rejects_non_cid_route_snapshot_src() -> None:
+    html = generate_receipt_html(
+        {
+            **RIDE,
+            "route_schema_version": 2,
+            "route_revision": 4,
+            "snapshot_revision": 4,
+            "route_snapshot_url": "https://maps.example/route-v4.png",
+            "route_quality": {"coverage_ratio": 0.91},
+        },
+        RIDER,
+        include_route_snapshot=False,
+        route_snapshot_src='https://evil.example/x.png" onerror="alert(1)',
+    )
+
+    assert "evil.example" not in html
+    assert "onerror" not in html
+    assert "https://maps.example/route-v4.png" not in html
+    assert "cid:spinr-route-snapshot" not in html
+    assert "Actual route (revision 4)" in html
+
+
 def test_completed_receipt_waits_for_initial_route_finalization(monkeypatch) -> None:
     from backend import db_supabase
     from backend.utils import email_receipt
@@ -156,7 +199,7 @@ def test_completed_receipt_signs_a_private_v2_snapshot(monkeypatch) -> None:
     assert "snapshot_object_path" not in resolved
 
 
-def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(monkeypatch) -> None:
+def test_email_receipt_embeds_private_snapshot_via_cid_without_an_expiring_html_url(monkeypatch) -> None:
     """The receipt remains viewable after a temporary storage URL expires."""
     from backend.utils import email_provider, email_receipt, receipt_pdf
 
@@ -172,8 +215,54 @@ def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(mo
     send = AsyncMock(
         return_value=email_provider.EmailDeliveryResult(status=email_provider.EmailDeliveryStatus.accepted)
     )
+    pdf_kwargs = {}
+
+    def _fake_pdf(*_args, **kwargs):
+        pdf_kwargs.update(kwargs)
+        return b"pdf"
+
     monkeypatch.setattr(email_receipt, "_await_route_receipt_projection", AsyncMock(return_value=route))
     monkeypatch.setattr(email_receipt, "_download_route_snapshot", AsyncMock(return_value=_png_bytes()))
+    monkeypatch.setattr(receipt_pdf, "generate_receipt_pdf", _fake_pdf)
+    monkeypatch.setattr(email_receipt, "send_transactional_email_result", send)
+
+    assert asyncio.run(email_receipt.send_receipt_email(RIDE, RIDER, recipient_email="rider@example.test"))
+
+    payload = send.await_args.kwargs
+    assert signed_url not in payload["html"]
+    assert 'src="cid:spinr-route-snapshot"' in payload["html"]
+    assert "Actual route (revision 4)" in payload["html"]
+    assert "A permanent map copy is attached" not in payload["html"]
+    assert pdf_kwargs["route_snapshot_bytes"] == _png_bytes()
+    assert payload["attachments"] == [
+        {"filename": "Spinr-receipt-SPIN-1.pdf", "content": b"pdf", "mime": "application/pdf"},
+        {
+            "filename": "Spinr-route-SPIN-1.png",
+            "content": _png_bytes(),
+            "mime": "image/png",
+            "content_id": "spinr-route-snapshot",
+        },
+    ]
+
+
+def test_email_receipt_omits_cid_when_snapshot_download_fails(monkeypatch) -> None:
+    """A failed snapshot fetch must not hotlink the signed URL or attach a PNG."""
+    from backend.utils import email_provider, email_receipt, receipt_pdf
+
+    signed_url = "https://storage.example/signed/route-v4.png?expires=900"
+    route = {
+        **RIDE,
+        "route_schema_version": 2,
+        "route_revision": 4,
+        "snapshot_revision": 4,
+        "route_snapshot_url": signed_url,
+        "route_quality": {"coverage_ratio": 0.91},
+    }
+    send = AsyncMock(
+        return_value=email_provider.EmailDeliveryResult(status=email_provider.EmailDeliveryStatus.accepted)
+    )
+    monkeypatch.setattr(email_receipt, "_await_route_receipt_projection", AsyncMock(return_value=route))
+    monkeypatch.setattr(email_receipt, "_download_route_snapshot", AsyncMock(return_value=None))
     monkeypatch.setattr(receipt_pdf, "generate_receipt_pdf", lambda *_args, **_kwargs: b"pdf")
     monkeypatch.setattr(email_receipt, "send_transactional_email_result", send)
 
@@ -181,10 +270,12 @@ def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(mo
 
     payload = send.await_args.kwargs
     assert signed_url not in payload["html"]
+    assert "cid:spinr-route-snapshot" not in payload["html"]
+    assert 'width="472"' not in payload["html"]
     assert "Actual route (revision 4)" in payload["html"]
+    assert "91% GPS coverage" in payload["html"]
     assert payload["attachments"] == [
         {"filename": "Spinr-receipt-SPIN-1.pdf", "content": b"pdf", "mime": "application/pdf"},
-        {"filename": "Spinr-route-SPIN-1.png", "content": _png_bytes(), "mime": "image/png"},
     ]
 
 

@@ -201,10 +201,10 @@ class TestHttpExceptionHandlerEndToEnd:
         body = r.json()
         # Top-level detail (mobile client reads this) must be the
         # generic message — NOT the Stripe charge id.
-        assert body["detail"] == "Internal server error"
+        assert body["detail"] == "Something went wrong on our end. Please try again in a moment."
         assert "ch_1234567890abcdef" not in r.text
         # Nested error.message mirrors detail.
-        assert body["error"]["message"] == "Internal server error"
+        assert body["error"]["message"] == "Something went wrong on our end. Please try again in a moment."
         # Explicit signal so a future contributor reading dev tools
         # knows the message was scrubbed (vs the route returning
         # "Internal server error" intentionally).
@@ -219,7 +219,7 @@ class TestHttpExceptionHandlerEndToEnd:
         assert r.status_code == 500
         # Constraint name must not reach the wire.
         assert "users_phone_key" not in r.text
-        assert r.json()["detail"] == "Internal server error"
+        assert r.json()["detail"] == "Something went wrong on our end. Please try again in a moment."
 
     def test_5xx_err_sentinel_passes_through(self):
         """ERR_* sentinels are vetted by the route author and let

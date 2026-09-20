@@ -220,9 +220,7 @@ function PaymentConfirmScreenContent() {
       });
       Analytics.paymentInitiated({ method: selectedPayment, amount: totalFare });
 
-      // Schedule a local 15-min reminder if this is a scheduled ride.
-      // The backend cron also fires an FCM `scheduled_ride_reminder`; this
-      // local notification is a client-side fallback.
+      // Clear legacy local alarms; the server owns service-area reminder timing.
       if (scheduledTime && bookedRide.id) {
         scheduleReminder(bookedRide.id, scheduledTime).catch(() => {});
       }
@@ -528,13 +526,13 @@ function PaymentConfirmScreenContent() {
               <Text style={styles.fareTotalValue} allowFontScaling={false}>
                 ${totalFare.toFixed(2)}
               </Text>
-              <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: 8 }}>
+              <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: SPACING.sm }}>
                 <Ionicons name="chevron-down" size={18} color={colors.textDim} />
               </Animated.View>
             </TouchableOpacity>
 
             {fareExpanded && (
-              <View style={{ marginTop: 8 }}>
+              <View style={{ marginTop: SPACING.sm }}>
                 <View style={styles.fareDivider} />
                 {(selectedEstimate.fare_breakdown || []).map((line: any, i: number) => (
                   line.amount != null ? (
@@ -572,7 +570,7 @@ function PaymentConfirmScreenContent() {
         )}
         {selectedPayment === 'card' && (
           <View style={styles.holdNote}>
-            <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: SPACING.sm, marginTop: 1 }} />
             {/*
               The hold equals the fare shown above — the backend authorizes
               grand_total exactly (RIDE_AUTH_BUFFER_CAD is 0). This used to read

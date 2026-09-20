@@ -500,7 +500,7 @@ function DriverArrivingScreenContent() {
 
   const handleShareTrip = async () => {
     // Fail loud if ops hasn't configured a tracking URL yet — silently
-    // sending recipients to a hardcoded spinr-track.app would mislead
+    // sending recipients to a hardcoded tracking domain would mislead
     // them when the admin has moved tracking to a different domain.
     if (!trackBaseUrl) {
       showToast(

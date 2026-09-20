@@ -1241,7 +1241,7 @@ async def self_serve_wallet_topup(
         if not payment_method_id:
             raise HTTPException(
                 status_code=422,
-                detail="No payment method on file — provide payment_method_id or save a default card first",
+                detail=("No payment method on file. Add a card, or save one as your default, then try again."),
             )
 
         intent_kwargs = dict(

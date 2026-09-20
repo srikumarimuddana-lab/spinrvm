@@ -30,8 +30,8 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...services import statement_totals_backfill as backfill_svc
     from ...features import send_email
+    from ...services import statement_totals_backfill as backfill_svc
     from ...utils.audit_logger import log_admin_action
     from ...utils.driver_statement import PERIOD_TYPES, build_custom_statement, build_statement
     from ...utils.driver_statement_pdf import generate_driver_statement_pdf
@@ -176,7 +176,11 @@ async def download_driver_statement(
         "driver_statement_download",
         "drivers",
         driver_id,
-        {"period_type": statement["period_type"], "period_start": statement["period_start"], "period_end": statement["period_end"]},
+        {
+            "period_type": statement["period_type"],
+            "period_start": statement["period_start"],
+            "period_end": statement["period_end"],
+        },
     )
     filename = f"spinr-statement-{statement['period_type']}-{statement['period_start']}-{driver_id[:8]}.pdf"
     return Response(
@@ -285,7 +289,7 @@ async def admin_recompute_statement_totals(
     audit surface, the same bar as the other bulk money tools.
     """
     if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="Recomputing statement totals requires super_admin")
+        raise HTTPException(status_code=403, detail="Recomputing statement totals requires super admin access.")
 
     result = await backfill_svc.recompute_statement_totals(
         driver_ids=body.driver_ids,

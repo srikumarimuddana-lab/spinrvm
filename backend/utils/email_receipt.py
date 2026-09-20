@@ -37,6 +37,7 @@ for it.
 import asyncio
 import logging
 from decimal import ROUND_HALF_UP, Decimal
+from html import escape
 from typing import Any, Dict, Optional
 
 import httpx
@@ -47,7 +48,12 @@ try:
     from ..utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED
     from ..utils.email_layout import footer_html as _layout_footer_html
     from ..utils.email_layout import header_html as _layout_header_html
-    from ..utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus, send_transactional_email_result
+    from ..utils.email_provider import (
+        EmailDeliveryResult,
+        EmailDeliveryStatus,
+        _cid_token,
+        send_transactional_email_result,
+    )
     from .datetime_utils import parse_iso_utc
     from .receipt_distance import fare_basis_distance_km
 except ImportError:
@@ -60,6 +66,7 @@ except ImportError:
     from utils.email_provider import (  # type: ignore
         EmailDeliveryResult,
         EmailDeliveryStatus,
+        _cid_token,
         send_transactional_email_result,
     )
     from utils.receipt_distance import fare_basis_distance_km  # type: ignore
@@ -69,6 +76,9 @@ logger = logging.getLogger(__name__)
 _TWO_PLACES = Decimal("0.01")
 _ROUTE_FINALIZATION_WAIT_SECONDS = 4.0
 _ROUTE_FINALIZATION_POLL_SECONDS = 0.5
+# HTML ``<img src="cid:...">`` token. Must match the MIME Content-ID used when
+# the downloaded route PNG is related-inlined (signed Storage URLs expire).
+_ROUTE_SNAPSHOT_CID = "spinr-route-snapshot"
 
 # ── Pre-retrofit shell ──────────────────────────────────────────────────────
 # Kept verbatim so `branded_receipt_enabled = false` restores exactly what
@@ -379,7 +389,7 @@ async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any
 
 
 async def _download_route_snapshot(url: str) -> Optional[bytes]:
-    """Fetch a previously-published image for the PDF attachment only."""
+    """Fetch snapshot bytes for the PDF embed and the CID-inlined email map."""
     if not url:
         return None
     try:
@@ -400,6 +410,7 @@ def generate_receipt_html(
     tip: Decimal = Decimal(0),
     *,
     include_route_snapshot: bool = True,
+    route_snapshot_src: Optional[str] = None,
     company: Optional["CompanyDetails"] = None,
     show_pickup_leg: bool = False,
 ) -> str:
@@ -410,6 +421,10 @@ def generate_receipt_html(
             with the shared branded shell — real logo, documented brand red, and
             the company name and address from the admin Settings page. When
             None it falls back to the original bespoke shell, byte-for-byte.
+        route_snapshot_src: Must be ``None`` or a ``cid:<token>`` value. Never
+            pass a URL or user-controlled string — signed Storage URLs expire
+            and must not appear in the HTML body. The emailed receipt passes
+            ``cid:spinr-route-snapshot``.
 
     Stays synchronous so the fare-row tests can drive it directly; the async
     caller (:func:`send_receipt_email`) resolves the identity and passes it,
@@ -441,23 +456,32 @@ def generate_receipt_html(
     # receipt so the rider can quote it to support.
     ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
 
-    route_snapshot_url, route_snapshot_note, _route_snapshot_is_actual = _route_snapshot_presentation(ride)
+    route_snapshot_url, route_snapshot_note, _ = _route_snapshot_presentation(ride)
     route_snapshot_html = ""
-    if route_snapshot_url and include_route_snapshot:
+    if route_snapshot_src is not None:
+        try:
+            if not route_snapshot_src.startswith("cid:"):
+                raise ValueError("not cid")
+            _cid_token(route_snapshot_src[4:])
+        except ValueError:
+            logger.error("receipt HTML ignored non-CID route_snapshot_src")
+            route_snapshot_src = None
+    img_src = route_snapshot_src or (route_snapshot_url if include_route_snapshot else "")
+    if img_src:
+        safe_src = escape(img_src, quote=True)
+        safe_note = escape(route_snapshot_note or "", quote=True)
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
-          <p style="font-size:12px;color:#666;margin:0 0 6px;">{route_snapshot_note}</p>
-          <img src="{route_snapshot_url}" alt="{route_snapshot_note}" width="472"
+          <p style="font-size:12px;color:#666;margin:0 0 6px;">{safe_note}</p>
+          <img src="{safe_src}" alt="{safe_note}" width="472"
                style="width:100%;max-width:472px;height:auto;border-radius:12px;display:block;" />
         </td></tr>
         """
     elif route_snapshot_note:
-        attached_copy_note = ""
-        if route_snapshot_url and _route_snapshot_is_actual:
-            attached_copy_note = " A permanent map copy is attached to this receipt."
+        safe_note = escape(route_snapshot_note, quote=True)
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
-          <p style="font-size:12px;color:#8a3412;margin:0;">{route_snapshot_note}{attached_copy_note}</p>
+          <p style="font-size:12px;color:#8a3412;margin:0;">{safe_note}</p>
         </td></tr>
         """
 
@@ -784,15 +808,16 @@ async def send_receipt_email_result(
         # the underlying exception — a settings read failing on the receipt
         # path must surface loudly (CLAUDE.md: never silently swallow).
         logger.error("pickup-leg receipt flag read failed; omitting the line", exc_info=True)
-    # Private Storage URLs expire. The email body must remain valid long after
-    # delivery, so it contains only the quality note; the PDF and PNG contain
-    # the immutable bytes downloaded while the signed URL was valid.
+    # Private Storage URLs expire. Never put that URL in the HTML — embed the
+    # downloaded PNG as a CID-related part so the map lives in the message
+    # body (and in the PDF) without a downloadable PNG attachment.
     html = generate_receipt_html(
         ride,
         rider,
         driver,
         tip,
         include_route_snapshot=False,
+        route_snapshot_src=f"cid:{_ROUTE_SNAPSHOT_CID}" if snapshot_bytes else None,
         company=company,
         show_pickup_leg=show_pickup_leg,
     )
@@ -829,9 +854,16 @@ async def send_receipt_email_result(
     except Exception:
         logger.error("Receipt PDF generation failed — sending receipt without attachment", exc_info=True)
 
-    if snapshot_bytes and snapshot_is_actual:
+    if snapshot_bytes:
         ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
-        attachments.append({"filename": f"Spinr-route-{ref}.png", "content": snapshot_bytes, "mime": "image/png"})
+        attachments.append(
+            {
+                "filename": f"Spinr-route-{ref}.png",
+                "content": snapshot_bytes,
+                "mime": "image/png",
+                "content_id": _ROUTE_SNAPSHOT_CID,
+            }
+        )
 
     recipient_user_id = rider.get("id") or ride.get("rider_id")
     return await send_transactional_email_result(

@@ -42,7 +42,7 @@ def _require_super_admin(admin: dict) -> None:
     the guard survives a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Data Transfer import requires super_admin")
+        raise HTTPException(status_code=403, detail="Data Transfer import requires super admin access.")
 
 
 async def _read_zip_bytes(bundle_zip: UploadFile) -> bytes:

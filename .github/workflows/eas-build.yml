@@ -63,10 +63,10 @@ jobs:
         working-directory: rider-app
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Node 22, not 20: eas-version: latest below always pulls eas-cli's
-      # current dependency tree, and @oclif/plugin-autocomplete bumped its own
-      # engines.node to >=22.0.0 in 3.3.0 (2026-08-2x) independent of eas-cli's
-      # own (unchanged) >=20.0.0 requirement. yarn classic hard-fails the
+      # Node 22, not 20: eas-cli's own dependency tree pulls in
+      # @oclif/plugin-autocomplete, which bumped its own engines.node to
+      # >=22.0.0 in 3.3.0 (2026-08-2x) independent of eas-cli's own
+      # (unchanged) >=20.0.0 requirement. yarn classic hard-fails the
       # install on that mismatch (not just a warning), which is why every run
       # of this workflow failed from that release onward. Before this change,
       # confirmed rider-app's and driver-app's own yarn install
@@ -80,7 +80,8 @@ jobs:
           node-version: 22
       - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
       - run: yarn install --frozen-lockfile
 
@@ -190,7 +191,8 @@ jobs:
           node-version: 22
       - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
       - run: yarn install --frozen-lockfile
 

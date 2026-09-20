@@ -49,19 +49,51 @@ try {
   useNative = false;
 }
 
+/**
+ * Spinner-only stand-in used when the native RefreshControl is unusable.
+ *
+ * MUST render `children`. ScrollView (and therefore FlatList) treats its
+ * `refreshControl` element differently per platform:
+ *   - iOS: the element is rendered as a SIBLING inside the scroll view, so
+ *     `children` is undefined and returning just a spinner (or null) is fine.
+ *   - Android: ScrollView.js wraps the scroll view IN the refresh control —
+ *     `React.cloneElement(refreshControl, {style}, <NativeScrollView…>)` — so
+ *     the refresh control is the PARENT of the entire list. A fallback that
+ *     ignores `children` (as this one did until 2026-09-14) drops the whole
+ *     FlatList on Android: the Notifications screen rendered nothing below the
+ *     header (or nothing at all once the header moved inside the FlatList),
+ *     pull-to-refresh had no touch surface, and iOS was unaffected. The same
+ *     fallback is shared by quests, lost-and-found, tax-documents and
+ *     payout-history.
+ *
+ * Exported for the regression test; screens should keep using the default
+ * export so the native/fallback choice stays in one place.
+ */
+export function FallbackRefreshControl(props: RefreshControlProps) {
+  const { refreshing, tintColor, colors, children, style } = props;
+  const hasChildren = children != null;
+  if (!refreshing && !hasChildren) return null;
+  const color = tintColor ?? (colors && colors.length > 0 ? String(colors[0]) : '#999');
+  return (
+    // `style` is the layout style ScrollView hands the wrapper on Android
+    // (its own flex/size props); `flex: 1` is what AndroidSwipeRefreshLayout
+    // would otherwise contribute so the wrapped list fills the screen.
+    <View style={[hasChildren ? { flex: 1 } : null, style]}>
+      {refreshing ? (
+        <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 12 }}>
+          <ActivityIndicator size="small" color={color} />
+        </View>
+      ) : null}
+      {children}
+    </View>
+  );
+}
+
 function SafeRefreshControl(props: RefreshControlProps) {
   if (useNative) {
     return <RefreshControl {...props} />;
   }
-
-  const { refreshing, tintColor, colors } = props;
-  if (!refreshing) return null;
-  const color = tintColor ?? (colors && colors.length > 0 ? String(colors[0]) : '#999');
-  return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 12 }}>
-      <ActivityIndicator size="small" color={color} />
-    </View>
-  );
+  return <FallbackRefreshControl {...props} />;
 }
 
 export default SafeRefreshControl;

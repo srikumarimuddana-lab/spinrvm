@@ -111,3 +111,17 @@ Step 1 above failed. Evidence from the fresh session's own `/tmp/claude-code.log
 
 Per the rollback plan above, the two `.claude/settings.json` entries were removed in the PR
 that added this section. No other files were touched.
+
+## Correction (2026-09-14) — the "collateral damage" framing above is incomplete
+
+The "collateral damage matched the `karpathy-skills` precedent: `feature-dev` also came up
+unregistered" line above was true but understated: further investigation
+(`docs/audit/2026-09-14-plugin-activation-never-worked.md`) found `Found 0 plugins (0 enabled,
+0 disabled)` in this session's log going all the way back to this session's very first hour
+(2026-09-07), *before* `karpathy-skills`, `feature-dev`, or `Understand-Anything` were ever
+configured. `feature-dev` was never a confirmed-working control group this whole session — this
+doc's framing of it as "the marketplace that already proved to work" (used to justify piloting
+`Understand-Anything` the same way) was not actually verified against the log at the time. See
+the new doc for the full evidence and corrected analysis; nothing in this doc's own timeline or
+rollback record above is being retracted, only the "feature-dev definitely works here" premise
+it was built on.

@@ -40,10 +40,19 @@ beforeEach(() => {
         configurable: true,
         get: () => BOX.h,
     });
+    // Carto was removed as the built-in raster default on 2026-09-14, so with
+    // nothing configured this component now lays out zero tiles by design.
+    // These tests are about tile-failure behaviour, not about which host serves
+    // the bytes, so point them at a stand-in self-hosted pyramid.
+    vi.stubEnv(
+        "NEXT_PUBLIC_RASTER_TILE_URL",
+        "https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png",
+    );
 });
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
 });
 
@@ -65,6 +74,27 @@ describe("StaticRouteMap rendering", () => {
         // Pins are SVG injected per kind; their titles are the accessible hook.
         expect(document.querySelector('[title="Pickup"]')).toBeTruthy();
         expect(document.querySelector('[title="Dropoff"]')).toBeTruthy();
+    });
+
+    // Regression guard for the Carto removal: the unconfigured template is "",
+    // and an <img src=""> does NOT 404 quietly like a dead tile host — it
+    // resolves to the current page, so a missing tile source would re-request
+    // this dashboard route once per tile.
+    it("lays out no tiles at all when no tile source is configured", () => {
+        vi.unstubAllEnvs();
+        render(<StaticRouteMap {...ROUTE} />);
+        expect(tiles()).toHaveLength(0);
+        // The ride itself must still be readable without a basemap.
+        expect(document.querySelector('[title="Pickup"]')).toBeTruthy();
+        expect(document.querySelector('[title="Dropoff"]')).toBeTruthy();
+        // And it must not be SILENT. allTilesBlocked requires tiles.length > 0,
+        // so it can never fire here — without its own notice this is a blank
+        // panel with no explanation anywhere, which is the exact gap the
+        // blocked-tiles notice was added to close.
+        expect(screen.getByText(/no basemap configured/i)).toBeInTheDocument();
+        // Different cause, different remedy: an operator sets a variable, an
+        // admin disables a blocker. The two notices must not be confused.
+        expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
     });
 
     it("always renders attribution, even before anything loads", () => {

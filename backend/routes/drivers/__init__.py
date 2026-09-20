@@ -225,6 +225,7 @@ from .ride_flow import (  # noqa: F401
 from .ride_reads import (  # noqa: F401
     get_active_ride,
     get_ride_history,
+    get_ride_offer,
 )
 from .status import (  # noqa: F401
     STALE_PENDING_OFFER_SECONDS,
@@ -454,6 +455,7 @@ __all__ = [
     "get_payout_history",
     "get_referred_drivers",
     "get_ride_history",
+    "get_ride_offer",
     "get_service_area_polygon",
     "get_subscription_payment_history",
     "get_subscription_plans",

@@ -304,6 +304,19 @@ class TestAlwaysAllowedOrigins:
         assert "https://admin-spinr.spinr.ca" in allowed
         # The dead Vercel preview domain was removed in favour of the custom domain.
         assert "https://spinr-admin.vercel.app" not in allowed
+        # spinr.app / spinr-track.app were removed 2026-09-14: neither resolves
+        # (NXDOMAIN) and neither is registered to Spinr, so both were standing
+        # CORS grants for hostnames any third party could buy. allow_credentials
+        # is True for every explicit origin in production, so these must not come
+        # back — including "restored" from an old runbook or .env example.
+        # See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
+        for dead in (
+            "https://spinr.app",
+            "https://www.spinr.app",
+            "https://spinr-track.app",
+            "https://www.spinr-track.app",
+        ):
+            assert dead not in allowed
 
 
 class TestStripeEmbedSecurityHeaders:
@@ -393,4 +406,3 @@ class TestMobileBootstrapAppCheckExemptions:
             "/api/v1/drivers/rides/active",
         ):
             assert not any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
-

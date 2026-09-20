@@ -9,14 +9,15 @@ vi.mock('maplibre-gl', () => ({
   Marker: class {},
   Popup: class {},
   NavigationControl: class {},
+  // maplibre-base.ts calls this at module load (v6 Turbopack-worker fix) —
+  // without it, importing maplibre-base.ts in a test throws.
+  setWorkerUrl: vi.fn(),
 }));
 
 import {
   attachBasemapFallback,
   basemapChain,
-  cartoStyleUrl,
-  MAP_STYLE_CARTO_DARK,
-  MAP_STYLE_CARTO_LIGHT,
+  primaryMapStyle,
   MAP_STYLE_DARK,
   MAP_STYLE_URL,
   selfHostedStyleUrl,
@@ -45,13 +46,14 @@ type FakeMap = ReturnType<typeof fakeMap>;
 const asMap = (m: FakeMap) => m as unknown as Parameters<typeof attachBasemapFallback>[0];
 
 describe('basemap provider chain', () => {
-  it('starts at OpenFreeMap and always ends at the keyless Carto style', () => {
+  it('starts at OpenFreeMap', () => {
     const chain = basemapChain();
     expect(chain[0]).toBe(MAP_STYLE_URL);
-    expect(chain[chain.length - 1]).toBe(MAP_STYLE_CARTO_LIGHT);
-    // (optional self-hosted) + OpenFreeMap + (optional Protomaps) + Carto
-    expect(chain.length).toBeGreaterThanOrEqual(2);
-    expect(chain.length).toBeLessThanOrEqual(4);
+    // OpenFreeMap, plus Protomaps only when NEXT_PUBLIC_PROTOMAPS_API_KEY is
+    // set (it is not, here). Carto was removed 2026-09-14, and since it was the
+    // only keyless hop the unconfigured chain can now legitimately be length 1.
+    expect(chain.length).toBeGreaterThanOrEqual(1);
+    expect(chain.length).toBeLessThanOrEqual(2);
   });
 
   it('never repeats a provider — a retry must actually change host', () => {
@@ -59,23 +61,19 @@ describe('basemap provider chain', () => {
     expect(new Set(basemapChain('dark')).size).toBe(basemapChain('dark').length);
   });
 
-  it('uses the dark variants at both ends for a dark theme', () => {
-    const chain = basemapChain('dark');
-    expect(chain[0]).toBe(MAP_STYLE_DARK);
-    expect(chain[chain.length - 1]).toBe(MAP_STYLE_CARTO_DARK);
+  it('uses the dark variant for a dark theme', () => {
+    expect(basemapChain('dark')[0]).toBe(MAP_STYLE_DARK);
   });
 
-  it('spans at least two independent hosts, so one host outage cannot blank every hop', () => {
-    const hosts = [...new Set(basemapChain().map((u) => new URL(u).host))];
-    expect(hosts.length).toBeGreaterThanOrEqual(2);
-    expect(hosts).toContain('basemaps.cartocdn.com');
-  });
-
-  it('cartoStyleUrl needs no API key in either theme', () => {
-    expect(cartoStyleUrl()).toContain('cartocdn.com');
-    expect(cartoStyleUrl('dark')).toContain('cartocdn.com');
-    expect(cartoStyleUrl()).not.toContain('key=');
-    expect(cartoStyleUrl('dark')).not.toContain('key=');
+  // The point of the removal: no admin map traffic reaches Carto, in any theme,
+  // configured or not. A regression here means a third-party CDN crept back in.
+  it('never routes any hop to Carto', () => {
+    for (const theme of [undefined, 'light', 'dark']) {
+      for (const url of basemapChain(theme)) {
+        expect(url).not.toContain('cartocdn.com');
+      }
+      expect(primaryMapStyle(theme)).not.toContain('cartocdn.com');
+    }
   });
 });
 
@@ -94,14 +92,15 @@ describe('self-hosted basemap override', () => {
     expect(basemapChain()[0]).toBe(MAP_STYLE_URL);
   });
 
-  it('takes the first hop when configured, keeping the third parties behind it', () => {
+  it('is the only hop when configured — no third party behind it', () => {
     vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
     const chain = basemapChain();
-    expect(chain[0]).toBe(SELF);
-    // Our tile server going down must degrade to somebody else's basemap, not
-    // to a blank panel — so the existing providers stay in the chain.
-    expect(chain).toContain(MAP_STYLE_URL);
-    expect(chain[chain.length - 1]).toBe(MAP_STYLE_CARTO_LIGHT);
+    // Product decision 2026-09-14: once we serve our own basemap it is the only
+    // basemap, so admins stop paying an 8s third-party timeout before the map
+    // paints. The accepted cost is that our tile server going down blanks the
+    // panel rather than degrading to somebody else's tiles.
+    expect(chain).toEqual([SELF]);
+    expect(chain).not.toContain(MAP_STYLE_URL);
   });
 
   it('ignores whitespace-only configuration rather than trying to load it', () => {
@@ -125,18 +124,52 @@ describe('self-hosted basemap override', () => {
   // A repeated hop is not a fallback: it re-requests the host that just failed
   // and burns a full 8s watchdog window doing it.
   it('does not duplicate a hop when pointed at a provider already in the chain', () => {
-    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', MAP_STYLE_CARTO_LIGHT);
+    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', MAP_STYLE_URL);
     const chain = basemapChain();
-    expect(chain[0]).toBe(MAP_STYLE_CARTO_LIGHT);
+    expect(chain[0]).toBe(MAP_STYLE_URL);
     expect(new Set(chain).size).toBe(chain.length);
-    expect(chain.filter((u) => u === MAP_STYLE_CARTO_LIGHT)).toHaveLength(1);
+    expect(chain.filter((u) => u === MAP_STYLE_URL)).toHaveLength(1);
   });
 
-  it('still spans multiple hosts once self-hosting is on', () => {
-    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
-    const hosts = [...new Set(basemapChain().map((u) => new URL(u).host))];
-    expect(hosts).toContain('maps.spinr.ca');
-    expect(hosts.length).toBeGreaterThanOrEqual(3);
+  // Four admin maps (driver, geofence, venue, live-ride) hand MapLibre a single
+  // style and never retry, so they cannot use basemapChain(). They hard-coded
+  // MAP_STYLE_URL, which meant they kept loading a third party even with our own
+  // tile server configured — the chain maps switched over and these silently did
+  // not. primaryMapStyle() is what closes that gap.
+  describe('primaryMapStyle (single-style maps)', () => {
+    it('is the third-party default when self-hosting is not configured', () => {
+      expect(primaryMapStyle()).toBe(MAP_STYLE_URL);
+    });
+
+    it('is the self-hosted style when configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
+      expect(primaryMapStyle()).toBe(SELF);
+    });
+
+    it('never returns a third-party style once self-hosting is on', () => {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', SELF);
+      for (const theme of [undefined, 'light', 'dark']) {
+        expect(primaryMapStyle(theme)).toBe(SELF);
+      }
+    });
+  });
+
+  // The unconfigured chain is not dead code kept for tidiness: an empty chain
+  // paints nothing, so a missing or wrongly-scoped NEXT_PUBLIC_MAP_STYLE_URL
+  // must still land on a working provider rather than a blank panel. CI relies
+  // on this too — it sets no style URL, and visual-regression.spec.ts stubs
+  // tiles.openfreemap.org as the first hop.
+  //
+  // It no longer spans two hosts by default. Carto was the keyless second host
+  // and removing it means that without NEXT_PUBLIC_PROTOMAPS_API_KEY there is
+  // exactly one hop and no fallback — accepted deliberately, because the answer
+  // to our tile server being down is to fix our tile server, not to fail over
+  // to a third-party CDN.
+  it('still lands on a working provider when self-hosting is NOT configured', () => {
+    const chain = basemapChain();
+    expect(chain.length).toBeGreaterThanOrEqual(1);
+    expect(chain[0]).toBe(MAP_STYLE_URL);
+    expect(new URL(chain[0]).host).toBe('tiles.openfreemap.org');
   });
 });
 

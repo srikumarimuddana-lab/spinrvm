@@ -129,6 +129,52 @@ export function toGeoJsonMultiLineString(input: unknown): GeoJsonMultiLineString
   };
 }
 
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'boolean' || value == null) return undefined;
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Coerce a stored decoded polyline (`planned_route_polyline`, `road_polyline`,
+ * phase trails) to `{lat, lng}[]`.
+ *
+ * Mirrors `normalize_polyline_points()` in `backend/utils/route_snapshot.py`:
+ * the column contract is `[[lat, lng], …]`, but legacy import briefly wrote
+ * `{lat, lng}` objects, and some JSONB rows still arrive as numeric strings.
+ * A `[lng, lat]` pair is swapped when the first component cannot be a latitude.
+ */
+export function normalizeDecodedPolyline(
+  value: unknown,
+): { lat: number; lng: number; timestamp?: string }[] {
+  if (!Array.isArray(value)) return [];
+  const points: { lat: number; lng: number; timestamp?: string }[] = [];
+  for (const raw of value) {
+    let lat: number | undefined;
+    let lng: number | undefined;
+    let timestamp: string | undefined;
+    if (Array.isArray(raw) && raw.length >= 2) {
+      lat = toFiniteNumber(raw[0]);
+      lng = toFiniteNumber(raw[1]);
+      if (typeof raw[2] === 'string' && raw[2]) timestamp = raw[2];
+    } else if (raw && typeof raw === 'object') {
+      const row = raw as Record<string, unknown>;
+      lat = toFiniteNumber(row.lat ?? row.latitude);
+      lng = toFiniteNumber(row.lng ?? row.longitude ?? row.lon);
+      if (typeof row.timestamp === 'string' && row.timestamp) timestamp = row.timestamp;
+    }
+    if (lat == null || lng == null) continue;
+    if (Math.abs(lat) > 90 && Math.abs(lng) <= 90) {
+      const swapped = lat;
+      lat = lng;
+      lng = swapped;
+    }
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+    points.push(timestamp ? { lat, lng, timestamp } : { lat, lng });
+  }
+  return points;
+}
+
 /** Plain, approved quality copy for rider, driver, admin, and receipts. */
 export function routeQualityLabel(quality: unknown): string {
   const value = quality as {

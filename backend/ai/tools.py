@@ -22,16 +22,18 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 try:
     from .. import db_supabase
+    from ..settings_loader import get_cached_app_settings
     from ..utils.background import log_task_exception as _log_task_exception
     from ..utils.background import spawn as _spawn
-    from .pii import ScrubPolicy, scrub_pii_deep
+    from .pii import ScrubPolicy, official_contact_preserve, scrub_pii_deep
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
-    from ai.pii import ScrubPolicy, scrub_pii_deep  # type: ignore
+    from ai.pii import ScrubPolicy, official_contact_preserve, scrub_pii_deep  # type: ignore
+    from settings_loader import get_cached_app_settings  # type: ignore
     from utils.background import log_task_exception as _log_task_exception  # type: ignore
     from utils.background import spawn as _spawn  # type: ignore
 
@@ -272,7 +274,12 @@ def _policy_for_audience(audience: str) -> ScrubPolicy:
     return ScrubPolicy.STRICT if audience == "web" else ScrubPolicy.AI_CHAT
 
 
-def _cap_result(result: Dict[str, Any], *, policy: ScrubPolicy = ScrubPolicy.AI_CHAT) -> Dict[str, Any]:
+def _cap_result(
+    result: Dict[str, Any],
+    *,
+    policy: ScrubPolicy = ScrubPolicy.AI_CHAT,
+    preserve: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
     """Cap the MODEL-facing portion of a result. ``_client_action`` is popped
     by the orchestrator before the result enters the model context, so it
     neither counts against the budget nor gets destroyed by truncation —
@@ -306,6 +313,7 @@ def _cap_result(result: Dict[str, Any], *, policy: ScrubPolicy = ScrubPolicy.AI_
         result = scrub_pii_deep(
             {k: v for k, v in result.items() if k != "_client_action" and k not in _META_KEYS},
             policy=policy,
+            preserve=preserve,
         )
     else:
         client_action = None
@@ -503,4 +511,15 @@ async def _execute_tool_inner(
         logger.error("ai tool failed", exc_info=True, extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup failed — try again or contact support"}, False
 
-    return _cap_result(result, policy=_policy_for_audience(audience)), True
+    preserve = list(official_contact_preserve(get_cached_app_settings()))
+    # get_company_info's whole payload is the public Settings contact. Keep
+    # those values even when the settings cache is cold (unit tests, first
+    # request after a worker start) so the model is not handed '[EMAIL]'.
+    if name == "get_company_info" and isinstance(result, dict):
+        for key in ("email", "phone"):
+            val = result.get(key)
+            if isinstance(val, str):
+                text = val.strip()
+                if text and text not in preserve:
+                    preserve.append(text)
+    return _cap_result(result, policy=_policy_for_audience(audience), preserve=preserve), True

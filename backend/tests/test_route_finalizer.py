@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
@@ -649,6 +651,61 @@ def test_missing_completion_fix_skips_reconstruction_when_flag_off(monkeypatch):
     assert result["processing_status"] == "incomplete"
     assert payload["route_quality"]["incomplete_reason"] == "missing_completion_fix"
     assert "completion_anchor_source" not in payload["route_quality"]
+
+
+@pytest.mark.parametrize("enabled, expected_sequences", [(False, [7]), (True, [8, 7]), ("false", [7])])
+def test_finalizer_gates_interleaved_captures_without_changing_raw_evidence(monkeypatch, enabled, expected_sequences):
+    points = [
+        {**_point(7, 31), "source": "foreground"},
+        {**_point(8, 29), "source": "background"},
+    ]
+    update, _ = _anchor_case(
+        monkeypatch,
+        settings=AsyncMock(return_value={"route_interleaved_capture_enabled": enabled}),
+        points=points,
+    )
+
+    _run(route_finalizer.finalize_route("ride_1"))
+
+    segments = route_finalizer.compute_segmented_road_route.await_args.args[0]
+    assert [point["sequence_number"] for segment in segments for point in segment.points] == expected_sequences
+    quality = update.await_args.args[2]["route_quality"]
+    assert quality["point_count"] == len(expected_sequences)
+    assert points[1]["captured_at"] == _point(8, 29)["captured_at"]
+
+
+@pytest.mark.parametrize("enabled, expected_count", [(False, 1), (True, 2)])
+def test_finalizer_applies_capture_ordering_to_pickup_without_mixing_trip_evidence(
+    monkeypatch, enabled, expected_count
+):
+    pickup = [
+        {**_point(0, -10), "source": "foreground", "tracking_phase": "pickup_en_route"},
+        {**_point(1, -12), "source": "background", "tracking_phase": "pickup_en_route"},
+    ]
+    update, _ = _anchor_case(
+        monkeypatch,
+        settings=AsyncMock(
+            return_value={"route_interleaved_capture_enabled": enabled, "p2_route_geometry_enabled": True}
+        ),
+        points=[*pickup, _point(2, 10)],
+        ride={**_ride_with_endpoints(), "assigned_at": _point(0, -20)["captured_at"]},
+    )
+    _run(route_finalizer.finalize_route("ride_1"))
+    payload = update.await_args.args[2]
+    pickup_segments = [segment for segment in payload["observed_segments"] if segment["phase"] == "pickup_en_route"]
+    assert sum(len(segment["coordinates"]) for segment in pickup_segments) == expected_count
+    assert payload["route_quality"]["point_count"] == 1
+
+
+def test_capture_ordering_setting_failure_stays_off_and_surfaces_error(monkeypatch, caplog):
+    update, _ = _anchor_case(
+        monkeypatch,
+        settings=AsyncMock(side_effect=RuntimeError("settings unavailable")),
+        points=[{**_point(7, 31), "source": "foreground"}, {**_point(8, 29), "source": "background"}],
+    )
+    _run(route_finalizer.finalize_route("ride_1"))
+    assert update.await_args.args[2]["route_quality"]["point_count"] == 1
+    assert any(record.levelname == "ERROR" and record.exc_info for record in caplog.records)
 
 
 def test_missing_completion_fix_anchors_to_booked_dropoff_when_flag_on(monkeypatch):

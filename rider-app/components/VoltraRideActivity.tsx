@@ -17,6 +17,7 @@
  */
 import { Voltra } from '@use-voltra/ios-client';
 import type { VoltraContent } from '../services/rideVoltraLiveActivity';
+import { FONT } from '@shared/utils/responsive';
 
 function etaText(min?: number | null): string {
     if (!min || min <= 0) return '';
@@ -37,7 +38,7 @@ export default function VoltraRideActivity(content: VoltraContent) {
                 <Voltra.Text style={{ color: '#9CA3AF', fontSize: 14 }}>{sub}</Voltra.Text>
             ) : null}
             {content.dropoffArea ? (
-                <Voltra.Text style={{ color: '#6B7280', fontSize: 13 }}>To {content.dropoffArea}</Voltra.Text>
+                <Voltra.Text style={{ color: '#6B7280', fontSize: FONT.bodySm }}>To {content.dropoffArea}</Voltra.Text>
             ) : null}
         </Voltra.VStack>
     );

@@ -348,7 +348,7 @@ async def update_wallet_config(
         if threshold is None or amount is None:
             raise HTTPException(
                 status_code=422,
-                detail="auto_topup_threshold and auto_topup_amount must be set before enabling",
+                detail=("Set both a top-up threshold and a top-up amount before turning auto top-up on."),
             )
     updated = await update_corporate_wallet_config(wallet_id=wallet["id"], patch=patch)
 

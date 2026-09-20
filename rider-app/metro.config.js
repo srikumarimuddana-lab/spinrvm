@@ -2,6 +2,7 @@
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require('path');
 const { FileStore } = require('metro-cache');
+const { resolvePosthogCoreSubpath } = require('../shared/metro/resolvePosthogCoreSubpath');
 
 const config = getDefaultConfig(__dirname);
 
@@ -92,6 +93,14 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   // from @types/react-test-renderer → @types/react.
   if (moduleName.startsWith('@types/')) {
     return { type: 'empty' };
+  }
+
+  // Keep package-exports OFF (Sentry CJS / Hermes). PostHog's @posthog/core
+  // subpaths only exist via exports; map them onto dist/*.js. Same helper
+  // as driver-app/metro.config.js.
+  const posthogCore = resolvePosthogCoreSubpath(__dirname, moduleName);
+  if (posthogCore) {
+    return posthogCore;
   }
 
   if (platform === 'web') {

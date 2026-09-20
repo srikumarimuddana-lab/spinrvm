@@ -548,7 +548,7 @@ class TestCheckScheduledRides:
 
         await sr.check_scheduled_rides()
 
-        get_rows.assert_awaited_once()
+        assert get_rows.await_count == 2
 
     @pytest.mark.anyio
     async def test_get_rows_error_is_logged_and_returns(self, sr, monkeypatch, caplog):

@@ -292,7 +292,14 @@ function ProfileScreenInner() {
   const handleLogout = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
+      { text: 'Sign Out', style: 'destructive', onPress: async () => {
+        try {
+          await logout();
+          router.replace('/login' as any);
+        } catch {
+          showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
+        }
+      } },
     ]);
   };
 
@@ -309,7 +316,12 @@ function ProfileScreenInner() {
           text: 'Sign out everywhere',
           style: 'destructive',
           onPress: async () => {
-            try { await logoutAll(); } finally { router.replace('/login' as any); }
+            try {
+              await logoutAll();
+              router.replace('/login' as any);
+            } catch {
+              showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
+            }
           },
         },
       ]

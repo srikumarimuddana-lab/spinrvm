@@ -15,6 +15,7 @@ import {
     makeCircleMarkerEl,
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
+import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 import {
     buildPathGradient,
     ROUTE_STROKE_WIDTH,
@@ -136,6 +137,21 @@ interface MonitoringMapProps {
     onSelectRide: (id: string) => void;
     /** Exposes imperative update handles to parent */
     onReady: (handles: MapHandles) => void;
+    /**
+     * Fires once, on mount, with whether this browser can actually render
+     * the map (mirrors the `webglOk` guard below — see hasRenderingWebGL()
+     * in src/lib/map/webgl-support.ts). `onReady` above never fires when
+     * `webglOk` is false, so without this the parent has no way to know
+     * the map is inert: `mapHandlesRef.current` just stays null forever.
+     * Every `mapHandlesRef.current?.foo()` call site already tolerates
+     * that via optional chaining, but controls whose entire purpose IS a
+     * map-visual effect (the service-area jump buttons, the Follow
+     * toggle) need this signal to disable themselves with an explanation
+     * instead of silently no-op'ing. webglOk is computed once and never
+     * changes post-mount, so this is a one-shot signal, not something
+     * that needs to re-fire. See ACTION_ITEMS.md C115.
+     */
+    onCanRenderChange?: (canRender: boolean) => void;
 }
 
 export interface MapHandles {
@@ -204,6 +220,7 @@ export function MonitoringMap({
     onSelectDriver,
     onSelectRide,
     onReady,
+    onCanRenderChange,
 }: MonitoringMapProps) {
     const { resolvedTheme } = useTheme();
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -211,6 +228,20 @@ export function MonitoringMap({
     const [isLoaded, setIsLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [basemapStatus, setBasemapStatus] = useState<"ok" | "retrying" | "failed">("ok");
+    // Lazy initializer, computed once — same idiom ride-route-map.tsx already
+    // uses for this exact probe, rather than a setState call inside the mount
+    // effect below (which would cause a needless extra render and trips
+    // react-hooks/set-state-in-effect).
+    const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
+
+    const onCanRenderChangeRef = useRef(onCanRenderChange);
+    onCanRenderChangeRef.current = onCanRenderChange;
+    // Report the render-capability signal once. webglOk never changes after
+    // mount, so [webglOk] fires this exactly once — see the prop doc comment
+    // on MonitoringMapProps.onCanRenderChange for why the parent needs it.
+    useEffect(() => {
+        onCanRenderChangeRef.current?.(webglOk);
+    }, [webglOk]);
 
     const driverMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
     const driverVisibleRef = useRef<Map<string, boolean>>(new Map());
@@ -439,6 +470,20 @@ export function MonitoringMap({
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
 
+        // Bail out before ever constructing a MapLibre map when this browser's
+        // WebGL context cannot actually paint (a stub, common with privacy/
+        // ad-blocking extensions). Without this check the map "loads"
+        // successfully by every signal this component watches — MapLibre's
+        // own `load` event only reflects style/tile JSON reaching the page,
+        // not a GPU actually drawing a pixel — so isLoaded flips true,
+        // basemapStatus stays "ok", loadError stays null, and the canvas
+        // sits blank with nothing on screen explaining why. See
+        // src/lib/map/webgl-support.ts and
+        // docs/change-log/2026-09-14-webgl-stub-detection-and-blocked-tile-notice.md
+        // for the confirmed root cause (found on the ride-detail Route Views
+        // map first; this map has the identical gap).
+        if (!webglOk) return;
+
         let cancelled = false;
         let detach: (() => void) | null = null;
         const chain = basemapChain(resolvedTheme);
@@ -617,6 +662,22 @@ export function MonitoringMap({
         const d = driversMap.current.get(selected.id);
         if (d?.lat && d.lng) panTo(d.lat, d.lng);
     }, [isLoaded, followMode, selected, driversMap, panTo]);
+
+    if (!webglOk) {
+        return (
+            <div
+                role="status"
+                className="flex h-full items-center justify-center bg-muted px-6 text-center"
+            >
+                <p className="text-sm text-muted-foreground">
+                    Live map can&apos;t render in this browser — often an ad or
+                    privacy blocker. Try disabling it for this site, or use a
+                    different browser. Driver and ride data elsewhere on this
+                    page is still live.
+                </p>
+            </div>
+        );
+    }
 
     if (loadError) {
         return (

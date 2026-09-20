@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
     View,
     StyleSheet,
@@ -6,6 +6,8 @@ import {
     FlatList,
     Alert,
     ActivityIndicator,
+    Modal,
+    Pressable,
 } from 'react-native';
 import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
@@ -18,12 +20,15 @@ import {
     useNotifications,
     useMarkNotificationRead,
     useMarkAllNotificationsRead,
+    useDeleteNotification,
+    useClearNotifications,
 } from '@shared/hooks/queries';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { showAlert } from '../../components/AlertDialog';
 
 interface Notification {
     id: string;
@@ -49,12 +54,51 @@ function formatTime(dateStr: string): string {
     return `${days}d ago`;
 }
 
+// Category tabs reuse the SAME `type` taxonomy iconMap (below) already maps —
+// no new category names invented beyond what this screen's own icon map and
+// backend/routes/notifications.py's NOTIFICATION_DEEPLINKS already use.
+type CategoryFilter = 'all' | 'rides' | 'earnings' | 'promotions' | 'safety' | 'general';
+
+const CATEGORY_TABS: { key: CategoryFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'rides', label: 'Rides' },
+    { key: 'earnings', label: 'Earnings' },
+    { key: 'promotions', label: 'Promotions' },
+    { key: 'safety', label: 'Safety' },
+    { key: 'general', label: 'General' },
+];
+
+const RIDE_TYPES = ['ride_update', 'ride', 'ride_offer', 'chat_message', 'ride_cancelled', 'ride_noshow'];
+const GENERAL_TYPES = new Set([
+    ...RIDE_TYPES, 'earnings', 'payout_processed', 'payout_failed', 'promotion', 'safety',
+    'lost_and_found', 'lost_and_found_message',
+]);
+
+function matchesCategory(type: string, category: CategoryFilter): boolean {
+    if (category === 'all') return true;
+    switch (category) {
+        case 'rides':
+            return RIDE_TYPES.includes(type);
+        case 'earnings':
+            return type === 'earnings' || type === 'payout_processed' || type === 'payout_failed' || type === 'quest_earned';
+        case 'promotions':
+            return type === 'promotion';
+        case 'safety':
+            return type === 'safety';
+        case 'general':
+            return !GENERAL_TYPES.has(type);
+        default:
+            return true;
+    }
+}
+
 function NotificationsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const { t } = useLanguageStore();
+    const [category, setCategory] = useState<CategoryFilter>('all');
 
     // /notifications is owned by the useNotifications hook. The hook
     // handles dedupe, cache, refetch on focus, and the persisted cache
@@ -74,9 +118,22 @@ function NotificationsScreen() {
 
     const data = rawNotifData as { notifications?: Notification[]; unread_count?: number } | undefined;
     const notifications: Notification[] = data?.notifications ?? [];
+    const filteredNotifications = useMemo(
+        () => notifications.filter((n) => matchesCategory(n.type, category)),
+        [notifications, category],
+    );
     const unreadCount: number = data?.unread_count ?? 0;
     const markReadMutation = useMarkNotificationRead();
     const markAllReadMutation = useMarkAllNotificationsRead();
+    const deleteNotificationMutation = useDeleteNotification();
+    const clearNotificationsMutation = useClearNotifications();
+
+    // Notifications whose `type` has no destination screen (e.g. auto_offline,
+    // quota_exhausted, ride_cancelled, ride_noshow, safety, general, system)
+    // previously did nothing at all when tapped beyond marking as read — with
+    // no way to read past the row's own 2-line-truncated body. This shows the
+    // full title/body in place instead of silently swallowing the tap.
+    const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
     const iconMap: Record<string, { name: string; color: string }> = {
         ride_update: { name: 'car', color: colors.primary },
@@ -92,8 +149,9 @@ function NotificationsScreen() {
     };
 
     const markAsRead = (id: string) => {
-        // Mutation invalidates the list cache on success; the screen
-        // re-renders with the row's is_read=true once the server confirms.
+        // Mutation writes is_read=true into the cache optimistically (see
+        // useMarkNotificationRead) — the row updates on tap, not after a
+        // round trip.
         markReadMutation.mutate(id, {
             onError: () => {
                 Alert.alert(t('notifications.markReadError'), t('notifications.markReadErrorBody'));
@@ -111,43 +169,84 @@ function NotificationsScreen() {
 
     const onRefresh = () => { refetch(); };
 
+    const handleDelete = (item: Notification) => {
+        showAlert(
+            t('notifications.deleteTitle'),
+            t('notifications.deleteBody'),
+            [
+                { text: t('common.delete'), style: 'destructive', onPress: () => deleteNotificationMutation.mutate(item.id) },
+                { text: t('common.cancel'), style: 'cancel' },
+            ],
+        );
+    };
+
+    const handleClearAll = () => {
+        if (notifications.length === 0) return;
+        showAlert(
+            t('notifications.clearAllTitle'),
+            t('notifications.clearAllBody'),
+            [
+                { text: t('notifications.clearAll'), style: 'destructive', onPress: () => clearNotificationsMutation.mutate(false) },
+                { text: t('common.cancel'), style: 'cancel' },
+            ],
+        );
+    };
+
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);
         const caseId = item.data?.case_id;
-        if (item.type === 'document_expiry') router.push('/driver/documents' as any);
-        else if (item.type === 'payout_processed') router.push('/driver/activity' as any);
-        else if (item.type === 'ride_offer') router.push('/driver/' as any);
-        else if (item.type === 'quest_earned') router.push('/driver/quests' as any);
-        else if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
+        if (item.type === 'document_expiry') { router.push('/driver/documents' as any); return; }
+        if (item.type === 'payout_processed') { router.push('/driver/activity' as any); return; }
+        if (item.type === 'ride_offer') { router.push('/driver/' as any); return; }
+        if (item.type === 'quest_earned') { router.push('/driver/quests' as any); return; }
+        if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
             if (caseId) router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId } } as any);
             else router.push('/driver/lost-and-found' as any);
+            return;
         }
+        // No destination screen for this type — show the full text in place.
+        setSelectedNotification(item);
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {
         const icon = iconMap[item.type] || iconMap.system;
         return (
-            <TouchableOpacity
-                style={[styles.notifCard, !item.is_read && styles.notifUnread]}
-                onPress={() => handleNotificationPress(item)}
-                activeOpacity={0.7}
-            >
-                <View style={[styles.notifIcon, { backgroundColor: `${icon.color}12` }]}>
-                    <Ionicons name={icon.name as any} size={20} color={icon.color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                    <View style={styles.notifHeader}>
-                        <Text style={styles.notifTitle}>{item.title}</Text>
-                        <Text style={styles.notifTime}>{formatTime(item.created_at)}</Text>
+            <View style={[styles.notifCard, !item.is_read && styles.notifUnread]}>
+                <TouchableOpacity
+                    style={styles.notifCardTouchable}
+                    onPress={() => handleNotificationPress(item)}
+                    activeOpacity={0.7}
+                    accessibilityLabel={`${item.title}${item.is_read ? '' : ', unread'}`}
+                >
+                    <View style={[styles.notifIcon, { backgroundColor: `${icon.color}12` }]}>
+                        <Ionicons name={icon.name as any} size={20} color={icon.color} />
                     </View>
-                    <Text style={styles.notifBody} numberOfLines={2}>{item.body}</Text>
-                </View>
-                {!item.is_read && <View style={styles.unreadDot} />}
-            </TouchableOpacity>
+                    <View style={{ flex: 1 }}>
+                        <View style={styles.notifHeader}>
+                            <Text style={styles.notifTitle}>{item.title}</Text>
+                            <Text style={styles.notifTime}>{formatTime(item.created_at)}</Text>
+                        </View>
+                        <Text style={styles.notifBody} numberOfLines={2}>{item.body}</Text>
+                    </View>
+                    {!item.is_read && <View style={styles.unreadDot} />}
+                </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={() => handleDelete(item)}
+                    style={styles.deleteBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('notifications.deleteTitle')}
+                >
+                    <Ionicons name="trash-outline" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+            </View>
         );
     };
 
     return (
+        // The screen returns a Fragment (FlatList + the fallback detail Modal
+        // below) instead of a bare FlatList; the comment below still applies
+        // to the FlatList itself as the scroll root.
         // FlatList IS the screen's root, with the header as its
         // ListHeaderComponent (stickied via stickyHeaderIndices), rather than
         // a separate View+FlatList sibling pair. The previous sibling layout
@@ -163,9 +262,10 @@ function NotificationsScreen() {
         // this ListHeaderComponent shape instead of a sibling header — this
         // change adopts that proven-working pattern rather than patching the
         // sibling layout further.
+        <>
         <FlatList
             style={styles.container}
-            data={notifications}
+            data={filteredNotifications}
             renderItem={renderNotification}
             keyExtractor={(item) => item.id}
             ListHeaderComponent={
@@ -175,17 +275,50 @@ function NotificationsScreen() {
                             <Ionicons name="arrow-back" size={22} color={colors.text} />
                         </TouchableOpacity>
                         <Text style={styles.headerTitle}>{t('notifications.title')}</Text>
-                        {unreadCount > 0 ? (
-                            <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
-                                <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
-                            </TouchableOpacity>
-                        ) : (
-                            <View style={{ width: 80 }} />
-                        )}
+                        <View style={styles.headerActions}>
+                            {unreadCount > 0 && (
+                                <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
+                                    <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
+                                </TouchableOpacity>
+                            )}
+                            {notifications.length > 0 && (
+                                <TouchableOpacity
+                                    onPress={handleClearAll}
+                                    style={styles.clearAllBtn}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={t('notifications.clearAllTitle')}
+                                >
+                                    <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                                </TouchableOpacity>
+                            )}
+                        </View>
                     </View>
                     {unreadCount > 0 && (
                         <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
                     )}
+                    <FlatList
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        data={CATEGORY_TABS}
+                        keyExtractor={(tab) => tab.key}
+                        style={styles.tabsRow}
+                        contentContainerStyle={styles.tabsContent}
+                        accessibilityRole="tablist"
+                        renderItem={({ item: tab }) => {
+                            const active = category === tab.key;
+                            return (
+                                <TouchableOpacity
+                                    style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
+                                    onPress={() => setCategory(tab.key)}
+                                    accessibilityRole="tab"
+                                    accessibilityState={{ selected: active }}
+                                >
+                                    <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
+                                </TouchableOpacity>
+                            );
+                        }}
+                    />
                 </LinearGradient>
             }
             // Keeps the back button / "Mark All Read" reachable while
@@ -227,6 +360,45 @@ function NotificationsScreen() {
                 )
             }
         />
+        <Modal
+            visible={!!selectedNotification}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setSelectedNotification(null)}
+            testID="notification-detail-modal"
+        >
+            <View style={styles.modalBackdrop}>
+                <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedNotification(null)} />
+                <View style={styles.modalCard}>
+                    {selectedNotification && (() => {
+                        const icon = iconMap[selectedNotification.type] || iconMap.system;
+                        return (
+                            <>
+                                <View
+                                    accessible={false}
+                                    importantForAccessibility="no-hide-descendants"
+                                    style={[styles.notifIcon, { backgroundColor: `${icon.color}12`, marginBottom: SPACING.sm }]}
+                                >
+                                    <Ionicons name={icon.name as any} size={22} color={icon.color} />
+                                </View>
+                                <Text style={styles.modalTitle}>{selectedNotification.title}</Text>
+                                <Text style={styles.modalTime}>{formatTime(selectedNotification.created_at)}</Text>
+                                <Text style={styles.modalBody} testID="notification-detail-body">{selectedNotification.body}</Text>
+                            </>
+                        );
+                    })()}
+                    <TouchableOpacity
+                        style={styles.modalCloseBtn}
+                        onPress={() => setSelectedNotification(null)}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('common.close')}
+                    >
+                        <Text style={styles.modalCloseText}>{t('common.close')}</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+        </>
     );
 }
 
@@ -251,21 +423,30 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
         },
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
+        headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
         markAllBtn: { padding: SPACING.sm },
         markAllText: { color: colors.primary, fontSize: FONT.bodySm, fontWeight: '600' },
+        clearAllBtn: { padding: SPACING.sm, minWidth: 36, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
         unreadCountText: {
             color: colors.textDim,
             fontSize: 12,
             marginTop: 6,
             textAlign: 'center',
         },
+        tabsRow: { marginTop: SPACING.sm },
+        tabsContent: { gap: 8, paddingBottom: 2 },
+        tab: {
+            paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+            backgroundColor: colors.surfaceLight, marginRight: 8,
+            minHeight: 44, justifyContent: 'center',
+        },
+        tabText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },
+        tabTextActive: { color: '#fff' },
         notifCard: {
             flexDirection: 'row',
-            alignItems: 'flex-start',
-            gap: 12,
+            alignItems: 'stretch',
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 14,
             // Was horizontal inset from the FlatList's own contentContainerStyle
             // before the header moved into ListHeaderComponent; kept here now
             // that contentContainerStyle no longer applies it (it would also
@@ -275,7 +456,16 @@ function createStyles(colors: ThemeColors) {
             marginBottom: SPACING.sm,
             borderWidth: 1,
             borderColor: colors.border,
+            overflow: 'hidden',
         },
+        notifCardTouchable: {
+            flex: 1,
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 12,
+            padding: 14,
+        },
+        deleteBtn: { paddingHorizontal: 14, justifyContent: 'center' },
         notifUnread: {
             borderColor: `${colors.primary}30`,
             backgroundColor: `${colors.primary}08`,
@@ -319,6 +509,34 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.primary,
         },
         retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+        modalBackdrop: {
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: SPACING.lg,
+        },
+        modalCard: {
+            width: '100%',
+            maxWidth: 420,
+            backgroundColor: colors.surface,
+            borderRadius: 20,
+            padding: SPACING.lg,
+        },
+        modalTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 4 },
+        modalTime: { color: colors.textDim, fontSize: FONT.label, marginBottom: SPACING.sm },
+        modalBody: { color: colors.text, fontSize: FONT.bodySm, lineHeight: 21, marginBottom: SPACING.lg },
+        modalCloseBtn: {
+            alignSelf: 'flex-end',
+            paddingHorizontal: 20,
+            // 14 (not the row-level retryBtn's 10) since the backdrop tap
+            // is the only other dismiss path and this needs to clear a
+            // ~44pt touch target on its own.
+            paddingVertical: 14,
+            borderRadius: 20,
+            backgroundColor: colors.primary,
+        },
+        modalCloseText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
 }
 

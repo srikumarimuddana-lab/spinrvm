@@ -1,11 +1,17 @@
 # Self-hosted basemap tiles
 
-The admin dashboard's maps currently render off a chain of third-party
-basemaps — OpenFreeMap → Protomaps (if keyed) → Carto — and fail over between
-them when one is slow (`basemapChain()` in
-`admin-dashboard/src/lib/map/maplibre-base.ts`). That chain works, but the
-"Basemap slow to load — trying another provider…" banner admins see is the
+The admin dashboard's maps used to render off a chain of third-party basemaps —
+OpenFreeMap → Protomaps (if keyed) → Carto — failing over between them when one
+was slow (`basemapChain()` in
+`admin-dashboard/src/lib/map/maplibre-base.ts`). That chain worked, but the
+"Basemap slow to load — trying another provider…" banner admins saw was the
 first hop timing out, every time, on somebody else's donation-funded CDN.
+
+**As of 2026-09-14 that chain is gone.** Carto was removed entirely, and when
+`NEXT_PUBLIC_MAP_STYLE_URL` points at this service it is the *only* hop — no
+third party sits behind it. With the variable unset the chain is OpenFreeMap,
+plus Protomaps if keyed. This service is therefore load-bearing once configured:
+if it is down, the admin maps are blank.
 
 This service replaces the chain with one we own, and serves **both** shapes the
 dashboard needs:
@@ -63,7 +69,7 @@ map is the normal failure here, and the smoke test is what distinguishes them.
 | `REGION_URL` | Geofabrik Saskatchewan `.osm.pbf` | The base extract to build tiles from. |
 | `EXTRA_REGION_URLS` | Geofabrik **Alberta** `.osm.pbf` | Space-separated extra `.osm.pbf` URLs merged into `REGION_URL` with `osmium merge`. Planetiler accepts only one input file, so a second province is a merge — not a second `--area`. **Cannot be set from Railway** — see the warning below. |
 | `JAVA_OPTS` | `-Xmx8g` | Planetiler heap. Raise for a bigger area; lower if your builder has less RAM. |
-| `STYLE_TARBALL_URL` | openmaptiles/positron-gl-style `master` | Any MapLibre GL style repo tarball. Positron matches the light, low-chrome look the dashboard already gets from Carto, so self-hosting is not a visual change. |
+| `STYLE_TARBALL_URL` | openmaptiles/positron-gl-style `master` | Any MapLibre GL style repo tarball. Positron matches the light, low-chrome look the dashboard got from Carto and OpenFreeMap's positron style, so self-hosting is not a visual change. |
 | `FONTS_ZIP_URL` | openmaptiles/fonts `v2.0` | Pre-generated PBF glyph ranges. |
 | `DATA_ID` | `v3` | Safe to override — `config.json` is re-keyed to match at build time, and the build asserts the style's source resolves against it. |
 | `PLANETILER_TAG` / `TILESERVER_TAG` | `latest` | **Pin these after your first successful build — see below.** |
@@ -152,23 +158,52 @@ needs a public domain — `*.railway.internal` will not work.
 ## 4. Wire the admin dashboard
 
 Set on the Vercel project (both are optional and independent — set one, both, or
-neither, and anything unset keeps today's third-party default):
+neither, and anything unset keeps today's third-party default). `maps.spinr.ca`
+below is illustrative; the service's live host is whatever domain is attached to
+it on Railway — currently `tilesserver-production-14c2.up.railway.app`:
 
 ```
-NEXT_PUBLIC_MAP_STYLE_URL=https://maps.spinr.ca/styles/basemap/style.json
-NEXT_PUBLIC_RASTER_TILE_URL=https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png
+NEXT_PUBLIC_MAP_STYLE_URL=https://<tile-host>/styles/basemap/style.json
+NEXT_PUBLIC_RASTER_TILE_URL=https://<tile-host>/styles/basemap/{z}/{x}/{y}.png
 ```
 
-- `NEXT_PUBLIC_MAP_STYLE_URL` becomes the **first hop** of `basemapChain()`. The
-  existing providers stay behind it as fallbacks, so if this service goes down
-  the maps degrade to OpenFreeMap/Carto rather than going blank.
+- `NEXT_PUBLIC_MAP_STYLE_URL` becomes the **only hop** of `basemapChain()`.
+  Since 2026-09-14 nothing sits behind it: if this service goes down the admin
+  maps go blank rather than degrading to OpenFreeMap/Carto. Set it once the
+  service is bedded in.
 - `NEXT_PUBLIC_RASTER_TILE_URL` retargets the no-WebGL renderer. `{z}`/`{x}`/`{y}`
-  are substituted; anything else in the string is left alone.
+  are substituted; anything else in the string is left alone. It no longer has a
+  third-party default: unset, it is **derived** from `NEXT_PUBLIC_MAP_STYLE_URL`
+  whenever that ends in `/style.json`, so for tileserver-gl the two lines above
+  are equivalent to setting the vector one alone. Set it explicitly only if your
+  PNGs live somewhere other than the style's own directory — a style from any
+  other provider has no sibling pyramid, and the renderer then shows a
+  "No basemap configured" notice rather than 404ing every tile.
+
+  The old staged rollout ("set the raster variable second, it has no fallback")
+  no longer applies in the way it used to: **neither** variable has a
+  third-party fallback now, so the vector one is the bigger commitment of the
+  two, not the safer one.
 - Optional `NEXT_PUBLIC_MAP_STYLE_URL_DARK` for a dark style, if you build one.
   Unset, the dark theme falls back to the light self-hosted style.
 
-These are `NEXT_PUBLIC_*`, so they are **inlined at build time** — changing them
-in Vercel requires a redeploy, not just a restart.
+### These do nothing until a production build succeeds
+
+`NEXT_PUBLIC_*` values are **inlined into the bundle at build time**, so:
+
+- Saving the variable in Vercel does **not** redeploy. You must trigger a
+  deployment yourself.
+- Scope it to the **Production** environment. A variable set only for
+  Preview/Development is correct-looking and inert in production.
+- Redeploy with the build cache **off**, so the new value is actually re-inlined.
+- Vercel **auto-cancels a production build that a newer commit supersedes.** On
+  2026-09-14 eight consecutive production deployments were CANCELED this way
+  during a run of back-to-back merges, leaving production pinned to a bundle
+  built over an hour earlier — with the dashboard still on OpenFreeMap and an
+  admin-visible "Basemap slow to load" banner, while the tile server itself was
+  healthy and serving in 10-124 ms. If the banner persists after setting the
+  variable, check that a production deployment actually reached **READY** before
+  looking anywhere else.
 
 ## 5. Troubleshooting
 

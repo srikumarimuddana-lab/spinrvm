@@ -546,3 +546,108 @@ async def test_push_title_is_bare_fare_when_no_incentives():
     pushes = push_mock.call_args.args[0]
     assert len(pushes) == 1
     assert pushes[0]["title"] == "New ride · $12.50"
+
+
+_MINIMAL_ONLY_FIELDS = (
+    "pickup_lat",
+    "pickup_lng",
+    "pickup_nav_lat",
+    "pickup_nav_lng",
+    "dropoff_lat",
+    "dropoff_lng",
+    "rider_rating",
+)
+
+
+async def test_fcm_payload_unchanged_when_minimal_flag_off():
+    """#1231 finding 15 (remaining half): minimal_fcm_offer_payload_enabled
+    defaults False, so the FCM data payload must stay byte-for-byte the same
+    fields as before this flag existed -- precise coordinates and
+    rider_rating still present, no offer_minimal marker."""
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver()
+    push_mock = AsyncMock()
+
+    with ExitStack() as stack:
+        mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
+        for p in _base_patches({}):
+            stack.enter_context(p)
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_dispatch_offer_pushes_batch", push_mock))
+
+        mock_db.get_rows = AsyncMock(return_value=[driver])
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
+        mock_db.supabase.table = MagicMock(side_effect=_table_router({}))
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_manager = MagicMock()
+        mock_manager.send_personal_message = AsyncMock()
+        stack.enter_context(patch("backend.routes.rides.matching._deps.manager", mock_manager))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    push_mock.assert_called_once()
+    fcm_data = push_mock.call_args.args[0][0]["data"]
+    for field in _MINIMAL_ONLY_FIELDS:
+        assert field in fcm_data, f"{field} unexpectedly dropped from FCM data with the flag off"
+    assert "offer_minimal" not in fcm_data
+
+
+async def test_fcm_payload_drops_coords_and_rating_when_minimal_flag_on():
+    """#1231 finding 15 (remaining half): minimal_fcm_offer_payload_enabled=
+    True must drop precise pickup/dropoff coordinates and rider_rating from
+    the FCM data payload and mark it offer_minimal, while the WS
+    dispatch_payload (the foreground app's path) keeps every field,
+    unaffected either way."""
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver()
+    push_mock = AsyncMock()
+
+    with ExitStack() as stack:
+        mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
+        for p in _base_patches({}):
+            stack.enter_context(p)
+        # After _base_patches so this binding wins (same precedent as
+        # test_push_title_includes_area_boost_bonus above).
+        stack.enter_context(
+            patch(
+                "backend.routes.rides.matching._deps.get_app_settings",
+                AsyncMock(return_value={"minimal_fcm_offer_payload_enabled": True}),
+            )
+        )
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_dispatch_offer_pushes_batch", push_mock))
+
+        mock_db.get_rows = AsyncMock(return_value=[driver])
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
+        mock_db.supabase.table = MagicMock(side_effect=_table_router({}))
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_manager = MagicMock()
+        mock_manager.send_personal_message = AsyncMock()
+        stack.enter_context(patch("backend.routes.rides.matching._deps.manager", mock_manager))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    push_mock.assert_called_once()
+    fcm_data = push_mock.call_args.args[0][0]["data"]
+    for field in _MINIMAL_ONLY_FIELDS:
+        assert field not in fcm_data, f"{field} leaked into the minimal FCM data payload"
+    assert fcm_data["offer_minimal"] == "true"
+    # Human-readable address labels are NOT removed by this flag -- they're
+    # already visible in the OS notification body / iOS aps.alert regardless
+    # (see matching.py's _FCM_EXCLUDE comment).
+    assert fcm_data["pickup_address"] == "100 Main St"
+    assert fcm_data["dropoff_address"] == "200 Broadway Ave"
+
+    # WS path (dispatch_payload) is untouched by this flag either way.
+    mock_manager.send_personal_message.assert_awaited_once()
+    ws_payload, _ = mock_manager.send_personal_message.await_args.args
+    assert ws_payload["pickup_lat"] == ride["pickup_lat"]
+    assert ws_payload["rider_rating"] == 4.9

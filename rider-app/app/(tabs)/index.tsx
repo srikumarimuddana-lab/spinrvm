@@ -19,7 +19,7 @@ import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useAuthStore } from '@shared/store/authStore';
 import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
-import api, { isAppCheckTokenReady } from '@shared/api/client';
+import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import { useBottomSheetGuard } from '../../hooks/useBottomSheetGuard';
 import { useAiChatStore } from '../../store/aiChatStore';
@@ -38,6 +38,7 @@ import {
   openNotificationSettings,
 } from '@shared/services/firebase';
 import { useTranslation } from '../../i18n';
+import { useNotifications } from '@shared/hooks/queries';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000;
 
@@ -80,7 +81,21 @@ export default function HomeScreen() {
   useEffect(() => {
     loadAiConfig();
   }, [loadAiConfig]);
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  // Bell-badge count: sourced from the shared notifications query cache
+  // (staleTime 30s), which useRiderSocket's `new_notification` handler
+  // updates instantly for a connected rider. That socket only opens while
+  // the rider has an active ride, so the explicit widened refetch below
+  // covers the rest of the time (was: fetched on every screen focus via a
+  // raw api.get with no fixed interval; now: at most every 3 minutes via
+  // this timer, plus instant on WS push, plus the query's own
+  // refetchOnWindowFocus/refetchOnReconnect defaults).
+  const { data: rawNotifData, refetch: refetchNotifications } = useNotifications(1);
+  const notifData = rawNotifData as { unread_count?: number } | undefined;
+  const unreadNotifCount = notifData?.unread_count ?? 0;
+  useEffect(() => {
+    const timer = setInterval(() => { refetchNotifications(); }, 3 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [refetchNotifications]);
   const [showPromo, setShowPromo] = useState(true);
   const [notifPermissionGranted, setNotifPermissionGranted] = useState(true);
   const [dismissedNotifBanner, setDismissedNotifBanner] = useState(false);
@@ -202,14 +217,9 @@ export default function HomeScreen() {
   const fetchHomeData = useCallback(async () => {
     await refreshLocation(true);
     fetchSavedAddresses();
-    // /api/v1/notifications is App-Check-enforced in prod; polling before the
-    // App Check token is minted 401s. Skip until ready — useFocusEffect re-runs
-    // this, so the badge loads on the next focus once App Check is up.
-    if (await isAppCheckTokenReady()) {
-      api.get('/notifications?limit=1').then((res: any) => {
-        setUnreadNotifCount(res.data?.unread_count ?? 0);
-      }).catch(() => {});
-    }
+    // Notification bell badge is now sourced from useNotifications(1) above
+    // (shared query cache, App-Check-gated internally) — no ad-hoc api.get
+    // here anymore.
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(

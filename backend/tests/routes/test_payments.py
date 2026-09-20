@@ -38,7 +38,7 @@ async def test_confirm_payment_ownership_check_rejects_non_owner():
             )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "forbidden"
+    assert exc_info.value.detail == ("This ride belongs to a different account, so you can't pay for it.")
 
 
 @pytest.mark.anyio
@@ -114,7 +114,7 @@ async def test_confirm_payment_race_guard_returns_409():
             )
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "payment_already_processing"
+    assert exc_info.value.detail == ("This payment is already being processed. Give it a moment before trying again.")
 
 
 @pytest.mark.anyio

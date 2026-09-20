@@ -1,0 +1,128 @@
+"""Online-idle live delivery must not depend on durable history being enabled."""
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
+
+from routes.drivers import location
+
+
+def test_live_position_rejects_zero_sentinel():
+    with pytest.raises(ValidationError):
+        location.LiveLocationRequest(lat=0, lng=0, captured_at=datetime.now(timezone.utc))
+
+
+@pytest.mark.parametrize(
+    "online,age,enabled,status",
+    [
+        (True, 0, True, None),
+        (False, 0, True, 409),
+        (True, 61, True, 422),
+        (True, -10, True, 422),
+        (True, 0, False, None),
+        (False, 0, False, 409),
+        (True, 61, False, 422),
+        (True, -10, False, 422),
+    ],
+)
+def test_live_position_without_idle_history(monkeypatch, online, age, enabled, status):
+    async def rows(table, filters, **kwargs):
+        if table == "drivers":
+            assert filters == {"user_id": "user-1"}
+            return [{"id": "driver-1", "is_online": online}]
+        return []
+
+    monkeypatch.setattr(location.db_supabase, "get_rows", rows)
+    monkeypatch.setattr(
+        "settings_loader.get_app_settings",
+        AsyncMock(return_value={"background_location_fanout_enabled": enabled, "idle_location_v2_enabled": False}),
+    )
+    apply = AsyncMock()
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
+    monkeypatch.setattr(location, "_apply_v2_live_marker_update", apply)
+    guard = AsyncMock()
+    monkeypatch.setattr(location, "_guard_revoked_session", guard)
+    tasks = BackgroundTasks()
+    point = location.LiveLocationRequest(
+        lat=50.45, lng=-104.6, captured_at=datetime.now(timezone.utc) - timedelta(seconds=age)
+    )
+    call = location.update_live_location(point, tasks, current_user={"id": "user-1"}, token_session_id="session-1")
+    if status:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(call)
+        assert exc.value.status_code == status
+    else:
+        result = asyncio.run(call)
+        assert result["accepted"] is True
+        asyncio.run(tasks())
+    assert apply.await_count == int(status is None)
+    assert presence.await_count == int(status is None)
+    if status is None:
+        presence.assert_awaited_once_with("driver-1")
+    guard.assert_awaited_once_with("session-1")
+
+
+@pytest.mark.parametrize("revoked,status", [(False, 403), (True, 401)])
+def test_live_presence_rejects_missing_driver_or_revoked_session(monkeypatch, revoked, status):
+    monkeypatch.setattr(location.db_supabase, "get_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr("settings_loader.get_app_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        location,
+        "_guard_revoked_session",
+        AsyncMock(side_effect=HTTPException(status_code=401) if revoked else None),
+    )
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
+    tasks = BackgroundTasks()
+    point = location.LiveLocationRequest(lat=50.45, lng=-104.6, captured_at=datetime.now(timezone.utc))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            location.update_live_location(
+                point,
+                tasks,
+                current_user={"id": "user-1"},
+                token_session_id="session-1",
+            )
+        )
+    assert exc.value.status_code == status
+    presence.assert_not_awaited()
+    assert not tasks.tasks
+
+
+def test_live_endpoint_updates_marker_with_fanout_disabled(monkeypatch):
+    async def rows(table, filters, **kwargs):
+        return [{"id": "driver-1", "is_online": True}] if table == "drivers" else []
+
+    monkeypatch.setattr(location.db_supabase, "get_rows", rows)
+    monkeypatch.setattr("settings_loader.get_app_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
+    presence = AsyncMock()
+    monkeypatch.setattr(location._deps, "mark_present", presence)
+    monkeypatch.setattr("utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, "ok")))
+    monkeypatch.setattr(location, "_newer_than_last_written_marker", AsyncMock(return_value=True))
+    write = AsyncMock()
+    send = AsyncMock()
+    monkeypatch.setattr(location, "_write_marker_if_due", write)
+    monkeypatch.setattr(location._deps.manager, "send_personal_message", send)
+    tasks = BackgroundTasks()
+    point = location.LiveLocationRequest(lat=50.45, lng=-104.6, captured_at=datetime.now(timezone.utc))
+    result = asyncio.run(
+        location.update_live_location(
+            point,
+            tasks,
+            current_user={"id": "user-1"},
+            token_session_id="session-1",
+        )
+    )
+    assert result["accepted"] is True
+    asyncio.run(tasks())
+    write.assert_awaited_once()
+    assert write.await_args.args[1]["lat"] == point.lat
+    assert write.await_args.args[1]["lng"] == point.lng
+    send.assert_not_awaited()
+    presence.assert_awaited_once_with("driver-1")

@@ -51,7 +51,7 @@ router = APIRouter()
 def _require_super_admin(admin: dict) -> None:
     """403 unless super_admin — writing payouts history is above module grants."""
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Stripe payout sync requires super_admin")
+        raise HTTPException(status_code=403, detail="Stripe payout sync requires super admin access.")
 
 
 class PayoutSyncRequest(BaseModel):
@@ -163,4 +163,3 @@ async def commit_payout_sync(
         },
     )
     return {**_report(plan, batch), "committed": True, **result}
-

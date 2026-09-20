@@ -475,6 +475,14 @@ driver_dormancy_commit_limit = default_limiter.limit("10/hour")
 legacy_id_crosswalk_backfill_preview_limit = default_limiter.limit("30/hour")
 legacy_id_crosswalk_backfill_commit_limit = default_limiter.limit("10/hour")
 
+# Legacy duration-estimated marker backfill (2026-09-14, ACTION_ITEMS.md A41
+# residual gap) -- same small-fixed-dataset, generous-headroom reasoning as
+# the tools above (~186 legacy rides per the 2026-08-19 audit, not
+# thousands); additive-only (legacy_import_metadata), never touches
+# duration_minutes or any money/dispatch field.
+duration_estimated_backfill_preview_limit = default_limiter.limit("30/hour")
+duration_estimated_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and
@@ -741,7 +749,8 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
             "limit": limit_amount,
-            "documentation_url": "https://spinr.app/docs/rate-limits",
+            # Link to the published runbook; spinr.ca has no /docs/rate-limits page.
+            "documentation_url": "https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/rate-limits.md",
         },
         headers=headers,
     )

@@ -234,7 +234,7 @@ Use a sentinel (`ERR_DB_POOL`) or a `SpinrException` subclass.
 # 1. Sanitisation: trigger a 500 and confirm the body is generic.
 #    /api/admin/staff/{id} with a malformed id produces a 500
 #    today (Supabase exception interpolation).
-curl -i -X PATCH "https://api.spinr.app/api/admin/staff/INVALID" \
+curl -i -X PATCH "https://api-spinr.spinr.ca/api/admin/staff/INVALID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}' | head -30
@@ -247,7 +247,7 @@ curl -i -X PATCH "https://api.spinr.app/api/admin/staff/INVALID" \
 #             "request_id":"<id>","sanitised":true,...}}
 
 # 2. Correlation: client-set X-Request-ID round-trips.
-curl -i -X GET "https://api.spinr.app/api/admin/rides/nonexistent" \
+curl -i -X GET "https://api-spinr.spinr.ca/api/admin/rides/nonexistent" \
   -H "X-Request-ID: support-ticket-12345" \
   -H "Authorization: Bearer $TOKEN" | grep -i "x-request-id"
 

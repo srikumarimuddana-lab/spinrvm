@@ -486,7 +486,7 @@ class InsufficientFundsException(PaymentException):
 class InternalErrorException(SpinrException):
     """Internal server error."""
 
-    def __init__(self, message: str = "Internal server error", **kwargs):
+    def __init__(self, message: str = "Something went wrong on our end. Please try again in a moment.", **kwargs):
         super().__init__(
             message=message,
             error_code=ErrorCode.INTERNAL_ERROR,
@@ -794,7 +794,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         except Exception:  # noqa: S110
             # Never let logging take down the error handler itself.
             pass
-        detail = "Internal server error"
+        detail = "Something went wrong on our end. Please try again in a moment."
         sanitized = True
 
     error_obj: Dict[str, Any] = {
@@ -806,7 +806,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     if sanitized:
         # Explicit signal so a future contributor reading the response
         # in dev tools knows the message was scrubbed (vs the route
-        # genuinely returning "Internal server error").
+        # genuinely returning that sentence).
         error_obj["sanitised"] = True
 
     headers: Dict[str, str] = {
@@ -916,7 +916,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
 
     error_body: Dict[str, Any] = {
         "code": ErrorCode.INTERNAL_ERROR.value,
-        "message": "An unexpected error occurred",
+        "message": "Something went wrong on our end. Please try again in a moment.",
         "request_id": request_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

@@ -430,7 +430,7 @@ export default function ActivityScreen() {
               <View style={styles.statsRow}>
                 {[0, 1, 2, 3].map(i => (
                   <View key={i} style={styles.statItem}>
-                    <SkeletonBox width={44} height={18} style={{ marginBottom: 4 }} />
+                    <SkeletonBox width={44} height={18} style={{ marginBottom: SPACING.xs }} />
                     <SkeletonBox width={32} height={12} />
                   </View>
                 ))}
@@ -490,15 +490,15 @@ export default function ActivityScreen() {
               <Text style={styles.emptyText}>Pull down to refresh.</Text>
             </ScrollView>
           ) : loading && rides.length === 0 ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            <View style={{ paddingHorizontal: SPACING.md, paddingTop: SPACING.sm }}>
               {[0, 1, 2, 3].map((i) => (
                 <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}>
                   <SkeletonBox width={40} height={40} borderRadius={20} style={{ marginRight: 12 }} />
-                  <View style={{ flex: 1, gap: 8 }}>
+                  <View style={{ flex: 1, gap: SPACING.sm }}>
                     <SkeletonBox width="60%" height={14} />
                     <SkeletonBox width="40%" height={12} />
                   </View>
-                  <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                  <View style={{ alignItems: 'flex-end', gap: SPACING.sm }}>
                     <SkeletonBox width={50} height={14} />
                     <SkeletonBox width={40} height={12} />
                   </View>

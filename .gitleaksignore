@@ -105,3 +105,13 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # still exists in history, so the history scan (G5a) needs this fingerprint
 # ignored.
 9cc1febdd1755b64f80a13209fa38314e2758019:docs/change-log/2026-09-11-stripe-preauth-incremental-auth-ineligible-fallback.md:generic-api-key:67
+
+# PR #5456: spinr-driver-export-pii false-positived on two new regression
+# tests for the admin driver-export endpoint (CRIMSON-SMOKE-7445-WK fix).
+# The test mock data includes fake single-char-user email addresses and
+# phone numbers alongside a driver dict containing "license_number": None
+# — all fake test fixtures, no real PII. The rule keyword pre-filter
+# matches "license_number" anywhere in the file and then flags any
+# email-shaped string, regardless of proximity.
+e08bb1c2886b9f17304d8870c257fa092e1216e8:backend/tests/test_admin_rides_read_endpoints_coverage.py:spinr-driver-export-pii:802
+e08bb1c2886b9f17304d8870c257fa092e1216e8:backend/tests/test_admin_rides_read_endpoints_coverage.py:spinr-driver-export-pii:843

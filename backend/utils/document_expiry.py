@@ -333,12 +333,28 @@ async def check_expiring_documents():
                 "drivers",
                 {
                     "id": driver["id"],
-                    "$or": [f"doc_expiry_warned_at.is.null,doc_expiry_warned_at.lt.{cutoff}"],
+                    # Mongo-shaped {col: predicate} dicts, not a raw PostgREST
+                    # string — repositories._base._build_or_clause iterates
+                    # `clause.items()` per $or entry. A raw string here (the
+                    # prior form of this filter) has no .items() and raised
+                    # AttributeError on every tick, silently swallowed by the
+                    # except below, so this CAS never once succeeded and no
+                    # expiry-warning push/email ever went out.
+                    "$or": [
+                        {"doc_expiry_warned_at": {"$notnull": False}},
+                        {"doc_expiry_warned_at": {"$lt": cutoff}},
+                    ],
                 },
                 {"doc_expiry_warned_at": now.isoformat()},
             )
         except Exception as e:
-            logger.warning(f"Doc expiry: warn-claim failed for driver {driver['id']}: {e}")
+            # error + exc_info, not warning: this is a DB write failure on the
+            # same footing as the suspension CAS above (line ~257), which
+            # already logs at this level. CLAUDE.md forbids `logger.warning`
+            # + continue on a DB error — this line previously did exactly
+            # that, which is how the malformed-$or AttributeError above went
+            # unnoticed at production alerting severity for as long as it did.
+            logger.error(f"Doc expiry: warn-claim failed for driver {driver['id']}: {e}", exc_info=True)
             continue
         if not claimed:
             # Another replica already notified within the throttle window.

@@ -887,7 +887,16 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         # passenger-trip contracts. The pickup leg (flag-gated) is computed
         # separately below as an ADDITIVE display artifact so it can never
         # contaminate measured distance or route quality.
-        segmented = segment_route(_phase_3_points(points, ride), ride, completion_point)
+        try:
+            reorder_captures = ((await get_app_settings()) or {}).get("route_interleaved_capture_enabled") is True
+        except Exception:
+            # This additive rollout stays off when its setting cannot be read.
+            # Preserve the existing route contract, while surfacing the failure.
+            logger.error("route capture-ordering flag read failed for ride %s; treating as off", ride_id, exc_info=True)
+            reorder_captures = False
+        segmented = segment_route(
+            _phase_3_points(points, ride), ride, completion_point, allow_interleaved_sources=reorder_captures
+        )
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
         # Tail-anchor resolution. The recorded completion fix is the preferred
         # anchor; when capture died before one could be recorded (SPR-YDEBCH:
@@ -949,6 +958,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         drawable = _has_drawable_route(display_segments)
         processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
+        quality["capture_ordering"] = "bounded_native_overlap" if reorder_captures else "strict_sequence"
         if reconstructed is not None and completion_anchor_source is not None:
             # Provenance of the reconstruction's tail anchor: a recorded
             # completion fix vs. the booked dropoff fallback (audit surface).
@@ -1005,7 +1015,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                     and (parse_iso_utc(point.get("captured_at") or point.get("timestamp")) or started_at) < started_at
                 ]
                 if p2_points:
-                    p2_segmented = segment_route(p2_points, ride, None)
+                    p2_segmented = segment_route(p2_points, ride, None, allow_interleaved_sources=reorder_captures)
                     p2_projection = _observed_projection(p2_segmented)
                     if p2_projection:
                         display_segments = [*p2_projection, *display_segments]

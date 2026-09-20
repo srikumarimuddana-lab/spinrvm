@@ -1,9 +1,12 @@
 """Public endpoint serving the Spinr logo for transactional-email headers.
 
-Email clients cannot read a file off disk, and ``utils/email_provider._build_mime``
-builds only ``multipart/alternative`` / ``multipart/mixed`` — it has no
-``multipart/related`` support, so a CID-embedded inline image is not available.
-Branded emails therefore reference the logo by URL, and that URL is this route.
+Email clients cannot read a file off disk. The logo is a public brand mark
+with no PII, so branded emails reference it by this URL rather than
+CID-embedding it — mail-client image proxies (Gmail's, notably) cache the
+asset for a year (``_CACHE_CONTROL`` below). Route-map snapshots cannot use
+this pattern (PIPEDA: they are a trip GPS trace; signed Storage URLs expire)
+and are instead CID-embedded via ``utils.email_provider._build_mime``'s
+``multipart/related`` support. The logo URL is this route.
 
 Why a single-file route rather than ``app.mount("/static", StaticFiles(...))``:
 ``backend/static/`` also holds ``sgi_forms/D00032_*.pdf`` and ``D00033_*.pdf`` —

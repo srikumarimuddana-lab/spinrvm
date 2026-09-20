@@ -107,6 +107,14 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     needs: [detect-changes]
+    # C47: this job was previously hit by unexplained external cancellations
+    # (exit 143, "runner has received a shutdown signal") with the root
+    # cause never found -- downstream gates were made fail-open on a missing
+    # artifact, but the job itself had no bound. If that same anomaly ever
+    # manifests as a hang instead of an external kill, this is the single
+    # most expensive job in the workflow (~15-18 min real runtime per the
+    # comment below) and would otherwise run to GitHub's 360-minute default.
+    timeout-minutes: 25
     # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
     # 5): this is the single most expensive job in this workflow (a full
     # `pytest --cov` run, ~15-18 min) -- the real turnaround-time win. Every
@@ -152,7 +160,35 @@ jobs:
           ADMIN_PASSWORD: ci-placeholder-password
           ENV: test
         run: |
-          pytest --cov=. --cov-report=json:../shared-coverage.json -q --no-header 2>/dev/null || true
+          # The three --ignore flags mirror ci.yml's `backend-test` step, which
+          # has excluded these since it was written. This step did not, and a
+          # bare `pytest` therefore COLLECTED tests/test_schemathesis_fuzz.py --
+          # whose collection loads the app's OpenAPI schema over the network.
+          # When that read timed out, pytest reported
+          # `Interrupted: 1 error during collection`, which aborts the whole
+          # session: `1 skipped`, ZERO tests run, no coverage file written.
+          # Every downstream floor/regression gate then consumed nothing and
+          # reported its own misleading message. Observed on run 35526289539
+          # (PR #5571); see CR #5578 for the full trace.
+          #
+          # `2>/dev/null` is deliberately gone. It hid the collection error
+          # above, turning a one-glance diagnosis into a four-job
+          # investigation -- the same "never silently swallow errors" rule
+          # CLAUDE.md enforces in application code, applied to the step that
+          # feeds every coverage gate.
+          #
+          # `|| true` STAYS. It is not the bug: this job exists to produce
+          # coverage data, not a pass/fail verdict, and it deliberately
+          # tolerates individual test failures (it runs without a Postgres
+          # service, so a handful of DB-dependent tests always fail here --
+          # see check_admin_coverage_floor.py's FLOOR MANIFEST provenance
+          # note, which measured against exactly this environment shape).
+          # Removing it would make this job fail on those pre-existing
+          # failures and produce no artifact at all -- the very outcome
+          # CR #5578 is about.
+          pytest --cov=. --cov-report=json:../shared-coverage.json -q --no-header \
+            --ignore=tests/direct_pool --ignore=tests/rls \
+            --ignore=tests/test_schemathesis_fuzz.py || true
 
       - name: Upload shared coverage artifact
         # if-no-files-found: warn (not error) -- a hard pytest crash before
@@ -231,6 +267,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
         # downloads shared-coverage-run's single coverage.json instead.
         # continue-on-error: true so a missing artifact (shared job crashed
@@ -243,6 +280,37 @@ jobs:
         with:
           name: shared-coverage-${{ github.run_id }}
           path: backend
+
+      - name: Retry shared coverage artifact download on backend lag
+        # Confirmed on PR #5382, run 34814240460: this gate and
+        # money-path-coverage-floor-gate both failed with "Artifact not
+        # found for name: shared-coverage-<run_id>" even though
+        # shared-coverage-run's upload step had already completed --
+        # GitHub Actions' artifact backend has occasional brief
+        # read-after-write lag when several jobs download a
+        # freshly-uploaded artifact in parallel, not a logic bug in this
+        # workflow. Retries via the pre-installed `gh` CLI (no new pinned
+        # marketplace action, per this repo's preference to avoid new
+        # supply-chain surface) before giving up. If the artifact is
+        # genuinely missing -- e.g. shared-coverage-run crashed before
+        # uploading -- this loop exhausts and "Extract PR branch coverage"
+        # below still degrades exactly as it always has (its existing
+        # try/except "Coverage read failed" path); this step never masks a
+        # real failure, only a transient one.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
 
       - name: Extract PR branch coverage
         working-directory: backend
@@ -270,10 +338,22 @@ jobs:
           # silently always fall back to origin/main regardless of what the
           # dispatch input asked for.
           BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
+          # BASE prefers github.event.merge_group.base_sha (the real base
+          # commit GitHub already computed for this merge group) over
+          # reconstructing "origin/main" from the workflow_dispatch
+          # base_branch input -- this workflow's pull_request trigger covers
+          # both `main` and `staging`, but the base_branch-input fallback
+          # alone would always assume "main" even for a staging-targeted
+          # merge_group run (this job is advisory, continue-on-error: true,
+          # so the worst case pre-fix was a misleading coverage-regression
+          # number, never a blocked merge). Same refinement already applied
+          # to migration-safety-gate's 3 steps (CR-2026-085/#5381,
+          # spinr-cicd-infra-reviewer-reviewed) -- CR-2026-087/#5409.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           if [ -z "$BASE" ]; then
-            BASE="origin/${BASE_BRANCH_INPUT:-main}"
+            BASE="${MERGE_GROUP_BASE_SHA:-origin/${BASE_BRANCH_INPUT:-main}}"
           fi
           MB=$(git merge-base "$BASE" HEAD 2>/dev/null || echo "$BASE")
           echo "sha=$MB" >> "$GITHUB_OUTPUT"
@@ -576,6 +656,7 @@ jobs:
           cat /tmp/changed_files_money.txt
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
         # downloads shared-coverage-run's single coverage.json instead.
         # continue-on-error: true so a missing artifact doesn't hard-stop
@@ -590,12 +671,43 @@ jobs:
           name: shared-coverage-${{ github.run_id }}
           path: backend
 
+      - name: Retry shared coverage artifact download on backend lag
+        # Confirmed on PR #5382, run 34814240460: this gate and
+        # coverage-regression-gate both failed with "Artifact not found for
+        # name: shared-coverage-<run_id>" even though shared-coverage-run's
+        # upload step had already completed -- GitHub Actions' artifact
+        # backend has occasional brief read-after-write lag when several
+        # jobs download a freshly-uploaded artifact in parallel, not a
+        # logic bug in this workflow. Retries via the pre-installed `gh`
+        # CLI (no new pinned marketplace action, per this repo's preference
+        # to avoid new supply-chain surface) before giving up. If the
+        # artifact is genuinely missing, this loop exhausts and "Check
+        # per-module floors" below still fails loudly exactly as it always
+        # has -- CLAUDE.md's "don't silently swallow errors" convention;
+        # this step never substitutes a fallback result for a real
+        # failure.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
+
       - name: Check per-module floors
         working-directory: backend
         run: |
           python3 scripts/check_money_path_coverage_floor.py \
             --coverage-json shared-coverage.json \
-            --changed-files-file /tmp/changed_files_money.txt
+            --changed-files-file /tmp/changed_files_money.txt \
+            --producer-result '${{ needs.shared-coverage-run.result }}'
 
   # ─── 1d. Admin routes / utilities coverage floor ─────────────────────────
   # CLAUDE.md's coverage-minimums table names ">= 70%" for "Admin routes,
@@ -642,18 +754,47 @@ jobs:
           cat /tmp/changed_files_admin.txt
 
       - name: Download shared coverage artifact
+        id: download_shared_coverage
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: shared-coverage-${{ github.run_id }}
           path: backend
 
+      - name: Retry shared coverage artifact download on backend lag
+        # Same rationale as money-path-coverage-floor-gate above: GitHub
+        # Actions' artifact backend has occasional brief read-after-write
+        # lag when several jobs download a freshly-uploaded artifact in
+        # parallel (confirmed on PR #5382, run 34814240460), not a logic
+        # bug in this workflow. Retries via the pre-installed `gh` CLI (no
+        # new pinned marketplace action, per this repo's preference to
+        # avoid new supply-chain surface) before giving up. If the
+        # artifact is genuinely missing, this loop exhausts and "Check
+        # per-module floors" below still fails loudly exactly as it always
+        # has; this step never substitutes a fallback result for a real
+        # failure.
+        if: steps.download_shared_coverage.outcome == 'failure'
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if [ -f shared-coverage.json ]; then
+              echo "shared-coverage.json present -- no retry needed."
+              break
+            fi
+            echo "Attempt $attempt: retrying shared-coverage-${{ github.run_id }} download via gh CLI..."
+            gh run download "${{ github.run_id }}" -n "shared-coverage-${{ github.run_id }}" -D . && break
+            sleep 5
+          done
+
       - name: Check per-module floors
         working-directory: backend
         run: |
           python3 scripts/check_admin_coverage_floor.py \
             --coverage-json shared-coverage.json \
-            --changed-files-file /tmp/changed_files_admin.txt
+            --changed-files-file /tmp/changed_files_admin.txt \
+            --producer-result '${{ needs.shared-coverage-run.result }}'
 
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
@@ -834,7 +975,7 @@ jobs:
           PYEOF
 
       - name: Check for new secrets in diff
-        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # main (2026-08-19)
+        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # main (2026-08-19)
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -967,12 +1108,46 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
           import os, subprocess, re, sys
 
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
+          BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
+
+          # BASE_SHA/HEAD_SHA come from github.event.pull_request.*, which is
+          # undefined on merge_group/workflow_dispatch runs (both empty
+          # strings there) -- without this fallback, `git merge-base '' ''`
+          # fails, MERGE_BASE resolves to '', and `git diff --name-only '' ''`
+          # silently reports zero migration files: a hard-blocking gate
+          # (continue-on-error: false) reporting PASS having never actually
+          # scanned anything. Mirrors coverage-regression-gate's own
+          # "Resolve merge-base SHA" step (~line 296) in this same file, with
+          # one refinement: BASE prefers github.event.merge_group.base_sha
+          # (the real base commit GitHub already computed for this merge
+          # group) over reconstructing "origin/main" from the
+          # workflow_dispatch base_branch input -- this workflow's
+          # pull_request trigger covers both `main` and `staging`
+          # (github.event.pull_request.base.sha covers per-branch, but the
+          # workflow_dispatch fallback alone would always assume "main" even
+          # for a staging-targeted merge_group run once/if the merge queue is
+          # enabled there too; merge_group.base_sha sidesteps that entirely).
+          # HEAD falls back to the literal HEAD ref, which actions/checkout
+          # has already set to the right commit for whichever event
+          # triggered this run -- correct for merge_group too, since the
+          # checked-out commit there is already the temporary merge-group
+          # commit. CR-2026-085 / #5381. Adversarially reviewed by
+          # spinr-cicd-infra-reviewer, which flagged the original
+          # origin/main-only fallback as a real (if not currently exercised)
+          # gap before this refinement was added.
+          if not BASE_SHA:
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
+          if not HEAD_SHA:
+              HEAD_SHA = 'HEAD'
 
           # Diff from the actual merge-base, not raw BASE_SHA. BASE_SHA is the
           # base branch's CURRENT tip, which keeps moving as main advances — a
@@ -1106,12 +1281,26 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
           import os, re, subprocess, sys
 
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
+          BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
+
+          # Empty on merge_group/workflow_dispatch (github.event.pull_request
+          # doesn't exist there) -- same CR-2026-085 fix as this job's "Check
+          # for dangerous migration patterns" step above; this step has its
+          # own independent env/diff. See that step's comment for the full
+          # rationale. CR-2026-085 / #5381.
+          if not BASE_SHA:
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
+          if not HEAD_SHA:
+              HEAD_SHA = 'HEAD'
 
           # Diff from the actual merge-base, not raw BASE_SHA — same
           # CR-2026-035 fix as this job's "Check for dangerous migration
@@ -1256,12 +1445,26 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
           python3 - <<'PYEOF'
           import os, re, subprocess, sys
 
           BASE_SHA = os.environ.get('BASE_SHA', '')
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
+          BASE_BRANCH_INPUT = os.environ.get('BASE_BRANCH_INPUT', '')
+          MERGE_GROUP_BASE_SHA = os.environ.get('MERGE_GROUP_BASE_SHA', '')
+
+          # Empty on merge_group/workflow_dispatch (github.event.pull_request
+          # doesn't exist there) -- same CR-2026-085 fix as this job's other
+          # diff steps; this step has its own independent env/diff. See
+          # "Check for dangerous migration patterns" above for the full
+          # rationale. CR-2026-085 / #5381.
+          if not BASE_SHA:
+              BASE_SHA = MERGE_GROUP_BASE_SHA or f'origin/{BASE_BRANCH_INPUT or "main"}'
+          if not HEAD_SHA:
+              HEAD_SHA = 'HEAD'
 
           # Diff from the actual merge-base, not raw BASE_SHA — same
           # CR-2026-035 fix as this job's other diff steps; this step has its
@@ -1727,8 +1930,22 @@ jobs:
       # kind of never-failing roll-up branch protection would otherwise rely
       # on. Path-filtered `skipped` results still pass; only an actual
       # `failure`/`cancelled` result now fails the job.
+      #
+      # CR #5572: same defect, same fix as `security-gates.yml`'s summary job
+      # -- these two are the only copies of this pattern in the repo (verified
+      # by grep). The `cancelled` half is correct for a gate cancelled
+      # mid-run, but could not tell that apart from the whole run being
+      # superseded by a newer push, so every force-push left a spurious red on
+      # the abandoned sha. `!cancelled()` is true only when the workflow
+      # itself was not cancelled.
+      #
+      # Clause placement is deliberate and matches the sibling workflow: a
+      # real `failure` still fails this job UNCONDITIONALLY; only the
+      # `cancelled` branch is gated. If `cancelled()` misbehaves, the worst
+      # case is a superseded run going red again -- never a genuine gate
+      # failure being swallowed. C74's hole stays closed either way.
       - name: Fail if any required gate failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || (!cancelled() && contains(needs.*.result, 'cancelled')) }}
         run: |
           echo "::error::one or more required CI guardrails failed — see the summary comment above"
           exit 1

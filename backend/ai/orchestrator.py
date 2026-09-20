@@ -26,7 +26,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 try:
     from . import conversations, response_cache
     from .guardrails import fallback_over_cap
-    from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
+    from .pii import ScrubPolicy, filter_tool_leakage, official_contact_preserve, scrub_pii
     from .prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
@@ -36,7 +36,7 @@ try:
 except ImportError:
     from ai import conversations, response_cache
     from ai.guardrails import fallback_over_cap
-    from ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii
+    from ai.pii import ScrubPolicy, filter_tool_leakage, official_contact_preserve, scrub_pii
     from ai.prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
@@ -389,7 +389,8 @@ async def _run_chat_turn(
     # postal code of a tapped address, both of which the model must see
     # verbatim (ADR 012). Only this path and tools.py's model-facing result
     # cap opt in — Sentry, support and /mcp scrubbing stay fully strict.
-    scrubbed = scrub_pii(user_message, policy=ScrubPolicy.AI_CHAT)
+    contact_preserve = official_contact_preserve(settings)
+    scrubbed = scrub_pii(user_message, policy=ScrubPolicy.AI_CHAT, preserve=contact_preserve)
     user_row = await conversations.append_message(conversation, "user", scrubbed)
     yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
 
@@ -487,9 +488,13 @@ async def _run_chat_turn(
             # the tool's latency for no safety gain — a value cannot span two
             # separate provider responses.
             out_filter = (
-                StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT)
+                StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT, preserve=contact_preserve)
                 if incremental_streaming_enabled
-                else StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT, holdback=_DISABLE_INCREMENTAL_HOLDBACK)
+                else StreamingOutputFilter(
+                    policy=ScrubPolicy.AI_CHAT,
+                    holdback=_DISABLE_INCREMENTAL_HOLDBACK,
+                    preserve=contact_preserve,
+                )
             )
             async for event in adapter.stream_turn(system=system, messages=messages, tools=tools):
                 if event.type == "text" and event.text:
@@ -635,7 +640,7 @@ async def _run_chat_turn(
     # the streaming path having been correct; if the stream filter ever
     # regresses, the stored copy still gets scrubbed rather than both failing
     # together.
-    stored_text = filter_tool_leakage(scrub_pii(delivered_text, policy=ScrubPolicy.AI_CHAT))
+    stored_text = filter_tool_leakage(scrub_pii(delivered_text, policy=ScrubPolicy.AI_CHAT, preserve=contact_preserve))
 
     assistant_row = await conversations.append_message(
         conversation,

@@ -705,7 +705,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
 
     if not req.free_ride:
         if req.discount_type not in ("flat", "percentage"):
-            raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
+            raise HTTPException(status_code=400, detail="Choose a discount type: a flat amount or a percentage.")
         # P1-4: cap discount_value to prevent absurd promo creation
         if req.discount_type == "percentage" and req.discount_value > 100:
             raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")

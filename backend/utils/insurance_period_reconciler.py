@@ -66,14 +66,24 @@ except ImportError:
 
 try:
     from .. import db_supabase
+    from ..models.ride_status import RideStatus
     from ..settings_loader import get_app_settings
-    from .insurance_periods import record_period_transition
+    from .insurance_periods import (
+        _EN_ROUTE_STATUSES,
+        derive_insurance_period,
+        record_period_transition,
+    )
     from .metrics import inc as _metric_inc
     from .redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual import path
     import db_supabase  # type: ignore
+    from models.ride_status import RideStatus  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
-    from utils.insurance_periods import record_period_transition  # type: ignore
+    from utils.insurance_periods import (  # type: ignore
+        _EN_ROUTE_STATUSES,
+        derive_insurance_period,
+        record_period_transition,
+    )
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
@@ -92,7 +102,10 @@ ACTIVE_SCAN_LIMIT = 1000
 # wrongful downgrade, so a bounded page is an acceptable v1 limitation.
 ONLINE_DRIVER_LIMIT = 500
 
-_ASSIGNED_RIDE_STATUSES = ["driver_assigned", "driver_accepted", "driver_arrived"]
+# Sourced from the shared derivation rather than restated here: these are
+# exactly the statuses `derive_insurance_period` maps to Period 2, so the
+# query filter and the classification can no longer drift apart.
+_ASSIGNED_RIDE_STATUSES = sorted(s.value for s in _EN_ROUTE_STATUSES)
 
 # (period, ride_id) expected for a driver_id.
 _Expected = Tuple[int, Optional[str]]
@@ -108,7 +121,8 @@ async def _pending_offer_candidates() -> Dict[str, _Expected]:
         )
         or []
     )
-    return {r["driver_id"]: (2, r.get("ride_id")) for r in rows if r.get("driver_id")}
+    period = derive_insurance_period(has_live_offer=True, is_online=True)
+    return {r["driver_id"]: (period, r.get("ride_id")) for r in rows if r.get("driver_id")}
 
 
 async def _assigned_ride_candidates() -> Dict[str, _Expected]:
@@ -121,7 +135,14 @@ async def _assigned_ride_candidates() -> Dict[str, _Expected]:
         )
         or []
     )
-    return {r["driver_id"]: (2, r.get("id")) for r in rows if r.get("driver_id")}
+    # Derived once from the shared table, not per row: every row here is
+    # already constrained to _ASSIGNED_RIDE_STATUSES by the filter above, so
+    # the filter IS the classification. Deriving per row would mean a row
+    # missing `status` silently degrades to Period 1 — a wrongful downgrade,
+    # the failure class this module's docstring singles out as the dangerous
+    # direction.
+    period = derive_insurance_period(ride_status=RideStatus.DRIVER_ASSIGNED, is_online=True)
+    return {r["driver_id"]: (period, r.get("id")) for r in rows if r.get("driver_id")}
 
 
 async def _in_progress_candidates() -> Dict[str, _Expected]:
@@ -134,7 +155,8 @@ async def _in_progress_candidates() -> Dict[str, _Expected]:
         )
         or []
     )
-    return {r["driver_id"]: (3, r.get("id")) for r in rows if r.get("driver_id")}
+    period = derive_insurance_period(ride_status=RideStatus.IN_PROGRESS, is_online=True)
+    return {r["driver_id"]: (period, r.get("id")) for r in rows if r.get("driver_id")}
 
 
 async def _online_idle_candidates(exclude: set) -> Dict[str, _Expected]:
@@ -148,7 +170,8 @@ async def _online_idle_candidates(exclude: set) -> Dict[str, _Expected]:
         )
         or []
     )
-    return {r["id"]: (1, None) for r in rows if r.get("id") and r["id"] not in exclude}
+    period = derive_insurance_period(is_online=True)
+    return {r["id"]: (period, None) for r in rows if r.get("id") and r["id"] not in exclude}
 
 
 async def _open_rows_for_drivers(driver_ids: List[str]) -> Dict[str, Dict[str, Any]]:

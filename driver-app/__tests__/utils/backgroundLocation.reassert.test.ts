@@ -12,6 +12,9 @@
  * replay exactly once when the app comes back to the foreground.
  */
 import { AppState, Platform } from 'react-native';
+import * as Location from 'expo-location';
+
+jest.mock('../../utils/stationaryTrackingFlag', () => ({ stationaryTrackingEnabled: jest.fn(async () => false) }));
 
 const appStateListeners: Array<(state: string) => void> = [];
 const mockRemove = jest.fn();
@@ -20,7 +23,11 @@ jest.mock('react-native/Libraries/AppState/AppState', () => ({
   default: {
     addEventListener: (event: string, cb: (state: string) => void) => {
       if (event === 'change') appStateListeners.push(cb);
-      return { remove: mockRemove };
+      return { remove: () => {
+        const index = appStateListeners.indexOf(cb);
+        if (index >= 0) appStateListeners.splice(index, 1);
+        mockRemove();
+      } };
     },
     currentState: 'active',
   },
@@ -44,8 +51,10 @@ jest.mock('expo-location', () => ({
   requestBackgroundPermissionsAsync: jest.fn(),
 }));
 jest.mock('expo-task-manager', () => ({ defineTask: jest.fn() }));
+jest.mock('expo-sqlite', () => ({ openDatabaseAsync: jest.fn() }));
+jest.mock('expo-crypto', () => ({ CryptoDigestAlgorithm: { SHA256: 'SHA-256' }, digestStringAsync: jest.fn() }));
 jest.mock('expo-secure-store', () => ({
-  getItemAsync: jest.fn().mockResolvedValue('true'),
+  getItemAsync: jest.fn(async (key: string) => key === 'spinr_session_ended' ? null : 'true'),
   setItemAsync: jest.fn(),
   deleteItemAsync: jest.fn(),
 }));
@@ -81,7 +90,7 @@ import {
 const AppStateMock = AppState as unknown as { currentState: string };
 
 const flush = async () => {
-  for (let i = 0; i < 6; i++) await Promise.resolve();
+  await new Promise<void>(resolve => setImmediate(resolve));
 };
 
 describe('reassertDispatchTaskUnlocked foreground gate', () => {
@@ -195,18 +204,21 @@ describe('reassertDispatchTaskUnlocked cadence selection', () => {
     mockHasStarted.mockResolvedValue(true);
     mockGetBgPerms.mockResolvedValue({ status: 'granted' });
     mockStartUpdates.mockResolvedValue(undefined);
-    readFlag.mockResolvedValue('true');
+    readFlag.mockImplementation(async (key: string) => key === 'spinr_session_ended' ? null : 'true');
   });
 
   it('applies trip cadence while the flag reports an active ride', async () => {
     await reassertDispatchTaskUnlocked();
     expect(appliedInterval(0)).toBe(TRIP_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[0][1].accuracy).toBe(TRIP_CADENCE.accuracy);
   });
 
   it('applies idle cadence when the flag is definitively absent', async () => {
     readFlag.mockResolvedValue(null);
     await reassertDispatchTaskUnlocked();
     expect(appliedInterval(0)).toBe(IDLE_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[0][1].accuracy).toBe(Location.Accuracy.Balanced);
+    expect(mockStartUpdates.mock.calls[0][1].distanceInterval).toBe(10);
   });
 
   it('never downgrades a live trip to idle when the flag cannot be read', async () => {
@@ -219,7 +231,9 @@ describe('reassertDispatchTaskUnlocked cadence selection', () => {
     await reassertDispatchTaskUnlocked();
 
     expect(appliedInterval(1)).toBe(TRIP_CADENCE.timeInterval);
-    expect(appliedInterval(1)).not.toBe(IDLE_CADENCE.timeInterval);
+    expect(mockStartUpdates.mock.calls[1][1].accuracy).toBe(TRIP_CADENCE.accuracy);
+    expect(mockStartUpdates.mock.calls[1][1].distanceInterval).toBe(TRIP_CADENCE.distanceInterval);
+    expect(mockStartUpdates.mock.calls[1][1].distanceInterval).not.toBe(IDLE_CADENCE.distanceInterval);
   });
 
   it('repeated unreadable heals keep re-asserting trip cadence, not drifting to idle', async () => {

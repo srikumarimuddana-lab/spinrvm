@@ -15,6 +15,7 @@ import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
 import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
+import { queryClient, queryKeys } from '@shared/api/queryClient';
 import { API_URL } from '@shared/config';
 // Keep the default import: many test files jest.mock(
 // '@shared/config/spinr.config', () => ({ default: {...} })) without a
@@ -63,6 +64,10 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 // force-reconnect after this window instead of waiting out the server's ~30s
 // auth timeout, which otherwise leaves the driver stuck on "Reconnecting…".
 const AUTH_WATCHDOG_MS = 10000;
+// Cap the pre-connect token refresh so a hung SecureStore/refresh cannot
+// hold wsConnectingRef forever and leave the driver on a dead Connection lost
+// chip after a long background. Matches shared/api/client.ts REQUEST_TIMEOUT.
+const TOKEN_REFRESH_WAIT_MS = 15_000;
 
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
   // Idle-online raised Balanced/10s/30m → High/4s/10m (2026-08-28): Balanced
@@ -141,6 +146,7 @@ interface UseDriverDashboardReturn {
 
   // Actions
   toggleOnline: () => Promise<void>;
+  retryConnection: () => void;
   openNavigation: (lat: number, lng: number, label: string) => void;
   uploadLocationBatch: () => Promise<void>;
   refreshLocation: (useCache: boolean) => Promise<Location.LocationObject | null>;
@@ -371,7 +377,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // returns) would each construct a real WebSocket; the loser is orphaned but
   // never closed, stays authenticated, and its onmessage still dispatches — so
   // ride offers get processed twice. This mutex makes the connect path reentrant-safe.
-  const wsConnectingRef = useRef(false);
+  const wsConnectingRef = useRef<object | null>(null);
+  const wsLifecycleActiveRef = useRef(false);
   // Wall-clock floor between connectivity-triggered reconnects. Without it a
   // flapping connection (tunnel edge, cell handoff) fires NetInfo repeatedly,
   // and each tick zeroing reconnectAttemptRef would pin every retry at tier 0
@@ -399,10 +406,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // createFixFeed is a pure factory (allocates a Set); once-only via useRef.
   // eslint-disable-next-line react-hooks/purity
   const markerFixFeedRef = useRef(createFixFeed());
-  // Last coordinate/heading handed to the marker feed and when — read by the
-  // stationary heartbeat below, written every time a real fix is emitted.
-  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null; accuracyM?: number | null } | null>(null);
-  const lastMarkerFixEmitMsRef = useRef<number>(0);
+  const locationRefreshGenerationRef = useRef(0);
+  const [locationResumeEpoch, setLocationResumeEpoch] = useState(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
@@ -516,10 +521,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // AppState refresh the map would still point at home until
   // watchPositionAsync starts after Go Online).
   const refreshLocation = useCallback(async (useCache: boolean) => {
+    const generation = ++locationRefreshGenerationRef.current;
+    const isCurrent = () => generation === locationRefreshGenerationRef.current && AppState.currentState === 'active';
+    const displayFreshFix = (loc: Location.LocationObject | null) => {
+      if (!isCurrent() || !loc || !Number.isFinite(loc.timestamp) ||
+          Date.now() - loc.timestamp > 30_000 || loc.timestamp > Date.now() + 5_000 ||
+          (locationRef.current && loc.timestamp < locationRef.current.timestamp) ||
+          !fgIntegrity.check(loc).trusted ||
+          !shouldDisplayFix(loc.coords.accuracy, Date.now() - lastDisplayedFixMsRef.current)) return false;
+      setLocation(loc);
+      locationRef.current = loc;
+      setLocationStatus('ok');
+      lastDisplayedFixMsRef.current = Date.now();
+      markerFixFeedRef.current.emit({ latitude: loc.coords.latitude, longitude: loc.coords.longitude,
+        heading: loc.coords.heading, accuracyM: loc.coords.accuracy, timestampMs: loc.timestamp });
+      return true;
+    };
     setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
     if (useCache) {
       try {
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
+        if (!isCurrent()) return null;
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
           // heading -1 = "unknown" (expo-location convention) — a cached fix has
@@ -531,8 +553,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     let { status } = await Location.getForegroundPermissionsAsync();
+    if (!isCurrent()) return null;
     if (status !== 'granted') {
       const res = await Location.requestForegroundPermissionsAsync();
+      if (!isCurrent()) return null;
       status = res.status;
     }
     if (status !== 'granted') {
@@ -551,6 +575,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // just throw, so detect it up front. No fix will ever arrive in this
     // state, so a stale cached map would be misleading: clear it too.
     const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+    if (!isCurrent()) return null;
     if (!servicesOn) {
       setLocation(null);
       locationRef.current = null;
@@ -561,6 +586,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
+        if (!isCurrent()) return null;
         if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
       } catch {}
     }
@@ -570,29 +596,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // waiting for a fix (indoors, weak GPS) — race it so the driver
       // never sits on the spinner forever.
       const loc = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        Location.getCurrentPositionAsync({ accuracy: isOnlineRef.current ? Location.Accuracy.High : Location.Accuracy.Balanced }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location fix timeout')), 15000)),
       ]);
-      setLocation(loc);
-      locationRef.current = loc;
-      setLocationStatus('ok');
+      if (!isCurrent()) return null;
+      if (!displayFreshFix(loc)) throw new Error('No fresh display position');
       try {
         AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
       } catch {}
       return loc;
     } catch {
+      if (!isCurrent()) return null;
       // Fix failed or timed out — a coarse last-known position still lets
       // the map render; watchPositionAsync corrects it once a fix lands.
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          setLocation(lastKnown);
-          locationRef.current = lastKnown;
-          setLocationStatus('ok');
+        if (displayFreshFix(lastKnown)) {
           return lastKnown;
         }
       } catch {}
-      if (locationRef.current) {
+      if (!isCurrent()) return null;
+      if (locationRef.current && Date.now() - locationRef.current.timestamp <= 30_000) {
         // A real fix from this session (lastKnown/watcher) is still on the
         // map — keep it; the watcher corrects it once a fresh fix lands.
         setLocationStatus('ok');
@@ -615,10 +639,45 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     refreshLocation(true);
     const sub = AppState.addEventListener('change', (next) => {
       // Skip cache on resume — we want a fresh fix, not yesterday's.
-      if (next === 'active') refreshLocation(false);
+      if (next === 'active') {
+        setLocationResumeEpoch(value => value + 1);
+        refreshLocation(false);
+      }
     });
-    return () => sub.remove();
+    return () => { locationRefreshGenerationRef.current++; sub.remove(); };
   }, [refreshLocation]);
+
+  // Native registration belongs to the online lifecycle, not profile hydration.
+  // Resume can repair a missing task without sending the driver to Settings again.
+  useEffect(() => {
+    if (!isOnline || !user?.id) return;
+    let cancelled = false;
+    const accountId = user.id;
+    const canStart = () => !cancelled && isOnlineRef.current && !isTogglingRef.current &&
+      AppState.currentState === 'active' && useAuthStore.getState().user?.id === accountId;
+    const ensureTracking = async () => {
+      if (!canStart()) return;
+      try {
+        const permission = await Location.getBackgroundPermissionsAsync();
+        if (!canStart()) return;
+        if (permission.status !== 'granted') {
+          setWsError('Allow background location in Settings to keep your ride location updated.');
+          return;
+        }
+        const cadence = TRACKED_TRIP_PHASES.includes(useDriverStore.getState().rideState) ? TRIP_CADENCE : IDLE_CADENCE;
+        const started = await startBackgroundLocation(cadence, canStart);
+        if (!started && canStart()) setWsError('Background location unavailable. Check location permissions in Settings.');
+      } catch (error) {
+        if (!canStart()) return;
+        captureException(error instanceof Error ? error : new Error('Background tracking restart failed'),
+          { domain: 'drivers', location: 'resume_background_tracking' });
+        setWsError('Background location unavailable. Check location permissions in Settings.');
+      }
+    };
+    void ensureTracking();
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') void ensureTracking(); });
+    return () => { cancelled = true; sub.remove(); };
+  }, [isOnline, user?.id, rideState]);
 
   // ─── Durable trip-location upload ─────────────────────────────────
   // The recorder owns the only durable queue. This transport is deliberately
@@ -646,37 +705,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
 
-  // Marker stationary heartbeat: distanceInterval-gated watchPositionAsync
-  // (see LOCATION_CONFIGS above) goes fully quiet at a genuine standstill —
-  // Android does not fire a fix just because timeInterval elapsed if the
-  // device hasn't moved distanceInterval. With no new fixes, the CarMarker's
-  // playback buffer ran dry and dead-reckoned FORWARD along the last
-  // pre-stop segment's real velocity — the car visibly drove through a red
-  // light it was stopped at, then snapped back once a real fix finally
-  // landed (live-testing report 2026-08-30, screenshots of the reversal).
-  // Fix: while online, re-emit the last known coordinate with a FRESH
-  // timestamp into the marker feed every ~2.5s whenever no real fix has
-  // arrived — zero GPS cost (no poll, this is the cached coordinate) and
-  // zero network cost, purely a JS timer. This keeps the buffer's newest
-  // entry inside the playback/extrapolation window at all times, so a real
-  // stop is represented as a held position instead of an invented one.
-  // Covers every online state, not just trip phases — the report above was
-  // from online-idle, which the pre-existing 30s trip-only GPS watchdog
-  // below never reaches.
-  const MARKER_HEARTBEAT_MS = 2_500;
-  useEffect(() => {
-    if (!isOnline) return;
-    const id = setInterval(() => {
-      if (!lastMarkerFixRef.current) return;
-      if (Date.now() - lastMarkerFixEmitMsRef.current < MARKER_HEARTBEAT_MS) return;
-      lastMarkerFixEmitMsRef.current = Date.now();
-      markerFixFeedRef.current.emit({
-        ...lastMarkerFixRef.current,
-        timestampMs: Date.now(),
-      });
-    }, MARKER_HEARTBEAT_MS);
-    return () => clearInterval(id);
-  }, [isOnline]);
+  // Never manufacture measurements at rest: markerPlayback already caps
+  // extrapolation at 1.5s and then holds. Fake timestamps can make a genuine
+  // resume position look like an impossible jump from a just-measured fix.
 
   // GPS heartbeat: during a trip, if the recorder has captured nothing for
   // its 30s watchdog window (standstill under distanceInterval, provider
@@ -757,6 +788,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
     const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;
+    let cancelled = false;
     // Re-tune the *background* task to match the phase too. The foreground
     // watchPositionAsync below only fires while the app is foregrounded, so a
     // trip driven with the app backgrounded (driver in Maps / screen locked)
@@ -795,6 +827,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             distanceInterval: config.distanceInterval,
           },
           (loc) => {
+          if (cancelled) return;
           // CAPTURE BEFORE FILTER (SPR-PE7TTB): durable trip capture happens
           // first and unconditionally — a client-side integrity drop is route
           // history lost forever. The verdict below gates DISPLAY surfaces
@@ -843,6 +876,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           // ── Display trust gate — everything below moves markers/UI state. ──
+          // A re-created watcher can first return an older cached fix. Keep
+          // its durable capture above, but never rewind a fresh resume fix.
+          if (!Number.isFinite(loc.timestamp) || Date.now() - loc.timestamp > 60_000 ||
+              loc.timestamp > Date.now() + 5_000 ||
+              (locationRef.current && loc.timestamp < locationRef.current.timestamp)) return;
           if (!integrity.trusted) {
             console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
             return;
@@ -871,8 +909,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           // throttle below stretches inter-fix spacing past the 5 s playback
           // delay and starves the buffer (freeze-then-jump, live-testing
           // 2026-09-02). Zero re-renders: subscribers ingest via refs.
-          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading, accuracyM: loc.coords.accuracy };
-          lastMarkerFixEmitMsRef.current = Date.now();
           markerFixFeedRef.current.emit({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
@@ -927,20 +963,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         );
       } catch (e) {
+        if (cancelled) return;
         console.error('[Location] watchPositionAsync failed — driver is GPS-blind:', e);
         setWsError('Location unavailable. Check location permissions in Settings.');
         return;
       }
+      if (cancelled) { sub.remove(); return; }
       locationSubRef.current = sub;
     })();
 
     return () => {
+      cancelled = true;
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
-  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
+  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch, locationResumeEpoch]);
 
   // Period-1 idle durable recording: while online with no trip, keep ONE idle
   // outbox session open (the recorder throttles fixes to ≥30s/60s or 100m).
@@ -1020,6 +1059,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           requires_wav: data.requires_wav === true,
           quiet_mode: data.quiet_mode === true,
           is_scheduled: data.is_scheduled === true,
+          scheduled_time: data.scheduled_time,
           countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
           offer_expires_at: data.offer_expires_at,
           surge_multiplier: typeof data.surge_multiplier === 'number' ? data.surge_multiplier : undefined,
@@ -1081,6 +1121,29 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             : 'The rider has cancelled this ride.'
         );
         resetRideState();
+        break;
+
+      // In-app notification inbox: merge the new row + fresh unread_count
+      // straight into the shared TanStack Query cache the notifications
+      // screen and the dashboard bell badge both read via useNotifications()
+      // — reuses this same WS connection, no second transport. The REST poll
+      // in app/driver/(tabs)/index.tsx remains as a periodic reconciliation
+      // fallback for whenever this socket isn't connected.
+      case 'new_notification':
+        if (data.notification && typeof data.unread_count === 'number') {
+          queryClient.setQueriesData(
+            { queryKey: queryKeys.notifications.list },
+            (old: any) => {
+              if (!old?.notifications) return old;
+              if (old.notifications.some((n: any) => n.id === data.notification.id)) return old;
+              return {
+                ...old,
+                notifications: [data.notification, ...old.notifications],
+                unread_count: data.unread_count,
+              };
+            },
+          );
+        }
         break;
 
       // G20: Reply to server heartbeat so the backend doesn't mark
@@ -1212,13 +1275,30 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // handleWSMessage] and recreated on unrelated store changes — the mount
   // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
   // leaving the banner stuck on "Reconnecting…".
-  const openWebSocket = useCallback(async () => {
+  const openWebSocket = useCallback(async (attempt: object) => {
+    // Paint 'reconnecting' before the token refresh. After a long background
+    // the 15-min JWT is dead and ensureFreshToken can take seconds (or hang).
+    // Leaving connectionState at 'disconnected' that whole time is the red
+    // "Connection lost" chip with nothing to tap.
+    setConnectionState('reconnecting');
     // Ensure the access token is fresh before opening the socket. Without
     // this, a driver returning from a long background period opens a WS
     // with an expired token — the server rejects auth and the socket
     // immediately closes, burning a reconnect cycle.
     try {
-      await ensureFreshToken();
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          // Swallow a late reject after the 15s cap wins — otherwise the
+          // orphaned ensureFreshToken() becomes an unhandled RN rejection.
+          ensureFreshToken().catch(() => {}),
+          new Promise<void>((resolve) => {
+            timeoutId = setTimeout(resolve, TOKEN_REFRESH_WAIT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
     } catch (err) {
       // Token refresh failed — the stored token may still be valid (short
       // background period) so we proceed. If it's truly expired, the server
@@ -1229,11 +1309,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
     }
 
+    if (wsConnectingRef.current !== attempt || !wsLifecycleActiveRef.current ||
+        AppState.currentState === 'background') return;
     const currentUser = userRef.current;
     if (!isOnlineRef.current || !currentUser) return;
 
     const token = useAuthStore.getState().token;
     if (!token) {
+      setConnectionState('disconnected');
       return;
     }
 
@@ -1259,14 +1342,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const useSecure = baseUrl.startsWith('https');
     const wsBaseUrl = `${baseUrl.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     const wsUrl = lastSeqRef.current > 0 ? `${wsBaseUrl}?last_seq=${lastSeqRef.current}` : wsBaseUrl;
-    // Flip the banner to 'reconnecting' the moment we start connecting.
-    // The initial state is 'disconnected', which renders as the red
-    // "Connection Lost" banner — if we leave it there during the TLS +
-    // auth-handshake window (easily 1–2 s on Railway cold starts), the
-    // driver sees an alarming banner while the socket is actually coming
-    // up fine. 'reconnecting' renders as the amber "Reconnecting…" state
-    // which correctly signals work-in-progress.
-    setConnectionState('reconnecting');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -1291,6 +1366,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }, AUTH_WATCHDOG_MS);
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
         type: 'auth',
@@ -1304,6 +1380,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       try {
         let data = JSON.parse(event.data);
         if (data && typeof data === 'object' && 'seq' in data && 'data' in data) {
@@ -1398,10 +1475,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // onclose fires after the reset and creates a second socket, which
       // then has onclose fire again — producing a connection-storm.
       if (ws !== wsRef.current) return;
+      wsRef.current = null;
 
       if (authWatchdogRef.current) { clearTimeout(authWatchdogRef.current); authWatchdogRef.current = null; }
 
-      if (isOnlineRef.current && userRef.current) {
+      if (wsLifecycleActiveRef.current && AppState.currentState !== 'background' &&
+          isOnlineRef.current && userRef.current) {
         // Report ONCE at the threshold, then keep retrying at the capped tier.
         // This used to `return` with no timer armed, which permanently gave up
         // on the socket: reconnectAttemptRef is only reset on auth_success or
@@ -1433,6 +1512,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const jitter = Math.random() * jitterRange * 2 - jitterRange;
         const delay = Math.max(500, baseDelay + jitter);
         reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           reconnectAttemptRef.current++;
           connectWebSocket();
         }, delay);
@@ -1462,18 +1542,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // offers — the orphan is never closed because onclose's `ws !== wsRef.current`
   // guard correctly makes it a no-op.
   const connectWebSocket = useCallback(async () => {
-    if (wsConnectingRef.current) return;
-    wsConnectingRef.current = true;
+    if (!wsLifecycleActiveRef.current || AppState.currentState === 'background' ||
+        !isOnlineRef.current || !userRef.current || wsConnectingRef.current) return;
+    const ws = wsRef.current;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    const attempt = {};
+    wsConnectingRef.current = attempt;
     try {
-      await openWebSocket();
+      await openWebSocket(attempt);
     } finally {
-      // Cleared once wsRef.current is assigned (or an early return bailed), so
-      // a later caller sees a real socket and correctly declines to reconnect.
-      wsConnectingRef.current = false;
+      // An obsolete refresh must not release a newer attempt's ownership.
+      if (wsConnectingRef.current === attempt) wsConnectingRef.current = null;
     }
   }, [openWebSocket]);
 
   useEffect(() => {
+    wsLifecycleActiveRef.current = isOnline && !!user;
+    wsConnectingRef.current = null;
     if (!isOnline || !user) {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -1484,8 +1569,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         authWatchdogRef.current = null;
       }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
+        const ws = wsRef.current;
         wsRef.current = null;
+        try { ws.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
       }
       // Sync connection-state UI with the driver going offline / signing
       // out. Doesn't feed back into isOnline/user, so this can't loop.
@@ -1497,16 +1583,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     connectWebSocket();
 
     return () => {
+      wsLifecycleActiveRef.current = false;
+      wsConnectingRef.current = null;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (authWatchdogRef.current) {
         clearTimeout(authWatchdogRef.current);
         authWatchdogRef.current = null;
       }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }
+        const ws = wsRef.current;
         wsRef.current = null;
+        try { ws.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }
       }
     };
     // connectWebSocket is stable (empty deps, reads state through refs), so
@@ -1516,13 +1606,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline, user?.id]);
 
-  // Uber/Lyft-style presence: proactively close the WebSocket when the
-  // app backgrounds so the backend clears Redis presence immediately
-  // (via the disconnect handler), instead of waiting for the 90 s TTL
-  // to expire. Reconnect on return to foreground. Mobile OSes suspend
-  // background sockets silently — without this the driver shows as
-  // online to admins and can even receive ride offers after the app
-  // was swiped away.
+  // Proactively close background sockets before the OS suspends them and
+  // reconnect on foreground. The backend owns the presence grace period;
+  // the native background GPS/HTTP pipeline is independent of this socket.
   //
   // Background close is debounced ~3s and `inactive` is ignored, so a
   // transient transition (notification shade, control-center, system
@@ -1547,6 +1633,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setWsError(null);
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          // Release a hung connect (ensureFreshToken never returned) so resume
+          // can start a new attempt. Foreground used to leave that mutex set,
+          // which made every later connectWebSocket a no-op.
+          wsConnectingRef.current = null;
+          setConnectionState('reconnecting');
           if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
@@ -1554,6 +1645,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           connectWebSocket();
         }
       } else if (nextState === 'background') {
+        wsConnectingRef.current = null;
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
         // Schedule the close — if the app comes back to 'active' within
         // the debounce window (notification shade pull, system dialog),
         // we cancel and keep the socket open. `inactive` is iOS partial
@@ -1561,9 +1657,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         cancelBackgroundClose();
         backgroundCloseTimer = setTimeout(() => {
           backgroundCloseTimer = null;
-          if (wsRef.current) {
-            try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+          if (AppState.currentState !== 'background' || !wsLifecycleActiveRef.current) return;
+          const ws = wsRef.current;
+          wsRef.current = null;
+          if (authWatchdogRef.current) {
+            clearTimeout(authWatchdogRef.current);
+            authWatchdogRef.current = null;
           }
+          if (ws) {
+            try { ws.close(1001, 'app_backgrounded'); }
+            catch (e) { console.warn('[WS] close error (background):', e); }
+          }
+          setConnectionState('disconnected');
         }, BACKGROUND_CLOSE_DELAY_MS);
       }
       // 'inactive' (iOS): intentionally no-op.
@@ -1576,6 +1681,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // listener is registered exactly once per hook instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const retryConnection = useCallback(() => {
+    if (!isOnlineRef.current || !userRef.current) return;
+    reconnectAttemptRef.current = 0;
+    setWsError(null);
+    setConnectionState('reconnecting');
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    const ws = wsRef.current;
+    // Don't abort a live handshake or authenticated socket — mash-tapping
+    // Connection lost used to close(4000) every time and restart auth.
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    wsConnectingRef.current = null;
+    connectWebSocket();
+  }, [connectWebSocket]);
 
   // ─── Reconnect on network regain ─────────────────────────────────
   // "Connectivity came back" is the other signal that should reset the
@@ -1592,7 +1716,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // the question being asked here — it is only null when NetInfo cannot
       // determine it, which is when isConnected is the right fallback.
       const up = state.isInternetReachable ?? state.isConnected ?? false;
-      if (!up || !isOnlineRef.current || !userRef.current) return;
+      if (!up || !wsLifecycleActiveRef.current || AppState.currentState === 'background' ||
+          !isOnlineRef.current || !userRef.current) return;
       // A marginal connection emits "restored" repeatedly, and resetting the
       // backoff on every tick would hold every retry at tier 0 (~1s)
       // indefinitely, defeating the 30s cap this ladder exists to enforce and
@@ -1624,8 +1749,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   useEffect(() => {
     if (connectionState !== 'connected') return;
     const id = setInterval(() => {
-      if (Date.now() - lastServerMsgRef.current > 15_000) {
-        wsRef.current?.close(4001, 'heartbeat_timeout');
+      const ws = wsRef.current;
+      if (AppState.currentState !== 'background' && ws?.readyState === WebSocket.OPEN &&
+          Date.now() - lastServerMsgRef.current > 15_000) {
+        ws.close(4001, 'heartbeat_timeout');
       }
     }, 5_000);
     return () => clearInterval(id);
@@ -2008,11 +2135,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // stays entirely backend-owned.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOnline(!!serverOnline);
-    if (serverOnline) {
-      // Re-arm background tracking for a resumed-online session. Idempotent:
-      // startBackgroundLocation no-ops when the task is already running.
-      startBackgroundLocation().catch(() => {});
-    }
   }, [driverData?.is_online, isOnline]);
 
   // ─── Fetch earnings when online ─────────────────────────────────
@@ -2090,6 +2212,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           duration_minutes: toNum(data.duration_minutes),
           rider_name: data.rider_name || undefined,
           rider_rating: toNum(data.rider_rating),
+          is_scheduled: String(data.is_scheduled).toLowerCase() === 'true',
+          scheduled_time: data.scheduled_time || existing?.scheduled_time,
           countdown_seconds: toNum(data.countdown_seconds),
           offer_expires_at: data.offer_expires_at || undefined,
           surge_multiplier: toNum(data.surge_multiplier),
@@ -2175,6 +2299,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     // Actions
     toggleOnline,
+    retryConnection,
     openNavigation,
     uploadLocationBatch,
     refreshLocation,

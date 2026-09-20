@@ -39,6 +39,8 @@ and this viewer must not be the thing that widens it.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json as _json_mod
 import logging
 import re
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
@@ -52,11 +54,13 @@ try:
     from ...dependencies import require_super_admin
     from ...utils.audit_logger import log_admin_action
     from ...utils.rate_limiter import default_limiter as limiter
+    from ...utils.redis_client import redis_get, redis_set
 except ImportError:
     from core.config import settings  # type: ignore
     from dependencies import require_super_admin  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sentry", tags=["Sentry"])
@@ -135,6 +139,11 @@ _PERIOD_RE = re.compile(r"^\d{1,3}[mhdw]$")
 # generous enough for real triage; the mutation is tighter.
 _READ_RATE_LIMIT = "60/minute"
 _WRITE_RATE_LIMIT = "20/minute"
+
+_CACHE_TTL_SECONDS = 60
+_CACHE_PREFIX = "sentry:issues:"
+
+_TAG_MODE_STAGGER_SECONDS = 0.25
 
 
 def _per_surface_projects() -> Dict[str, str]:
@@ -299,18 +308,34 @@ async def _sentry_request(
     *,
     params: Optional[Dict[str, Any]] = None,
     json: Optional[Dict[str, Any]] = None,
+    _retry: int = 0,
 ) -> httpx.Response:
     """Issue one authenticated Sentry API call. Raises HTTPException (never a
     bare httpx error) so callers get a clean upstream-failure response and the
-    dashboard can retry. Never logs the response body (may hold scrubbed PII)."""
+    dashboard can retry. Never logs the response body (may hold scrubbed PII).
+
+    Retries once on HTTP 429 (rate-limited), respecting Sentry's Retry-After
+    header when present and falling back to a 2-second wait.
+    """
     url = f"{_base_url()}/api/0{path}"
     headers = {"Authorization": f"Bearer {settings.SENTRY_API_TOKEN}"}
     try:
         resp = await client.request(method, url, params=params, json=json, headers=headers)
     except httpx.HTTPError as exc:
-        # PII-safe: log the path + exception type only, never issue content.
         logger.error("[sentry] %s %s failed: %s", method, path, type(exc).__name__, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Sentry API request failed: {type(exc).__name__}") from exc
+
+    if resp.status_code == 429 and _retry < 1:
+        retry_after = 2.0
+        ra_header = resp.headers.get("Retry-After")
+        if ra_header:
+            try:
+                retry_after = min(float(ra_header), 10.0)
+            except (ValueError, TypeError):
+                pass
+        logger.warning("[sentry] %s %s -> 429, retrying in %.1fs", method, path, retry_after)
+        await asyncio.sleep(retry_after)
+        return await _sentry_request(client, method, path, params=params, json=json, _retry=_retry + 1)
 
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Sentry issue or project not found")
@@ -321,11 +346,6 @@ async def _sentry_request(
             detail="Sentry rejected the API token (needs event:read + event:write). Check SENTRY_API_TOKEN scopes.",
         )
     if resp.status_code == 400:
-        # A 400 here is Sentry rejecting OUR request shape (an unsupported
-        # statsPeriod, an unparseable search term), not an outage. Its body is a
-        # parameter-validation message rather than issue content, so relaying a
-        # truncated `detail` is PII-safe and is the difference between a
-        # diagnosable error and an opaque "Sentry API failed for every surface".
         detail = ""
         try:
             body = resp.json()
@@ -513,6 +533,11 @@ def _error_detail(exc: BaseException) -> str:
     return f"Sentry API request failed: {type(exc).__name__}"
 
 
+def _cache_key(surface: Optional[str], status: str, query: Optional[str], stats_period: str, limit: int) -> str:
+    raw = f"{surface}|{status}|{query}|{stats_period}|{limit}"
+    return f"{_CACHE_PREFIX}{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
+
+
 async def _list_issues(
     *,
     surface: Optional[str],
@@ -528,44 +553,64 @@ async def _list_issues(
     """
     _require_configured()
 
+    cache_k = _cache_key(surface, status, query, stats_period, limit)
+    try:
+        cached = await redis_get(cache_k)
+        if cached:
+            return _json_mod.loads(cached)
+    except Exception:
+        logger.debug("[sentry] cache read failed for %s, proceeding without cache", cache_k)
+
     targets = _targets(surface)
 
     status = (status or "unresolved").strip()
     if status not in _ALLOWED_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of: {_STATUSES_HELP}")
-    # The look-back is applied as a search term, not via statsPeriod — see
-    # _period_params for why. `stats_param` is only the sparkline window.
     stats_param, period_term = _period_params(stats_period)
 
-    # Compose the Sentry search: `is:<status>` plus the look-back plus any extra
-    # caller terms.
     base_query = f"is:{status}"
     if period_term:
         base_query = f"{base_query} {period_term}"
     if query:
         base_query = f"{base_query} {query.strip()}"
 
+    use_tag_mode = _tag_mode()
+
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        # return_exceptions=True is load-bearing, not defensive style. Without
-        # it the first failing leg propagates immediately, the `async with`
-        # closes the client out from under its still-in-flight siblings, and
-        # one typo'd SENTRY_PROJECT_* slug blanks the entire multi-surface
-        # triage view. Degrade per surface instead: report what worked and say
-        # loudly which surface failed and why.
-        results = await asyncio.gather(
-            *(
-                _fetch_project_issues(
-                    client,
-                    t.surface,
-                    t.project,
-                    query=f"{base_query} {t.term}" if t.term else base_query,
-                    stats_period=stats_param,
-                    limit=limit,
-                )
-                for t in targets
-            ),
-            return_exceptions=True,
-        )
+        if use_tag_mode and len(targets) > 1:
+            # Tag mode: all targets hit the same project. Serialize with a
+            # small stagger to avoid tripping Sentry's per-project rate limit.
+            results: List[Any] = []
+            for i, t in enumerate(targets):
+                if i > 0:
+                    await asyncio.sleep(_TAG_MODE_STAGGER_SECONDS)
+                try:
+                    r = await _fetch_project_issues(
+                        client,
+                        t.surface,
+                        t.project,
+                        query=f"{base_query} {t.term}" if t.term else base_query,
+                        stats_period=stats_param,
+                        limit=limit,
+                    )
+                    results.append(r)
+                except BaseException as exc:
+                    results.append(exc)
+        else:
+            results = await asyncio.gather(
+                *(
+                    _fetch_project_issues(
+                        client,
+                        t.surface,
+                        t.project,
+                        query=f"{base_query} {t.term}" if t.term else base_query,
+                        stats_period=stats_param,
+                        limit=limit,
+                    )
+                    for t in targets
+                ),
+                return_exceptions=True,
+            )
 
     issues: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
@@ -581,17 +626,9 @@ async def _list_issues(
             errors.append({"surface": target.surface, "project": target.project, "detail": _error_detail(result)})
             continue
         issues.extend(result)
-        # A leg that returned a full page may have more behind it — flag so a
-        # full list never silently reads as "everything".
         if len(result) >= limit:
             truncated = True
 
-    # In tag mode every leg queries the SAME project, so one issue can match two
-    # legs if its events carry more than one `surface` value (same error
-    # signature raised on two surfaces). Sentry groups by signature, not by tag,
-    # so that is a real possibility rather than a theoretical one. Keep the
-    # first match — legs run in _SURFACE_SETTING order, so the label is stable
-    # across refreshes rather than dependent on which request returned first.
     deduped: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
     for issue in issues:
@@ -603,9 +640,6 @@ async def _list_issues(
         deduped.append(issue)
     issues = deduped
 
-    # Every configured surface failed: there is nothing to show and pretending
-    # otherwise ("0 issues, all clear") would be the worst possible outcome on
-    # an error-triage screen. Surface it as an upstream failure.
     if errors and not issues and len(errors) == len(targets):
         raise HTTPException(
             status_code=502,
@@ -613,15 +647,12 @@ async def _list_issues(
             + "; ".join(f"{e['surface']}: {e['detail']}" for e in errors),
         )
 
-    # Merge across legs newest-seen first so the combined view stays useful.
     issues.sort(key=lambda i: i.get("last_seen") or "", reverse=True)
 
-    return {
+    response = {
         "issues": issues,
         "count": len(issues),
         "surfaces": [t.surface for t in targets],
-        # Surfaces whose fetch failed. The dashboard warns on a non-empty list
-        # so a partial view is never mistaken for a complete one.
         "errors": errors,
         "partial": bool(errors),
         "status": status,
@@ -629,6 +660,14 @@ async def _list_issues(
         "per_project_limit": limit,
         "truncated": truncated,
     }
+
+    if not errors:
+        try:
+            await redis_set(cache_k, _json_mod.dumps(response), ttl=_CACHE_TTL_SECONDS)
+        except Exception:
+            logger.debug("[sentry] cache write failed for %s", cache_k)
+
+    return response
 
 
 @router.get("/issues")

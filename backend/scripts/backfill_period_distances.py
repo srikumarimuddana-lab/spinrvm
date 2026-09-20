@@ -53,7 +53,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("backfill_period_distances")
 
-_ROW_LIMIT = 10000
+_ROW_LIMIT = 10000  # safety ceiling, not a page size -- see _fetch_completed_rides
+_PAGE_SIZE = 500
 
 
 def _phase_distance_km(ride_metrics: dict, phase_key: str) -> float | None:
@@ -72,6 +73,35 @@ def _phase_distance_km(ride_metrics: dict, phase_key: str) -> float | None:
     return km if km >= 0 else None
 
 
+async def _fetch_completed_rides(db_supabase, filters: dict) -> tuple[list[dict], bool]:
+    """Page through candidate rides up to _ROW_LIMIT. Returns (rides, has_more).
+
+    A single get_rows(limit=_ROW_LIMIT) call would silently under-cover once
+    the completed-ride count crosses 10000, with a "scanned=10000" summary
+    that looks like a complete scan rather than a truncated one. Paging in
+    _PAGE_SIZE chunks lets us tell the two cases apart.
+    """
+    rides: list[dict] = []
+    offset = 0
+    while True:
+        page = (
+            await db_supabase.get_rows(
+                "rides",
+                filters,
+                columns="id,driver_id,ride_metrics,assigned_at,driver_accepted_at,ride_started_at,ride_completed_at",
+                limit=_PAGE_SIZE,
+                offset=offset,
+            )
+            or []
+        )
+        rides.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return rides, False
+        if len(rides) >= _ROW_LIMIT:
+            return rides[:_ROW_LIMIT], True
+        offset += _PAGE_SIZE
+
+
 async def _main(apply_changes: bool, before: str | None) -> int:
     import db_supabase
     from utils.period_distance_audit import record_ride_period_distances
@@ -80,13 +110,14 @@ async def _main(apply_changes: bool, before: str | None) -> int:
     if before:
         filters["ride_completed_at"] = {"$lt": before}
 
-    rides = await db_supabase.get_rows(
-        "rides",
-        filters,
-        columns="id,driver_id,ride_metrics,assigned_at,driver_accepted_at,ride_started_at,ride_completed_at",
-        limit=_ROW_LIMIT,
-    )
+    rides, has_more = await _fetch_completed_rides(db_supabase, filters)
     logger.info("scanned %s completed ride(s)%s", len(rides), f" before {before}" if before else "")
+    if has_more:
+        logger.warning(
+            "hit the %d-row safety ceiling; more completed rides may remain -- "
+            "narrow with --before and re-run to cover the rest",
+            _ROW_LIMIT,
+        )
 
     stats = {"scanned": len(rides), "no_gps_distance": 0, "would_write": 0, "written": 0, "failed": 0}
 

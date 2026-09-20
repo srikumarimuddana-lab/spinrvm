@@ -379,7 +379,7 @@ Test tiers:
   cd backend
   pytest tests/rls -c /dev/null --confcutdir=tests/rls
   ```
-  `-c /dev/null --confcutdir=tests/rls` stops pytest from also loading `backend/tests/conftest.py` (and `pytest.ini`'s coverage gate), which these tests don't use. Currently covers 5 of the ~127 tracked `CREATE POLICY` statements (`users`, `drivers`, `rides`, `financial_events`, `driver_insurance_periods`) — a start, not full coverage. See `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`.
+  `-c /dev/null --confcutdir=tests/rls` stops pytest from also loading `backend/tests/conftest.py` (and `pytest.ini`'s coverage gate), which these tests don't use. Coverage has grown incrementally past its original 5 tables — see ACTION_ITEMS.md C49 for the current running total, not any number quoted here, which will go stale the next time a session adds more. **This tier proves policy *logic* (given a claim set, is access correctly granted/denied), not production reachability (ACTION_ITEMS.md C108):** no rider/driver/admin has ever obtained a real Supabase-issued session JWT — the app's entire end-user auth model is the custom `JWT_SECRET`-signed scheme this file documents elsewhere, and the backend's exclusive use of the service-role key (which bypasses RLS) is the only path real traffic takes — so every `anon`/`authenticated`-role RLS policy in the schema is currently dormant-but-correct, not actively enforced against real users. Still worth testing (protects a future direct-PostgREST path and catches RLS regressions), just don't cite this suite as evidence these policies are live-enforced today. See `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`.
 - **Property-based fuzz (pilot, `test_schemathesis_fuzz.py`)**: Schemathesis generates adversarial inputs against the app's own OpenAPI schema, GET-only for now (532 operations), checking only for 5xx responses. On-demand, not wired into CI's main step — see `docs/audit/2026-09-08-agentic-tooling-atlas.md` for scope, findings, and why. Run via `pytest -m slow tests/test_schemathesis_fuzz.py`.
 
 Coverage minimums (per domain):
@@ -553,7 +553,7 @@ rather than leave it looking like an oversight.
 
 | Directory | Status | Purpose |
 |-----------|--------|---------|
-| `.kilo/` | Active | Kilo Code AI assistant config |
+| `.kilo/` | Dormant | Kilo Code AI assistant config — not actually in use. `kilo.jsonc` has no model/rule/MCP setup (just `{"snapshot": false}`); its one saved plan is dated 2026-04-14 with no follow-through. Both files entered git in a single incidental commit (2026-09-11, PR #5241, an unrelated rider-app UX diff) — not a deliberate tooling adoption; no other commit has ever touched this directory. Two earlier audits (`docs/claude-audit-2026-04-22.md`, `docs/audit/2026-08-24-repo-hygiene-audit.md`) already flagged this as "archive candidate"/"purpose unclear" — this row's "Active" label was never corrected to match until now (2026-09-14). |
 | `.emergent/` | Active | Emergent AI agent config |
 | `.maestro/` | Active | Maestro orchestration config |
 | `.codex/` | Active | OpenAI Codex CLI config (`agents/`, `hooks/`, `hooks.json`) |

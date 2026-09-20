@@ -114,9 +114,9 @@ keywords = [
 # name/email/phone/license_number/lat/lng for 189 drivers and was NOT caught by that
 # rule, because it names none of the SIN/bank column identifiers — its column shape is
 # entirely different (a plain contact/identity export, not a financial one). Confirmed
-# via git history (commit 41356340d, the file's real first-appearance commit — #4596's
-# and the breach record's citation of commit `dea8ea5`/`3c336ff` as the origin is
-# incorrect, neither touches this file; see the correction landed alongside this rule).
+# via git history (the file's real first-appearance commit — #4596's and the
+# breach record's earlier citation of a different commit as the origin was
+# incorrect, neither touched this file; see the correction landed alongside this rule).
 #
 # Same design as spinr-sin-bank-pii: a bare quoted email address is too common
 # to flag globally (test fixtures, admin seed data, comments), so this only fires in

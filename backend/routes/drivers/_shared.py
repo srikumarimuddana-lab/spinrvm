@@ -864,6 +864,24 @@ async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) 
         logger.error(f"[route_validation] failed for ride {ride_id}: {exc}", exc_info=True)
 
 
+# Driver-facing phrasing for each ride state. The raw state values are
+# internal vocabulary (`driver_accepted`, `in_progress`, ...) and used to be
+# interpolated straight into the 409 below, so a driver mid-shift read
+# "Ride is in status 'driver_arrived'; cannot perform this action from that
+# state (allowed: ['driver_accepted'])". Phrased from the driver's point of
+# view because every caller of this helper is a driver action.
+_RIDE_STATE_PHRASE = {
+    "scheduled": "scheduled for later",
+    "searching": "still looking for a driver",
+    "driver_assigned": "still waiting to be accepted",
+    "driver_accepted": "accepted, but you haven't marked yourself as arrived yet",
+    "driver_arrived": "waiting for you to start the trip",
+    "in_progress": "already in progress",
+    "completed": "already finished",
+    "cancelled": "cancelled",
+}
+
+
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
     """Load a driver's ride only if it is in one of ``allowed_states``.
 
@@ -884,11 +902,13 @@ async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: t
     existing = await _deps.db.find_one("rides", {"id": ride_id, "driver_id": driver_id})
     if existing:
         current = existing.get("status", "unknown")
+        phrase = _RIDE_STATE_PHRASE.get(current)
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Ride is in status '{current}'; cannot perform this action "
-                f"from that state (allowed: {list(allowed_states)})."
+                f"This ride is {phrase}, so that action isn't available right now. Refresh to see its latest status."
+                if phrase
+                else "That action isn't available for this ride right now. Refresh to see its latest status."
             ),
         )
     raise HTTPException(status_code=404, detail="Ride not found")

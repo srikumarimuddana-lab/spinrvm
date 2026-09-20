@@ -1,5 +1,6 @@
 // Mock dependencies before importing store
 import { useRideStore } from '../rideStore';
+import api from '@shared/api/client';
 
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
@@ -23,10 +24,39 @@ describe('rideStore — WebSocket-driven updates', () => {
       chatMessages: [],
       isLoading: false,
       error: null,
+      _lastWsDriverPositionAt: 0,
+      _lastDriverFix: null,
     });
   });
 
   describe('updateDriverLocation', () => {
+    it('rejects another ride or driver and delayed measurements of the same ride', () => {
+      useRideStore.setState({ currentRide: { id: 'ride-1' } as any,
+        currentDriver: { id: 'driver-1', lat: 50, lng: -104 } as any });
+      const metadata = { rideId: 'ride-1', driverId: 'driver-1', capturedAt: new Date().toISOString() };
+      const update = useRideStore.getState().updateDriverLocation;
+      update(50.1, -104, null, null, null, metadata);
+      update(50.2, -104, null, null, null, { ...metadata, rideId: 'other' });
+      update(50.3, -104, null, null, null, { ...metadata, driverId: 'other' });
+      update(50.4, -104, null, null, null, { ...metadata, capturedAt: new Date(Date.now() - 5000).toISOString() });
+      expect(useRideStore.getState().currentDriver?.lat).toBe(50.1);
+    });
+
+    it('does not overwrite a live update with an HTTP request that completes much later', async () => {
+      jest.useFakeTimers();
+      let resolve!: (value: unknown) => void;
+      (api.get as jest.Mock).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      useRideStore.setState({ currentRide: { id: 'ride-1' } as any,
+        currentDriver: { id: 'driver-1', lat: 50, lng: -104 } as any });
+      try {
+        const pending = useRideStore.getState().fetchRide('ride-1');
+        useRideStore.getState().updateDriverLocation(50.1, -104);
+        jest.advanceTimersByTime(20_000);
+        resolve({ data: { id: 'ride-1', driver: { id: 'driver-1', lat: 50, lng: -104 } } });
+        await pending;
+        expect(useRideStore.getState().currentDriver?.lat).toBe(50.1);
+      } finally { jest.useRealTimers(); }
+    });
     it('should update currentDriver lat/lng', () => {
       useRideStore.setState({
          

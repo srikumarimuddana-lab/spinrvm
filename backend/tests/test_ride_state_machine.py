@@ -185,7 +185,7 @@ class TestCancelStateGuardRider:
                 await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
 
             assert exc_info.value.status_code == 409
-            assert "in_progress" in exc_info.value.message
+            assert "already in progress" in exc_info.value.message
 
     async def test_complete_allowed_from_in_progress(self):
         """Completing an in_progress ride must pass the state guard."""
@@ -241,7 +241,7 @@ class TestCancelStateGuardRider:
                 await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
 
             assert exc_info.value.status_code == 409
-            assert "completed" in exc_info.value.message
+            assert "already finished" in exc_info.value.message
 
 
 def test_state_constants_are_disjoint_from_terminal():

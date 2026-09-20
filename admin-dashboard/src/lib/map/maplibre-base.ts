@@ -12,6 +12,34 @@ import {
     type RoutePinKind,
 } from "@spinr/shared/constants/routeMapStyle";
 
+// MapLibre v6's default worker bootstrap bundles the tile-processing Web
+// Worker via an `import.meta.url`-derived module URL -- a technique Next.js
+// 16's Turbopack does not resolve the same way Webpack does, so the worker
+// spawns but never actually fetches a tile (every admin map rendered a
+// blank canvas with only controls/attribution -- the reason this dependency
+// was downgraded to v4.7.1 on 2026-09-14, PR #5427, which pre-dates a
+// critical XSS-sanitizer CVE disclosed against every version <=6.4.0,
+// GHSA-jrc7-96c5-q579). Pointing MapLibre at a same-origin static copy of
+// its own worker module bypasses that automatic bundling entirely -- this
+// is MapLibre's own documented escape hatch for exactly this class of
+// bundler incompatibility, not a workaround specific to this app.
+// scripts/copy-maplibre-worker.mjs (wired as predev/prebuild) bundles the
+// worker entry point -- with the shared chunk it would otherwise import via
+// a relative specifier inlined via esbuild, not copied as a second file --
+// into public/maplibre/ from whatever maplibre-gl version package.json
+// actually resolves. The inlining matters: a worker's own top-level script
+// fetch is unambiguously covered by this app's `worker-src 'self'` CSP
+// directive, but a *nested* static `import` inside that script is, per the
+// CSP spec's own open ambiguity (see the copy script's comment), commonly
+// treated as governed by `script-src` instead -- which has no `'self'` and
+// no way to attach this app's per-request nonce to an import specifier.
+// Bundling to a single file removes that nested fetch entirely rather than
+// gambling on which directive a given browser applies to it.
+// Must run before any `new maplibregl.Map(...)` call -- safe as a
+// module-level side effect here since every map component already imports
+// from this shared file before constructing its own map instance.
+maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
+
 // OpenFreeMap styles — free, no API key, vector tiles.
 // Swap the key in the URL to change the look (liberty / positron / bright / dark-matter).
 export const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
@@ -89,26 +117,19 @@ export function monitoringFallbackStyle(flavor: string = "light"): string | null
     return protomapsStyleUrl(flavor);
 }
 
-// Carto's free GL basemaps — keyless, commercial use permitted with attribution,
-// and served from tiles.basemaps.cartocdn.com: a different host *and* a different
-// CDN from both tiles.openfreemap.org and api.protomaps.com. That independence is
-// the entire point of having them. MAP_STYLE_FALLBACK (same host, different style
-// path) cannot help when the host itself is the problem, and protomapsStyleUrl()
-// returns null whenever NEXT_PUBLIC_PROTOMAPS_API_KEY is unset — so without a
-// keyless third provider a chain can still end up with nowhere to go.
-export const MAP_STYLE_CARTO_LIGHT =
-    "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
-export const MAP_STYLE_CARTO_DARK =
-    "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-
-/**
- * Keyless Carto basemap for the given resolved theme. Needs no API key, so
- * unlike protomapsStyleUrl() this never returns null — it is the hop every
- * chain can always fall back to.
- */
-export function cartoStyleUrl(resolvedTheme?: string): string {
-    return resolvedTheme === "dark" ? MAP_STYLE_CARTO_DARK : MAP_STYLE_CARTO_LIGHT;
-}
+// Carto (basemaps.cartocdn.com) was removed as a basemap provider on 2026-09-14
+// at the product owner's request: Spinr serves its own tiles (deploy/tiles) and
+// should not hand admin map traffic to a third-party CDN, not even as a last
+// resort. What that costs is real and deliberate — Carto was the only keyless
+// hop, so when NEXT_PUBLIC_PROTOMAPS_API_KEY is unset the unconfigured chain is
+// now OpenFreeMap alone. Do not reintroduce it as a "safety net"; stand the tile
+// server up instead.
+//
+// One Carto reference survives on purpose, in
+// rides/_components/static-route-map.tsx's rasterAttribution(): it credits Carto
+// only if an operator points NEXT_PUBLIC_RASTER_TILE_URL at them. That is an
+// attribution-licence guard, not a provider — deleting it would under-credit
+// them if anyone ever does.
 
 /**
  * Our own tile server, when one is configured (see deploy/tiles).
@@ -136,34 +157,59 @@ export function selfHostedStyleUrl(resolvedTheme?: string): string | null {
 }
 
 /**
- * Ordered basemap providers for an admin map, most-preferred first:
- *   0. Self-hosted — only when NEXT_PUBLIC_MAP_STYLE_URL is configured
- *   1. OpenFreeMap — keyless
- *   2. Protomaps   — only when NEXT_PUBLIC_PROTOMAPS_API_KEY is configured
- *   3. Carto       — keyless, always present, independent host + CDN
+ * Basemap providers for an admin map. Two distinct shapes:
  *
- * The third-party hops stay behind a configured self-hosted style on purpose:
- * our own tile server going down should degrade the map to somebody else's,
- * not to nothing.
+ *   Self-hosted configured  → [self-hosted]                    (nothing else)
+ *   Self-hosted unconfigured → OpenFreeMap → Protomaps?
  *
- * Passing no theme yields the light styles, which is byte-for-byte the style a
- * caller that hardcoded MAP_STYLE_URL was already using — adopting this chain
- * is not a visual change for those callers, only a resilience one.
+ * Once we serve our own basemap it is the *only* basemap. That is a deliberate
+ * trade, made by the product owner on 2026-09-14, and it costs something real:
+ * our tile server going down now blanks the admin maps instead of quietly
+ * degrading to somebody else's. What it buys is that the first hop is ours, so
+ * admins stop paying an 8s timeout on a donation-funded CDN before every map
+ * paints — the banner that timeout produces was the original reason
+ * deploy/tiles exists at all.
+ *
+ * The third-party chain is kept for the unconfigured case rather than deleted,
+ * for two reasons that are not stylistic:
+ *   - An empty chain paints nothing. If NEXT_PUBLIC_MAP_STYLE_URL is missing or
+ *     scoped to the wrong Vercel environment, deleting the third parties turns
+ *     a misconfiguration into blank maps with no fallback at all.
+ *   - CI does not set NEXT_PUBLIC_MAP_STYLE_URL, and
+ *     e2e/visual-regression.spec.ts stubs tiles.openfreemap.org. Removing
+ *     OpenFreeMap as the unconfigured first hop would blank the seeded
+ *     dashboard-monitoring baseline and fail a merge-blocking gate.
+ *
+ * Passing no theme yields the light styles.
  *
  * Deduplicated because a hop that repeats an earlier URL is not a fallback: it
  * re-requests the host that just failed and burns a whole 8s watchdog window
- * doing it. Reachable in practice by pointing NEXT_PUBLIC_MAP_STYLE_URL at a
- * provider already in the chain.
+ * doing it.
  */
+/**
+ * The one style to use for a map that has no fallback chain of its own.
+ *
+ * Several admin maps (driver, geofence, venue, live-ride) hand MapLibre a single
+ * `style` and never retry, so they cannot use basemapChain(). They previously
+ * hard-coded MAP_STYLE_URL, which meant they kept loading a third-party basemap
+ * even with our own tile server configured — the chain-using maps switched over
+ * and these four silently did not.
+ *
+ * Self-hosted when configured, otherwise exactly the style they used before.
+ */
+export function primaryMapStyle(resolvedTheme?: string): string {
+    return selfHostedStyleUrl(resolvedTheme) ?? themedMapStyle(resolvedTheme);
+}
+
 export function basemapChain(resolvedTheme?: string): string[] {
+    const selfHosted = selfHostedStyleUrl(resolvedTheme);
+    if (selfHosted) return [selfHosted];
+
     const protomaps =
         resolvedTheme === "dark" ? protomapsStyleUrl("dark") : protomapsStyleUrl();
-    const selfHosted = selfHostedStyleUrl(resolvedTheme);
     const ordered = [
-        ...(selfHosted ? [selfHosted] : []),
         themedMapStyle(resolvedTheme),
         ...(protomaps ? [protomaps] : []),
-        cartoStyleUrl(resolvedTheme),
     ];
     return [...new Set(ordered)];
 }

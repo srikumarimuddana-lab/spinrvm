@@ -257,8 +257,34 @@ describe('OtpScreen (driver-app)', () => {
       await verifyBtn.props.onPress();
       await flush();
     });
-    expect(mockShowToast).toHaveBeenCalledWith('error', 'Verification Failed', 'Invalid code. Please try again.');
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'error',
+      'Verification Failed',
+      "That code didn't match. Check the SMS and try again.",
+    );
     expect(r.root.findByType(TextInput).props.value).toBe('');
+  });
+
+  it('surfaces a wrong OTP as friendly copy, not ERR_OTP_INVALID', async () => {
+    mockApiPost.mockRejectedValue({
+      name: 'SpinrApiError',
+      message: 'ERR_OTP_INVALID',
+      messageKey: 'errors.auth.otp_invalid',
+      code: 1008,
+    });
+    const r = await renderScreen();
+    await enterCode(r, '9999');
+    const verifyBtn = findVerifyBtn(r);
+    await act(async () => {
+      await verifyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'error',
+      'Verification Failed',
+      "That code didn't match. Check the SMS and try again.",
+    );
+    expect(mockShowToast.mock.calls.some((c) => String(c[2]).includes('ERR_OTP') || String(c[2]).includes('ERROR_OTP'))).toBe(false);
   });
 
   it('does not show the Resend button while the countdown is active', async () => {

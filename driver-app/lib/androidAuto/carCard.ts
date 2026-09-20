@@ -52,11 +52,13 @@ export interface OfferLike {
   // as it does today (no badge) rather than throwing.
   quiet_mode?: boolean;
   is_scheduled?: boolean;
+  scheduled_time?: string;
   payment_method?: string;
 }
 
 /** Everything the head-unit card renders. All fields pre-formatted for display. */
 export interface TripCard {
+  scheduledPickupLabel?: string | null;
   leg: TripCardLeg;
   /** Short state headline shown in the status pill, e.g. "Heading to pickup". */
   statusLabel: string;
@@ -281,7 +283,7 @@ export function buildOfferAlertText(card: TripCard): OfferAlertText {
     card.surgeLabel ? `${card.surgeLabel} surge` : null,
     card.wav ? 'WAV' : null,
     card.quietMode ? 'Quiet ride' : null,
-    card.isScheduled ? 'Pre-booked' : null,
+    card.scheduledPickupLabel ? `Pickup ${card.scheduledPickupLabel}` : card.isScheduled ? 'Pre-booked' : null,
     card.cashPayment ? 'Cash' : null,
   ]
     .filter(Boolean)
@@ -315,6 +317,8 @@ export function buildOfferCard(offer: OfferLike | null): TripCard {
     wav: offer?.requires_wav === true,
     quietMode: offer?.quiet_mode === true,
     isScheduled: offer?.is_scheduled === true,
+    scheduledPickupLabel: offer?.is_scheduled && offer.scheduled_time && Number.isFinite(Date.parse(offer.scheduled_time))
+      ? new Date(offer.scheduled_time).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null,
     cashPayment: offer?.payment_method === 'cash',
     pickupLabel: offer?.pickup_address?.trim() || null,
     dropoffLabel: offer?.dropoff_address?.trim() || null,
@@ -377,6 +381,8 @@ export function buildTripCard(
             incentives: activeRide?.incentives,
             quest_hint: activeRide?.quest_hint,
             quiet_mode: ride.quiet_mode,
+            is_scheduled: ride.is_scheduled,
+            scheduled_time: ride.scheduled_time,
             payment_method: ride.payment_method,
           }
         : null,
@@ -396,6 +402,8 @@ export function buildTripCard(
   const surgeLabel = surgeBadge(ride?.surge_multiplier);
   const wav = ride?.requires_wav === true;
   const quietMode = ride?.quiet_mode === true;
+  const scheduledPickup = ride?.is_scheduled && ride.scheduled_time && Number.isFinite(Date.parse(ride.scheduled_time))
+    ? new Date(ride.scheduled_time).toLocaleString('en-CA', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : null;
   const cashPayment = ride?.payment_method === 'cash';
   const pickupLabel = ride?.pickup_address?.trim() || null;
   const dropoffLabel = ride?.dropoff_address?.trim() || null;
@@ -437,7 +445,7 @@ export function buildTripCard(
         surgeLabel,
         wav,
         ...flagFields,
-        hint: null,
+        hint: scheduledPickup ? `Pickup ${scheduledPickup}` : null,
         earningsTodayLabel: null,
       };
 
@@ -460,7 +468,7 @@ export function buildTripCard(
         wav,
         ...flagFields,
         // OTP start-trip is distraction-sensitive — stays on the phone (CLAUDE.md).
-        hint: 'Verify the rider’s PIN on your phone to start the trip',
+        hint: scheduledPickup ? `Pickup ${scheduledPickup} · Verify PIN on your phone` : 'Verify the rider’s PIN on your phone to start the trip',
         earningsTodayLabel: null,
       };
 

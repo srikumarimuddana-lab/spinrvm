@@ -1,13 +1,7 @@
 /**
  * P3-19: Native push-notification flows (FCM/APNs) — rider side
  *
- * Pins useScheduledRideReminder hook:
- *   - scheduleReminder: skips when < 10 min away (matching the backend's
- *     scheduled_ride_reminder lead time); schedules otherwise; cancels old
- *     reminder before re-scheduling (idempotent)
- *   - cancelReminder: cancels notification and clears storage
- *   - handleScheduledRideReminderFCM: extracts rideId from FCM payload;
- *     returns null for wrong type
+ * Pins server-owned reminders and cleanup of legacy local notifications.
  *
  * Code under test:
  *   rider-app/hooks/useScheduledRideReminder.ts::scheduleReminder
@@ -20,6 +14,7 @@
 
 import {
   useScheduledRideReminder,
+  clearLegacyScheduledReminders,
   handleScheduledRideReminderFCM,
 } from '../useScheduledRideReminder';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -63,75 +58,29 @@ const RIDE_ID = 'ride-sch-001';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockCancelNotification.mockReset();
   (AsyncStorage as any)._reset();
 });
 
-describe('useScheduledRideReminder — scheduleReminder', () => {
-  it('schedules a notification when the ride is > 10 min away', async () => {
-    mockScheduleNotification.mockResolvedValue('notif-id-001');
-
-    const { scheduleReminder } = useScheduledRideReminder();
-    const futureTime = new Date(Date.now() + 60 * 60 * 1000); // 1 hour away
-
-    await scheduleReminder(RIDE_ID, futureTime);
-
-    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
-    const [config] = mockScheduleNotification.mock.calls[0];
-    expect(config.content.data.rideId).toBe(RIDE_ID);
-    expect(config.content.data.type).toBe('scheduled_ride_reminder');
-  });
-
-  it('skips scheduling when the ride is < 10 min away', async () => {
-    const { scheduleReminder } = useScheduledRideReminder();
-    const soonTime = new Date(Date.now() + 5 * 60 * 1000); // 5 min away
-
-    await scheduleReminder(RIDE_ID, soonTime);
-
-    expect(mockScheduleNotification).not.toHaveBeenCalled();
-  });
-
-  it('schedules when the ride is 12 min away — regression guard for the old 15-min lead', async () => {
-    // Previously this lead time was 15 minutes (mismatched against the
-    // backend's 10-minute FCM reminder); a ride 12 minutes away used to be
-    // silently skipped client-side even though the backend reminder hadn't
-    // fired yet either. Now both sides agree on 10 minutes, so 12-out schedules.
-    mockScheduleNotification.mockResolvedValue('notif-id-002');
-
-    const { scheduleReminder } = useScheduledRideReminder();
-    const twelveMinOut = new Date(Date.now() + 12 * 60 * 1000);
-
-    await scheduleReminder(RIDE_ID, twelveMinOut);
-
-    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
-  });
-
-  it('cancels the old notification before re-scheduling (idempotent)', async () => {
-    mockScheduleNotification.mockResolvedValue('notif-id-new');
-
-    // Pre-load an existing notif id for this ride
-    await AsyncStorage.setItem(
-      REMINDER_MAP_KEY,
-      JSON.stringify({ [RIDE_ID]: 'notif-id-old' }),
-    );
-
-    const { scheduleReminder } = useScheduledRideReminder();
-    const futureTime = new Date(Date.now() + 60 * 60 * 1000);
-
-    await scheduleReminder(RIDE_ID, futureTime);
-
-    expect(mockCancelNotification).toHaveBeenCalledWith('notif-id-old');
-    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
-  });
-
-  it('stores the new notification id in AsyncStorage', async () => {
-    mockScheduleNotification.mockResolvedValue('notif-id-stored');
-
+describe('server-owned reminders', () => {
+  it('never schedules a hardcoded local reminder', async () => {
     const { scheduleReminder } = useScheduledRideReminder();
     await scheduleReminder(RIDE_ID, new Date(Date.now() + 60 * 60 * 1000));
-
-    const raw = await AsyncStorage.getItem(REMINDER_MAP_KEY);
-    const map = JSON.parse(raw!);
-    expect(map[RIDE_ID]).toBe('notif-id-stored');
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+  });
+  it('retains failed cancellations while clearing successful ones', async () => {
+    await AsyncStorage.setItem(REMINDER_MAP_KEY, JSON.stringify({a:'old-a', b:'old-b'}));
+    mockCancelNotification.mockRejectedValueOnce(new Error('native unavailable')).mockResolvedValueOnce(undefined);
+    await clearLegacyScheduledReminders();
+    expect(mockCancelNotification).toHaveBeenCalledWith('old-a');
+    expect(mockCancelNotification).toHaveBeenCalledWith('old-b');
+    expect(JSON.parse((await AsyncStorage.getItem(REMINDER_MAP_KEY))!)).toEqual({a:'old-a'});
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+  });
+  it.each(['null', '[]', '"invalid"', '{"ride":3}'])('ignores invalid storage: %s', async raw => {
+    await AsyncStorage.setItem(REMINDER_MAP_KEY, raw);
+    await expect(clearLegacyScheduledReminders()).resolves.toBeUndefined();
+    expect(mockCancelNotification).not.toHaveBeenCalled();
   });
 });
 

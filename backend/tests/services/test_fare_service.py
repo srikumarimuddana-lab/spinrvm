@@ -453,6 +453,30 @@ class TestBuildFareBreakdownLines:
         tax_lines = {line["label"]: line["amount"] for line in lines if line["type"] == "tax"}
         assert tax_lines == {"GST (5%)": 1.15}
 
+    def test_tax_entry_with_no_amount_key_is_skipped_not_crashed(self):
+        """A malformed tax entry must be dropped, not raise.
+
+        `tax_breakdown` is read back from a JSONB ride column on the
+        receipt paths, so an entry written by an older importer or
+        backfill can lack `amount` entirely. The `.get("amount", 0)`
+        default is what turns that into a skipped line rather than a
+        KeyError two lines later at `info["amount"]`. Mutation testing
+        found this default was the one branch in the module no test
+        pinned: flipping it to any truthy default left the suite green.
+        """
+        fb = calculate_fare(_fare_info(), distance_km=5, duration_minutes=10)
+        lines = build_fare_breakdown_lines(
+            fb,
+            distance_km=5,
+            duration_minutes=10,
+            tax_breakdown={
+                "GST": {"amount": 1.15, "rate": 5},
+                "PST": {"rate": 6},  # no `amount` key at all — excluded, not a crash
+            },
+        )
+        tax_lines = {line["label"]: line["amount"] for line in lines if line["type"] == "tax"}
+        assert tax_lines == {"GST (5%)": 1.15}
+
 
 # ── recalculate_fare_for_distance: completion-time clamp & attribution ────────
 

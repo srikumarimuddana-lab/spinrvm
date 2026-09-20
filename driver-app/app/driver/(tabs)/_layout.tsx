@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
+import { SPACING } from '@shared/utils/responsive';
 
 export default function DriverTabsLayout() {
   const insets = useSafeAreaInsets();
@@ -25,7 +26,7 @@ export default function DriverTabsLayout() {
           borderTopColor: colors.border,
           height: tabBarHeight,
           paddingBottom: bottomPadding,
-          paddingTop: 8,
+          paddingTop: SPACING.sm,
           elevation: 8,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: -2 },

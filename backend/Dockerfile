@@ -30,7 +30,7 @@
 # speed gain (the stage was already free) and introduced real risk, since
 # `--prefix=/install` does not lay out identically to a normal
 # site-packages install.
-FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
+FROM python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144 AS runtime
 
 # Apply OS security patches to the runtime image.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \

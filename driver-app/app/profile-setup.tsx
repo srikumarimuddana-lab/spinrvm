@@ -451,7 +451,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Male' && (
-                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: SPACING.xs }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -469,7 +469,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Female' && (
-                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: SPACING.xs }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -487,7 +487,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Other' && (
-                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: SPACING.xs }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -531,7 +531,7 @@ export default function ProfileSetupScreen() {
               ))}
             </View>
             {serviceAreas.length === 0 && (
-              <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: SPACING.sm }} />
             )}
             <Text style={styles.serviceAreaHint}>
               {serviceAreaId ? 'You can only operate in your selected area' : 'Select your service area to continue'}

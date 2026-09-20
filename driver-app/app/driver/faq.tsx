@@ -181,7 +181,7 @@ export default function FaqScreen() {
                 <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 60 }} />
             ) : (
                 <ScrollView
-                    contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40, paddingTop: 16 }}
+                    contentContainerStyle={{ paddingHorizontal: SPACING.md, paddingBottom: insets.bottom + 40, paddingTop: SPACING.md }}
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"
                 >

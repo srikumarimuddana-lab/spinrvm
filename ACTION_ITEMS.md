@@ -29,7 +29,18 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 ADDED (open): `locationIntegrity.test.ts`'s
+_Last updated: 2026-09-20 — C122 INVESTIGATED (still open): traced
+`locationIntegrity.ts`'s mock-detection branch line by line — it is fully
+synchronous and deterministic (no timers, no wall-clock dependency), and
+`git log` confirms nothing has changed in the source or test since the
+CI failure, so this is unlike C120 — no silent upstream fix exists to
+credit. Ruled out a Jest/haste-map module-collision explanation (no
+duplicate `react-native` package copies in `driver-app/`). Re-ran 8 times
+against current `main` in multiple modes, never reproduced. Conclusion:
+the code has nothing to fix today; closing this out as a code defect
+would be guessing. Left open with instructions to watch for recurrence
+rather than treated as solved, since the original CI failure was real
+and unexplained, not disproven. Prior: C122 ADDED (open): `locationIntegrity.test.ts`'s
 mock-GPS-detection test failed in CI on PR #5538 (an infra-only diff) but
 passed locally on the identical commit — filed as a suspected flake since
 re-running to confirm hit a 403 (no permission). Prior: C121 ADDED (open, partial): Fly deploys a
@@ -27585,7 +27596,7 @@ as evidence that the thing it configures exists.
 
 ### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
 
-- [ ] **Status: OPEN, filed 2026-09-20.**
+- [ ] **Status: OPEN, investigated 2026-09-20 — code confirmed deterministic; no fix possible without a fresh reproduction.**
 - **What's wrong:** `driver-app-test` failed on PR #5538 (head `f0ffbb9a1`,
   a `.github/workflows/`-only + `ACTION_ITEMS.md` change — zero
   driver-app files touched) with one failure:
@@ -27593,36 +27604,51 @@ as evidence that the thing it configures exists.
   teleport fixes` — `expect(c.check(fix(52.1, -106.6, 1000, { mocked:
   true })).reason).toBe('mock_location_detected')`, got `undefined`
   (i.e. the checker didn't flag a mocked-location fix as mocked).
-- **Why this looks like a flake, not a regression:** ran
-  `npx jest utils/__tests__/locationIntegrity.test.ts` locally against
-  the exact same commit (`f0ffbb9a1`) — all 4 tests in the suite passed,
-  including this one. A test that fails in CI and passes locally on the
-  identical commit, with a non-timeout assertion mismatch (not a hang),
-  points to timing/ordering sensitivity in the checker's mock/speed
-  logic rather than a real logic bug — but this has not been proven,
-  only inferred from one data point.
-- **Not re-run to confirm** — attempted `rerun_failed_jobs` on the CI
-  run, got `403 Resource not accessible by integration`; this session's
-  GitHub integration lacks the permission. Per CLAUDE.md's flake-handling
-  rule, re-running is the correct next step and remains undone.
-- **Not investigated further here** — out of scope for the CI/CD-audit
-  PR that surfaced it (infra-only diff); `locationIntegrity.ts` is
-  fraud/safety-adjacent (mock-GPS and impossible-speed detection feeds
-  `spinr-fraud-auditor`'s "GPS plausibility between consecutive location
-  pings" domain), so a real fix needs its own session with the time to
-  read `driver-app/utils/locationIntegrity.ts`'s mock-detection branch
-  and determine whether it's genuinely non-deterministic (e.g. depends on
-  `Date.now()`/wall-clock deltas between the two `fix()` calls in the
-  test) or a real bug that only manifests under CI's slower/loaded
-  runner.
-- **Action:** get CI re-run permission or have a human re-run the failed
-  job to confirm reproducibility before spending time on a fix; if it
-  reproduces, read the mock-detection branch in
-  `driver-app/utils/locationIntegrity.ts` against the test's `fix()`
-  helper to find the timing dependency.
+- **Follow-up investigation (2026-09-20), unlike C120 this did NOT turn
+  out to be a real, silently-already-fixed bug:**
+  - `git log` on both `driver-app/utils/locationIntegrity.ts` and its
+    test since the failure: **no changes** — last touched 2026-08-18
+    (`d6829606b`, the per-producer refactor), over a month before this
+    failure. Nothing fixed it upstream; if it's real, it's still there.
+  - Read `locationIntegrity.ts`'s mock-detection branch
+    (`if (Platform.OS === 'android' && loc.mocked === true)`, line 59):
+    it is a **fully synchronous, pure function** of `Platform.OS` (set
+    once per test file via `jest.mock('react-native', () => ({ Platform:
+    { OS: 'android' } }))`, hoisted above imports) and `loc.mocked` (set
+    deterministically by the test's `fix()` helper via object-spread
+    override, `{ mocked: false, ...extra }` with `extra = { mocked: true
+    }` — spread-last always wins in JS). There is no `Date.now()`, no
+    timer, no promise, nothing wall-clock-dependent in this code path —
+    unlike C120's genuine async race, there is no plausible **application**
+    mechanism for this assertion to be non-deterministic.
+  - Checked for a Jest/haste-map module-collision explanation (a real,
+    known class of RN-monorepo flakiness where a duplicate nested package
+    copy can non-deterministically shadow a `jest.mock()`): no duplicate
+    `react-native` package copies exist inside `driver-app/` — only one
+    per app workspace (`driver-app/node_modules/react-native`,
+    `rider-app/node_modules/react-native`, no nesting). Ruled out.
+  - Re-ran 8 times total against current `main` across multiple modes
+    (standalone, CI's exact `--ci --coverage --forceExit` flags,
+    `--runInBand`, inside the full 1813-test suite) — never reproduced.
+  - **Conclusion:** the application code is correct and provably
+    deterministic for this assertion. If the CI failure was real (not a
+    one-off runner/infra glitch — e.g. a corrupted transform cache, a
+    bad coverage-instrumentation pass, or some other Jest/CI-environment-
+    level anomaly this session has no way to inspect after the fact),
+    the cause is NOT in `locationIntegrity.ts` or its test. There is
+    nothing here to code-fix without a fresh, re-examinable failure.
+- **Not re-run to confirm** — attempted `rerun_failed_jobs` on the
+  original CI run, got `403 Resource not accessible by integration`;
+  this session's GitHub integration lacks the permission.
+- **Action:** watch for recurrence rather than treat as an open code
+  defect. If `driver-app-test` fails on this exact assertion again,
+  capture the run URL/job ID immediately (before a later push supersedes
+  it) and check for Jest/coverage-transform warnings in the full log —
+  that would be the first real signal beyond what's here. Do not modify
+  `locationIntegrity.ts` speculatively; the trace above shows nothing to
+  fix in it today.
 - **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
-  `driver-app/utils/locationIntegrity.ts` (not yet inspected for this
-  issue).
+  `driver-app/utils/locationIntegrity.ts` — both inspected, unchanged.
 
 ## Recently completed (do not redo)
 

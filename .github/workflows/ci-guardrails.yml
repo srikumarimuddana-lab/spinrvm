@@ -945,7 +945,7 @@ jobs:
           PYEOF
 
       - name: Check for new secrets in diff
-        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # main (2026-08-19)
+        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # main (2026-08-19)
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}

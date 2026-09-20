@@ -18,6 +18,21 @@ fixture (right after its 142 extraction, for the same grant-then-narrow
 sequencing reason) so `test_corporate_billing_rls.py` and this file see the
 same, single, correct schema. This file's own duplicate fixture was removed
 rather than left to double-apply migration 416 in the same session.
+
+ACTION_ITEMS.md C107 / migration 430: a 2026-09-13 production data cleanup
+plus migration 256's `chk_users_role_not_admin` CHECK constraint already
+closed the original C107 finding (no `users` row can hold 'admin'/
+'super_admin' anymore) without touching any policy. migration 430 layers
+additional hardening on top: it replaces the "Admin read <table>" policy this
+file's `test_super_admin_can_select_any_corporate_account` /
+`test_admin_can_still_select_any_corporate_account` originally pinned with an
+explicit `USING (false)`, so both are rewritten below to assert denial
+instead of removed -- migration 416's admin/super_admin parity fix is still
+real (both role values reach the same, now-`false`, policy; neither is
+special-cased over the other), it's just that the policy denies everyone now.
+`test_super_admin_cannot_insert_corporate_account` is untouched by 430 (write
+access was already revoked at the grant layer by 416) and is unaffected by
+any of this.
 """
 
 from __future__ import annotations
@@ -51,12 +66,10 @@ def _seed_account(cur, account_id: str, name: str = "Test Co") -> None:
     cur.execute("INSERT INTO corporate_accounts (id, name) VALUES (%s, %s)", (account_id, name))
 
 
-def test_super_admin_can_select_any_corporate_account(pg_cur):
-    """Migration 416 regression pin: this is the bug. Before 416,
-    corporate_accounts' policy (migration 17) checked `role = 'admin'` only
-    -- a super_admin-role authenticated JWT was denied entirely, unlike the
-    9 sibling corporate tables migration 142 already fixed to check
-    `role IN ('admin', 'super_admin')`."""
+def test_super_admin_cannot_select_any_corporate_account(pg_cur):
+    """migration 430 (ACTION_ITEMS.md C107): the admin-read policy migration
+    416 fixed for super_admin parity is now USING (false) -- super_admin is
+    denied exactly like admin, not specially permitted."""
     account_id = _uuid()
     super_admin = _uuid()
     as_role(pg_cur, None)
@@ -64,11 +77,12 @@ def test_super_admin_can_select_any_corporate_account(pg_cur):
     _seed_account(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
-def test_admin_can_still_select_any_corporate_account(pg_cur):
-    """No regression on the pre-existing, already-working admin path."""
+def test_admin_cannot_select_any_corporate_account(pg_cur):
+    """Same denial applies to the plain admin role value -- migration 430
+    makes no distinction between the two."""
     account_id = _uuid()
     admin = _uuid()
     as_role(pg_cur, None)
@@ -76,7 +90,7 @@ def test_admin_can_still_select_any_corporate_account(pg_cur):
     _seed_account(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_rider_cannot_select_corporate_accounts(pg_cur):

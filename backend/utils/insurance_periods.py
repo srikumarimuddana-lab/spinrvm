@@ -37,6 +37,11 @@ except ImportError:  # pragma: no cover - dual-import per CLAUDE.md
     except ImportError:  # pragma: no cover
         _metrics = None  # type: ignore
 
+try:
+    from ..models.ride_status import RideStatus
+except ImportError:  # pragma: no cover - dual-import per CLAUDE.md
+    from models.ride_status import RideStatus  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 _VALID_PERIODS = (0, 1, 2, 3)
@@ -60,6 +65,80 @@ def _metric_inc(name: str, labels: Optional[dict] = None) -> None:
         _metrics.inc(name, labels)
     except Exception:  # noqa: BLE001, S110 - metrics are best-effort by design
         pass
+
+
+# Ride states that put a driver in Period 2 (en route to pickup). Period 2
+# opens on `driver_assigned`, NOT on `driver_accepted`: per CLAUDE.md the
+# driver is obligated to the ride the instant `claim_driver_atomic` succeeds
+# and the offer is live, not only once they tap Accept.
+_EN_ROUTE_STATUSES = frozenset(
+    {
+        RideStatus.DRIVER_ASSIGNED,
+        RideStatus.DRIVER_ACCEPTED,
+        RideStatus.DRIVER_ARRIVED,
+    }
+)
+
+_KNOWN_RIDE_STATUSES = frozenset(s.value for s in RideStatus)
+
+
+def derive_insurance_period(
+    *,
+    ride_status: Optional[str] = None,
+    is_online: bool = False,
+    has_live_offer: bool = False,
+) -> int:
+    """Map a driver's current situation to their TNC insurance period.
+
+    Single source of truth for CLAUDE.md's Period 0-3 table. Pure: no DB,
+    no async, no clock. Keyword-only on purpose — this is a regulatory
+    classification and a transposed positional argument would silently
+    misstate SGI commercial coverage.
+
+        Period 3  passenger aboard        ride is `in_progress`
+        Period 2  en route to pickup      ride is assigned/accepted/arrived,
+                                          OR a live offer is outstanding
+        Period 1  available, no ride      driver is online, none of the above
+        Period 0  offline                 everything else
+
+    `has_live_offer` is what `driver_assigned` means for batch dispatch,
+    which holds no `rides.driver_id` link pre-acceptance — the claim lives
+    in `ride_offers`. Callers that can see a pending offer must pass it, or
+    they will classify an obligated driver as merely available.
+
+    Unknown `ride_status`
+    ---------------------
+    CLAUDE.md says a `ride.status` outside the enum is a contract violation
+    that must surface loudly. It also says an audit write must never block
+    the driver state machine (see this module's docstring). Both are
+    honoured: an unknown status is logged at ERROR and counted, then
+    ignored for the purposes of this mapping — so it degrades toward the
+    offer/online signals rather than raising into a driver's go-online
+    request or a dispatch tick. It never degrades *upward* into a higher
+    period, so a bad row can't invent commercial coverage.
+    """
+    if ride_status is not None and ride_status not in _KNOWN_RIDE_STATUSES:
+        logger.error(
+            "insurance period derivation saw a ride status outside RideStatus: %r. "
+            "Treating as no active ride; fix the writer of this value.",
+            ride_status,
+        )
+        _metric_inc("spinr_rides_unknown_status_total", {"source": "insurance_period_derivation"})
+        # No reassignment needed: an unrecognised value already fails both
+        # the IN_PROGRESS comparison and the _EN_ROUTE_STATUSES membership
+        # test below, so it falls through to the offer/online signals on
+        # its own. Mutation testing caught an explicit `ride_status = None`
+        # here as dead code.
+
+    if ride_status == RideStatus.IN_PROGRESS:
+        return 3
+    if ride_status in _EN_ROUTE_STATUSES:
+        return 2
+    if has_live_offer:
+        return 2
+    if is_online:
+        return 1
+    return 0
 
 
 async def record_period_transition(

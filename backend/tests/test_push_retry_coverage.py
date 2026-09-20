@@ -314,6 +314,7 @@ class TestProcessRowTokenSelection:
 
         send_fcm.assert_awaited_once()
         assert send_fcm.await_args.args[0] == "generic-token"
+        assert send_fcm.await_args.args[5] is None
 
     @pytest.mark.anyio
     async def test_driver_target_prefers_driver_token(self, monkeypatch):
@@ -333,6 +334,9 @@ class TestProcessRowTokenSelection:
         await push_retry._process_row(row)
 
         assert send_fcm.await_args.args[0] == "driver-token"
+        # target_app must be forwarded so _send_fcm_push can pick the right
+        # Android channel (regression guard for the "ride-offers" hardcode).
+        assert send_fcm.await_args.args[5] == "driver"
 
     @pytest.mark.anyio
     async def test_driver_target_falls_back_to_generic_token(self, monkeypatch):
@@ -366,6 +370,9 @@ class TestProcessRowTokenSelection:
         await push_retry._process_row(row)
 
         assert send_fcm.await_args.args[0] == "rider-token"
+        # target_app must be forwarded so _send_fcm_push can pick the right
+        # Android channel (regression guard for the "ride-offers" hardcode).
+        assert send_fcm.await_args.args[5] == "rider"
 
     @pytest.mark.anyio
     async def test_rider_target_falls_back_to_generic_token(self, monkeypatch):
@@ -594,6 +601,61 @@ class TestSendFcmPush:
 
         result = await push_retry._send_fcm_push("token-1", "Title", "Body", None, "user-1")
         assert result is True
+
+    @pytest.mark.anyio
+    async def test_rider_target_uses_ride_updates_channel(self, monkeypatch):
+        """Regression guard: a non-dispatch push to a rider must use the
+        "ride-updates" channel that actually exists on rider-app — the old
+        hardcoded "ride-offers" (driver-app-only) channel silently dropped
+        on Android since the receiving app has no such channel."""
+        from backend.utils import push_retry
+
+        fake_messaging = MagicMock()
+        fake_messaging.send = MagicMock(return_value="ok")
+        fake_firebase_admin = types.ModuleType("firebase_admin")
+        fake_firebase_admin.messaging = fake_messaging
+        monkeypatch.setitem(sys.modules, "firebase_admin", fake_firebase_admin)
+
+        result = await push_retry._send_fcm_push(
+            "token-1", "SOS confirmed", "Help is on the way", {"type": "sos_confirmation"}, "rider-1", "rider"
+        )
+
+        assert result is True
+        fake_messaging.AndroidNotification.assert_called_once_with(channel_id="ride-updates")
+
+    @pytest.mark.anyio
+    async def test_driver_target_uses_ride_offers_channel(self, monkeypatch):
+        from backend.utils import push_retry
+
+        fake_messaging = MagicMock()
+        fake_messaging.send = MagicMock(return_value="ok")
+        fake_firebase_admin = types.ModuleType("firebase_admin")
+        fake_firebase_admin.messaging = fake_messaging
+        monkeypatch.setitem(sys.modules, "firebase_admin", fake_firebase_admin)
+
+        result = await push_retry._send_fcm_push(
+            "token-1", "Account update", "Your document was rejected", {"type": "driver_reject"}, "driver-1", "driver"
+        )
+
+        assert result is True
+        fake_messaging.AndroidNotification.assert_called_once_with(channel_id="ride-offers")
+
+    @pytest.mark.anyio
+    async def test_missing_target_app_defaults_to_ride_offers_channel(self, monkeypatch):
+        """No target_app on the row (legacy/unknown) must fall back to the
+        driver channel — matches features.py's _build_fcm_message default."""
+        from backend.utils import push_retry
+
+        fake_messaging = MagicMock()
+        fake_messaging.send = MagicMock(return_value="ok")
+        fake_firebase_admin = types.ModuleType("firebase_admin")
+        fake_firebase_admin.messaging = fake_messaging
+        monkeypatch.setitem(sys.modules, "firebase_admin", fake_firebase_admin)
+
+        result = await push_retry._send_fcm_push("token-1", "Title", "Body", {"type": "chat_message"}, "user-1")
+
+        assert result is True
+        fake_messaging.AndroidNotification.assert_called_once_with(channel_id="ride-offers")
 
 
 # ── _claim_row ───────────────────────────────────────────────────────────

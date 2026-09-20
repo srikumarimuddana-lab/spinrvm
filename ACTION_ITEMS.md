@@ -29,7 +29,17 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 INVESTIGATED (still open): traced
+_Last updated: 2026-09-20 — C122 RECURRED (2nd occurrence, still open):
+the same `locationIntegrity.ts` mock-detection test failed again in CI on
+PR #5580, identical signature to the first occurrence on PR #5538 — same
+assertion, same error, both on PRs touching zero driver-app files. 16
+total local reproduction attempts across both investigations still never
+reproduced it, and the code trace still shows no application-level
+mechanism for non-determinism, but two identical occurrences is now a
+confirmed recurring pattern, not a one-off — updated the action item to
+recommend a real CI-access session test the Jest/coverage-instrumentation
+hypothesis (the likely remaining locus) rather than keep guessing from a
+sandbox that can't rerun CI or inspect runner specs. Prior: C122 INVESTIGATED (still open): traced
 `locationIntegrity.ts`'s mock-detection branch line by line — it is fully
 synchronous and deterministic (no timers, no wall-clock dependency), and
 `git log` confirms nothing has changed in the source or test since the
@@ -27805,7 +27815,26 @@ as evidence that the thing it configures exists.
 
 ### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
 
-- [ ] **Status: OPEN, investigated 2026-09-20 — code confirmed deterministic; no fix possible without a fresh reproduction.**
+- [ ] **Status: OPEN, RECURRED 2026-09-20 (2nd occurrence) — code confirmed deterministic across both; still no root cause, upgraded from "one data point" to "confirmed pattern."**
+- **2nd occurrence (2026-09-20, later same day):** identical failure,
+  same exact assertion, same exact error (`Expected: "mock_location_detected"`,
+  `Received: undefined`), on PR #5580 (head `cb4456f61`, a
+  `.github/workflows/ci.yml` + `deploy-fly-signed-image.yml` +
+  `ACTION_ITEMS.md` change — zero driver-app files touched, same pattern
+  as the 1st occurrence). Run `35535699992`, job `106144246088`. Attempted
+  `rerun_failed_jobs` again — same `403`. Ran the full suite 8 MORE times
+  locally after this 2nd occurrence (16 total across both investigations,
+  standalone/CI-flags/`--runInBand`/full-suite) — still never reproduced.
+  Checked Node version parity (local `v22.22.2` vs CI's `NODE_VERSION: '22'`
+  — matches, not a lead). Two occurrences with an identical signature, both
+  on PRs with zero driver-app files changed, is no longer explainable as a
+  one-off runner glitch — this is a real, recurring problem — but the
+  code-level trace from the 1st investigation still holds: the failing
+  assertion has no application-level mechanism to be non-deterministic.
+  The likely locus has narrowed to Jest/coverage-instrumentation/worker
+  machinery itself (something Istanbul- or worker-pool-related under
+  `--coverage`), not `locationIntegrity.ts` — but this is still a
+  hypothesis, not a confirmed cause.
 - **What's wrong:** `driver-app-test` failed on PR #5538 (head `f0ffbb9a1`,
   a `.github/workflows/`-only + `ACTION_ITEMS.md` change — zero
   driver-app files touched) with one failure:
@@ -27849,13 +27878,20 @@ as evidence that the thing it configures exists.
 - **Not re-run to confirm** — attempted `rerun_failed_jobs` on the
   original CI run, got `403 Resource not accessible by integration`;
   this session's GitHub integration lacks the permission.
-- **Action:** watch for recurrence rather than treat as an open code
-  defect. If `driver-app-test` fails on this exact assertion again,
-  capture the run URL/job ID immediately (before a later push supersedes
-  it) and check for Jest/coverage-transform warnings in the full log —
-  that would be the first real signal beyond what's here. Do not modify
-  `locationIntegrity.ts` speculatively; the trace above shows nothing to
-  fix in it today.
+- **Action:** now that it's confirmed recurring, this deserves a real
+  session with CI rerun/inspection access (not just this sandbox's static
+  trace + local repro attempts) — someone who can: (a) actually re-run the
+  same failing commit's CI job repeatedly to measure the real failure
+  rate, (b) check GitHub Actions runner specs (CPU count) for both
+  occurrences to test the worker-parallelism hypothesis, (c) try disabling
+  `--coverage` on a manual run to see if the failure stops (would point
+  squarely at Istanbul/coverage instrumentation rather than the app code
+  or Jest core). Do not modify `locationIntegrity.ts` speculatively; the
+  trace across both occurrences still shows nothing to fix in it today —
+  if the coverage-instrumentation hypothesis is confirmed, the fix belongs
+  in `driver-app/jest.config.js` (e.g. excluding this file from coverage
+  collection, or a `--coverage`-related jest/babel-plugin-istanbul version
+  bump), not in application code.
 - **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
   `driver-app/utils/locationIntegrity.ts` — both inspected, unchanged.
 

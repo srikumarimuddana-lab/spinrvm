@@ -507,6 +507,15 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "17_corporate_accounts_fk.sql").read_text())
     cur.execute((migrations_dir / "27_corporate_b2b_v1.sql").read_text())
 
+    # ACTION_ITEMS.md C107 / migration 430: `disputes` (migration 10) was
+    # never built by this fixture at all -- out of scope for the money/PII
+    # coverage this harness originally targeted. migration 430's fix spans
+    # `disputes` too (it shares 142's exact broken admin-policy pattern, in
+    # the same file, just not counted in C107's own "10 tables" tally), so
+    # it now needs to exist here for that migration to even apply without
+    # erroring on a missing relation.
+    cur.execute((migrations_dir / "10_disputes_table.sql").read_text())
+
     # New tables need the same baseline grant as earlier batches -- granted
     # by name (like the stripe_disputes/stripe_orphan_refunds grant below),
     # NOT the repeated "ALL TABLES in schema" blanket used earlier in this
@@ -522,11 +531,18 @@ def pg_conn(pg_test_dbname):
         "GRANT SELECT, INSERT, UPDATE, DELETE ON corporate_accounts, corporate_wallets, "
         "corporate_wallet_transactions, corporate_members, corporate_member_allowances, "
         "corporate_allowance_requests, corporate_policies, corporate_allowed_domains, "
-        "ride_payment_sources, corporate_policy_evaluations "
+        "ride_payment_sources, corporate_policy_evaluations, disputes "
         "TO anon, authenticated, service_role"
     )
 
     migration_142_sql = (migrations_dir / "142_fix_rls_financial_tables.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_142_sql,
+            "-- 1. disputes:",
+            "-- 2. Corporate financial tables:",
+        )
+    )
     cur.execute(
         _extract_section(
             migration_142_sql,
@@ -540,6 +556,22 @@ def pg_conn(pg_test_dbname):
     # policy + REVOKE/GRANT write lockdown) to this one table, which 142
     # itself never touched.
     cur.execute((migrations_dir / "416_corporate_accounts_rls_super_admin_fix.sql").read_text())
+
+    # ACTION_ITEMS.md C107: production data no longer contains role='admin'/
+    # 'super_admin' in `users` (cleaned up + migration 256's
+    # chk_users_role_not_admin CHECK constraint enforces it going forward,
+    # applied directly against prod -- see docs/change-log for that fix).
+    # migration 256 is deliberately NOT added to this shared fixture: it's a
+    # blanket CHECK on `users.role` and would block every *other* RLS test
+    # file's ability to seed role="admin"/"super_admin" for its own,
+    # unrelated scenarios -- a blast radius this harness has no way to bound
+    # as new test files land from concurrent sessions. migration 430 doesn't
+    # need 256 present to be correct: its USING (false) policy denies
+    # unconditionally regardless of whether that role value could ever be
+    # seeded, so the fixture only needs 430 itself. It replaces the now-dead
+    # "Admin read <table>" policies (142's 9 tables + disputes + 416's
+    # corporate_accounts) with an explicit USING (false) policy.
+    cur.execute((migrations_dir / "430_admin_role_rls_unreachable_service_role_only.sql").read_text())
 
     # --- stripe_disputes (migration 88) / stripe_orphan_refunds (migration
     # 254): admin-only read tables, verbatim. Unlike every other

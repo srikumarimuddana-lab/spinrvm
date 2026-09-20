@@ -242,6 +242,51 @@ async def update_driver_status(
                 detail="Cannot go offline during an active trip. Please complete the current ride first.",
             )
 
+        # Flag-gated per CLAUDE.md gate #3 (see schemas.py's
+        # go_offline_live_offer_guard_enabled for the full rationale). The
+        # `active_ride` check above only ever finds a `rides` row — batch
+        # dispatch holds its claim in `ride_offers` with no `rides.driver_id`
+        # link pre-acceptance, so a driver mid-batch-offer walks straight
+        # past it despite this block's own comment above saying "To go
+        # offline during an offer, decline it first." Nothing enforced that
+        # until now, and only when this flag is on.
+        #
+        # docs/change-log/2026-09-20-insurance-period-derivation.md fixed
+        # what this same gap did to the *insurance audit record* by routing
+        # the classification through `derive_insurance_period` — a change
+        # invisible to the driver. This is the other half: it changes driver
+        # behaviour (a previously-allowed toggle now 409s), which is why it
+        # is a separate flag rather than folded into that one.
+        try:
+            from ...settings_loader import get_app_settings as _get_offline_guard_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings as _get_offline_guard_settings  # type: ignore
+        # Only on a genuine online -> offline FLIP. `status_flipped` proper
+        # isn't computed until later in this function, but for this branch
+        # (target is_online=False) it reduces to bool(driver.get("is_online"))
+        # using data already fetched above — no need to move that computation
+        # earlier just for this check. Guarding on it matters: without it, a
+        # driver already offline in the DB (app relaunch, admin force-offline,
+        # a dropped connection) who re-taps "Go offline" as a no-op would 409
+        # on a stale/orphaned `ride_offers` row they have no way to see or
+        # clear from the UI — a driver-stuck scenario, not a decline-the-offer
+        # prompt. Found in review; see the Change Impact Log's "corrected
+        # during review" note.
+        if bool(driver.get("is_online")):
+            _offline_guard_settings = await _get_offline_guard_settings()
+            if bool(_offline_guard_settings.get("go_offline_live_offer_guard_enabled", False)):
+                _pending_offline_offers = await db_supabase.get_rows(
+                    "ride_offers",
+                    {"driver_id": driver_id, "status": "pending"},
+                    limit=5,
+                    columns="id,offered_at,ride_id",
+                )
+                if _fresh_pending_offers(_pending_offline_offers):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=("You have a pending ride offer. Please accept or decline it before going offline."),
+                    )
+
     if is_online:
         now = datetime.now(timezone.utc)
 

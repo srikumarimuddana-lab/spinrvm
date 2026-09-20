@@ -1,7 +1,7 @@
 # Change Impact & Risk Log — C107: admin-role RLS policies formalized as service-role-only
 
 **Date:** 2026-09-20
-**Related:** ACTION_ITEMS.md C107 (already closed upstream by a different, non-policy fix — see "Reconciliation with upstream" below; this change layers additional hardening on top, per explicit owner decision), C121 (new, filed by this change)
+**Related:** ACTION_ITEMS.md C107 (already closed upstream by a different, non-policy fix — see "Reconciliation with upstream" below; this change layers additional hardening on top, per explicit owner decision), C123 (new, filed by this change)
 
 ## Reconciliation with upstream C107
 
@@ -36,7 +36,7 @@ None. No rider/driver/corporate-admin/internal-admin-facing behavior changes —
 | `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` | Rewrote the two admin/super-admin-can-select tests to assert denial instead of removing them; kept rider/anon/service-role/insert-denial tests unchanged | Same as above |
 | `backend/tests/rls/test_money_and_safety_rls.py` | **Fully reverted to upstream `main`** — `driver_insurance_periods` is untouched by migration 430 and migration 256 is no longer in the fixture, so this file needed no change at all | An earlier draft touched this file for a fixture-consequence reason that no longer applies |
 | `backend/tests/rls/test_disputes_rls.py` | New file: first-ever RLS test coverage for `disputes` (rider-own-row, stranger-denied, anon-denied, insert-denied, service-role-bypass, admin-denied, super-admin-denied) | `disputes` was newly built into the fixture by this change and is one of migration 430's 11 tables |
-| `ACTION_ITEMS.md` | Appended this work as a new paragraph under C107's existing 2026-09-13 closure (kept intact, not overwritten); filed the 7-additional-table finding as new item **C121** (renumbered twice: an initial "C108" collided with the real, pre-existing C108 about `auth.users`; the next pick, "C116", then collided with a second, unrelated, concurrently-filed C116 about `driver-map.tsx`) | Layered hardening, not a re-decision of the existing closure; avoid colliding with concurrently-filed items of the same number |
+| `ACTION_ITEMS.md` | Appended this work as a new paragraph under C107's existing 2026-09-13 closure (kept intact, not overwritten); filed the 7-additional-table finding as new item **C123** (renumbered three times: an initial "C108" collided with the real, pre-existing C108 about `auth.users`; "C116" collided with a second, unrelated, concurrently-filed C116 about `driver-map.tsx`; "C121" collided with a third, unrelated, concurrently-filed C121 about the Fly deploy signed-image gap) | Layered hardening, not a re-decision of the existing closure; avoid colliding with concurrently-filed items of the same number |
 
 ## Before/after snippet
 
@@ -69,4 +69,4 @@ CREATE POLICY "corporate_wallets admin RLS unreachable (service role only)"
 ## What was NOT verified
 - This migration has **not** been applied to production — it is committed to the repo only, pending the normal migration-apply process (`python -m backend.scripts.run_migrations`).
 - Real-world confirmation that no external tool or script directly queries Supabase with the anon/publishable key against these 11 tables (the scenario this policy defends against) — reasoned about via the "backend always uses service-role" grep, not observed live.
-- The 7 additional tables found with the identical pattern (`audit_logs`, `safety_incidents`, `driver_insurance_periods`, `cloud_messages`, `push_tokens`, `document_requirements`) are explicitly **not** fixed by this change — filed as **C121**, deliberately deferred given `safety_incidents`/`driver_insurance_periods`' regulatory sensitivity warrants its own review, not folding into this change.
+- The 7 additional tables found with the identical pattern (`audit_logs`, `safety_incidents`, `driver_insurance_periods`, `cloud_messages`, `push_tokens`, `document_requirements`) are explicitly **not** fixed by this change — filed as **C123**, deliberately deferred given `safety_incidents`/`driver_insurance_periods`' regulatory sensitivity warrants its own review, not folding into this change.

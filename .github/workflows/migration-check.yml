@@ -26,6 +26,7 @@ jobs:
   migration-safety:
     name: Migration Safety Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout PR branch (full history)

@@ -39,7 +39,7 @@
 -- the identical pattern (audit_logs, safety_incidents, driver_insurance_periods,
 -- cloud_messages, push_tokens, document_requirements, plus document_requirements's
 -- older role='admin'-only form) — two of them safety/regulatory-critical. Not
--- included here per explicit scope decision; tracked separately as C121.
+-- included here per explicit scope decision; tracked separately as C123.
 --
 -- Rollback plan: DROP each "<table> admin RLS unreachable (service role only)"
 -- policy below and re-run migrations 142 §2 / 416 to restore the

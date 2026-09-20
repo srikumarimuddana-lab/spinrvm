@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Date | 2026-09-21 |
+| Date | 2026-09-20 |
 | Author | Claude Code session (2026-09-20 review, Phase 1 item C4) |
 | Surface(s) | backend |
 | Domain (Sentry tag) | payments |
@@ -50,7 +50,7 @@ An explicit `is not None` check, **not** `or`: a legitimately zero `grand_total`
 |---|---|---|
 | `backend/routes/wallet.py` | `server_fare` reads `grand_total` with COALESCE semantics | match the RPC; make the endpoint satisfiable |
 | `backend/tests/test_wallet.py` | four tests: taxed ride accepts `grand_total`, rejects the pre-tax subtotal, legacy no-`grand_total` row still settles, zero `grand_total` is not treated as missing | the band had no coverage at all |
-| `docs/change-log/2026-09-21-wallet-pay-grand-total.md` | this file | |
+| `docs/change-log/2026-09-20-wallet-pay-grand-total.md` | this file | |
 
 ## 7. Before / after
 

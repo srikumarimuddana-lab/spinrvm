@@ -462,8 +462,25 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             # P2: each loser is an independent driver — release + notify them
             # concurrently instead of one serial chain of DB/WS round-trips.
             async def _release_loser(lid: str) -> None:
-                await db_supabase.set_driver_available(lid, True)
-                await _deps.record_period_transition(lid, 1)
+                # Losing the race ends this driver's obligation to the ride, so
+                # their open Period 2 (opened at claim time in matching.py) has
+                # to be closed with what they ACTUALLY are now — never a blanket
+                # Period 1, which asserted TNC contingent commercial cover over a
+                # driver who had gone offline mid-offer and left an append-only
+                # row nothing would ever close.
+                #
+                # set_driver_available clamps is_available→False for an offline
+                # driver (the is_available ⇒ is_online invariant), so its
+                # returned row tells us which: available → Period 1, clamped →
+                # Period 0, no row → unknown, so write nothing rather than guess
+                # at a regulator-facing row. Mirrors decline_ride below, plus
+                # cancellation.py and matching.py's process_expired_offer —
+                # those two still lack the Period 0 branch; see
+                # docs/change-log/2026-09-20-release-loser-period-guard.md
+                # section 4 for why that gap is latent rather than live.
+                released = await db_supabase.set_driver_available(lid, True)
+                if isinstance(released, dict):
+                    await _deps.record_period_transition(lid, 1 if released.get("is_available") else 0)
                 try:
                     loser_drv = await db_supabase.get_driver_by_id(lid)
                     loser_uid = (loser_drv or {}).get("user_id")
@@ -636,17 +653,25 @@ async def decline_ride(
 
     await update_acceptance_rate(driver["id"], accepted=False)
 
-    # Release this driver back to available. Only record Period 1 (online, no
-    # ride) if the release actually made the driver available — if they went
-    # offline between the offer being sent and this decline, set_driver_available
-    # clamps is_available->False and their go-offline already logged Period 0;
-    # recording Period 1 here would falsely reopen a commercial-insurance window
-    # for an offline driver. Mirrors the same guard in process_expired_offer
-    # (routes/rides/matching.py) — both close out the Period 2 that opened at
-    # claim/offer time in match_driver_to_ride.
+    # Release this driver back to available and close out the Period 2 that
+    # opened at claim/offer time in match_driver_to_ride, recording what they
+    # ACTUALLY are now. set_driver_available clamps is_available->False if they
+    # went offline between the offer and this decline, so its returned row says
+    # which: available -> Period 1, clamped -> Period 0, no row -> unknown, so
+    # write nothing rather than guess at a regulator-facing row. Recording
+    # Period 1 unconditionally would reopen a commercial-insurance window for an
+    # offline driver.
+    #
+    # The Period 0 branch is not redundant with the driver's own go-offline
+    # write: that only closes Period 2 while insurance_period_live_offer_enabled
+    # is off. With the flag on, derive_insurance_period deliberately KEEPS
+    # Period 2 open through a go-offline toggle that has a live offer, and
+    # nothing else would ever close it — utils/insurance_period_reconciler.py
+    # sees neither an offline driver nor an already-resolved offer. See
+    # docs/change-log/2026-09-20-release-loser-period-guard.md section 4.
     released = await db_supabase.set_driver_available(driver["id"], True)
-    if isinstance(released, dict) and released.get("is_available"):
-        await _deps.record_period_transition(driver["id"], 1)
+    if isinstance(released, dict):
+        await _deps.record_period_transition(driver["id"], 1 if released.get("is_available") else 0)
     await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it. `reason`

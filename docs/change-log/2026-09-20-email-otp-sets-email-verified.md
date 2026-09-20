@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Date | 2026-09-21 |
+| Date | 2026-09-20 |
 | Author | Claude Code session (2026-09-20 review, Phase 1 item C5) |
 | Surface(s) | backend |
 | Domain (Sentry tag) | auth / corporate |
@@ -53,7 +53,7 @@ The dead `phone_or_email` fallback is removed.
 | `backend/routes/corporate_rider.py` | `user_email` reads `email` only | `phone_or_email` was dead and could have desynced flag from domain |
 | `backend/tests/test_company_email_login.py` | success test asserts the user row is stamped verified; new test for the account-creation branch | pin both branches |
 | `backend/tests/test_corporate_rider_routes.py` | two tests moved from `phone_or_email` to `email`; new test that a stray `phone_or_email` is ignored | see §9 — they were green against a fallback production never used |
-| `docs/change-log/2026-09-21-email-otp-sets-email-verified.md` | this file | |
+| `docs/change-log/2026-09-20-email-otp-sets-email-verified.md` | this file | |
 
 ## 7. Before / after
 

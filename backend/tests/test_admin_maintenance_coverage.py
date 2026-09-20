@@ -505,6 +505,50 @@ class TestAuditLogTopActors:
 
 
 # ---------------------------------------------------------------------------
+# agent action log (migration 429) -- read-only view
+# ---------------------------------------------------------------------------
+
+
+class TestAgentActionLog:
+    @pytest.mark.asyncio
+    async def test_get_agent_action_log_no_filters(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "row1"}])) as mock:
+            result = await maint.get_agent_action_log(
+                limit=50,
+                offset=0,
+                agent_name=None,
+                action_type=None,
+                target_surface=None,
+                outcome=None,
+                _admin=ADMIN,
+            )
+        assert result == [{"id": "row1"}]
+        call_args = mock.call_args
+        assert call_args.args[0] == "agent_action_log"
+        assert call_args.args[1] == {}
+
+    @pytest.mark.asyncio
+    async def test_get_agent_action_log_applies_filters(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_agent_action_log(
+                limit=50,
+                offset=0,
+                agent_name="spinr-security-auditor",
+                action_type="scan",
+                target_surface="backend",
+                outcome="needs_human_review",
+                _admin=ADMIN,
+            )
+        call_args = mock.call_args
+        assert call_args.args[1] == {
+            "agent_name": "spinr-security-auditor",
+            "action_type": "scan",
+            "target_surface": "backend",
+            "outcome": "needs_human_review",
+        }
+
+
+# ---------------------------------------------------------------------------
 # PII reveal audit
 # ---------------------------------------------------------------------------
 

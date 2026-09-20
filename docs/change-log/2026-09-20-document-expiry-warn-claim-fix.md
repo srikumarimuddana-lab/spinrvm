@@ -8,7 +8,7 @@
 | Author | Claude Code (background investigation of a live production log finding) |
 | Surface(s) | backend |
 | Domain (Sentry tag) | drivers (regulatory-adjacent: document-expiry eligibility gate) |
-| PR / commit link | https://github.com/srikumarimuddana-lab/spinrvm/pull/&lt;fill in on open&gt; (branch `claude/document-expiry-warn-claim-fix`) |
+| PR / commit link | https://github.com/srikumarimuddana-lab/spinrvm/pull/5537 (branch `claude/document-expiry-warn-claim-fix`) |
 | Related issue or gap ID | Found live on Fly.io logs, repeating `Doc expiry: warn-claim failed` / `AttributeError: 'str' object has no attribute 'items'`; not previously tracked |
 
 ## 1. Issue / gap identified

@@ -824,27 +824,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // request off mid-flight and leave drivers.is_online stuck true on
       // the server — a dispatch/match-rate risk, not a data-corruption one,
       // since it's a fire-and-forget PUT with its own error handling. Racing
-      // it against sessionWork/a timeout — rather than awaiting it inside
-      // withSessionLock above — keeps the lock itself free (see the comment
-      // where goOffline is fired: that's what the earlier deadlock was).
-      // The timer is cleared as soon as anything settles so it never
-      // outlives this call (a bare Promise.race leaves the losing
-      // setTimeout running for its full duration, which showed up as a
-      // dangling-timer warning in tests and would do the same in the app).
+      // it against a timeout — rather than awaiting it inside withSessionLock
+      // above — keeps the lock itself free (see the comment where goOffline
+      // is fired: that's what the earlier deadlock was).
+      //
+      // Race ONLY against the timeout, not against sessionWork. An earlier
+      // version also raced sessionWork here, which meant a fast server-side
+      // revoke (the common case) settled this wait before goOffline had any
+      // real window at all — `return sessionWork` below still adopts
+      // sessionWork's own completion regardless, so racing it in here bought
+      // nothing except cutting goOffline's wait short and reintroducing the
+      // exact stuck-is_online bug this comment describes.
+      //
+      // The timer is cleared as soon as goOffline settles so it never
+      // outlives this call (a bare Promise.race leaves the losing setTimeout
+      // running for its full duration, which showed up as a dangling-timer
+      // warning in tests and would do the same in the app).
       await new Promise<void>((resolve) => {
-        let settled = false;
-        const timer = setTimeout(() => {
-          settled = true;
-          resolve();
-        }, 3000);
-        const settle = () => {
-          if (settled) return;
-          settled = true;
+        const timer = setTimeout(resolve, 3000);
+        goOffline.then(() => {
           clearTimeout(timer);
           resolve();
-        };
-        goOffline.then(settle);
-        sessionWork.then(settle, settle);
+        });
       });
     }
     return sessionWork;

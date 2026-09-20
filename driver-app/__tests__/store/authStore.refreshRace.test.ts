@@ -184,6 +184,39 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
+  it('does not let a fast server-revoke cut off the go-offline PUT\'s bounded window', async () => {
+    // Regression test for the bug found by the 2026-09-20 swarm-watch
+    // drift-audit (issue #5591): the bounded window originally raced
+    // goOffline against BOTH the timeout AND sessionWork, so a fast
+    // server-side revoke (the common case) settled the wait before
+    // goOffline had any real window — reintroducing the exact stuck
+    // is_online bug this fix (PR #5530) was meant to close.
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh', driver: { id: 'driver-1' } as any });
+    mockSecureStoreBacking.refresh_token = 'old-refresh';
+    mockPost.mockResolvedValue({ data: {} }); // server-side revoke resolves immediately — the fast path.
+    let finishGoOffline!: () => void;
+    (apiClient.put as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finishGoOffline = resolve; }),
+    );
+
+    let resolved = false;
+    const ending = useAuthStore.getState().logout().then(() => { resolved = true; });
+
+    // Let the fast server-side revoke (sessionWork) fully settle. Under the
+    // bug this test guards against, sessionWork finishing here alone would
+    // already resolve `ending`, even though the go-offline PUT is still
+    // pending below.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'old-refresh' });
+    expect(resolved).toBe(false);
+
+    finishGoOffline();
+    await ending;
+    expect(resolved).toBe(true);
+    expect(apiClient.put).toHaveBeenCalledWith('/drivers/driver-1/status', { is_online: false });
+  });
+
   it('revokes persisted background credentials even if foreground memory has no access token', async () => {
     Object.assign(mockSecureStoreBacking, { fg_access_token: 'background-access', refresh_token: 'background-refresh' });
     mockPost.mockResolvedValueOnce({ data: {} });

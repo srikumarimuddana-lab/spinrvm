@@ -12,6 +12,34 @@ import {
     type RoutePinKind,
 } from "@spinr/shared/constants/routeMapStyle";
 
+// MapLibre v6's default worker bootstrap bundles the tile-processing Web
+// Worker via an `import.meta.url`-derived module URL -- a technique Next.js
+// 16's Turbopack does not resolve the same way Webpack does, so the worker
+// spawns but never actually fetches a tile (every admin map rendered a
+// blank canvas with only controls/attribution -- the reason this dependency
+// was downgraded to v4.7.1 on 2026-09-14, PR #5427, which pre-dates a
+// critical XSS-sanitizer CVE disclosed against every version <=6.4.0,
+// GHSA-jrc7-96c5-q579). Pointing MapLibre at a same-origin static copy of
+// its own worker module bypasses that automatic bundling entirely -- this
+// is MapLibre's own documented escape hatch for exactly this class of
+// bundler incompatibility, not a workaround specific to this app.
+// scripts/copy-maplibre-worker.mjs (wired as predev/prebuild) bundles the
+// worker entry point -- with the shared chunk it would otherwise import via
+// a relative specifier inlined via esbuild, not copied as a second file --
+// into public/maplibre/ from whatever maplibre-gl version package.json
+// actually resolves. The inlining matters: a worker's own top-level script
+// fetch is unambiguously covered by this app's `worker-src 'self'` CSP
+// directive, but a *nested* static `import` inside that script is, per the
+// CSP spec's own open ambiguity (see the copy script's comment), commonly
+// treated as governed by `script-src` instead -- which has no `'self'` and
+// no way to attach this app's per-request nonce to an import specifier.
+// Bundling to a single file removes that nested fetch entirely rather than
+// gambling on which directive a given browser applies to it.
+// Must run before any `new maplibregl.Map(...)` call -- safe as a
+// module-level side effect here since every map component already imports
+// from this shared file before constructing its own map instance.
+maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
+
 // OpenFreeMap styles — free, no API key, vector tiles.
 // Swap the key in the URL to change the look (liberty / positron / bright / dark-matter).
 export const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";

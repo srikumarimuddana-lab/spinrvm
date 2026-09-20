@@ -959,7 +959,10 @@ class TestAdminCreatePromoCode:
             with pytest.raises(HTTPException) as exc:
                 await admin_create_promo_code(req)
         assert exc.value.status_code == 400
-        assert "discount_type" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "discount_type" field name from this copy (see
+        # backend/routes/promotions.py's admin_create_promo_code).
+        assert "flat amount or a percentage" in exc.value.detail
 
     async def test_percentage_over_100_raises_400_at_route_level(self):
         from backend.routes.promotions import CreatePromoCodeRequest, admin_create_promo_code

@@ -29,7 +29,15 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 RECURRED (2nd occurrence, still open):
+_Last updated: 2026-09-20 — C128 ADDED and CLOSED same day: `backend-test`
+was red on `main`'s own tip (19 tests) because the 2026-09-18 user-facing
+message audit rewrote several `HTTPException`/`SpinrException` messages
+from internal error-code text to friendly copy without running the test
+suite (self-disclosed in that audit's own doc) — found while babysitting
+an unrelated CI/deploy-workflow PR (#5580), confirmed identical on `main`'s
+own tip before fixing, so filed and closed as its own change rather than
+folded into that PR. See C128's entry for the full root-cause and fix.
+Prior: C122 RECURRED (2nd occurrence, still open):
 the same `locationIntegrity.ts` mock-detection test failed again in CI on
 PR #5580, identical signature to the first occurrence on PR #5538 — same
 assertion, same error, both on PRs touching zero driver-app files. 16
@@ -28033,6 +28041,72 @@ as evidence that the thing it configures exists.
   hardcoded estimate.
 - **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
   poll, ~line 129).
+
+### C128. `backend-test` red on `main`'s own tip — 19 tests asserted stale internal error-code substrings the 2026-09-18 user-facing message audit had already rewritten — CLOSED same day
+
+- [x] **Status:** CLOSED (2026-09-20) — found while babysitting PR #5580's
+  CI (an unrelated CI/deploy-workflow PR): `backend-test` failed with
+  `19 failed, 15058 passed, 6 skipped, 1 xfailed` on PR #5580's branch.
+  Confirmed via `main`'s own tip (commit `abece4fd6`, the merge of #5583,
+  run 35536280732) that the identical 19 tests fail there too — same
+  file/test-name/parametrize list, same assertion shape — proving this was
+  never caused by PR #5580's diff (which touches only `ci.yml`,
+  `deploy-fly-signed-image.yml`, and this file).
+- **What was wrong:** `docs/audit/2026-09-18-user-facing-message-audit.md`
+  rewrote several `HTTPException`/`SpinrException` `detail`/`message`
+  strings from internal/integrator-facing text (raw status values, error
+  codes like `too_short`/`complexity`/`too_common`, field names like
+  `discount_type`, the word `tokenize`/`object`) into rider/admin-facing
+  friendly copy — an intentional, reviewed product decision, not a bug.
+  But the audit's own doc self-discloses "No tests were run" (PyPI/npm were
+  blocked in that session's sandbox), so the 19 tests asserting the old
+  substrings were never updated and started failing the moment the new
+  copy shipped. Nothing in `ACTION_ITEMS.md` tracked this as a follow-up,
+  so the gate sat red on `main` with no open item explaining why.
+- **Why it mattered:** `docker-image-scan` (and therefore every image
+  build/scan/sign/deploy path) `needs: [backend-test]`, so this silently
+  blocked that gate for every PR touching backend code, not just #5580 —
+  a repo-wide gate decay per CLAUDE.md gate 8, not a one-PR problem.
+- **Fix:** updated each assertion to match the new copy, verifying the
+  *specific* branch under test still fires (not just "some 4xx happened").
+  One improvement beyond a literal copy-match: `test_e2e_cancellation.py`'s
+  two cases now assert on `SpinrException.details["current_status"]`
+  (a structured field already carried by that exception) instead of
+  string-matching the friendly message, so a future copy change won't
+  break it again. Two cases (`test_rejects_non_object_body` in
+  `test_payments_pci_guard.py`, and the three `TestPasswordPolicy`
+  complexity sub-tests) no longer discriminate their original narrower
+  intent, because the rewritten copy itself made two previously-distinct
+  messages identical (`payments.py`'s parse-failure and wrong-shape-body
+  branches now share one string; `password_policy.py`'s missing-uppercase/
+  digit/symbol branches always shared one message and still do) — this is
+  a pre-existing property of the already-shipped, already-audited copy
+  change, not something this fix altered; noted inline in each test.
+- **Verification performed:** ran all 19 previously-failing tests directly
+  (`pytest tests/test_e2e_cancellation.py::TestRiderCancelIllegalStates
+  tests/test_payments_pci_guard.py::TestAddCardRejectsRawCardData
+  tests/test_payments_pci_guard.py::TestAddCardRequiresPaymentMethodId::test_rejects_non_object_body
+  tests/test_promotions_coverage.py::TestAdminPromoCodeCrudDirect::test_create_rejects_invalid_discount_type
+  tests/test_routes_promotions_coverage.py::TestAdminCreatePromoCode::test_invalid_discount_type_raises_400
+  tests/test_utils_extended.py::TestPasswordPolicy`) — 23 passed (19 fixed
+  + 4 sibling tests in the same classes already green). Full mocked-DB
+  suite (`pytest --ignore=tests/rls --ignore=tests/direct_pool
+  --ignore=tests/test_schemathesis_fuzz.py`, matching `backend-test`'s own
+  exclusions) run separately to confirm no other regression — see the PR
+  for the result. Not run against RLS/direct-pool tiers (untouched by this
+  diff — test-file-only change, no source/migration edited) or in CI at
+  time of writing (this entry is filed alongside the fix PR, before its
+  own `backend-test` run completes).
+- **What was NOT verified:** whether other, non-test callers (e.g. mobile
+  app string-matching a `detail`/`message` field client-side instead of
+  `message_key`) depend on any of these old substrings — out of scope for
+  a test-only fix; flagging in case a future session investigates rider/
+  driver-app error handling.
+- **Files:** `backend/tests/test_e2e_cancellation.py`,
+  `backend/tests/test_payments_pci_guard.py`,
+  `backend/tests/test_promotions_coverage.py`,
+  `backend/tests/test_routes_promotions_coverage.py`,
+  `backend/tests/test_utils_extended.py`. No application code changed.
 
 ## Recently completed (do not redo)
 

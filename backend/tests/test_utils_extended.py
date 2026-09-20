@@ -978,7 +978,9 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("Short1!")
         assert exc.value.status_code == 422
-        assert "too_short" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "too_short" code prefix from this copy.
+        assert "at least 20 characters" in exc.value.detail
 
     def test_missing_uppercase_raises_422(self):
         from fastapi import HTTPException
@@ -988,7 +990,9 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("nouppercase1!nouppercase1!")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "complexity" code prefix from this copy.
+        assert "uppercase letter" in exc.value.detail
 
     def test_missing_digit_raises_422(self):
         from fastapi import HTTPException
@@ -998,7 +1002,9 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("NoDigitsHere!NoDigitsHere!")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "complexity" code prefix from this copy.
+        assert "uppercase letter" in exc.value.detail
 
     def test_missing_symbol_raises_422(self):
         from fastapi import HTTPException
@@ -1008,7 +1014,9 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("NoSymbolsHere1NoSymbols1")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "complexity" code prefix from this copy.
+        assert "uppercase letter" in exc.value.detail
 
     def test_common_password_raises_422(self):
         from unittest.mock import patch
@@ -1024,7 +1032,9 @@ class TestPasswordPolicy:
             with pytest.raises(HTTPException) as exc:
                 validate_admin_password(test_pw)
         assert exc.value.status_code == 422
-        assert "too_common" in exc.value.detail
+        # 2026-09-18 user-facing message audit dropped the raw
+        # "too_common" code prefix from this copy.
+        assert "too easy to guess" in exc.value.detail
 
 
 # ===========================================================================

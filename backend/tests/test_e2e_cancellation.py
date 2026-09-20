@@ -264,8 +264,13 @@ class TestRiderCancelIllegalStates:
                 )
 
         assert exc_info.value.status_code == 409
-        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
-        assert status in str(text)
+        # The 409 message is rider-facing friendly copy (see
+        # backend/routes/rides/_shared.py's _RIDER_RIDE_STATE_PHRASE) and no
+        # longer contains the raw status string. Assert on the structured
+        # SpinrException.details instead, which carries the raw status for
+        # exactly this reason.
+        assert isinstance(exc_info.value, SpinrException)
+        assert exc_info.value.details.get("current_status") == status
 
     async def test_cancel_unknown_ride_raises_404(self):
         from fastapi import HTTPException

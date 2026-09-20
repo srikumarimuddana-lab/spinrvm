@@ -49,7 +49,10 @@ class TestAddCardRejectsRawCardData:
             await add_card(_mock_request(body), current_user={"id": "user_1"})
 
         assert exc_info.value.status_code == 400
-        assert "tokenize" in exc_info.value.detail.lower()
+        # 2026-09-18 user-facing message audit rewrote this from an
+        # integrator-facing "tokenize" instruction to rider-facing copy
+        # (backend/routes/payments.py's add_card) — assert on the new text.
+        assert "secure card form" in exc_info.value.detail.lower()
 
     async def test_rejects_multiple_raw_fields(self):
         from backend.routes.payments import add_card
@@ -109,7 +112,13 @@ class TestAddCardRequiresPaymentMethodId:
             )
 
         assert exc_info.value.status_code == 400
-        assert "object" in exc_info.value.detail.lower()
+        # 2026-09-18 user-facing message audit made this branch share its
+        # copy with the JSON-parse-failure branch above it in add_card (both
+        # now say "We couldn't read that request."), so "object" is no
+        # longer present — only the status code still distinguishes this
+        # test's intent (a parseable-but-wrong-shape body) from a parse
+        # failure.
+        assert "couldn't read that request" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio

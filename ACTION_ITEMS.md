@@ -29,7 +29,10 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C121 ADDED (open, partial): Fly deploys a
+_Last updated: 2026-09-20 — C122 ADDED (open): `locationIntegrity.test.ts`'s
+mock-GPS-detection test failed in CI on PR #5538 (an infra-only diff) but
+passed locally on the identical commit — filed as a suspected flake since
+re-running to confirm hit a 403 (no permission). Prior: C121 ADDED (open, partial): Fly deploys a
 source rebuild rather than the signed GHCR image `ci.yml` already
 builds/scans/signs. Investigated per the 2026-09-20 CI/CD audit's task 4
 ("make Fly deploy the signed image directly"); found 3 concrete gaps
@@ -27505,6 +27508,47 @@ as evidence that the thing it configures exists.
   `.github/workflows/ci.yml` (cosign-verify doc-comment accuracy fix —
   the example referenced `:latest`, which is pushed but never signed;
   corrected to the sha tag that's actually signed).
+
+### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
+
+- [ ] **Status: OPEN, filed 2026-09-20.**
+- **What's wrong:** `driver-app-test` failed on PR #5538 (head `f0ffbb9a1`,
+  a `.github/workflows/`-only + `ACTION_ITEMS.md` change — zero
+  driver-app files touched) with one failure:
+  `createLocationIntegrityChecker › rejects mocked, impossible-speed, and
+  teleport fixes` — `expect(c.check(fix(52.1, -106.6, 1000, { mocked:
+  true })).reason).toBe('mock_location_detected')`, got `undefined`
+  (i.e. the checker didn't flag a mocked-location fix as mocked).
+- **Why this looks like a flake, not a regression:** ran
+  `npx jest utils/__tests__/locationIntegrity.test.ts` locally against
+  the exact same commit (`f0ffbb9a1`) — all 4 tests in the suite passed,
+  including this one. A test that fails in CI and passes locally on the
+  identical commit, with a non-timeout assertion mismatch (not a hang),
+  points to timing/ordering sensitivity in the checker's mock/speed
+  logic rather than a real logic bug — but this has not been proven,
+  only inferred from one data point.
+- **Not re-run to confirm** — attempted `rerun_failed_jobs` on the CI
+  run, got `403 Resource not accessible by integration`; this session's
+  GitHub integration lacks the permission. Per CLAUDE.md's flake-handling
+  rule, re-running is the correct next step and remains undone.
+- **Not investigated further here** — out of scope for the CI/CD-audit
+  PR that surfaced it (infra-only diff); `locationIntegrity.ts` is
+  fraud/safety-adjacent (mock-GPS and impossible-speed detection feeds
+  `spinr-fraud-auditor`'s "GPS plausibility between consecutive location
+  pings" domain), so a real fix needs its own session with the time to
+  read `driver-app/utils/locationIntegrity.ts`'s mock-detection branch
+  and determine whether it's genuinely non-deterministic (e.g. depends on
+  `Date.now()`/wall-clock deltas between the two `fix()` calls in the
+  test) or a real bug that only manifests under CI's slower/loaded
+  runner.
+- **Action:** get CI re-run permission or have a human re-run the failed
+  job to confirm reproducibility before spending time on a fix; if it
+  reproduces, read the mock-detection branch in
+  `driver-app/utils/locationIntegrity.ts` against the test's `fix()`
+  helper to find the timing dependency.
+- **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
+  `driver-app/utils/locationIntegrity.ts` (not yet inspected for this
+  issue).
 
 ## Recently completed (do not redo)
 

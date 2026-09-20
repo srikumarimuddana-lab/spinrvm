@@ -21,7 +21,7 @@ of their own submitted reports; no INSERT or DELETE policy for anyone but
 service_role (the comment on the migration is explicit: "Insert is
 service-role only -- admins escalate via the backend API, not by writing
 directly to the table"). The original admin/super_admin SELECT+UPDATE
-policies (via a `users.role` subquery) are unreachable -- migration 256 make
+policies (via a `users.role` subquery) are unreachable -- migration 256 makes
 that role value permanently impossible to hold -- and ACTION_ITEMS.md C123
 phase 2 / migration 433 replaces both with an explicit `USING (false)` deny,
 same pattern as migration 430/432.

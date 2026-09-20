@@ -27730,9 +27730,10 @@ as evidence that the thing it configures exists.
   changes made by this entry's closure.
 
 ### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 6 more tables — safety/regulatory-sensitive tables deliberately not fixed alongside C107
-- [x] **Status: PHASE 1 RESOLVED 2026-09-20** (`audit_logs`, `push_tokens`, `cloud_messages`,
-  `document_requirements`) via migration 432. **Phase 2 OPEN** (`safety_incidents`,
-  `driver_insurance_periods` — deliberately deferred, see below).
+- [x] **Status: RESOLVED 2026-09-20** — both phases done. **Phase 1** (`audit_logs`, `push_tokens`,
+  `cloud_messages`, `document_requirements`) via migration 432, merged. **Phase 2** (`safety_incidents`,
+  `driver_insurance_periods`, plus 2 direct siblings found while writing phase 2 — see below) via
+  migration 433.
   Found during C107's review (2026-09-20) by grepping every migration for
   the same pattern, rather than trusting C107's own "10 tables" scope as complete. Deliberately
   **not** fixed in the same pass as C107 — two of these tables are safety/regulatory-critical and
@@ -27748,25 +27749,31 @@ as evidence that the thing it configures exists.
   corrected to "6 more tables" to avoid re-confusing a future reader the way it briefly did this one.
 - **Affected tables and their migrations:**
   1. ~~`audit_logs`~~ **FIXED (phase 1, migration 432)** (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
-  2. `safety_incidents` (migration 94, `94_safety_incidents.sql`, 2 policies: "Admin read/update"
-     + "Admin update") — **safety-critical, phase 2, still open**.
-  3. `driver_insurance_periods` (migration 64, `64_driver_insurance_periods.sql`) — **regulatory-
-     critical, phase 2, still open**: 7-year TNC insurance audit retention (CLAUDE.md's
-     regulatory-sk.md). Its own `test_admin_can_select_any_insurance_period` RLS test is untouched
-     and still passing — migration 256 was deliberately kept out of the shared RLS test fixture
-     specifically to avoid breaking this and other unrelated tests' ability to seed `role="admin"`
-     (see `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS
-     policy is untouched. **Not a straight copy of migration 430's fix** — its one SELECT policy
-     ORs the driver's own legitimate self-read access together with the broken admin check
-     (`driver_id = own OR <broken admin check>`), so a blanket `USING (false)` would also break the
-     driver's real, working ability to read their own insurance-period history. Needs a rewrite
-     that drops only the `OR <broken admin check>` clause and keeps the driver-owned-row access.
+  2. ~~`safety_incidents`~~ **FIXED (phase 2, migration 433)** (migration 94, `94_safety_incidents.sql`,
+     2 policies: "Admin read/update" + "Admin update") — safety-critical.
+  3. ~~`driver_insurance_periods`~~ **FIXED (phase 2, migration 433)** (migration 64,
+     `64_driver_insurance_periods.sql`) — regulatory-critical: 7-year TNC insurance audit retention
+     (CLAUDE.md's regulatory-sk.md). **Not a straight copy of migration 430's fix** — its one SELECT
+     policy ORs the driver's own legitimate self-read access together with the broken admin check
+     (`driver_id = own OR <broken admin check>`), so a blanket `USING (false)` would also have broken
+     the driver's real, working ability to read their own insurance-period history. Fixed with a
+     rewrite that drops only the `OR <broken admin check>` clause and keeps the driver-owned-row
+     access exactly as it was — `test_admin_can_select_any_insurance_period` flipped to
+     `_cannot_select_`, every driver-self-access test re-verified passing unchanged.
   4. ~~`cloud_messages`~~ **FIXED (phase 1, migration 432)** (migration 06, `06_cloud_messaging.sql`) — notifications.
   5. ~~`push_tokens`~~ **FIXED (phase 1, migration 432)** (migration 06, same file, "Admin read push_tokens") — notifications.
   6. ~~`document_requirements`~~ **FIXED (phase 1, migration 432)** (migration 02, `02_dynamic_documents.sql`) — driver docs. Used the
      older `role = 'admin'` form (no `super_admin` at all — the same excludes-super_admin bug
      migration 142/416 already fixed elsewhere), so this one had two independent problems, not one;
      both close via the same `USING (false)` replacement.
+  7. ~~`driver_insurance_period_corrections`~~ **FIXED (phase 2, migration 433, not in original
+     scope)** (migration 355, `355_driver_insurance_period_corrections.sql`) — regulatory-critical
+     sibling of #3, found while writing migration 433 since 355's own header comment says it
+     deliberately mirrors `driver_insurance_periods`' shape; carried the identical entangled-OR
+     pattern. Fixed the same tailored way as #3.
+  8. ~~`driver_period_distances`~~ **FIXED (phase 2, migration 433, not in original scope)**
+     (migration 249, `249_driver_period_distances.sql`) — same as #7, another direct sibling found
+     during the same investigation, same tailored fix.
 - **Same root cause as C107, same real-world risk profile:** production data cleanup + migration
   256 already ensure `users.role` holds neither value today; the backend's only Supabase client
   always uses service-role (bypasses RLS entirely), so none of these policies gate any live
@@ -27784,16 +27791,24 @@ as evidence that the thing it configures exists.
   `auth.uid()` (`uuid`) with no cast — a comparison that cannot be freshly `CREATE POLICY`'d against
   today's schema, yet the live copy in production evaluates without error — see
   `docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md`.
-- **Phase 2 action (still open):** apply the same fix pattern to `safety_incidents` (straightforward
-  — 2 separate policies, no entangled legitimate-access clause) and `driver_insurance_periods`
-  (needs the tailored, non-blanket-deny rewrite described above) in a follow-up migration — explicit
-  sign-off already given for phase 1's split (2026-09-20); phase 2 needs its own sign-off given
-  before implementation, per the same escalation this item originally called for.
-- **Files:** `backend/migrations/432_admin_role_rls_unreachable_phase1.sql` (phase 1, done),
+- **Phase 2 fix/remediation (2026-09-20):** migration 433 applies C107's exact fix pattern
+  (explicit `USING (false)` deny) to `safety_incidents`' 2 standalone admin policies (SELECT +
+  UPDATE) — same shape as phase 1. `driver_insurance_periods`, `driver_insurance_period_corrections`,
+  and `driver_period_distances` needed the tailored, non-blanket-deny rewrite described above
+  instead — each policy's `OR <broken admin check>` clause is dropped, the driver-owned-row
+  predicate is otherwise untouched (verified character-by-character against each original). The 2
+  siblings (#7, #8) were not in this item's original named scope — found via a blast-radius check
+  while writing 433, since both migrations' own header comments say they mirror
+  `driver_insurance_periods`. Verified against live production `pg_policies` for all 4 tables before
+  writing the migration — no out-of-band drift. Reviewed by `spinr-migration-reviewer`,
+  `spinr-insurance-period-auditor`, and `spinr-safety-sos-reviewer` before merge — all three came
+  back with no blockers. Full details in
+  `docs/change-log/2026-09-20-c123-phase2-rls-unreachable-admin.md`.
+- **Files:** `backend/migrations/432_admin_role_rls_unreachable_phase1.sql`,
+  `433_admin_role_rls_unreachable_phase2_safety_insurance.sql`,
   `backend/tests/rls/conftest.py`, `backend/tests/rls/test_audit_and_insurance_correction_rls.py`,
-  `backend/tests/rls/test_notifications_and_docs_admin_rls.py` (phase 1, done). Phase 2 remaining:
-  `backend/migrations/64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
-  `backend/tests/rls/test_money_and_safety_rls.py`.
+  `backend/tests/rls/test_notifications_and_docs_admin_rls.py`,
+  `backend/tests/rls/test_money_and_safety_rls.py`, `backend/tests/rls/test_otp_and_safety_rls.py`.
 
 ### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)
 

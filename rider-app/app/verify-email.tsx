@@ -224,7 +224,7 @@ export default function VerifyEmailScreen() {
   if (alreadyVerified) {
     return (
       <KeyboardAvoidingView style={styles.container} behavior="padding">
-        <View style={[styles.centerArea, { paddingTop: insets.top + 16, paddingHorizontal: 24, justifyContent: 'center' }]}>
+        <View style={[styles.centerArea, { paddingTop: insets.top + 16, paddingHorizontal: SPACING.lg, justifyContent: 'center' }]}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={22} color={colors.text} />
           </TouchableOpacity>
@@ -277,7 +277,7 @@ export default function VerifyEmailScreen() {
           </View>
 
           {sending && !codeSent ? (
-            <ActivityIndicator color={colors.primary} size="small" style={{ marginBottom: 24 }} />
+            <ActivityIndicator color={colors.primary} size="small" style={{ marginBottom: SPACING.lg }} />
           ) : (
             <>
               <Animated.View style={[styles.codeContainer, { transform: [{ translateX: shakeAnim }] }]}>

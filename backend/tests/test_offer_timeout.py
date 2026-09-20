@@ -745,14 +745,27 @@ async def test_create_demo_drivers_is_a_noop():
 
 @pytest.mark.asyncio
 async def test_dispatch_retry_stops_after_max_attempts():
+    """Past the cap, a non-scheduled ride's chain stops without dispatching.
+    A single get_ride fetch IS expected first -- needed to check for a
+    scheduled-ride exemption via scheduled_search_deadline (see
+    routes/rides/matching.py's _dispatch_retry and
+    test_scheduled_timing_guards.py's test_scheduled_retry_continues_after_
+    normal_attempt_limit). Mocking a plain SEARCHING, non-scheduled ride
+    exercises the attempt-cap branch itself, not the earlier not-ride/
+    wrong-status short-circuit an unconfigured AsyncMock would hit."""
     from backend.routes.rides import matching as m
 
     with (
         patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides._deps.db_supabase.get_ride", new_callable=AsyncMock) as mock_get_ride,
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_k", "status": "searching"}),
+        ) as mock_get_ride,
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_match,
     ):
         await m._dispatch_retry("ride_k", delay=0, attempt=m._MAX_DISPATCH_ATTEMPTS + 1)
-    mock_get_ride.assert_not_awaited()
+    mock_get_ride.assert_awaited_once_with("ride_k")
+    mock_match.assert_not_awaited()
 
 
 @pytest.mark.asyncio

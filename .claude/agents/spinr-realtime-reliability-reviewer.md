@@ -29,7 +29,7 @@ You audit, you do not edit. Your output is a report.
 - Flag broadcast-to-all-connections instead of targeted delivery (perf angle covered by `spinr-performance-sla-reviewer`; this agent's angle is correctness — did the right replica's connection actually receive it)
 
 ## 4. Background loop replay-safety
-For any new or modified loop among the 18 in `core/lifespan.py` (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog):
+For any new or modified loop in `core/lifespan.py` — read `_WATCHDOG_LOOP_NAMES` there for the live registry rather than trusting a count or list quoted anywhere, including this file (it was 18 when this agent was written and is 42 as of 2026-09-20; a hardcoded list here is exactly what went stale before):
 - Uses an atomic DB claim (conditional update filtering on current state, like ride acceptance's `{'status': 'searching'}` pattern), an idempotency key, or a `*_sent`/`*_processed`-style flag — not just an in-memory set/dict that resets per replica/restart
 - If the loop sends a notification (push/SMS/email), a retry or crash mid-send must not double-send — check the flag is set *before* or atomically with the send, not only after
 - New loop is actually registered in `core/lifespan.py`'s startup list and covered by the loop watchdog (a loop that silently never starts is worse than one that's slow)

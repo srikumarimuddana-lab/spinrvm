@@ -72,10 +72,16 @@ jobs:
           EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
             --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")
 
+          # NOTE: must be -F/--field, not -f/--raw-field. Only -F does the
+          # "@filename reads the value from that file" substitution; -f
+          # takes an @-prefixed value as a literal string, so the comment
+          # body ends up being the literal text "@/tmp/gate_comment.md"
+          # instead of the rendered file's contents. Found 2026-09-20 when
+          # this exact literal string was posted on PR #5512.
           if [ -n "$EXISTING_ID" ]; then
-            gh api "repos/$REPO/issues/comments/$EXISTING_ID" -X PATCH -f body=@/tmp/gate_comment.md
+            gh api "repos/$REPO/issues/comments/$EXISTING_ID" -X PATCH -F body=@/tmp/gate_comment.md
           else
-            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -X POST -f body=@/tmp/gate_comment.md
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -X POST -F body=@/tmp/gate_comment.md
           fi
 
       # Deliberately DOES fail this job's own status (a visible red X in

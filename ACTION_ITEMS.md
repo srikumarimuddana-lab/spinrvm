@@ -19509,6 +19509,50 @@ how much they de-risk a public launch._
   billing checks (all need a human to create the underlying API
   credentials), GCP Billing Budgets coverage for Google Maps/Firebase, and
   E4 itself (still no live external synthetic monitor).
+- [ ] **E14. Stray `origin/staging` branch has unrelated git history to `main`
+  — not the E1 staging environment, needs a human decision** — found
+  2026-09-20 while trying to port a CI test fix (PR #5533, the
+  scheduled-timing-guards frozen-clock fix) onto `staging` at the user's
+  request. A branch literally named `staging` already exists on
+  `origin`, but it is **not** the staging environment E1 describes:
+  - `git merge-base origin/staging origin/main` returns nothing and
+    `git merge` refuses with "refusing to merge unrelated histories" —
+    the two branches do not share a common ancestor at all.
+  - `origin/staging` has **7,284 commits**, its own distinct "Initial
+    commit," and was last updated **2026-09-04**. `origin/main` has only
+    **217 commits** total, tracing back to a *different* "Initial commit."
+    Neither is a subset, superset, or lagging copy of the other — they are
+    two independent codebase histories that happen to collide on the
+    branch name `staging`.
+  - This directly contradicts E1's own scaffolding comment
+    (`.github/workflows/deploy-backend-staging.yml`'s header: *"the
+    `staging` branch ... does not exist yet either"*) and
+    `docs/runbooks/staging-environment.md` (*"Status: scaffolding only,
+    not live. Nothing described here has been provisioned yet"*). E1's
+    design assumes a real `staging` branch will eventually be cut fresh
+    from `main` once the manual Fly/Supabase/secrets setup is done — this
+    existing branch is not that, and using it as-is would be actively
+    wrong (any attempt to reconcile it with `main` requires forcing
+    `--allow-unrelated-histories` and manually resolving every file
+    across two unrelated codebases — not a safe or meaningful operation).
+  - **No action taken on the branch itself** — confirmed via
+    `AskUserQuestion` with the user that this needed a human decision
+    rather than a forced merge; this entry is that decision request.
+  - **Needs a human to**: (1) confirm whether `origin/staging` is a
+    genuine leftover/import artifact (e.g. from a pre-history-rewrite
+    copy of the repo, or an unrelated project that once shared this repo
+    name) with no current purpose, and if so (2) either delete it or
+    rename it out of the way (e.g. `archive/staging-unrelated-history`)
+    so the name `staging` is free for E1's real branch once that
+    environment is actually provisioned. Until this is resolved, do not
+    push, merge, or cherry-pick anything into `origin/staging` — nothing
+    currently on it needs to end up in `main`'s lineage, and nothing on
+    `main` can be safely reconciled onto it in place.
+  - **Once E1's real infra exists**: cut a fresh `staging` branch directly
+    from `main`'s tip at that time (not from today's stray branch), and
+    only then does a recurring/periodic "keep `staging` in sync with
+    `main`" task make sense — that is future work gated on E1, not
+    something to build today against the current stray branch.
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated

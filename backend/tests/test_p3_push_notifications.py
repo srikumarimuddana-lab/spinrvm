@@ -1244,6 +1244,32 @@ class TestDebugRideOffer:
         assert result["tokens"]["fcm_token_driver"] != raw
         assert "..." in result["tokens"]["fcm_token_driver"]
 
+    async def test_fcm_payload_excludes_rider_name_and_precise_location(self):
+        """PII exclusion regression (2026-09-19 spinr-notification-ux-reviewer
+        finding): this endpoint's own docstring/comment claims spatial fields
+        and rider_name are excluded "the same way the live offer path does",
+        but the code previously sent them raw. rider_name and precise lat/lng
+        must never reach the FCM data payload, mirroring
+        routes/rides/matching.py's _FCM_EXCLUDE invariant."""
+        user_row = {
+            "id": USER_ID,
+            "fcm_token_driver": "android-fcm-driver-token-1234567890",
+        }
+
+        _, captured = await self._run(user_row, send_result=True)
+
+        data = captured["data"]
+        assert "rider_name" not in data
+        assert "pickup_lat" not in data
+        assert "pickup_lng" not in data
+        assert "dropoff_lat" not in data
+        assert "dropoff_lng" not in data
+        # Non-sensitive fields must still be present -- this is an exclusion
+        # list, not an accidental drop of the whole payload.
+        assert data["type"] == "new_ride_assignment"
+        assert "pickup_address" in data
+        assert "dropoff_address" in data
+
     async def test_user_not_found_raises_404(self):
         from fastapi import HTTPException
 

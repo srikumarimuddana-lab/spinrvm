@@ -128,15 +128,34 @@ async def admin_send_test_push(body: TestPushRequest, admin: dict = Depends(get_
     }
 
 
-def _stringify_fcm(payload: Dict[str, Any]) -> Dict[str, str]:
+# Same invariant routes/rides/matching.py's live offer path enforces via its
+# own _FCM_EXCLUDE: no rider name or precise lat/lng may ride in an FCM data
+# payload (cleartext in the device tray, transits Google/Apple push infra).
+# Kept as a local, debug-endpoint-scoped set rather than importing
+# matching.py's — that set is a local variable inside a live dispatch code
+# path, not a shared constant, and this fix should not touch that file.
+_DEBUG_FCM_EXCLUDE = {
+    "rider_name",
+    "pickup_lat",
+    "pickup_lng",
+    "dropoff_lat",
+    "dropoff_lng",
+}
+
+
+def _stringify_fcm(payload: Dict[str, Any], exclude: Optional[set] = None) -> Dict[str, str]:
     """Coerce a dispatch payload into FCM's string-only data map.
 
     Mirrors the stringification the live ride-offer path applies in
-    routes/rides.py: dicts/lists become JSON, scalars become str, None → "".
+    routes/rides/matching.py: dicts/lists become JSON, scalars become str,
+    None → "". ``exclude`` drops keys before stringifying, same purpose as
+    matching.py's own _FCM_EXCLUDE.
     """
+    exclude = exclude or set()
     return {
         k: json.dumps(v) if isinstance(v, (dict, list)) else (str(v) if v is not None else "")
         for k, v in payload.items()
+        if k not in exclude
     }
 
 
@@ -212,7 +231,11 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
     offer_expires_at = (now + timedelta(seconds=body.countdown_seconds)).isoformat()
 
     # Minimal but realistic dispatch payload — same shape/keys the live offer
-    # uses in routes/rides.py (spatial fields are excluded there too).
+    # uses in routes/rides/matching.py. rider_name and precise lat/lng below
+    # are stripped before the FCM send by _DEBUG_FCM_EXCLUDE, mirroring that
+    # file's own _FCM_EXCLUDE (see 2026-09-19 spinr-notification-ux-reviewer
+    # finding — this endpoint previously sent them raw despite this comment
+    # already claiming they were excluded).
     offer_payload = {
         "type": "new_ride_assignment",
         "ride_id": ride_id,
@@ -233,7 +256,7 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
         "offer_expires_at": offer_expires_at,
         "deeplink": "/driver/",
     }
-    fcm_data = _stringify_fcm(offer_payload)
+    fcm_data = _stringify_fcm(offer_payload, exclude=_DEBUG_FCM_EXCLUDE)
 
     earnings_label = f"${body.fare:.2f}"
     delivered = await send_push_notification(

@@ -7,7 +7,38 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
+> **Known duplicate IDs (do not renumber):** this file has accumulated items
+> sharing one ID number, each filed independently by a different session the
+> same day and each already carrying its own "kept as-is" note at the
+> collision site — renumbering would break existing cross-references, which
+> is why every prior instance chose not to. Consolidated here so a reader (or
+> an agent grepping for one ID) doesn't have to rediscover each collision
+> piecemeal: **C13** (two items — "Required `pull_request`-triggered
+> workflows silently never fire" / "`tsc --noEmit` false-positives"),
+> **C100** (two items — "`driver-app/__tests__/.../CarMarker.test.tsx` —
+> 7 tests broken" / "`driver-app-test` is red on `main`'s own tip"),
+> **C111** (two items — "`driver_matching_algorithm`/`min_driver_rating`/
+> `search_radius_km` may lack a settings-table column" / "`emergency_contacts`
+> has no admin/super_admin override policy"), **C112** (two items —
+> "`audit_logs`' migration-57 trigger silently breaks migration-56's
+> retention DELETE" / "`admin_create_ride`'s FCM push sent `rider_name`
+> with zero PII filtering"), **C118** (two items — "`ride_distance_*`
+> tables claim immutability with no DB-level trigger" / "Open Change
+> Requests were never cross-referenced here"). When filing a new item, check
+> this list and the surrounding numeric range before reusing a number, and
+> add an entry here (not just at the collision site) if a new collision is
+> unavoidable.
+
+_Last updated: 2026-09-20 — B43 ADDED (open): `dashboard-settings`
+visual-regression baseline is stale on `main`, merge-blocking every
+admin-dashboard PR regardless of diff — a regression of the gate B38
+closed 2026-09-04, not a new gap in the gate itself. Found while
+diagnosing an unrelated CI failure on PR #5518 (maplibre-gl CVE upgrade);
+confirmed identical, deterministic failure reproduces on `main`'s own tip
+independent of that PR. Filed as CR-2026-091 (issue #5519) per CLAUDE.md's
+CI-red-gate-decay rule, since re-seeding needs Actions-dispatch access
+this session's GitHub integration doesn't have (same blocker B38
+documented). Prior: A39's deferred `migrate.py` decision resolved
 (product owner: reconcile, not just delete). Ported `migrate.py`'s tested
 CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which
 never had that fix and would have failed on any `CREATE INDEX
@@ -23993,6 +24024,72 @@ how much they de-risk a public launch._
   project has never processed any Stripe traffic at all, staging or
   otherwise — that result says nothing about the actual incident and must
   not be read as "no events were affected."
+
+### B43. `dashboard-settings` visual-regression baseline is stale on `main` — merge-blocking on every admin-dashboard PR regardless of what it touches (CR-2026-091)
+
+- [ ] **Status: OPEN, filed 2026-09-20.** Regression of B38 (closed
+  2026-09-04) — the gate B38 seeded and made merge-blocking is working
+  exactly as designed; one of its 6 baselines has simply gone stale since.
+- **What's wrong:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
+  `dashboard-settings matches baseline` test fails deterministically on
+  `main`'s own current tip (confirmed on commit `fee2d3cf4`, an unrelated
+  App Check PR #5506, run
+  https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/35480557122/job/106001847560):
+  `Expected an image 1280px by 2224px, received 1280px by 2309px. 163564
+  pixels (ratio 0.06 of all image pixels) are different.` Reproduces
+  identically across all 3 Playwright retries, and again on an unrelated
+  PR (#5518, a maplibre-gl CVE upgrade that never touches
+  `src/app/dashboard/settings/`) — ruling out anything specific to either
+  PR's own diff.
+- **Root cause:** the baseline (last re-seeded at #4992, part of B38's
+  original seeding pass) is stale relative to content added to the
+  settings page's default-visible view since then. At least two merged
+  commits grew the page without re-seeding: `dfd0320a0` (#5288, added a
+  "Stale in-progress ride alert" Switch to the Operations tab's "Kill
+  Switches" card) and `e93dc0b45` (added a new "Driver tracking rollout"
+  Card). A third commit in the same window, `9cc96365d` (#5285), explicitly
+  checked and confirmed its own change did **not** affect this baseline
+  (it landed on a non-default tab the spec never clicks into) — not
+  implicated here. The ~85px height growth (2224px → 2309px) is consistent
+  with one or both of the two implicated commits.
+- **Impact:** every open and future admin-dashboard PR shows a red,
+  merge-blocking `Visual regression (Playwright)` check regardless of what
+  it actually changes, per CLAUDE.md §6's own description of this gate as
+  "fully active and merge-blocking." Left unaddressed, this erodes trust
+  in the gate exactly the way CLAUDE.md §6 was written to prevent — every
+  PR author has to independently rediscover this same root cause.
+- **Risk & impact on existing functionality:** none — this is a
+  test-fixture-only fix (regenerating one screenshot). No application
+  code, data, or other CI job is touched.
+- **Blocker (same shape as B38's original one):** re-seeding requires
+  running `update-visual-baselines.yml`, which needs Actions-dispatch
+  access this session's GitHub integration does not have (per CLAUDE.md
+  §6's documented limitation, carried over unchanged from B38).
+- **Action:**
+  1. A human (or an account with Actions-dispatch access) runs
+     `update-visual-baselines.yml` against `main`.
+  2. Review the resulting `dashboard-settings` baseline PNG diff
+     (old vs. new) to confirm the only change is the two additive UI
+     elements named above, not something unexpected.
+  3. Commit the updated PNG directly (test-fixture-only, `type: trivial`
+     per the PR template).
+  4. Confirm `Visual regression (Playwright)` goes green on `main`
+     afterward.
+- **Files:** `admin-dashboard/e2e/visual-regression.spec.ts-snapshots/dashboard-settings-visual-regression-linux.png`
+  (baseline to regenerate). No other files.
+- **What was NOT verified:** whether any other of the 6 seeded baselines
+  (`login`, `dashboard-home`, `dashboard-drivers`, `dashboard-monitoring`,
+  `dashboard-rides`) have similarly drifted — only `dashboard-settings`
+  was confirmed failing in the runs checked. A full re-run against all 6
+  would be needed to rule out a second stale baseline.
+- **Tracking:** [CR-2026-091 / issue #5519](https://github.com/srikumarimuddana-lab/spinrvm/issues/5519)
+  (formal Change Request, pending approval per `.github/ISSUE_TEMPLATE/ci_change_request.yml`);
+  standing-down comment on the PR that surfaced it:
+  https://github.com/srikumarimuddana-lab/spinrvm/pull/5518#issuecomment-5747135585
+- **Acceptance:** `update-visual-baselines.yml` run against `main`,
+  `dashboard-settings` baseline PNG diff reviewed and confirmed to match
+  only the two known additive UI changes, updated PNG committed, and
+  `Visual regression (Playwright)` green on `main`'s next push.
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
 

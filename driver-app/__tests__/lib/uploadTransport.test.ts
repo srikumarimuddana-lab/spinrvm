@@ -31,6 +31,7 @@ jest.mock('../../../shared/config/spinr.config', () => ({
 
 jest.mock('../../../shared/api/client', () => ({
   getAuthHeader: jest.fn().mockResolvedValue('token-abc'),
+  appCheckHeader: jest.fn().mockResolvedValue({}),
 }));
 
 jest.mock('../../../shared/store/authStore', () => ({
@@ -39,6 +40,8 @@ jest.mock('../../../shared/store/authStore', () => ({
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { postMultipart, uploadFile } from '../../../shared/api/upload';
+// eslint-disable-next-line import/first -- must follow the jest.mock calls above
+import { appCheckHeader } from '../../../shared/api/client';
 
 type XhrInstance = {
   open: jest.Mock;
@@ -127,6 +130,25 @@ describe('upload transport', () => {
     // would fail to parse the body.
     const headerNames = lastXhr.setRequestHeader.mock.calls.map((c: string[]) => c[0].toLowerCase());
     expect(headerNames).not.toContain('content-type');
+  });
+
+  it('attaches the App Check header — regression guard for the 401 "App Check token required" bug', async () => {
+    (appCheckHeader as jest.Mock).mockResolvedValueOnce({ 'X-Firebase-AppCheck': 'appcheck-token-xyz' });
+    installXhrMock();
+
+    await uploadFile('file:///tmp/a.jpg', 'a.jpg', 'image/jpeg');
+
+    expect(lastXhr.setRequestHeader).toHaveBeenCalledWith('X-Firebase-AppCheck', 'appcheck-token-xyz');
+  });
+
+  it('omits the App Check header rather than failing when no token is available', async () => {
+    (appCheckHeader as jest.Mock).mockResolvedValueOnce({});
+    installXhrMock();
+
+    await uploadFile('file:///tmp/a.jpg', 'a.jpg', 'image/jpeg');
+
+    const headerNames = lastXhr.setRequestHeader.mock.calls.map((c: string[]) => c[0].toLowerCase());
+    expect(headerNames).not.toContain('x-firebase-appcheck');
   });
 
   it('surfaces a non-2xx response with the server body', async () => {

@@ -9,7 +9,11 @@ jest.mock('@shared/hooks/queries', () => ({
   useNotifications: () => mockUseNotifications(),
   useMarkNotificationRead: () => ({ mutate: jest.fn() }),
   useMarkAllNotificationsRead: () => ({ mutate: jest.fn() }),
+  useDeleteNotification: () => ({ mutate: jest.fn() }),
+  useClearNotifications: () => ({ mutate: jest.fn() }),
 }));
+
+jest.mock('../../components/AlertDialog', () => ({ showAlert: jest.fn() }));
 
 jest.mock('@shared/theme/ThemeContext', () => ({
   useTheme: () => ({
@@ -75,7 +79,10 @@ describe('Driver notifications inbox', () => {
 
   it('keeps variable-height notification rows attached on Android', () => {
     const screen = render(<NotificationsScreen />);
-    const list = screen.UNSAFE_getByType(FlatList);
+    // Two FlatLists now render (the outer inbox list + the category tabs row
+    // inside its ListHeaderComponent) — the outer one carries refreshControl.
+    const lists = screen.UNSAFE_getAllByType(FlatList);
+    const list = lists.find((l: any) => l.props.refreshControl)!;
 
     expect(screen.getByText('Document reminder')).toBeTruthy();
     expect(list.props.removeClippedSubviews).not.toBe(true);

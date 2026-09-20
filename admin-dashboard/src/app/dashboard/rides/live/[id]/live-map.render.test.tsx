@@ -55,6 +55,9 @@ vi.mock("maplibre-gl", () => {
         Marker: FakeMarker,
         Popup: FakePopup,
         NavigationControl: FakeControl,
+        // maplibre-base.ts calls this at module load (v6 Turbopack-worker fix) —
+        // without it, importing maplibre-base.ts in a test throws.
+        setWorkerUrl: vi.fn(),
     };
 });
 

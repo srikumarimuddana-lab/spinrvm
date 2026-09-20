@@ -15,6 +15,7 @@ import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
 import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
+import { queryClient, queryKeys } from '@shared/api/queryClient';
 import { API_URL } from '@shared/config';
 // Keep the default import: many test files jest.mock(
 // '@shared/config/spinr.config', () => ({ default: {...} })) without a
@@ -1120,6 +1121,29 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             : 'The rider has cancelled this ride.'
         );
         resetRideState();
+        break;
+
+      // In-app notification inbox: merge the new row + fresh unread_count
+      // straight into the shared TanStack Query cache the notifications
+      // screen and the dashboard bell badge both read via useNotifications()
+      // — reuses this same WS connection, no second transport. The REST poll
+      // in app/driver/(tabs)/index.tsx remains as a periodic reconciliation
+      // fallback for whenever this socket isn't connected.
+      case 'new_notification':
+        if (data.notification && typeof data.unread_count === 'number') {
+          queryClient.setQueriesData(
+            { queryKey: queryKeys.notifications.list },
+            (old: any) => {
+              if (!old?.notifications) return old;
+              if (old.notifications.some((n: any) => n.id === data.notification.id)) return old;
+              return {
+                ...old,
+                notifications: [data.notification, ...old.notifications],
+                unread_count: data.unread_count,
+              };
+            },
+          );
+        }
         break;
 
       // G20: Reply to server heartbeat so the backend doesn't mark

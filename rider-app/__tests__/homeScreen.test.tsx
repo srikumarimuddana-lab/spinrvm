@@ -80,6 +80,15 @@ jest.mock('@shared/api/client', () => ({
   isAppCheckTokenReady: () => Promise.resolve(true),
 }));
 
+// The bell badge now reads useNotifications(1) (shared TanStack Query hook)
+// instead of an ad-hoc api.get poll — mock the hooks module directly, same
+// convention settingsScreen.test.tsx uses, to avoid needing a real
+// QueryClientProvider ancestor in this test tree.
+const mockRefetchNotifications = jest.fn();
+jest.mock('@shared/hooks/queries', () => ({
+  useNotifications: () => ({ data: { unread_count: 0 }, refetch: mockRefetchNotifications }),
+}));
+
 const mockGetForegroundPermissionsAsync = jest.fn();
 const mockRequestForegroundPermissionsAsync = jest.fn();
 const mockGetCurrentPositionAsync = jest.fn();

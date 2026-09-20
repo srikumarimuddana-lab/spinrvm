@@ -51,7 +51,13 @@ def test_phase_distance_km_requires_actual_not_estimated():
 
 def test_dry_run_counts_but_never_writes():
     rides = [
-        _ride("r1", phases={"navigating_to_pickup": {"actual_distance_km": 1.0}, "trip_in_progress": {"actual_distance_km": 4.0}}),
+        _ride(
+            "r1",
+            phases={
+                "navigating_to_pickup": {"actual_distance_km": 1.0},
+                "trip_in_progress": {"actual_distance_km": 4.0},
+            },
+        ),
         _ride("r2", phases={"navigating_to_pickup": {"estimated_distance_km": 2.0}}),  # estimate-only, skipped
     ]
     get_rows = AsyncMock(return_value=rides)
@@ -68,7 +74,13 @@ def test_dry_run_counts_but_never_writes():
 
 def test_apply_writes_only_gps_measured_phases():
     rides = [
-        _ride("r1", phases={"navigating_to_pickup": {"actual_distance_km": 1.0}, "trip_in_progress": {"actual_distance_km": 4.0}}),
+        _ride(
+            "r1",
+            phases={
+                "navigating_to_pickup": {"actual_distance_km": 1.0},
+                "trip_in_progress": {"actual_distance_km": 4.0},
+            },
+        ),
         _ride("r2", phases={"navigating_to_pickup": {"estimated_distance_km": 2.0}}),  # skipped: no actual
         _ride("r3", driver_id=None, phases={"trip_in_progress": {"actual_distance_km": 3.0}}),
     ]
@@ -102,3 +114,42 @@ def test_per_ride_failure_is_counted_not_raised():
         code = _run(backfill._main(apply_changes=True, before=None))
 
     assert code == 1  # nonzero exit signals the failure, but the run completes
+
+
+def test_hitting_the_row_ceiling_logs_a_warning_not_a_silent_truncation():
+    """2026-09-19 finding: a single limit=_ROW_LIMIT read would silently
+    under-cover once completed rides exceed the ceiling, with a
+    'scanned=10000' summary indistinguishable from a full scan. Paging must
+    detect the truncation and warn."""
+    import db_supabase as db_supabase_mod
+
+    full_page = [
+        _ride(f"r{i}", phases={"trip_in_progress": {"actual_distance_km": 1.0}}) for i in range(backfill._PAGE_SIZE)
+    ]
+    n_pages = backfill._ROW_LIMIT // backfill._PAGE_SIZE
+
+    call_count = 0
+
+    async def _paged_get_rows(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # Always return a full page so the ceiling, not exhaustion, is hit.
+        return full_page
+
+    with (
+        patch("db_supabase.get_rows", AsyncMock(side_effect=_paged_get_rows)),
+    ):
+        rides, has_more = _run(backfill._fetch_completed_rides(db_supabase_mod, {"status": "completed"}))
+
+    assert has_more is True
+    assert len(rides) == backfill._ROW_LIMIT
+    assert call_count == n_pages
+
+    with (
+        patch("db_supabase.get_rows", AsyncMock(side_effect=_paged_get_rows)),
+        patch.object(backfill.logger, "warning") as log_warning,
+        patch("utils.period_distance_audit.record_ride_period_distances", AsyncMock(return_value=1)),
+    ):
+        _run(backfill._main(apply_changes=False, before=None))
+
+    assert any("safety ceiling" in str(c) for c in log_warning.call_args_list)

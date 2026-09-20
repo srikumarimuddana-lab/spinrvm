@@ -280,7 +280,7 @@ export function setAppCheckTokenProvider(fn: () => Promise<string | null>): void
   _appCheckTokenProvider = fn;
 }
 
-async function appCheckHeader(): Promise<Record<string, string>> {
+export async function appCheckHeader(): Promise<Record<string, string>> {
   if (!_appCheckTokenProvider) return {};
   try {
     const token = await _appCheckTokenProvider();

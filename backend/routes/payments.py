@@ -743,10 +743,19 @@ async def confirm_payment(
                         },
                     )
 
+            # Map Stripe's terminal success status onto the canonical "paid"
+            # every other settlement path writes. Writing the raw
+            # `intent.status` put "succeeded" into rides.payment_status, a
+            # value no other reader knows: utils/payment_collection's
+            # collected set, routes/webhooks.py's already-settled guard and
+            # routes/admin/rides.py's terminal-state check were all spelled
+            # with "paid". (The collected set still carries "succeeded" so any
+            # row written before this fix still reads as collected.)
+            _mapped_status = "paid" if intent.status == "succeeded" else intent.status
             await db_supabase.update_ride(
                 ride_id,
                 {
-                    "payment_status": intent.status,
+                    "payment_status": _mapped_status,
                     "payment_intent_id": payment_intent_id,
                 },
             )

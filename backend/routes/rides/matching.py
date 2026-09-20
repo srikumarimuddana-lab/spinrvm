@@ -2024,11 +2024,42 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 )
                 claimed = await _deps.db_supabase.update_one("rides", claim_filter, base_update)
             if not claimed:
-                logger.info(
-                    "[AUTO-CANCEL] ride {} not claimed (left 'searching' first, or the write was skipped) — no-op",
+                # A falsy result is not conclusively "someone else won".
+                # update_one goes through run_sync WITHOUT a retry_policy, so
+                # it inherits the default "read" policy — 3 attempts — on a
+                # non-idempotent write, and the transient classifier covers
+                # exactly the committed-but-ack-lost faults (ConnectionTerminated,
+                # RemoteProtocolError/"Server disconnected", httpx timeouts, the
+                # H2 stream race). When attempt 1 commits and its ack is lost,
+                # the retry re-runs the same CAS, legitimately matches zero rows
+                # and returns a clean None — on a ride THIS call just cancelled.
+                # Returning here would skip the hold release, the cancellation
+                # metric, the rider ride_cancelled WS event, the push and the
+                # guest SMS, leaving the rider's app on "searching" for a
+                # cancelled ride and undercounting the cancellation-rate KPI.
+                #
+                # Same shape as accept_ride's re-read (routes/drivers/
+                # ride_flow.py): before concluding we lost, look at the row.
+                # Only our own attribution values can have been written by this
+                # timer, so matching them means the write was ours.
+                _fresh = await _deps.db_supabase.get_ride(r_id)
+                _ours = (
+                    _fresh
+                    and _fresh.get("status") == RideStatus.CANCELLED
+                    and _fresh.get("cancelled_by") == "system"
+                    and _fresh.get("cancellation_type") == "no_drivers_found"
+                )
+                if not _ours:
+                    logger.info(
+                        "[AUTO-CANCEL] ride {} not claimed (left 'searching' first, or the write was skipped) — no-op",
+                        r_id,
+                    )
+                    return
+                logger.warning(
+                    "[AUTO-CANCEL] ride {} claim returned no row but the row is our cancel — "
+                    "treating a lost ack as a win and running the side effects",
                     r_id,
                 )
-                return
             # WS-8 (finding 11): release the booking-time pre-auth hold so the
             # rider's card isn't blocked for 7 days after timeout — only now
             # that the cancel is ours. release_open_hold cancels the

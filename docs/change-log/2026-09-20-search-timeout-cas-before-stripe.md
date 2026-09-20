@@ -102,3 +102,21 @@ Code-only, no data migration, no flag. `git revert` + deploy restores the previo
 
 - **pytest was not run in this session** (sandbox cannot reach PyPI). CI is the gate: `test_p0_ship_blockers.py::TestNoDriversAvailableTimeout`, `test_coverage_rides.py`'s two timeout tests, `test_preauth_release_on_cancel.py::TestSearchTimeoutReleasesHold`, and `test_scheduled_timing_guards.py` must all be green before merge.
 - Not exercised against a real Supabase: `update_one`'s zero-row → `None` contract was read from `repositories/_base.py::_single_row_from_res`, not observed live.
+
+---
+
+## 11. Revision after PR review (2026-09-20)
+
+Review on [#5599](https://github.com/srikumarimuddana-lab/spinrvm/pull/5599) found that treating a falsy `update_one` result as conclusively "another writer won" is unsafe. Verified against the code and fixed.
+
+`update_one` calls `run_sync(_fn)` **without** a `retry_policy`, so it inherits the default `"read"` policy — `_BACKOFFS_BY_POLICY["read"] == [0.5, 1.5]`, i.e. 3 attempts — on a non-idempotent write. The transient classifier that gates those retries explicitly covers `ConnectionTerminated`, `RemoteProtocolError` / "Server disconnected", httpx timeouts, the H2 stream race and the httpx network-error family: exactly the *server committed, client never saw the response* class (CLAUDE.md calls the H2 GOAWAY retry expected, not hypothetical).
+
+So: attempt 1's `UPDATE … WHERE id=… AND status='searching'` commits, its ack is lost, the retry re-runs the same CAS, legitimately matches **zero** rows, and returns a clean `None` — on a ride this call just cancelled. The early return then skipped the hold release, the `spinr_rides_state_transition_total{to_status=cancelled}` metric, the rider `ride_cancelled` WS event, the push and the guest SMS. The rider's app sits on "searching" for a cancelled ride and the cancellation-rate KPI undercounts. Money is not at risk — `utils/orphaned_hold_reconciler.py` sweeps cancelled rides whose `auth_status` is still open — so this is stale UI plus a metric gap.
+
+This was **newly reachable on the high-volume path** because of this change: the old non-scheduled branch used an id-only `update_ride`, where a retry was an idempotent re-write. The scheduled-only CAS had the same shape, so the pattern is not new, but this extended it to every search timeout.
+
+**Fix:** on a falsy claim, re-read the ride and check whether the row carries *this timer's own* attribution (`status='cancelled'`, `cancelled_by='system'`, `cancellation_type='no_drivers_found'`). If it does, the write was ours — a lost ack, not a lost race — so fall through to the side effects and log at `warning`. Otherwise no-op as before. Same shape `accept_ride` already uses (`routes/drivers/ride_flow.py`), chosen over passing `retry_policy="write"` because that helper has many callers and this keeps the change local.
+
+Also noted and applied: the no-op log line now says "left 'searching' first, or the write was skipped" rather than asserting a race, since `update_one` also returns `None` when no Supabase client is configured.
+
+**Not covered by the existing tests** — `test_timeout_is_a_noop_when_accept_wins_the_claim_race` mocks a clean `None`, and the attribution-fallback test raises *before* any write; neither simulates a committed-then-lost ack. A test for it needs `get_ride` to return the system-cancelled row after a falsy claim.

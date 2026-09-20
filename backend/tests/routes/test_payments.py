@@ -263,7 +263,13 @@ async def test_confirm_marks_paid_when_bound_and_sufficient():
             request=None,
             current_user=_OWNER_USER,
         )
+    # The API response still echoes Stripe's own status verbatim...
     assert result["status"] == "succeeded"
     mock_db.update_ride.assert_awaited_once()
     written = mock_db.update_ride.call_args[0][1]
-    assert written["payment_status"] == "succeeded"
+    # ...but the persisted status is the canonical "paid" every other
+    # settlement path writes. This assertion used to pin "succeeded" — a value
+    # no reader of rides.payment_status knows (utils/payment_collection's
+    # collected set, webhooks' already-settled guard, admin's terminal-state
+    # check are all spelled "paid"), so it pinned the bug open.
+    assert written["payment_status"] == "paid"

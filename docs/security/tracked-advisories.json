@@ -5,9 +5,9 @@
     "ecosystem": "npm",
     "surface": "admin-dashboard",
     "severity": "critical",
-    "status": "needs_decision",
+    "status": "fixed",
     "first_seen": "2026-09-19",
     "decision_owner": null,
-    "reasoning": "Surfaced during PR #5512's CI run (G4c/G4b npm/yarn audit failures) via threat_watch.py's first real dry-run. Not researched yet -- see docs/security/decision-requests/decision-request-GHSA-jrc7-96c5-q579.md for the open research checklist. This PR did not introduce the finding (no admin-dashboard files touched) and does not attempt to fix or allowlist it -- recording it here so it's tracked instead of silently re-appearing unexplained on every future scan."
+    "reasoning": "Surfaced during PR #5512's CI run (G4c/G4b npm/yarn audit failures) via threat_watch.py's first real dry-run. Fixed in PR #5518 (merged to main 2026-09-20): maplibre-gl upgraded 4.7.1 -> 6.10.0, closing the CVE, with the Turbopack Web Worker regression that had originally forced the downgrade re-solved via a bundled worker + setWorkerUrl(). See docs/change-log/2026-09-20-maplibre-gl-cve-upgrade-turbopack-worker-fix.md for the full investigation and docs/security/decision-requests/decision-request-GHSA-jrc7-96c5-q579.md for the original research checklist."
   }
 ]

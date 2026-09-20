@@ -27729,8 +27729,11 @@ as evidence that the thing it configures exists.
   `driver-app/app/driver/profile.tsx` — all already fixed on `main`, no
   changes made by this entry's closure.
 
-### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 7 more tables — safety/regulatory-sensitive, deliberately not fixed alongside C107
-- [ ] **Status:** OPEN — found during C107's review (2026-09-20) by grepping every migration for
+### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 6 more tables — safety/regulatory-sensitive tables deliberately not fixed alongside C107
+- [x] **Status: PHASE 1 RESOLVED 2026-09-20** (`audit_logs`, `push_tokens`, `cloud_messages`,
+  `document_requirements`) via migration 432. **Phase 2 OPEN** (`safety_incidents`,
+  `driver_insurance_periods` — deliberately deferred, see below).
+  Found during C107's review (2026-09-20) by grepping every migration for
   the same pattern, rather than trusting C107's own "10 tables" scope as complete. Deliberately
   **not** fixed in the same pass as C107 — two of these tables are safety/regulatory-critical and
   warrant their own review rather than folding into a fix for an unrelated, lower-stakes surface.
@@ -27738,32 +27741,58 @@ as evidence that the thing it configures exists.
   pre-existing C108 about `auth.users`; the next pick, "C116", collided with a second, unrelated,
   concurrently-filed C116 about `driver-map.tsx`; the next pick, "C121", collided with a third,
   unrelated, concurrently-filed C121 about the Fly deploy signed-image gap.)
+  **Correction (2026-09-20, phase 1):** this item's own title said "7 more tables" while its list
+  below only ever named 6 — not a real discrepancy, just an ambiguous count: `document_requirements`
+  has 2 independent problems on one table (the unreachable-role-check pattern, *and* the older
+  `role = 'admin'`-only form missing `super_admin`), so "7" counted problems, not tables. Title
+  corrected to "6 more tables" to avoid re-confusing a future reader the way it briefly did this one.
 - **Affected tables and their migrations:**
-  1. `audit_logs` (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
+  1. ~~`audit_logs`~~ **FIXED (phase 1, migration 432)** (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
   2. `safety_incidents` (migration 94, `94_safety_incidents.sql`, 2 policies: "Admin read/update"
-     + "Admin update") — **safety-critical**.
+     + "Admin update") — **safety-critical, phase 2, still open**.
   3. `driver_insurance_periods` (migration 64, `64_driver_insurance_periods.sql`) — **regulatory-
-     critical**: 7-year TNC insurance audit retention (CLAUDE.md's regulatory-sk.md). Its own
-     `test_admin_can_select_any_insurance_period` RLS test is untouched and still passing —
-     migration 256 was deliberately kept out of the shared RLS test fixture specifically to avoid
-     breaking this and other unrelated tests' ability to seed `role="admin"` (see
-     `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS policy
-     is untouched.
-  4. `cloud_messages` (migration 06, `06_cloud_messaging.sql`) — notifications.
-  5. `push_tokens` (migration 06, same file, "Admin read push_tokens") — notifications.
-  6. `document_requirements` (migration 02, `02_dynamic_documents.sql`) — driver docs. Uses the
+     critical, phase 2, still open**: 7-year TNC insurance audit retention (CLAUDE.md's
+     regulatory-sk.md). Its own `test_admin_can_select_any_insurance_period` RLS test is untouched
+     and still passing — migration 256 was deliberately kept out of the shared RLS test fixture
+     specifically to avoid breaking this and other unrelated tests' ability to seed `role="admin"`
+     (see `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS
+     policy is untouched. **Not a straight copy of migration 430's fix** — its one SELECT policy
+     ORs the driver's own legitimate self-read access together with the broken admin check
+     (`driver_id = own OR <broken admin check>`), so a blanket `USING (false)` would also break the
+     driver's real, working ability to read their own insurance-period history. Needs a rewrite
+     that drops only the `OR <broken admin check>` clause and keeps the driver-owned-row access.
+  4. ~~`cloud_messages`~~ **FIXED (phase 1, migration 432)** (migration 06, `06_cloud_messaging.sql`) — notifications.
+  5. ~~`push_tokens`~~ **FIXED (phase 1, migration 432)** (migration 06, same file, "Admin read push_tokens") — notifications.
+  6. ~~`document_requirements`~~ **FIXED (phase 1, migration 432)** (migration 02, `02_dynamic_documents.sql`) — driver docs. Used the
      older `role = 'admin'` form (no `super_admin` at all — the same excludes-super_admin bug
-     migration 142/416 already fixed elsewhere), so this one has two independent problems, not one.
+     migration 142/416 already fixed elsewhere), so this one had two independent problems, not one;
+     both close via the same `USING (false)` replacement.
 - **Same root cause as C107, same real-world risk profile:** production data cleanup + migration
   256 already ensure `users.role` holds neither value today; the backend's only Supabase client
   always uses service-role (bypasses RLS entirely), so none of these policies gate any live
   request today — defense-in-depth correctness gaps, not active vulnerabilities.
-- **Action:** apply C107's exact fix pattern (migration 430) to these 7 tables in a follow-up
-  migration — but get explicit sign-off given `safety_incidents`/`driver_insurance_periods`'
-  sensitivity, and audit each table's existing test coverage (only `driver_insurance_periods` has
-  any RLS tests today) before touching them, per the same process C107 followed.
-- **Files:** `backend/migrations/02_dynamic_documents.sql`, `06_cloud_messaging.sql`,
-  `51_audit_logs_lockdown.sql`, `64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
+- **Phase 1 fix/remediation (2026-09-20):** migration 432 applies C107's exact fix pattern
+  (explicit `USING (false)` deny) to `audit_logs` and `push_tokens` (both were `SELECT`-only, same
+  shape as migration 430's 11 tables). `cloud_messages` and `document_requirements`'s admin
+  policies were `FOR ALL` with no `WITH CHECK` — the same missing-`WITH CHECK` write gap migration
+  416 fixed on `corporate_accounts` — so their replacement is `FOR ALL ... USING (false)`, which
+  Postgres also applies as the (absent) `WITH CHECK` for INSERT/UPDATE, closing that gap in the
+  same migration rather than as a separate follow-up. Verified against live production
+  `pg_policies` immediately before writing the migration — no out-of-band drift on any of the 4
+  tables (unlike C124's `corporate_accounts` finding). Full details, including a genuinely unusual
+  finding on `document_requirements` (its original admin policy compares `users.id` (`text`) to
+  `auth.uid()` (`uuid`) with no cast — a comparison that cannot be freshly `CREATE POLICY`'d against
+  today's schema, yet the live copy in production evaluates without error — see
+  `docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md`.
+- **Phase 2 action (still open):** apply the same fix pattern to `safety_incidents` (straightforward
+  — 2 separate policies, no entangled legitimate-access clause) and `driver_insurance_periods`
+  (needs the tailored, non-blanket-deny rewrite described above) in a follow-up migration — explicit
+  sign-off already given for phase 1's split (2026-09-20); phase 2 needs its own sign-off given
+  before implementation, per the same escalation this item originally called for.
+- **Files:** `backend/migrations/432_admin_role_rls_unreachable_phase1.sql` (phase 1, done),
+  `backend/tests/rls/conftest.py`, `backend/tests/rls/test_audit_and_insurance_correction_rls.py`,
+  `backend/tests/rls/test_notifications_and_docs_admin_rls.py` (phase 1, done). Phase 2 remaining:
+  `backend/migrations/64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
   `backend/tests/rls/test_money_and_safety_rls.py`.
 
 ### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)

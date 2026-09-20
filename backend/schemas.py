@@ -324,6 +324,22 @@ class AppSettings(BaseModel):
     # gate #3; OFF reproduces the previous behaviour exactly. See
     # docs/change-log/2026-09-20-insurance-period-derivation.md.
     insurance_period_live_offer_enabled: bool = False
+    # When true, the Go Offline 409 guard also rejects a driver holding a
+    # live batch-dispatch offer, not just an active `rides` row. Companion
+    # to `insurance_period_live_offer_enabled` above, which fixed the
+    # *audit record* for this same gap without changing driver-visible
+    # behaviour. This flag closes the gap itself: today a driver mid-batch-
+    # offer can tap Go Offline and walk straight past the guard, whose own
+    # comment says "To go offline during an offer, decline it first" — a
+    # rule nothing enforced. Deliberately kept as a SEPARATE flag from the
+    # audit-record fix (not folded into it) because this one changes what a
+    # driver can do (a previously-allowed toggle now 409s), not just what
+    # gets written to `driver_insurance_periods` — the two are different
+    # risk classes and CLAUDE.md gate #3 wants a new/changed validation
+    # rule flagged on its own. Defaults to false (dark ship); OFF reproduces
+    # the previous behaviour exactly. See
+    # docs/change-log/2026-09-20-go-offline-live-offer-guard.md.
+    go_offline_live_offer_guard_enabled: bool = False
     # When true, suspending/closing a corporate account auto-cancels its
     # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
     # driver_arrived) instead of leaving them to run to completion as if the

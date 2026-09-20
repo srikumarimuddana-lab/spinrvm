@@ -201,7 +201,7 @@ export default function PayoutHistoryScreen() {
                 data={spinrHistory}
                 renderItem={renderPayoutItem}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
+                contentContainerStyle={{ paddingHorizontal: SPACING.md, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
@@ -213,7 +213,7 @@ export default function PayoutHistoryScreen() {
                         <View>
                             <View style={styles.previousAppHeader}>
                                 <Ionicons name="time-outline" size={16} color={colors.textDim} />
-                                <View style={{ marginLeft: 8, flex: 1 }}>
+                                <View style={{ marginLeft: SPACING.sm, flex: 1 }}>
                                     <Text style={styles.previousAppTitle}>Previous app</Text>
                                     <Text style={styles.previousAppSub}>
                                         Payments made by the previous Spinr app — included in your

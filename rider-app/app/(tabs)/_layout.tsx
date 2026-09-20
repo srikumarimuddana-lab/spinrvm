@@ -3,6 +3,7 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { SPACING } from '@shared/utils/responsive';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
@@ -23,14 +24,14 @@ export default function TabLayout() {
           backgroundColor: colors.surface,
           borderTopWidth: 1,
           borderTopColor: colors.border,
-          paddingTop: 8,
+          paddingTop: SPACING.sm,
           paddingBottom: Math.max(insets.bottom, 8),
           height: 62 + Math.max(insets.bottom, 8),
         },
         tabBarLabelStyle: {
           fontFamily: 'PlusJakartaSans_500Medium',
           fontSize: 12,
-          marginTop: 4,
+          marginTop: SPACING.xs,
         },
       }}
     >

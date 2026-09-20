@@ -217,7 +217,7 @@ export default function WalletScreen() {
             void Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {});
           }}>
             <Text style={[styles.balanceAmount, { fontSize: 18 }]}>Balance unavailable</Text>
-            <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: 4 }}>Tap to retry</Text>
+            <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: SPACING.xs }}>Tap to retry</Text>
           </TouchableOpacity>
         ) : (
           <Text style={styles.balanceAmount}>

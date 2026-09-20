@@ -147,7 +147,7 @@ export default function SavedPlacesScreen() {
           <Text style={styles.placeName}>{item.name}</Text>
           <Text style={styles.placeAddr} numberOfLines={1}>{item.address}</Text>
         </View>
-        <TouchableOpacity onPress={() => handleDelete(item.id, item.name)} style={{ padding: 8 }}>
+        <TouchableOpacity onPress={() => handleDelete(item.id, item.name)} style={{ padding: SPACING.sm }}>
           <Ionicons name="trash-outline" size={18} color="#CCC" />
         </TouchableOpacity>
       </View>
@@ -217,7 +217,7 @@ export default function SavedPlacesScreen() {
                     value={searchText}
                     onChangeText={searchPlaces}
                   />
-                  {searching && <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />}
+                  {searching && <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: SPACING.sm }} />}
 
                   {predictions.length > 0 && (
                     <View style={styles.predList}>

@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SPACING } from '@shared/utils/responsive';
 import { SafetySheetHost } from '../components/SafetySheetHost';
 import * as Updates from 'expo-updates';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -996,7 +997,7 @@ function RootLayoutInner({
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
           {wsState === 'reconnecting' && (
-            <View style={{ backgroundColor: colors.warning, paddingVertical: 4, alignItems: 'center' }}>
+            <View style={{ backgroundColor: colors.warning, paddingVertical: SPACING.xs, alignItems: 'center' }}>
               <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
                 Reconnecting to ride updates…
               </Text>

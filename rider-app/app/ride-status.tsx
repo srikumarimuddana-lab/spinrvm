@@ -399,7 +399,7 @@ export default function RideStatusScreen() {
 
       {/* M-4: Offer acceptance countdown — only shown while driver_assigned */}
       {currentRide?.status === 'driver_assigned' && (
-        <View style={{ marginTop: 16, marginBottom: 4 }}>
+        <View style={{ marginTop: SPACING.md, marginBottom: SPACING.xs }}>
           <View style={styles.offerProgressTrack}>
             <View
               style={[

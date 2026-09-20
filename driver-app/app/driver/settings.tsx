@@ -564,7 +564,7 @@ export default function SettingsScreen() {
                             onChangeText={setDeleteInput}
                             autoCapitalize="characters"
                         />
-                        <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+                        <View style={{ flexDirection: 'row', gap: 12, marginTop: SPACING.md }}>
                             <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.surface }]} onPress={() => setShowDeleteStep2(false)}>
                                 <Text style={[styles.deleteModalBtnText, { color: colors.text }]}>{t('settings.cancel')}</Text>
                             </TouchableOpacity>

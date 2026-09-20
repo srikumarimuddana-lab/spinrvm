@@ -526,13 +526,13 @@ function PaymentConfirmScreenContent() {
               <Text style={styles.fareTotalValue} allowFontScaling={false}>
                 ${totalFare.toFixed(2)}
               </Text>
-              <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: 8 }}>
+              <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: SPACING.sm }}>
                 <Ionicons name="chevron-down" size={18} color={colors.textDim} />
               </Animated.View>
             </TouchableOpacity>
 
             {fareExpanded && (
-              <View style={{ marginTop: 8 }}>
+              <View style={{ marginTop: SPACING.sm }}>
                 <View style={styles.fareDivider} />
                 {(selectedEstimate.fare_breakdown || []).map((line: any, i: number) => (
                   line.amount != null ? (
@@ -570,7 +570,7 @@ function PaymentConfirmScreenContent() {
         )}
         {selectedPayment === 'card' && (
           <View style={styles.holdNote}>
-            <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: SPACING.sm, marginTop: 1 }} />
             {/*
               The hold equals the fare shown above — the backend authorizes
               grand_total exactly (RIDE_AUTH_BUFFER_CAD is 0). This used to read

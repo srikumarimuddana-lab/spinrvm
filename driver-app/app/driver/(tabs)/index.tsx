@@ -1294,7 +1294,7 @@ function DriverDashboard() {
     if (locationStatus === 'denied' || locationStatus === 'unavailable') {
       const denied = locationStatus === 'denied';
       return (
-        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
+        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACING.xl }]}>
           <Ionicons name={denied ? 'location-outline' : 'navigate-outline'} size={48} color={colors.primary} />
           <Text style={styles.locationFallbackTitle}>
             {t(denied ? 'home.locationDeniedTitle' : 'home.locationUnavailableTitle')}
@@ -1322,7 +1322,7 @@ function DriverDashboard() {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={{ color: colors.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
+        <Text style={{ color: colors.text, marginTop: 12, fontSize: FONT.bodyMd }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }
@@ -1738,7 +1738,7 @@ function DriverDashboard() {
 
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
       {rideState === 'idle' && activeAirportZone && (
-        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: 4 }}>
+        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: SPACING.xs }}>
           <Ionicons name="airplane" size={13} color={colors.surface} />
           <Text style={{ color: colors.surface, fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
         </View>
@@ -1746,8 +1746,8 @@ function DriverDashboard() {
 
       {/* Surge multiplier chip — on map when active (HM-11) */}
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
-        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
-          <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
+        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: SPACING.xs }}>
+          <Text style={{ color: colors.surface, fontSize: FONT.bodySm, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
         </View>
       )}
 
@@ -1993,7 +1993,7 @@ function DriverDashboard() {
           style={{
             flex: 1,
             justifyContent: 'center',
-            padding: 24,
+            padding: SPACING.lg,
             backgroundColor: 'rgba(0, 0, 0, 0.55)',
           }}
         >
@@ -2013,14 +2013,14 @@ function DriverDashboard() {
                 onPress={() => void requestRideCompletion(confirmation)}
                 style={{ backgroundColor: colors.surfaceLight, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14 }}
               >
-                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
+                <Text style={{ color: colors.text, fontSize: FONT.bodyMd, fontWeight: '600' }}>{label}</Text>
               </TouchableOpacity>
             ))}
             <TouchableOpacity
               onPress={() => setCompletionConfirmationVisible(false)}
               style={{ alignItems: 'center', paddingVertical: 10 }}
             >
-              <Text style={{ color: colors.textDim, fontSize: 15, fontWeight: '600' }}>Keep trip open</Text>
+              <Text style={{ color: colors.textDim, fontSize: FONT.bodyMd, fontWeight: '600' }}>Keep trip open</Text>
             </TouchableOpacity>
           </View>
         </View>

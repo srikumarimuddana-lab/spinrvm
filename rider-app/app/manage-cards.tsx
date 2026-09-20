@@ -438,7 +438,7 @@ export default function ManageCardsScreen() {
                 <View style={styles.ghostCard}>
                   <View style={styles.ghostChip} />
                   <View style={[styles.ghostLine, { width: '70%' }]} />
-                  <View style={[styles.ghostLine, { width: '45%', marginTop: 8 }]} />
+                  <View style={[styles.ghostLine, { width: '45%', marginTop: SPACING.sm }]} />
                   <MaterialCommunityIcons
                     name="credit-card-plus-outline"
                     size={30}

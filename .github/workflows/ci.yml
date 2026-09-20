@@ -1151,9 +1151,12 @@ jobs:
 
       # INF-006: Sign the image with cosign (keyless, OIDC-based Sigstore).
       # Only runs on main so feature-branch builds don't require GHCR push
-      # permissions. The signature is written to the registry alongside the
-      # image and can be verified with:
-      #   cosign verify ghcr.io/${{ github.repository }}/spinr-backend:latest \
+      # permissions. Only the :${{ github.sha }} tag is signed below (see the
+      # "Sign image with cosign" step) — :latest is pushed but never signed,
+      # so `cosign verify` against :latest always fails. The signature is
+      # written to the registry alongside the sha-tagged image and can be
+      # verified with:
+      #   cosign verify ghcr.io/${{ github.repository }}/spinr-backend:<sha> \
       #     --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign

@@ -1,0 +1,188 @@
+name: Deploy Fly (signed GHCR image) — EXPERIMENTAL, manual only
+
+# 2026-09-20 CI/CD audit, task 4: today deploy-fly.yml has Fly's remote
+# builder independently REBUILD the backend from backend/Dockerfile on every
+# push to main, while ci.yml's docker-image-scan job separately builds,
+# scans, pushes-to-GHCR, and cosign-signs its own copy of the same image —
+# so the bits Fly actually runs are never the exact bits that got scanned
+# and signed, just a same-Dockerfile rebuild. The ask this workflow answers:
+# make Fly deploy that exact signed GHCR artifact instead.
+#
+# This is intentionally NOT wired to `push: branches: [main]` yet. Investigation
+# for this task found three concrete, unresolved gaps that make an automatic
+# switchover risky on a live-tested production surface:
+#
+#   1. RACE CONDITION: deploy-fly.yml and ci.yml's docker-image-scan job are
+#      two independently-triggered workflows on the same push, with no
+#      needs:/workflow_run: link. docker-image-scan needs: [backend-test]
+#      (~13-14 min) plus build/push/sign time, so a naive "trigger deploy on
+#      push" would very likely try to deploy an image that doesn't exist yet.
+#      This workflow's "Wait for signed image" step below polls/retries to
+#      cover that gap, but the wait has never been exercised against a real
+#      run end-to-end.
+#   2. UNVERIFIED REGISTRY AUTH: this repo has no prior art for `flyctl
+#      deploy --image` against a private, non-Fly registry (GHCR). The
+#      `docker/login-action` step below is a best-effort guess at how flyctl
+#      picks up pull credentials for ghcr.io — it has not been proven to
+#      work against a real Fly app from this sandbox (egress-restricted, no
+#      live Fly credentials).
+#   3. MISSING BUILD PROVENANCE: ci.yml's docker-image-scan job builds the
+#      image WITHOUT deploy-fly.yml's "Stamp build info" step, so the GHCR
+#      image ships with the committed backend/build_info.json PLACEHOLDER
+#      ("sha": null), not the real commit SHA. deploy-fly.yml's "Verify the
+#      deployed build SHA is serving" check would therefore always fail
+#      against this image — that check is deliberately OMITTED below rather
+#      than left in to fail every run. Closing this gap needs a stamp step
+#      added to ci.yml's docker-image-scan job, out of scope for this PR
+#      (that job is the shared, always-on CVE-scan/publish path — changing it
+#      has a different blast radius than this opt-in-only workflow).
+#
+# Run this manually, watch it end-to-end, and only then decide whether to
+# promote it to replace deploy-fly.yml's push trigger. See ACTION_ITEMS.md
+# for the tracked entry and promotion checklist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Git SHA of the GHCR image to deploy (ghcr.io/<repo>/spinr-backend:<sha> — only sha-tagged images are cosign-signed, :latest is not). Leave blank to use this run's own HEAD SHA."
+        required: false
+        type: string
+
+# Share deploy-fly.yml's concurrency group: both ultimately run `flyctl
+# deploy` against the same Fly app, and must never race each other.
+concurrency:
+  group: deploy-fly-spinr-backend-yyz
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read # GHCR pull
+
+jobs:
+  deploy-signed-image:
+    name: Deploy signed GHCR image to Fly.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # up to 30 min polling for the image + normal deploy time
+    env:
+      FLY_APP: spinr-backend-yyz
+      FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            exit 1
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Verify SENTRY_DSN is set
+        run: |
+          if [ -z "${SENTRY_DSN}" ]; then
+            echo "::error title=Missing secret::SENTRY_DSN is not set (name, not SENTRY_DNS)."
+            exit 1
+          fi
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          TAG="${{ inputs.image_sha }}"
+          if [ -z "$TAG" ]; then
+            TAG="${GITHUB_SHA}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${{ github.repository }}/spinr-backend:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Best-effort GHCR pull auth for the later `flyctl deploy --image` step
+      # (gap #2 above — unverified whether flyctl actually consults this).
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Combines "does the image exist" and "is it cosign-signed" into one
+      # gate: cosign verify fails on either a missing manifest or a missing
+      # signature, so a single retry loop covers both (gap #1 above).
+      - name: Wait for signed image to exist in GHCR
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -uo pipefail
+          IMAGE_REF="${{ steps.image.outputs.ref }}"
+          echo "Waiting for ${IMAGE_REF} to exist and be cosign-signed"
+          echo "(ci.yml's docker-image-scan job: backend-test ~13-14 min, then build+push+sign) ..."
+          for i in $(seq 1 30); do
+            if cosign verify "${IMAGE_REF}" \
+                --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                >/tmp/cosign-verify.log 2>&1; then
+              echo "Signature verified after attempt ${i}/30."
+              exit 0
+            fi
+            echo "  attempt ${i}/30: not ready yet ($(tail -1 /tmp/cosign-verify.log))"
+            sleep 60
+          done
+          echo "::error::Timed out after 30 minutes waiting for a verified signed image at ${IMAGE_REF}."
+          cat /tmp/cosign-verify.log
+          exit 1
+
+      - name: Stage Sentry DSN in Fly secrets
+        run: flyctl secrets set SENTRY_DSN="${SENTRY_DSN}" --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      # No "Stamp build info" step here (unlike deploy-fly.yml) — there is no
+      # build, so there is nothing to stamp into. The image's baked-in
+      # build_info.json is whatever ci.yml's docker-image-scan job produced,
+      # which is the committed placeholder (gap #3 above) until that job is
+      # changed to stamp it too.
+      - name: Deploy signed image to Fly.io
+        working-directory: backend
+        run: flyctl deploy --image "${{ steps.image.outputs.ref }}" --config fly.toml --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Ensure mixed pool (2 warm 4 GB + 6 burst 2 GB)
+        run: flyctl scale count app=2 burst=6 --region yyz -a "${FLY_APP}" --yes
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Readiness check
+        if: ${{ env.FLY_HEALTH_URL != '' }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL}/ready …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL}/ready" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Service is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Readiness check timed out after 3 minutes."
+          echo "Fly keeps the previous release in traffic on a failed rolling deploy."
+          echo "Inspect with: flyctl status -a spinr-backend-yyz && flyctl logs -a spinr-backend-yyz"
+          exit 1
+
+      # No "Verify the deployed build SHA is serving" step here — gap #3
+      # above means it would always fail against this image. Re-add once
+      # ci.yml's docker-image-scan job stamps build_info.json.
+      - name: Note on build-SHA verification
+        run: |
+          echo "::notice::Skipped build-SHA verification (backend/utils/build_info.py) — the GHCR image built by ci.yml's docker-image-scan job does not carry a real build_info.json stamp yet. See this workflow's header comment (gap #3) and ACTION_ITEMS.md."

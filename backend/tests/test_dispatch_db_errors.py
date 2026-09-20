@@ -242,11 +242,21 @@ async def test_no_rearm_when_offers_already_pending():
 
 @pytest.mark.asyncio
 async def test_dispatch_retry_respects_attempt_cap():
-    """The re-arm must not defeat the attempt cap — past it, the chain stops."""
+    """The re-arm must not defeat the attempt cap for a non-scheduled ride
+    -- past it, the chain stops without dispatching or re-arming. A single
+    get_ride fetch DOES happen first: routes/rides/matching.py's
+    _dispatch_retry needs the ride's is_scheduled/scheduled_time to decide
+    whether scheduled_search_deadline exempts it from the flat attempt cap
+    (a scheduled ride's dispatch chain can legitimately exceed
+    _MAX_DISPATCH_ATTEMPTS while still inside its deadline -- see
+    test_scheduled_timing_guards.py's test_scheduled_retry_continues_after_
+    normal_attempt_limit, added in the same commit that introduced this).
+    Mocking a plain SEARCHING, non-scheduled ride exercises the attempt-cap
+    branch this test is actually named for."""
     from backend.routes import rides as rides_mod
 
     spawn_mock = MagicMock()
-    get_ride_mock = AsyncMock()
+    get_ride_mock = AsyncMock(return_value=dict(_RIDE))
 
     with (
         patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
@@ -255,5 +265,5 @@ async def test_dispatch_retry_respects_attempt_cap():
     ):
         await rides_mod._dispatch_retry(_RIDE["id"], delay=0, attempt=rides_mod._MAX_DISPATCH_ATTEMPTS + 1)
 
-    get_ride_mock.assert_not_called()
+    get_ride_mock.assert_awaited_once_with(_RIDE["id"])
     spawn_mock.assert_not_called()

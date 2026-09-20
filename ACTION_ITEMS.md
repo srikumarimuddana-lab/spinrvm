@@ -24840,9 +24840,51 @@ how much they de-risk a public launch._
   device-testing cycle; not gating merge of #5089 given the ported-and-proven-in-
   driver-app risk mitigation already in its Change Impact Log, but should be closed
   out before this is considered fully done.
+- **Due-diligence pass, 2026-09-19 (does NOT close this item — no device pass
+  exists, see below):** the user asked to confirm "everything is working fine"
+  via whatever evidence is actually available, given a related daily Sentry
+  monitor (a *different* bug, the CarMarker icon-decode-failure fixed by
+  #5207/#5209) had just run clean for 8 days. Ran the two strongest available
+  substitutes — a 90-day Sentry sweep and a direct test-coverage read against
+  the three fixes this item actually names — and is reporting both here rather
+  than letting "checked, looks fine" stand without specifics:
+  - **Sentry (90d, both surfaces):** no unresolved issue matching `CarMarker`,
+    `bearing`, or `marker` in production telemetry. One near-hit
+    (`CRIMSON-SMOKE-7445-S5`, titled "playbackPosition") turned out to be a
+    `level: info`, `handled: yes` cold-start breadcrumb that Sentry's frame
+    attribution happened to land on `markerPlayback.ts:188` — not a thrown
+    error — and predates fix (3) below anyway. **Sentry can only prove "not
+    crashing," never "renders correctly" — it has no way to catch a
+    visually-wrong-but-non-crashing bearing, which is the entire risk this
+    item exists to track.**
+  - **Test coverage, found genuinely uneven across the three fixes:**
+    (2) GPS pre-smoothing/implausible-jump rejection and (3) the ring re-arm
+    both have real coverage — (3) has 4 dedicated tests in
+    `rider-app/__tests__/carMarkerPositionChange.test.tsx`, and (2) is
+    confirmed wired into `shared/components/CarMarker.tsx`'s actual ingest
+    path (not just the standalone `gpsSmoothing.test.ts`) with an integration
+    test exercising the jump-reset case. (1) the route-segment continuity hint
+    (`preferredFromIndex`) had **zero test coverage anywhere in the repo** —
+    confirmed by a full-repo search, not even in `driver-app` where it
+    originated — despite being live in production. Closed this specific gap
+    today: added `shared/utils/__tests__/vehicleTracking.test.ts` (5 tests),
+    which reproduces the actual "divided road / out-and-back" ambiguity the
+    fix's own code comments describe (two route legs 6m/4m from a noisy fix,
+    opposite travel directions) and proves `preferredFromIndex` picks the
+    correct segment where an unrestricted search picks the wrong one 180° off.
+    Full rider-app suite (152 suites / 2096 tests, includes `shared/`) passes
+    after the addition.
+  - **Conclusion — still open:** this closes the test-coverage gap on fix (1)
+    and adds production-telemetry evidence for all three, but neither
+    substitutes for the actual device pass this item asks for. Do not read
+    "no Sentry errors + tests pass" as equivalent to "watched render
+    correctly on a phone" — that distinction is the entire point of this
+    item and of C103's access-gap writeup. Left open, still tracked under
+    C103.
 - **Files (reference only, no code changed by this entry):**
   `shared/components/CarMarker.tsx`, `rider-app/__tests__/carMarkerPositionChange.
-  test.tsx`, `docs/change-log/2026-09-07-rider-app-marker-parity-fix.md`,
+  test.tsx`, `shared/utils/__tests__/vehicleTracking.test.ts` (new, 2026-09-19),
+  `docs/change-log/2026-09-07-rider-app-marker-parity-fix.md`,
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI

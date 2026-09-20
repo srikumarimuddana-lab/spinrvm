@@ -234,7 +234,7 @@ export default function ConfirmPickupScreen() {
           <View style={styles.addressDot} />
           <View style={{ flex: 1 }}>
             {geocoding ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.sm }}>
                 <ActivityIndicator size="small" color={colors.textDim} />
                 <Text style={styles.addressLoading}>Finding address...</Text>
               </View>

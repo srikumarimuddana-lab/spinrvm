@@ -5,6 +5,13 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
 from . import _deps, _shared
+
+try:
+    from ...utils.insurance_periods import derive_insurance_period as _derive_insurance_period
+except ImportError:  # pragma: no cover - dual-import per CLAUDE.md
+    from utils.insurance_periods import (  # type: ignore
+        derive_insurance_period as _derive_insurance_period,
+    )
 from ._deps import (  # noqa: F401
     AccountDisabledException,
     Any,
@@ -665,6 +672,12 @@ async def update_driver_status(
     # flip opens below — Period 2/3 keyed to the ride's own status, never a
     # blanket Period 1 while a passenger or assignment is in play.
     _busy_ride_row = None
+    # Live-claim signal for the insurance-period classification further down.
+    # Batch dispatch holds no `rides.driver_id` link pre-acceptance (the claim
+    # lives in `ride_offers`), so a driver can be obligated to a ride with no
+    # ride row to find. CLAUDE.md: Period 2 starts the instant the claim
+    # succeeds and the offer is live, not when the driver taps Accept.
+    _live_offer_ride_id = None
     if is_online:
         _busy_ride = await db_supabase.get_rows(
             "rides",
@@ -694,10 +707,14 @@ async def update_driver_status(
                 "ride_offers",
                 {"driver_id": driver_id, "status": "pending"},
                 limit=5,
-                columns="id,offered_at",
+                # `ride_id` added so a live claim can be recorded against its
+                # ride — CLAUDE.md ties a Period 2 row to a ride_id.
+                columns="id,offered_at,ride_id",
             )
-            if _fresh_pending_offers(_pending_offers):
+            _fresh_offers = _fresh_pending_offers(_pending_offers)
+            if _fresh_offers:
                 is_available = False
+                _live_offer_ride_id = _fresh_offers[0].get("ride_id")
     _base = {"is_online": is_online, "is_available": is_available, "updated_at": _now_iso}
     # If the driver app supplied current GPS on Go Online, persist it in the
     # same write so the rider/admin queries see a real location immediately
@@ -789,7 +806,53 @@ async def update_driver_status(
     # period row; the helper's no-op branch would absorb it but we save
     # the round-trip by gating on status_flipped.
     if status_flipped:
-        if is_online and _busy_ride_row:
+        # Flag-gated per CLAUDE.md gate #3. OFF reproduces the previous
+        # behaviour byte-for-byte; ON routes the decision through the shared
+        # `derive_insurance_period` table so this handler and
+        # `utils/insurance_period_reconciler.py` can no longer disagree.
+        #
+        # What ON changes: a driver holding a live batch-dispatch offer. The
+        # Go Offline guard above only rejects on a `rides` row, and batch
+        # dispatch keeps its claim in `ride_offers` with no `rides.driver_id`
+        # link pre-acceptance — so a driver mid-offer could toggle offline
+        # (recorded Period 0, personal auto only) or back online (Period 1),
+        # either of which overwrote the correct Period 2 row that
+        # `routes/rides/matching.py` opened at claim time. That is the
+        # misclassification CLAUDE.md calls a regulatory and insurance
+        # liability. See docs/change-log/2026-09-20-insurance-period-derivation.md.
+        try:
+            from ...settings_loader import get_app_settings as _get_period_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings as _get_period_settings  # type: ignore
+        _period_settings = await _get_period_settings()
+        _live_offer_period_enabled = bool(_period_settings.get("insurance_period_live_offer_enabled", False))
+
+        if _live_offer_period_enabled and not is_online and _live_offer_ride_id is None:
+            # The Go Offline path skips the busy-ride/offer lookups above
+            # entirely (they are guarded on `is_online`), so without this the
+            # handler cannot see the live claim it is about to overwrite.
+            _offline_offers = await db_supabase.get_rows(
+                "ride_offers",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=5,
+                columns="id,offered_at,ride_id",
+            )
+            _fresh_offline_offers = _fresh_pending_offers(_offline_offers)
+            if _fresh_offline_offers:
+                _live_offer_ride_id = _fresh_offline_offers[0].get("ride_id")
+
+        if _live_offer_period_enabled:
+            _period = _derive_insurance_period(
+                ride_status=_busy_ride_row.get("status") if _busy_ride_row else None,
+                is_online=is_online,
+                has_live_offer=_live_offer_ride_id is not None,
+            )
+            # A Period 2/3 row must name its ride; Period 0/1 must not.
+            _period_ride_id = None
+            if _period in (2, 3):
+                _period_ride_id = (_busy_ride_row or {}).get("id") or _live_offer_ride_id
+            await _deps.record_period_transition(driver_id, _period, ride_id=_period_ride_id)
+        elif is_online and _busy_ride_row:
             # A driver coming online while a ride is still theirs (app
             # relaunch mid-trip, admin force-offline undone) is in Period 2/3
             # per the ride's own status — never blanket Period 1, which would

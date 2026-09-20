@@ -312,6 +312,18 @@ class AppSettings(BaseModel):
     # were never previously blocked on these fields. See CLAUDE.md gate #3
     # and docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md.
     enforce_driver_eligibility_recheck: bool = False
+    # When true, the driver status handler classifies insurance periods via
+    # the shared `utils.insurance_periods.derive_insurance_period` table
+    # instead of its own inline ternaries. The behavioural difference is a
+    # driver holding a live batch-dispatch offer: the Go Offline guard only
+    # rejects on a `rides` row, and batch dispatch keeps its claim in
+    # `ride_offers`, so toggling status mid-offer used to overwrite the
+    # correct Period 2 (opened at claim time) with Period 0 or 1 —
+    # understating SGI commercial coverage while the driver was already
+    # obligated to the ride. Defaults to false (dark ship) per CLAUDE.md
+    # gate #3; OFF reproduces the previous behaviour exactly. See
+    # docs/change-log/2026-09-20-insurance-period-derivation.md.
+    insurance_period_live_offer_enabled: bool = False
     # When true, suspending/closing a corporate account auto-cancels its
     # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
     # driver_arrived) instead of leaving them to run to completion as if the

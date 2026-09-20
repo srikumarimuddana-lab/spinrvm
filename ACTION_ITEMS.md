@@ -27360,6 +27360,45 @@ added it to the CORS allowlist on the strength of that inference. An unverified
 assumption became two more files. Worth remembering before citing a config block
 as evidence that the thing it configures exists.
 
+### C120. `driver-app/__tests__/store/authStore.refreshRace.test.ts` — 2 of its rotation-race tests are red on `main`'s own tip
+
+- [ ] **Status: OPEN, filed 2026-09-20.**
+- **What's wrong:** `driver-app-test` fails on `main`'s current tip
+  (commit `ea3c6be9`, PR #5518's merge) with 2 of the suite's own
+  concurrency tests failing:
+  - `does not let delayed go-offline cleanup wipe a new login` — times out
+    at Jest's default 15000ms.
+  - `revokes persisted background credentials even if foreground memory
+    has no access token` — `expect(mockPost).toHaveBeenCalledWith('/auth/logout',
+    {refresh_token: 'background-refresh'})`, actual call count 0.
+  Reproduced identically on an unrelated PR (#5525, a pure
+  `.github/workflows/`/`dependabot.yml`/`deploy/backend-required-env.txt`
+  change that touches zero driver-app files) — ruling out that PR's diff
+  as the cause.
+- **What the test actually covers:** `authStore.refreshTokens — rotation-race
+  recovery` is a suite specifically testing async ordering between
+  `logout()`, `refreshTokens()`, and `setTokens()` racing each other, using
+  manually-controlled promise resolution (`let finish!: () => void; ...
+  new Promise(resolve => { finish = resolve; })`) to force specific
+  interleavings. Both failing tests are in that same manually-sequenced
+  style, so this could be either a genuine, deterministic regression in
+  the auth store's real race-handling logic, or a timing assumption in the
+  test itself that no longer holds — not yet determined which.
+- **Not investigated further here** — found while driving an unrelated
+  CI/CD audit PR (#5525) to green; this needs its own session with the
+  time to actually read `authStore.ts`'s current `logout()`/`refreshTokens()`
+  interleaving logic against what the test expects, given this is
+  auth/session-state code (CLAUDE.md: treat with extra caution).
+- **Action:** run `npx jest __tests__/store/authStore.refreshRace.test.ts`
+  locally against current `main`, confirm which of the two failures is
+  reproducible standalone (not just in the full suite, in case of
+  cross-test state leakage), then read the corresponding
+  `logout()`/`refreshTokens()` code path in `driver-app/store/authStore.ts`
+  to determine root cause before changing either the test or the
+  implementation.
+- **Files:** `driver-app/__tests__/store/authStore.refreshRace.test.ts`,
+  `driver-app/store/authStore.ts` (not yet inspected for this issue).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -1,0 +1,63 @@
+-- migration 431: drop an out-of-band RLS policy on corporate_accounts that
+-- no migration file in this repo's history ever created.
+-- =============================================================================
+-- What's wrong: production's corporate_accounts carries a policy named
+-- "Admin full access for corporate accounts" (FOR ALL, TO authenticated,
+-- USING users.role = 'admin', no WITH CHECK). Found 2026-09-20 while
+-- verifying migration 430's rollout -- `git log --all -S` across every
+-- branch/commit in this repo's history returns zero hits for that exact
+-- policy name anywhere in backend/migrations/. It was never created by any
+-- committed migration; it exists in production only, created out-of-band
+-- (most likely a manual edit via Supabase's dashboard/SQL editor at some
+-- point before or alongside this table's own migration history).
+--
+-- This is a different bug than it first looked like. Migration 17
+-- (`17_corporate_accounts_fk.sql`, checksum-verified unedited since
+-- application) creates a *differently*-named policy,
+-- "Admin full access corporate_accounts" (no "for", underscore not space),
+-- guarded by its own `IF NOT EXISTS (... policyname = '...')` check.
+-- Migration 416 (`416_corporate_accounts_rls_super_admin_fix.sql`) correctly
+-- DROPped that exact policy migration 17 created -- its DROP POLICY
+-- statement was not a typo, it matched migration 17's own committed name
+-- precisely, and it worked. What 416 had no way to know about is this
+-- separate, out-of-band policy with a similar-but-different name that
+-- predates or sits alongside the tracked migration history entirely --
+-- untouched by any migration because none of them ever knew it existed.
+--
+-- Why this is safe to change: identical reasoning to migration 430.
+-- Production `users` has zero rows with role='admin' or 'super_admin'
+-- (migration 256's chk_users_role_not_admin CHECK constraint blocks the
+-- value permanently), so this policy's USING clause can never be satisfied
+-- today. Its write half (INSERT/UPDATE/DELETE/TRUNCATE) is separately,
+-- independently blocked at the table-grant layer -- migration 416 REVOKEd
+-- those privileges from `authenticated` entirely, confirmed still in effect
+-- (information_schema.role_table_grants shows `authenticated` holding only
+-- SELECT/REFERENCES/TRIGGER on this table, `anon` holding nothing). So this
+-- migration only removes a second, currently-dead way to reach SELECT on
+-- this table -- not a live write path, and not the only thing standing
+-- between an admin-role JWT and a read (migration 430's own explicit-deny
+-- policy on this table is unaffected and stays in place).
+--
+-- Blast radius: checked every other policy on all 11 tables migration 430
+-- touched -- corporate_accounts is the only one carrying an untracked,
+-- out-of-band policy. The other 10 show exactly their expected policy set
+-- (migration 430's own deny policy, plus each table's "own row"/service-role
+-- policies where applicable) and are unaffected by this migration.
+--
+-- Rollback plan: re-create the policy verbatim. The USING clause below is
+-- not a reconstruction -- confirmed byte-exact against the live policy via
+-- `SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polrelid =
+-- 'corporate_accounts'::regclass AND polname = 'Admin full access for
+-- corporate accounts'` before this migration ran (polcmd='*'/FOR ALL,
+-- polroles={authenticated}, polwithcheck=NULL/no WITH CHECK, polpermissive):
+--   CREATE POLICY "Admin full access for corporate accounts"
+--       ON corporate_accounts FOR ALL TO authenticated
+--       USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text
+--                        AND users.role = 'admin'));
+-- Zero data changes in this migration -- pure policy removal, instantly
+-- reversible, no PITR needed.
+-- =============================================================================
+
+DROP POLICY IF EXISTS "Admin full access for corporate accounts" ON corporate_accounts;
+
+NOTIFY pgrst, 'reload schema';

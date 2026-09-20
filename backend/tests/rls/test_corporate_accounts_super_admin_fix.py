@@ -33,6 +33,13 @@ special-cased over the other), it's just that the policy denies everyone now.
 `test_super_admin_cannot_insert_corporate_account` is untouched by 430 (write
 access was already revoked at the grant layer by 416) and is unaffected by
 any of this.
+
+Migration 431 (found 2026-09-20 while rolling out 430 to production): a
+second, out-of-band "Admin full access for corporate accounts" policy that
+no migration file in this repo's history ever created -- see
+`test_stray_admin_policy_removed_by_431` below for the regression test and
+`backend/migrations/431_drop_stray_corporate_accounts_admin_policy.sql` for
+the full root-cause writeup.
 """
 
 from __future__ import annotations
@@ -138,3 +145,54 @@ def test_service_role_can_insert_corporate_account(pg_cur):
     as_role(pg_cur, "service_role", None)
     pg_cur.execute("INSERT INTO corporate_accounts (id, name) VALUES (%s, 'Service Co')", (account_id,))
     assert pg_cur.rowcount == 1
+
+
+# ── migration 431: out-of-band "Admin full access for corporate accounts" ──
+
+
+def test_stray_admin_policy_removed_by_431(pg_cur):
+    """migration 431 (found 2026-09-20 while rolling out 430): production
+    carried a policy named "Admin full access for corporate accounts" that no
+    migration file in this repo's history ever created (confirmed via `git
+    log --all -S` across every branch) -- pure out-of-band drift, invisible
+    to this harness since it only ever builds schema by replaying migration
+    files. conftest.py's global setup already applies 431, so by the time any
+    test runs the drifted policy is long gone -- there is nothing left here
+    to demonstrate a fix against. This test manufactures the exact drifted
+    state directly (recreating the stray policy verbatim), proves it really
+    was a live access hole (an admin-role JWT gains SELECT through it despite
+    migration 430's own USING (false) policy on this table -- RLS ORs
+    permissive SELECT policies together), then re-applies 431's DROP and
+    proves the hole closes. Ends by restoring the post-431 state the rest of
+    the suite expects, so this test doesn't leak side effects to others."""
+    as_role(pg_cur, None)
+    pg_cur.execute(
+        """
+        CREATE POLICY "Admin full access for corporate accounts"
+            ON corporate_accounts FOR ALL TO authenticated
+            USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text
+                             AND users.role = 'admin'))
+        """
+    )
+    try:
+        account_id = _uuid()
+        admin = _uuid()
+        _seed_user(pg_cur, admin, role="admin")
+        _seed_account(pg_cur, account_id)
+
+        as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+        pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
+        assert [r[0] for r in pg_cur.fetchall()] == [account_id], (
+            "expected the drifted stray policy to actually grant access here -- "
+            "if this fails, the stray-policy scenario isn't reproduced correctly"
+        )
+
+        as_role(pg_cur, None)
+        pg_cur.execute('DROP POLICY IF EXISTS "Admin full access for corporate accounts" ON corporate_accounts')
+
+        as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+        pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
+        assert pg_cur.fetchall() == []
+    finally:
+        as_role(pg_cur, None)
+        pg_cur.execute('DROP POLICY IF EXISTS "Admin full access for corporate accounts" ON corporate_accounts')

@@ -340,10 +340,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
-  setTokens: (token, refreshToken, expiresIn, csrfToken) => withSessionLock(async () => {
+  setTokens: (token, refreshToken, expiresIn, csrfToken) => {
+    // Bumped synchronously, before the session lock is even requested, so a
+    // logout already queued ahead of us (see the generation check above) is
+    // guaranteed to observe this sign-in the moment its own turn comes up —
+    // not only once our queued write has actually run. Incrementing inside
+    // the locked callback instead would let a logout that entered the queue
+    // first read the pre-bump generation and wrongly treat this as stale.
     loginGeneration++;
-    await publishTokensUnlocked(token, refreshToken, expiresIn, csrfToken, true);
-  }),
+    return withSessionLock(async () => {
+      await publishTokensUnlocked(token, refreshToken, expiresIn, csrfToken, true);
+    });
+  },
 
   refreshTokens: (): Promise<boolean> => withSessionLock(async () => {
     const ended = await storage.getItem(SESSION_ENDED_KEY);
@@ -742,12 +750,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // interceptor 401, refresh rejected). A PUT/POST here 401s and queues
     // behind a doomed refresh — hanging sign-out so router.replace('/login')
     // never runs. /auth/logout-all now takes the driver offline itself.
-    const liveCredential = options?.revokeServerSession !== false && !!token;
+    const skipServerRevoke = options?.revokeServerSession === false;
 
     // Start go-offline immediately so it overlaps /auth/logout rather than
     // blocking it. Swallow errors — a flaky network must not block sign-out.
+    // Gated on the FOREGROUND token only (unlike the server-revoke check
+    // below) — go-offline authenticates with whatever is currently in
+    // memory, so there is no point attempting it without one.
     const goOffline =
-      liveCredential && driver?.id
+      !skipServerRevoke && driver?.id && token
         ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
             if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
           })
@@ -755,7 +766,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     return withSessionLock(async () => {
       if (generation !== loginGeneration) {
-        await goOffline;
+        // A newer explicit sign-in already won the session lock and published
+        // fresh credentials — this logout is stale and must not touch them.
+        // Do NOT await goOffline here: it is fire-and-forget with its errors
+        // already swallowed above, and awaiting it would hold this queue slot
+        // open for the lifetime of that network call, defeating the whole
+        // point of the generation fence (a fast concurrent sign-in needs this
+        // slot to free up promptly, not once a slow PUT finally resolves).
         return;
       }
       // Background refresh may have replaced BOTH credentials while the UI slept.
@@ -763,7 +780,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (persistedAccess) setInMemoryToken(persistedAccess);
 
       const serverLogout = (async () => {
-        if (!(liveCredential && (persistedAccess || token))) return;
+        // Revoke whenever the caller didn't explicitly ask us to skip it and
+        // there is SOME live credential — foreground or a background-rotated
+        // one persisted to storage. Deliberately independent of goOffline's
+        // gating above: a driver with no foreground token but a persisted
+        // background credential still has a refresh token worth revoking.
+        if (skipServerRevoke || !(persistedAccess || token)) return;
         try {
           // F02 (2026-09-08 AI security assessment): this used to POST with no
           // body. The server revokes a refresh token only if one arrives in a

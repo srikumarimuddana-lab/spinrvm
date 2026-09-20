@@ -1032,7 +1032,11 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
-            detail="We couldn't read that card. Please check the details and try again.",
+            # This is a request body-shape failure (missing/malformed
+            # payment_method_id), not a bad physical card — the card was
+            # already tokenized fine by Stripe.js before this request.
+            # Don't blame the card or send the rider back to re-enter it.
+            detail="We couldn't process that request. Please try again.",
         ) from exc
 
     payment_method_id = body.payment_method_id

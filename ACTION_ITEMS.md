@@ -29,7 +29,14 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 INVESTIGATED (still open): traced
+_Last updated: 2026-09-20 — C121 gap #3 CLOSED, gap #2 UPGRADED: added a
+build-info stamp step to `ci.yml`'s `docker-image-scan` job and re-enabled
+`deploy-fly-signed-image.yml`'s build-SHA verification (gap #3). Researched
+Fly's actual documented/community-reported behavior for gap #2 (registry
+auth) and found real evidence the current approach likely fails against a
+PRIVATE GHCR image (`401 Unauthorized` even after `docker login`) — the
+known working fix (make the package public) is a product decision, not
+implemented here; flagged for the user. Prior: C122 INVESTIGATED (still open): traced
 `locationIntegrity.ts`'s mock-detection branch line by line — it is fully
 synchronous and deterministic (no timers, no wall-clock dependency), and
 `git log` confirms nothing has changed in the source or test since the
@@ -27748,9 +27755,9 @@ as evidence that the thing it configures exists.
   `51_audit_logs_lockdown.sql`, `64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
   `backend/tests/rls/test_money_and_safety_rls.py`.
 
-### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 3 unresolved gaps
+### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)
 
-- [ ] **Status: OPEN (partial), filed 2026-09-20.**
+- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-20 — gap #3 closed, gap #2 needs a product decision.**
 - **What's wrong:** `deploy-fly.yml` has Fly's remote builder independently
   rebuild the backend from `backend/Dockerfile` on every push to `main`,
   while `ci.yml`'s `docker-image-scan` job separately builds, scans,
@@ -27767,41 +27774,51 @@ as evidence that the thing it configures exists.
   so the two can never race the same Fly app. It is **not** wired to the
   `push: branches: [main]` trigger — `deploy-fly.yml` is unchanged and
   remains the production path.
-- **Why not fully automatic yet — 3 concrete gaps found, none resolved:**
-  1. **Race condition:** `docker-image-scan` needs `backend-test`
-     (~13-14 min) plus build/push/sign time; a push-triggered deploy would
-     very likely fire before the image exists. The new workflow's polling
-     wait covers this in theory but has never been exercised end-to-end.
-  2. **Unverified registry auth:** no prior art in this repo for `flyctl
-     deploy --image` against a private, non-Fly registry. The
-     `docker/login-action` GHCR login step is a best-effort guess at how
-     flyctl picks up pull credentials — unproven from this sandbox
-     (egress-restricted, no live Fly credentials).
-  3. **Missing build provenance:** `docker-image-scan` builds without
-     `deploy-fly.yml`'s "Stamp build info" step, so the GHCR image ships
-     with the committed `backend/build_info.json` placeholder
-     (`"sha": null"`), not the real commit SHA. `deploy-fly.yml`'s
-     "Verify the deployed build SHA is serving" check would always fail
-     against it — deliberately omitted from the new workflow rather than
-     left in to fail every run.
+- **Gap status (2026-09-20 update):**
+  1. **Race condition — still open.** `docker-image-scan` needs
+     `backend-test` (~13-14 min) plus build/push/sign time; a push-triggered
+     deploy would very likely fire before the image exists. The workflow's
+     polling wait covers this in theory but has never been exercised
+     end-to-end.
+  2. **Registry auth — still open, and worse than first thought.**
+     Researched 2026-09-20: multiple independent reports (Fly community
+     thread "deploy from private package with github actions"; flyctl
+     issues #75, #1100, #362) describe `flyctl deploy --image` returning
+     `401 Unauthorized` pulling a **private** GHCR image even after
+     `docker login ghcr.io` — the exact setup `deploy-fly-signed-image.yml`
+     uses. The one consistently-reported working fix is making the GHCR
+     package **public**. **This needs an explicit decision, not a silent
+     code change** — the image contains application code/dependencies, not
+     secrets (this repo's Dockerfile never bakes secrets in), but "public"
+     vs "private" for a commercial product's backend image is a product
+     call. Options: (a) make `ghcr.io/<repo>/spinr-backend` public,
+     (b) find another Fly-supported auth path for a private registry,
+     (c) abandon `flyctl deploy --image` against GHCR and push to Fly's own
+     registry instead. None implemented — awaiting a decision.
+  3. **Build provenance — CLOSED 2026-09-20.** Added a "Stamp build info"
+     step to `ci.yml`'s `docker-image-scan` job (mirrors `deploy-fly.yml`'s
+     own step; `"provider":"ghcr"` since this job never deploys anywhere
+     itself). `deploy-fly-signed-image.yml`'s "Verify the deployed build
+     SHA is serving" step is re-enabled accordingly (compares against the
+     image's own tag SHA, not `GITHUB_SHA`, since this workflow can deploy
+     a different commit's image than the one that triggered the run). Both
+     still pending confirmation on a real end-to-end dispatch, like gaps 1
+     and 2.
 - **Risk & impact if promoted to automatic without closing the gaps:**
-  every `main` push would risk a failed/stalled production deploy (gap 1),
-  a deploy that can't authenticate to pull the image at all (gap 2), or a
-  standby-parity monitor (ACTION_ITEMS C5) that can never confirm Fly's
-  running SHA (gap 3). `deploy-fly.yml`'s rolling strategy means a failed
-  deploy fails safe (old release keeps serving) — but a systematically
-  broken deploy path is still an operational outage waiting to happen.
-- **Action to promote to automatic:** (a) manually dispatch
-  `deploy-fly-signed-image.yml` and confirm it succeeds end-to-end against
-  a real Fly app; (b) add a build-info stamp step to `ci.yml`'s
-  `docker-image-scan` job (own blast-radius review — that job is the
-  shared, always-on CVE-scan/publish path); (c) once both are proven,
-  either link the two workflows with `workflow_run:` or fold the polling
-  wait into `deploy-fly.yml` directly and retire the separate file.
-- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (new),
-  `.github/workflows/ci.yml` (cosign-verify doc-comment accuracy fix —
-  the example referenced `:latest`, which is pushed but never signed;
-  corrected to the sha tag that's actually signed).
+  every `main` push would risk a failed/stalled production deploy (gap 1)
+  or a deploy that can't authenticate to pull the image at all (gap 2).
+  `deploy-fly.yml`'s rolling strategy means a failed deploy fails safe (old
+  release keeps serving) — but a systematically broken deploy path is
+  still an operational outage waiting to happen.
+- **Action to promote to automatic:** (a) decide gap #2 (see options
+  above); (b) manually dispatch `deploy-fly-signed-image.yml` and confirm
+  it succeeds end-to-end against a real Fly app, including the now-enabled
+  build-SHA verification; (c) once proven, either link the two workflows
+  with `workflow_run:` or fold the polling wait into `deploy-fly.yml`
+  directly and retire the separate file.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (new, then
+  updated 2026-09-20 for gap #3), `.github/workflows/ci.yml` (cosign-verify
+  doc-comment accuracy fix, then the "Stamp build info" step for gap #3).
 
 ### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
 

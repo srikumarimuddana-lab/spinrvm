@@ -127,17 +127,38 @@ async def _tick() -> None:
             # Won the claim — we're the one caller responsible for sending.
             rider_id = ride.get("rider_id")
             if rider_id:
+                # priority="safety" makes this bypass the push opt-out/quiet-hours
+                # and, on immediate-delivery failure, fall back to the
+                # push_retry_queue instead of being dropped outright.
+                # target_app="rider" is required so the Android channel picked
+                # (by push_retry.py / features.py's _build_fcm_message) is the
+                # one rider-app actually registers — omitting it defaulted to
+                # driver-app's channel, which Android silently drops.
                 try:
-                    await send_push_notification(
+                    sent_ok = await send_push_notification(
                         rider_id,
                         "Safety check-in",
                         "Just checking in — are you okay? Tap to confirm.",
                         data={"type": "safety_checkin", "ride_id": ride_id},
+                        priority="safety",
+                        target_app="rider",
                     )
                 except Exception:
+                    sent_ok = False
                     logger.error(
-                        f"[SAFETY_CHECKIN] FCM push failed ride_id={ride_id}",
+                        f"[SAFETY_CHECKIN] FCM push raised for ride_id={ride_id}",
                         exc_info=True,
+                    )
+
+                if not sent_ok:
+                    # send_push_notification fails closed (returns False)
+                    # rather than raising for a time-critical priority like
+                    # "safety" — checking only for a raised exception here
+                    # previously let a plain delivery failure look like a
+                    # success: the claim was never released and the check-in
+                    # was never retried.
+                    logger.error(
+                        f"[SAFETY_CHECKIN] Push delivery failed for ride_id={ride_id}; releasing claim for retry"
                     )
                     # Release the claim so a later tick (this replica or
                     # another) can retry the send instead of silently never

@@ -771,6 +771,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     const sessionWork = withSessionLock(async () => {
       if (generation !== loginGeneration) {
+        // A newer explicit sign-in already won the session lock and published
+        // fresh credentials — this logout is stale and must not touch them.
+        // Do NOT await goOffline here: it is fire-and-forget with its errors
+        // already swallowed above (and, per the comment where it's fired,
+        // never awaited inside this lock in any path) — awaiting it here
+        // would hold this queue slot open for the lifetime of that network
+        // call, defeating the whole point of the generation fence (a fast
+        // concurrent sign-in needs this slot to free up promptly).
         return;
       }
       // Background refresh may have replaced BOTH credentials while the UI slept.

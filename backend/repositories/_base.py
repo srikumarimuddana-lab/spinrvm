@@ -1214,7 +1214,29 @@ def _log_safe_write(table: str, filters: Dict[str, Any], payload: Dict[str, Any]
     return " ".join(parts)
 
 
+def _require_write_filters(op: str, table: str, filters: Optional[Dict[str, Any]]) -> None:
+    """Refuse a table-wide write.
+
+    ``_apply_filters`` returns the unfiltered builder for ``{}``/``None`` — fine
+    for a read that pages a whole table, catastrophic for an UPDATE/DELETE. The
+    degenerate-``$or`` case below already raises for exactly this reason; this
+    closes the top-level case so a conditionally-built filter that collapses to
+    ``{}`` surfaces as a caller bug instead of rewriting or truncating a table.
+    Runs before the ``if not supabase`` short-circuit so it fires in dev/test too.
+    """
+    if not filters:
+        raise ValueError(
+            f"{op}({table!r}) called with no filters; refusing to write the whole table. "
+            "Guard the empty case in the caller rather than issuing an unfiltered write."
+        )
+
+
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
+    # upsert merges the filters into the payload and matches on the primary
+    # key, so an empty filter there is one row's insert-or-update, never a
+    # table-wide write.
+    if not upsert:
+        _require_write_filters("update_one", table, filters)
     if not supabase:
         # This was the warn-and-continue that CLAUDE.md forbids, left in place
         # because insert_many, insert_many_ignore_conflicts, delete_many and
@@ -1287,6 +1309,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
 
 async def delete_many(table: str, filters: Dict[str, Any]):
+    _require_write_filters("delete_many", table, filters)
     if not supabase:
         _write_skipped("delete_many", table)
         return None

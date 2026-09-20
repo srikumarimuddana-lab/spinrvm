@@ -1,0 +1,144 @@
+name: EAS OTA publish
+description: >-
+  Publish an Expo OTA (JS-only) update for one app to one or more
+  platform:channel pairs, optionally as a percentage rollout, then upload the
+  exported source maps to Sentry so post-OTA crashes symbolicate.
+
+# Shared by every job in eas-build.yml. Kept as a composite action (not a
+# reusable workflow) so each caller keeps its own `environment:` — the
+# production jobs sit behind the `production-ota` environment's required
+# reviewer, the preview jobs do not.
+
+inputs:
+  app_dir:
+    description: "rider-app | driver-app"
+    required: true
+  pairs:
+    description: >-
+      Space-separated platform:channel pairs, e.g. "ios:production
+      android:production". One --platform-scoped `eas update` per pair —
+      publishing by --branch (same name as the channel), always with an
+      explicit --environment (see the comments in eas-build.yml).
+    required: true
+  message:
+    description: "Update message (first line of the commit message)"
+    required: true
+  rollout_percentage:
+    description: >-
+      1-100. Below 100 publishes a per-update rollout so only that share of
+      devices on the branch receive it. NOTE — Expo allows ONE active rollout
+      per branch: the next publish to that branch fails until the rollout is
+      ended (`eas update:edit` → 100, or `eas update:revert-update-rollout`).
+    required: false
+    default: "100"
+  expo_token:
+    required: true
+  sentry_auth_token:
+    description: "Optional. When empty the source-map upload is skipped with a warning."
+    required: false
+    default: ""
+  sentry_org:
+    required: false
+    default: ""
+  sentry_project:
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Node 22, not 20: eas-cli's own dependency tree pulls in
+    # @oclif/plugin-autocomplete, which bumped its own engines.node to
+    # >=22.0.0 in 3.3.0 (2026-08-2x) independent of eas-cli's own
+    # (unchanged) >=20.0.0 requirement. yarn classic hard-fails the
+    # install on that mismatch (not just a warning), which is why every run
+    # of this workflow failed from that release onward.
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        node-version: 22
+    - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
+      with:
+        # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+        eas-version: 24.7.0
+        token: ${{ inputs.expo_token }}
+    - shell: bash
+      working-directory: ${{ inputs.app_dir }}
+      run: yarn install --frozen-lockfile
+
+    - name: Publish OTA update and upload its source maps
+      shell: bash
+      working-directory: ${{ inputs.app_dir }}
+      env:
+        PAIRS: ${{ inputs.pairs }}
+        MSG: ${{ inputs.message }}
+        ROLLOUT: ${{ inputs.rollout_percentage }}
+        # Loaded into the export so the Sentry Expo plugin can stamp the
+        # bundle with org/project (no-op when unset, same as EAS Build).
+        SENTRY_ORG: ${{ inputs.sentry_org }}
+        SENTRY_PROJECT: ${{ inputs.sentry_project }}
+        SENTRY_AUTH_TOKEN: ${{ inputs.sentry_auth_token }}
+      run: |
+        set -euo pipefail
+        MESSAGE="${MSG:-manual update}"
+        # eas update truncates at 1024 chars; keep just the first line.
+        MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
+        case "$ROLLOUT" in
+          ''|*[!0-9]*) echo "::error::rollout_percentage must be an integer 1-100, got '$ROLLOUT'"; exit 1 ;;
+        esac
+        if [ "$ROLLOUT" -lt 1 ] || [ "$ROLLOUT" -gt 100 ]; then
+          echo "::error::rollout_percentage must be 1-100, got '$ROLLOUT'"; exit 1
+        fi
+        ROLLOUT_FLAG=""
+        if [ "$ROLLOUT" -lt 100 ]; then
+          ROLLOUT_FLAG="--rollout-percentage=$ROLLOUT"
+          echo "Publishing as a ${ROLLOUT}% rollout. Ramp with 'eas update:edit' (set 100) or revert with 'eas update:revert-update-rollout'. A second publish to the same branch is refused by Expo until this rollout is ended."
+        fi
+        # --environment is REQUIRED, not optional. EXPO_PUBLIC_* vars are
+        # inlined into the JS bundle when it is built, and `eas update`
+        # rebuilds the bundle. Without an environment it loads none of the EAS
+        # environment variables, so every EXPO_PUBLIC_* value ships as an
+        # empty string and the OTA silently strips config the binary had
+        # (driver-app/hooks/useDriverDashboard.ts:89). `test` has no matching
+        # EAS environment (development/preview/production), so it maps to
+        # preview alongside the preview channel.
+        #
+        # Post-OTA crashes were unsymbolicated: source maps were only uploaded
+        # by the @sentry/react-native/expo config plugin at EAS *build* time,
+        # but an OTA replaces the JS bundle while the native release/dist stay
+        # fixed. `npx sentry-expo-upload-sourcemaps dist` is the step the
+        # Expo/Sentry guide prescribes after `eas update`
+        # (docs.expo.dev/guides/using-sentry, "Usage with EAS Update"): it
+        # reads the dist/ folder `eas update` just exported and uploads each
+        # bundle's map under that update's identifiers.
+        #
+        # It is called INSIDE the loop, once per platform, deliberately. Every
+        # `eas update` re-exports into the same dist/, so a single upload
+        # after the loop would only ever ship the LAST platform's maps — and
+        # silently: both publishes succeed, the upload exits 0, and the other
+        # platform's crashes stay unsymbolicated until somebody notices the
+        # missing frames. Do not hoist this out of the loop.
+        upload_sourcemaps() {
+          local label="$1"
+          if [ -z "${SENTRY_AUTH_TOKEN}" ] || [ -z "${SENTRY_ORG}" ] || [ -z "${SENTRY_PROJECT}" ]; then
+            echo "::warning::Sentry source-map upload skipped for ${label} — SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT not configured for this workflow. Crashes from this OTA will be unsymbolicated in Sentry."
+            return 0
+          fi
+          if [ ! -d dist ]; then
+            echo "::error::eas update produced no dist/ directory for ${label} — nothing to upload"
+            return 1
+          fi
+          npx sentry-expo-upload-sourcemaps dist
+        }
+
+        for pair in $PAIRS; do
+          platform="${pair%%:*}"
+          channel="${pair#*:}"
+          case "$channel" in
+            production) env=production ;;
+            *)          env=preview ;;
+          esac
+          # shellcheck disable=SC2086 — ROLLOUT_FLAG is intentionally unquoted (empty or one flag)
+          eas update --platform "$platform" --branch "$channel" \
+            --environment "$env" --non-interactive --message "$MESSAGE" $ROLLOUT_FLAG
+          upload_sourcemaps "$platform:$channel"
+        done

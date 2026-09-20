@@ -721,6 +721,20 @@ def pg_conn(pg_test_dbname):
         "driver_period_distances TO anon, authenticated, service_role"
     )
 
+    # ACTION_ITEMS.md C123 phase 2: replaces safety_incidents' two broken
+    # admin policies (SELECT + UPDATE) with an explicit USING (false) deny,
+    # same shape as migration 430/432. Rewrites driver_insurance_periods',
+    # driver_insurance_period_corrections', and driver_period_distances'
+    # single combined SELECT policies (all three already applied above --
+    # migrations 64/355/249) to drop only each one's broken `OR <admin
+    # check>` clause -- NOT a blanket deny, since each policy also carries
+    # a driver's own legitimate self-read access in the same USING clause.
+    # Applied here, after all 4 target tables exist. See migration 433's own
+    # header comment for the full reasoning, including why the corrections/
+    # distances tables (not part of C123's original named scope) are
+    # included.
+    cur.execute((migrations_dir / "433_admin_role_rls_unreachable_phase2_safety_insurance.sql").read_text())
+
     # --- admin PII-export audit trail (ACTION_ITEMS.md C49): three tables
     # tied to the dual-approval/export-audit hardening already done at the
     # app layer this session (B1/W2a-c) -- this round adds the RLS/DB-

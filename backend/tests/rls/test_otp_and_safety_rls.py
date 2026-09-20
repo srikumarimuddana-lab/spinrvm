@@ -16,12 +16,15 @@ anon (RLS's default-deny covers that role without one).
 override -- migration 378 (saved_addresses) explicitly cites this table as
 the precedent for that same no-admin-override shape.
 
-`safety_incidents` (migration 94): service-role bypass; admin/super_admin
-SELECT and UPDATE via a `users.role` subquery; reporter-only SELECT of their
-own submitted reports; no INSERT or DELETE policy for anyone but
+`safety_incidents` (migration 94): service-role bypass; reporter-only SELECT
+of their own submitted reports; no INSERT or DELETE policy for anyone but
 service_role (the comment on the migration is explicit: "Insert is
 service-role only -- admins escalate via the backend API, not by writing
-directly to the table").
+directly to the table"). The original admin/super_admin SELECT+UPDATE
+policies (via a `users.role` subquery) are unreachable -- migration 256 make
+that role value permanently impossible to hold -- and ACTION_ITEMS.md C123
+phase 2 / migration 433 replaces both with an explicit `USING (false)` deny,
+same pattern as migration 430/432.
 
 `safety_incident_photos` (migration 340): service-role bypass, zero policy
 for anon/authenticated by design -- evidence photos can name or depict a
@@ -268,7 +271,11 @@ def _seed_incident(cur, incident_id: str, reporter_id: str | None) -> None:
 
 
 @pytest.mark.parametrize("role", ["admin", "super_admin"])
-def test_admin_roles_can_select_any_incident(pg_cur, role):
+def test_admin_roles_cannot_select_any_incident(pg_cur, role):
+    """ACTION_ITEMS.md C123 phase 2 / migration 433: the "Admin read/update
+    safety_incidents" policy is replaced with an explicit USING (false) --
+    admin and super_admin are denied identically, same as any other
+    non-reporting authenticated user."""
     reporter, admin = _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, reporter)
@@ -277,7 +284,7 @@ def test_admin_roles_can_select_any_incident(pg_cur, role):
     _seed_incident(pg_cur, incident_id, reporter)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM safety_incidents WHERE id = %s", (incident_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [incident_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_reporter_can_select_own_incident(pg_cur):
@@ -314,7 +321,12 @@ def test_anon_cannot_select_incident(pg_cur):
     assert pg_cur.fetchall() == []
 
 
-def test_admin_can_update_incident_status(pg_cur):
+def test_admin_cannot_update_incident_status(pg_cur):
+    """ACTION_ITEMS.md C123 phase 2 / migration 433: the "Admin update
+    safety_incidents" policy is replaced with an explicit USING (false) --
+    same RLS default-deny-as-empty-set behavior as
+    test_reporter_cannot_update_own_incident below (no exception, 0 rows
+    affected)."""
     reporter, admin = _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, reporter)
@@ -323,7 +335,7 @@ def test_admin_can_update_incident_status(pg_cur):
     _seed_incident(pg_cur, incident_id, reporter)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("UPDATE safety_incidents SET status = 'resolved' WHERE id = %s", (incident_id,))
-    assert pg_cur.rowcount == 1
+    assert pg_cur.rowcount == 0
 
 
 def test_reporter_cannot_update_own_incident(pg_cur):

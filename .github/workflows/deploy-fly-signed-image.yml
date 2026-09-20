@@ -9,33 +9,37 @@ name: Deploy Fly (signed GHCR image) — EXPERIMENTAL, manual only
 # make Fly deploy that exact signed GHCR artifact instead.
 #
 # This is intentionally NOT wired to `push: branches: [main]` yet. Investigation
-# for this task found three concrete, unresolved gaps that make an automatic
-# switchover risky on a live-tested production surface:
+# for this task found three concrete gaps; #3 is now code-fixed, #1 and #2
+# still make an automatic switchover risky on a live-tested production surface:
 #
-#   1. RACE CONDITION: deploy-fly.yml and ci.yml's docker-image-scan job are
-#      two independently-triggered workflows on the same push, with no
-#      needs:/workflow_run: link. docker-image-scan needs: [backend-test]
+#   1. RACE CONDITION (open): deploy-fly.yml and ci.yml's docker-image-scan
+#      job are two independently-triggered workflows on the same push, with
+#      no needs:/workflow_run: link. docker-image-scan needs: [backend-test]
 #      (~13-14 min) plus build/push/sign time, so a naive "trigger deploy on
 #      push" would very likely try to deploy an image that doesn't exist yet.
 #      This workflow's "Wait for signed image" step below polls/retries to
 #      cover that gap, but the wait has never been exercised against a real
 #      run end-to-end.
-#   2. UNVERIFIED REGISTRY AUTH: this repo has no prior art for `flyctl
-#      deploy --image` against a private, non-Fly registry (GHCR). The
-#      `docker/login-action` step below is a best-effort guess at how flyctl
-#      picks up pull credentials for ghcr.io — it has not been proven to
-#      work against a real Fly app from this sandbox (egress-restricted, no
-#      live Fly credentials).
-#   3. MISSING BUILD PROVENANCE: ci.yml's docker-image-scan job builds the
-#      image WITHOUT deploy-fly.yml's "Stamp build info" step, so the GHCR
-#      image ships with the committed backend/build_info.json PLACEHOLDER
-#      ("sha": null), not the real commit SHA. deploy-fly.yml's "Verify the
-#      deployed build SHA is serving" check would therefore always fail
-#      against this image — that check is deliberately OMITTED below rather
-#      than left in to fail every run. Closing this gap needs a stamp step
-#      added to ci.yml's docker-image-scan job, out of scope for this PR
-#      (that job is the shared, always-on CVE-scan/publish path — changing it
-#      has a different blast radius than this opt-in-only workflow).
+#   2. REGISTRY AUTH (open, upgraded from "unverified" to "likely broken as
+#      written"): researched 2026-09-20 — multiple independent reports
+#      (Fly community thread "deploy from private package with github
+#      actions", flyctl issues #75/#1100/#362) describe `flyctl deploy
+#      --image` returning `401 Unauthorized` pulling a PRIVATE ghcr.io image
+#      even with `docker login ghcr.io` already done — the exact setup below.
+#      The one consistently-reported working fix is making the GHCR package
+#      PUBLIC. That is a product/visibility decision (the image is
+#      application code, not secrets — this repo's Dockerfile never bakes
+#      secrets in — but "publicly downloadable backend image" is still a
+#      call this file shouldn't make unilaterally), so it is NOT implemented
+#      here. Needs an explicit decision: make `ghcr.io/<repo>/spinr-backend`
+#      public, find another auth mechanism, or accept this path may not work
+#      as-is and needs redesign (e.g. push to Fly's own registry instead).
+#   3. BUILD PROVENANCE (CLOSED 2026-09-20): ci.yml's docker-image-scan job
+#      now has its own "Stamp build info" step (mirrors deploy-fly.yml's),
+#      so the GHCR image carries a real commit SHA instead of the committed
+#      placeholder. The "Verify the deployed build SHA is serving" step
+#      below is re-enabled accordingly — still pending confirmation on the
+#      first real end-to-end dispatch, same as gaps #1 and #2.
 #
 # Run this manually, watch it end-to-end, and only then decide whether to
 # promote it to replace deploy-fly.yml's push trigger. See ACTION_ITEMS.md
@@ -67,6 +71,9 @@ jobs:
     env:
       FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+      # Optional: enables "Verify the deployed build SHA is serving" below,
+      # same as deploy-fly.yml.
+      METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -107,8 +114,10 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Best-effort GHCR pull auth for the later `flyctl deploy --image` step
-      # (gap #2 above — unverified whether flyctl actually consults this).
+      # GHCR pull auth for the later `flyctl deploy --image` step. Gap #2
+      # above: real-world reports show this alone may not be enough for a
+      # PRIVATE image (flyctl still 401s) — this step is necessary but may
+      # not be sufficient until that gap is resolved.
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -150,9 +159,9 @@ jobs:
 
       # No "Stamp build info" step here (unlike deploy-fly.yml) — there is no
       # build, so there is nothing to stamp into. The image's baked-in
-      # build_info.json is whatever ci.yml's docker-image-scan job produced,
-      # which is the committed placeholder (gap #3 above) until that job is
-      # changed to stamp it too.
+      # build_info.json now comes from ci.yml's docker-image-scan job's own
+      # "Stamp build info" step (gap #3, closed), so it already carries the
+      # real commit SHA by the time it reaches this workflow.
       - name: Deploy signed image to Fly.io
         working-directory: backend
         run: flyctl deploy --image "${IMAGE_REF}" --config fly.toml --ha=false
@@ -184,9 +193,28 @@ jobs:
           echo "Inspect with: flyctl status -a spinr-backend-yyz && flyctl logs -a spinr-backend-yyz"
           exit 1
 
-      # No "Verify the deployed build SHA is serving" step here — gap #3
-      # above means it would always fail against this image. Re-add once
-      # ci.yml's docker-image-scan job stamps build_info.json.
-      - name: Note on build-SHA verification
+      # A green /ready only proves *something* is serving. This proves it is
+      # THIS image: /deploy-info returns the build stamp ci.yml's
+      # docker-image-scan job wrote (gap #3, closed). Skipped (not failed)
+      # when either optional secret is absent. Compares against the image's
+      # own tag SHA (steps.image.outputs.tag), not GITHUB_SHA — this
+      # workflow can deploy a different commit's image than the one that
+      # triggered the run, via the image_sha input.
+      - name: Verify the deployed build SHA is serving
+        if: ${{ env.FLY_HEALTH_URL != '' && env.METRICS_AUTH_TOKEN != '' }}
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
-          echo "::notice::Skipped build-SHA verification (backend/utils/build_info.py) — the GHCR image built by ci.yml's docker-image-scan job does not carry a real build_info.json stamp yet. See this workflow's header comment (gap #3) and ACTION_ITEMS.md."
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            running=$(curl -sf --max-time 5 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN}" \
+              "${FLY_HEALTH_URL}/deploy-info" | jq -r '.build.sha // empty' 2>/dev/null || true)
+            echo "  attempt ${i}/12 → running sha: ${running:-<none>}"
+            if [ "${running}" = "${IMAGE_TAG}" ]; then
+              echo "Fly is serving ${IMAGE_TAG}."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Stale build serving::Fly /deploy-info reports sha '${running:-<none>}', expected ${IMAGE_TAG}. Inspect with: flyctl releases -a ${FLY_APP}"
+          exit 1

@@ -1113,6 +1113,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # ACTION_ITEMS.md C121 gap #3: without this, the image this job builds
+      # carries the committed backend/build_info.json PLACEHOLDER ("sha":
+      # null) instead of a real commit stamp -- deploy-fly.yml's own "Verify
+      # the deployed build SHA is serving" check (backend/utils/build_info.py)
+      # would always fail against it. Mirrors deploy-fly.yml's own stamp step
+      # exactly, except "provider" is "ghcr": this job never deploys anywhere
+      # itself, it only builds+scans+publishes to GHCR -- a downstream
+      # consumer (e.g. deploy-fly-signed-image.yml) is what actually deploys
+      # the image, if and when it does.
+      - name: Stamp build info
+        run: |
+          printf '{"sha":"%s","ref":"%s","built_at":"%s","provider":"ghcr"}\n' \
+            "${GITHUB_SHA}" "${GITHUB_REF}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > backend/build_info.json
+          cat backend/build_info.json
+
       - name: Build backend Docker image
         run: |
           docker build \

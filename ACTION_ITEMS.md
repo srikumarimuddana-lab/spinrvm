@@ -24040,69 +24040,84 @@ how much they de-risk a public launch._
 
 ### B43. `dashboard-settings` visual-regression baseline is stale on `main` — merge-blocking on every admin-dashboard PR regardless of what it touches (CR-2026-091)
 
-- [ ] **Status: OPEN, filed 2026-09-20.** Regression of B38 (closed
+- [x] **Status: RESOLVED 2026-09-20.** Regression of B38 (closed
   2026-09-04) — the gate B38 seeded and made merge-blocking is working
-  exactly as designed; one of its 6 baselines has simply gone stale since.
-- **What's wrong:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
-  `dashboard-settings matches baseline` test fails deterministically on
+  exactly as designed; one of its 6 baselines had simply gone stale since.
+  Baseline re-seeded and committed; see Resolution below.
+- **What was wrong:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
+  `dashboard-settings matches baseline` test failed deterministically on
   `main`'s own current tip (confirmed on commit `fee2d3cf4`, an unrelated
   App Check PR #5506, run
   https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/35480557122/job/106001847560):
   `Expected an image 1280px by 2224px, received 1280px by 2309px. 163564
-  pixels (ratio 0.06 of all image pixels) are different.` Reproduces
+  pixels (ratio 0.06 of all image pixels) are different.` Reproduced
   identically across all 3 Playwright retries, and again on an unrelated
   PR (#5518, a maplibre-gl CVE upgrade that never touches
   `src/app/dashboard/settings/`) — ruling out anything specific to either
   PR's own diff.
-- **Root cause:** the baseline (last re-seeded at #4992, part of B38's
-  original seeding pass) is stale relative to content added to the
-  settings page's default-visible view since then. At least two merged
-  commits grew the page without re-seeding: `dfd0320a0` (#5288, added a
-  "Stale in-progress ride alert" Switch to the Operations tab's "Kill
-  Switches" card) and `e93dc0b45` (added a new "Driver tracking rollout"
-  Card). A third commit in the same window, `9cc96365d` (#5285), explicitly
-  checked and confirmed its own change did **not** affect this baseline
-  (it landed on a non-default tab the spec never clicks into) — not
-  implicated here. The ~85px height growth (2224px → 2309px) is consistent
-  with one or both of the two implicated commits.
-- **Impact:** every open and future admin-dashboard PR shows a red,
+- **Root cause — corrected 2026-09-20:** this CR's original filing (below)
+  misattributed the growth to `dfd0320a0` (#5288, "Stale in-progress ride
+  alert" Switch) and `e93dc0b45` ("Driver tracking rollout" Card). Both
+  commits are real, but **both land in the settings page's `operations`
+  `TabsContent`** (`admin-dashboard/src/app/dashboard/settings/page.tsx`
+  line ~1066+) — a non-default tab the spec never clicks into — so neither
+  could have produced this diff; the original filing never actually
+  diffed the two baseline images to check. Once the real re-seed artifact
+  was generated and compared pixel-for-pixel against the committed
+  baseline, the only visible change was one new card, **"PostHog session
+  replay,"** inserted into the default `integrations` tab between "Stripe
+  Payments" and "Telephony (Twilio)" — added by `4b1435c19` ("feat(replay):
+  add dark-launched PostHog session replay beside LogRocket," 2026-09-16).
+  That one card fully accounts for the 85px growth (2224px → 2309px); nothing
+  else in the image differs. `9cc96365d` (#5285) was correctly ruled out
+  in the original filing and remains not implicated.
+- **Impact:** every open and future admin-dashboard PR was showing a red,
   merge-blocking `Visual regression (Playwright)` check regardless of what
-  it actually changes, per CLAUDE.md §6's own description of this gate as
-  "fully active and merge-blocking." Left unaddressed, this erodes trust
-  in the gate exactly the way CLAUDE.md §6 was written to prevent — every
-  PR author has to independently rediscover this same root cause.
-- **Risk & impact on existing functionality:** none — this is a
-  test-fixture-only fix (regenerating one screenshot). No application
-  code, data, or other CI job is touched.
-- **Blocker (same shape as B38's original one):** re-seeding requires
-  running `update-visual-baselines.yml`, which needs Actions-dispatch
-  access this session's GitHub integration does not have (per CLAUDE.md
-  §6's documented limitation, carried over unchanged from B38).
-- **Action:**
-  1. A human (or an account with Actions-dispatch access) runs
-     `update-visual-baselines.yml` against `main`.
-  2. Review the resulting `dashboard-settings` baseline PNG diff
-     (old vs. new) to confirm the only change is the two additive UI
-     elements named above, not something unexpected.
-  3. Commit the updated PNG directly (test-fixture-only, `type: trivial`
-     per the PR template).
-  4. Confirm `Visual regression (Playwright)` goes green on `main`
-     afterward.
+  it actually changed, per CLAUDE.md §6's own description of this gate as
+  "fully active and merge-blocking." Resolved — see below.
+- **Risk & impact on existing functionality:** none — this was a
+  test-fixture-only fix (regenerated one screenshot). No application
+  code, data, or other CI job was touched.
+- **Resolution:** the user ran `update-visual-baselines.yml` against `main`
+  manually (Actions-dispatch access was requested for this session but not
+  granted — see Blocker below, unchanged) and shared the resulting
+  6-baseline artifact. All 6 new PNGs were sha256-compared against the
+  committed baselines: `login`, `dashboard-home`, `dashboard-drivers`,
+  `dashboard-monitoring`, and `dashboard-rides` came back **byte-identical**
+  (no drift on any of them — closes the "What was NOT verified" gap from
+  the original filing). Only `dashboard-settings` differed. The new PNG
+  was reviewed side-by-side against the old one (visually, not just by
+  dimensions) before committing, confirming the single-card diff described
+  above and ruling out anything unexpected. Updated PNG committed to
+  `admin-dashboard/e2e/visual-regression.spec.ts-snapshots/dashboard-settings-visual-regression-linux.png`.
+- **Blocker hit while resolving (informational, not blocking — resolved via
+  the user's own access instead):** this session's GitHub App integration
+  attempted `workflow_dispatch` on `update-visual-baselines.yml` directly
+  and got `403 Resource not accessible by integration` — confirming
+  CLAUDE.md §6's documented Actions-dispatch limitation still holds. The
+  user was walked through the scoped-approval path (App installation
+  permissions, repo-only) but chose to run the workflow manually instead
+  for this one-time need, which is the lower-blast-radius option per this
+  repo's own access-scoping preference.
 - **Files:** `admin-dashboard/e2e/visual-regression.spec.ts-snapshots/dashboard-settings-visual-regression-linux.png`
-  (baseline to regenerate). No other files.
-- **What was NOT verified:** whether any other of the 6 seeded baselines
-  (`login`, `dashboard-home`, `dashboard-drivers`, `dashboard-monitoring`,
-  `dashboard-rides`) have similarly drifted — only `dashboard-settings`
-  was confirmed failing in the runs checked. A full re-run against all 6
-  would be needed to rule out a second stale baseline.
+  (baseline regenerated). No other files — the other 5 baselines were left
+  untouched since they verified byte-identical.
+- **What was NOT verified:** the regenerated baseline was produced by
+  GitHub Actions' own `update-visual-baselines.yml` run (correct Chromium
+  build per that workflow's own warning against locally-generated
+  baselines), reviewed pixel-diff-by-eye rather than with an automated
+  diff tool — sufficient here since the whole-image size difference (2224
+  vs 2309px) is large and the only visible change is one clearly-bounded
+  card, but a subtler simultaneous regression elsewhere on the same page
+  could in principle have been missed by eye. `Visual regression
+  (Playwright)` going green on `main`'s next run was not directly observed
+  in this session (would require a subsequent push to confirm) — flagged
+  here rather than assumed.
 - **Tracking:** [CR-2026-091 / issue #5519](https://github.com/srikumarimuddana-lab/spinrvm/issues/5519)
-  (formal Change Request, pending approval per `.github/ISSUE_TEMPLATE/ci_change_request.yml`);
-  standing-down comment on the PR that surfaced it:
+  — close alongside this entry, with the root-cause correction added as a
+  comment rather than editing the original filing's text (issue history is
+  append-only in spirit); standing-down comment on the PR that surfaced it:
   https://github.com/srikumarimuddana-lab/spinrvm/pull/5518#issuecomment-5747135585
-- **Acceptance:** `update-visual-baselines.yml` run against `main`,
-  `dashboard-settings` baseline PNG diff reviewed and confirmed to match
-  only the two known additive UI changes, updated PNG committed, and
-  `Visual regression (Playwright)` green on `main`'s next push.
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
 

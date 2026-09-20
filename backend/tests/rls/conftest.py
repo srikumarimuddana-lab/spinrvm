@@ -573,6 +573,17 @@ def pg_conn(pg_test_dbname):
     # corporate_accounts) with an explicit USING (false) policy.
     cur.execute((migrations_dir / "430_admin_role_rls_unreachable_service_role_only.sql").read_text())
 
+    # Migration 431: drops an out-of-band "Admin full access for corporate
+    # accounts" policy that no migration file (including 17/416 above) ever
+    # created -- it only ever existed in production, via manual/out-of-band
+    # drift. This harness never had that policy to begin with (its schema is
+    # built entirely by replaying migration files), so applying 431 here is a
+    # safe no-op DROP POLICY IF EXISTS -- included so the harness keeps
+    # applying the real, full migration sequence. The actual regression test
+    # for 431's fix seeds the drifted policy manually first; see
+    # test_corporate_accounts_super_admin_fix.py.
+    cur.execute((migrations_dir / "431_drop_stray_corporate_accounts_admin_policy.sql").read_text())
+
     # --- stripe_disputes (migration 88) / stripe_orphan_refunds (migration
     # 254): admin-only read tables, verbatim. Unlike every other
     # admin-role-check applied in this harness, these two policies check

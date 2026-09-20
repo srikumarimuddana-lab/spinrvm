@@ -26222,10 +26222,11 @@ how much they de-risk a public launch._
      no session in this repo's agent integration has. The code fix (seeding a fixture driver so
      the baseline actually includes a marker) shipped 2026-09-08; only the baseline PNG itself
      is blocked.
-  4. **C97 #1** — ops check: confirm `FIREBASE_SERVICE_ACCOUNT_JSON` is actually set/valid on
-     both Fly.io and Railway. Costs nothing once someone has CLI/dashboard access; itself
-     blocked on **C99** (no Fly/Railway CLI access, Firebase MCP server can't authenticate from
-     this environment either).
+  4. ~~**C97 #1**~~ — **RESOLVED**, see the 2026-09-20 update below. (Was: ops check to confirm
+     `FIREBASE_SERVICE_ACCOUNT_JSON` is actually set/valid on both Fly.io and Railway. C97's own
+     entry already closed this for Fly on 2026-09-14 via a scoped Fly API credential a different
+     session had; the Railway half closed today via a presence-only Railway API path this
+     entry's own 2026-09-20 update originally said didn't exist.)
   5. **C97 #5** — a real compiled iOS build, to confirm the `UIBackgroundModes` finding
      (flagged SUSPECTED, unconfirmed) for driver-app push delivery in the backgrounded state.
 - **New tracking item added by this consolidation (previously had no entry at all):**
@@ -26275,6 +26276,62 @@ how much they de-risk a public launch._
 - **Owner / follow-up:** unassigned — needs the user to name a person. This entry exists so the
   next audit of this surface finds one open item with a clear ask, not five (now six)
   independently-discovered symptoms of the same access gap.
+- **Update (2026-09-20):** partial, real change to the root cause — Railway MCP access to the
+  actual `spinrvm` production service (project `cooperative-harmony`, Railway workspace "My
+  Projects") is now available in-session, where no prior session had any Fly.io/Railway
+  CLI/dashboard access at all. This does **not** close item 4 (C97 #1) or this entry overall:
+  attempting to actually read `FIREBASE_SERVICE_ACCOUNT_JSON`'s value via
+  `mcp__Railway__list-variables` was denied outright by this session's own safety classifier
+  ("Credential Materialization") — the tool can only return env vars in plaintext, with no
+  presence-only/redacted mode, so confirming "is it set" and reading the secret are the same
+  action from this session's tooling perspective. Fly.io access, physical
+  Android/iOS/Android-Auto-DHU devices, and GitHub Actions-dispatch remain completely
+  unavailable, unchanged from this entry's original filing. Whoever is eventually named as
+  device-verification owner (see Action item 2 above) should know Railway dashboard/CLI access
+  to this specific project is real and reachable now — only the credential-read step needs a
+  human to actually look at the value.
+- **Update (2026-09-20, later same day) — re-checked the whole gap fresh, three real changes:**
+  1. **C97 #1 (Railway half) now genuinely resolved, without touching the secret's value.**
+     `mcp__Railway__get-service-config` (a different tool from the blocked
+     `mcp__Railway__list-variables`) returns a `variableNames` array — variable **names only, no
+     values** — which is exactly the presence-only/redacted mode the update above said didn't
+     exist. Confirmed `FIREBASE_SERVICE_ACCOUNT_JSON` is present in that list for the `spinrvm`
+     service's `production` environment. Combined with C97's own 2026-09-14 addendum (Fly side
+     already confirmed working, via a different session's scoped credential — see next point),
+     both halves of C97 #1 are now closed; item 4 above is struck through accordingly.
+  2. **Correction to this entry's own "Fly.io access... remain completely unavailable" line
+     above: that was wrong, not just outdated.** C97's own 2026-09-14 addendum (already in this
+     file, missed when writing the update above) shows a prior session successfully querying and
+     fixing the Fly-hosted Firebase credential via Fly's GraphQL/Machines API, authenticated with
+     "a scoped Fly API credential added to this Claude Code environment" (that session's own
+     wording) — an app-scoped deploy token, deliberately narrow, not an org-wide one. So Fly
+     access is not a structural impossibility, it's **environment-provisioning-dependent**: this
+     session has none (confirmed via `ListConnectors` — no Fly connector installed at the account
+     level at all, unlike Railway/Supabase/Vercel/Sentry/Stripe/Twilio/Expo/Figma, which are),
+     but a session can apparently be granted one, scoped to a single app, on request. Restated
+     as a resourcing note in Action item 2 below rather than a claimed permanent block.
+  3. **GitHub Actions-dispatch: re-confirmed blocked, without re-triggering a real workflow to
+     test it.** Did not re-attempt dispatching `update-visual-baselines.yml` (that has a real
+     side effect — it would actually re-run CI and touch baseline files — so re-testing "just to
+     check" isn't appropriate for a status check). Instead relying on same-day evidence already
+     on file: C122 (filed today, 2026-09-20) records `rerun_failed_jobs` via this exact GitHub
+     MCP integration returning `403 Resource not accessible by integration` on an unrelated PR.
+     Same integration, same underlying `actions:write`-class permission — sufficiently current
+     to treat as still blocked without a fresh live test.
+  4. **Also clarified, not previously recorded:** the Railway access above actually spans two
+     projects, not one — `cooperative-harmony` (the `spinrvm` backend service + 2 Redis
+     services) and `beautiful-harmony` (`osrm-backend` + `TilesServer`). Verified both are
+     legitimately Spinr-owned infrastructure, not scope creep into an unrelated project:
+     `deploy/osrm/README.md` and `deploy/tiles/README.md` both describe these exact services as
+     part of this repo's own self-hosted routing/map-tile stack (`backend/utils/route_distance.py`
+     calls the OSRM one directly). Worth recording given this session's own user-preference
+     guardrail about access being project-scoped, not blanket — this is project-scoped, just to
+     two Railway projects that are both actually this project's infra.
+  - **Net effect on this entry's overall status:** still OPEN — items 1 (Android device), 2
+    (AA DHU/device), 3 (Actions-dispatch for the visual-regression baseline), 5 (iOS build), and
+    6 (iOS Live Activity device confirmation) remain fully blocked, unchanged. Only item 4 is now
+    closed. Not closing this entry itself; five of six sub-items are still exactly where they
+    were.
 - **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
   carSurface.tsx`, `shared/components/CarMarker.tsx`, `admin-dashboard/e2e/visual-regression.
   spec.ts`, `.github/workflows/update-visual-baselines.yml`, `backend/core/security.py`,

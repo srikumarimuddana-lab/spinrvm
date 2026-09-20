@@ -14180,6 +14180,42 @@ record of what was assumed vs. what was actually true</summary>
   is to delete the PR-review-handling section rather than leave it describing
   a workflow nobody runs — the same cleanup done for the Claude reviewer in
   #3096.
+- **Correction (2026-09-20) — this is not a "stall, cause still findable," it's
+  effectively dead with one unexplained one-day exception.** Re-verified fresh
+  rather than trusting the 2026-08-01 snapshot above, ahead of drafting a C9/C7
+  decision brief for the budget owner:
+  - `commenter:app/chatgpt-codex-connector created:>=2026-08-01` → **3** results
+    total, all three **created 2026-09-16** (#5480, #5481, #5483). Zero in all
+    of August, zero from 2026-09-17 through today (checked explicitly:
+    `created:>=2026-09-17` → 0).
+  - Volume in the same window: `is:merged created:>=2026-08-01` → **1,548**
+    merged PRs (as of this check; ~1,580 created, merged or not). So Codex
+    reviewed **3 out of ~1,550+ PRs merged over 7 weeks** — not a stall
+    recovering, a single one-day blip bracketed by silence on both sides.
+  - Control query re-run to rule out a search-syntax false negative (the
+    original entry's own concern): `commenter:app/github-actions
+    created:>=2026-08-01` → 1,580. The search mechanism works; Codex's 3 is
+    real signal.
+  - **Revised framing for whoever gets org/Codex-dashboard access to
+    investigate:** don't look for a clean on/off switch flipped around
+    July 29–30 and left off. Look for whatever happened specifically on
+    2026-09-16 that let it fire 3 times and then stopped again — a billing/
+    quota flap, a transient token refresh, or a config change that partially
+    reverted are all more consistent with this shape than a simple outage.
+  - **C7 re-verified the same day, unchanged:** `claude-review.yml`'s own job
+    log on this session's PR #5581 (run resolved 2026-09-20) shows
+    `HAS_ANTHROPIC_KEY: false` and a clean skip — the 2026-08-01 decision to
+    leave the key unset is still in effect, not silently reversed or drifted.
+  - **Net, corrected:** zero effective automated PR review from either vendor
+    across ~1,550+ PRs since the last time this was measured, with no fix
+    landed and no config change on the Claude-review side. The decision this
+    entry and C7 describe is still fully open — see the 2026-09-20 decision
+    brief (session `session_014H5KG38UmphVxPYyvY5kxn`) for the options
+    scored against this corrected picture, including that C7's old
+    "~50-80 runs/day" cost estimate is now stale in the budget owner's favor:
+    `synchronize` was already dropped and `paths-ignore` added for docs
+    before this correction, so real volume is closer to ~1 run per non-doc
+    PR (~25-30/day at current merge volume), not 50-80.
 
 ### C10. No reconciliation job for `stripe_events` rows stuck at `processed_at IS NULL`
 - [x] **Status:** closed 2026-08-01, same day it was filed — found while

@@ -178,7 +178,70 @@ def _split_sql_statements(sql: str) -> list[str]:
     if tail:
         statements.append(tail)
 
-    return [s.strip() for s in statements if s.strip()]
+    return _merge_explicit_transaction_blocks([s.strip() for s in statements if s.strip()])
+
+
+# Transaction-control statements that can open/close an explicit BEGIN...COMMIT
+# wrapper. Matched against a whole, already-split statement (case-insensitive)
+# -- never a substring -- so a PL/pgSQL `BEGIN`/`END` inside a dollar-quoted
+# function body (which the state machine above never splits out on its own)
+# can't accidentally match.
+_TXN_OPEN = {"BEGIN", "BEGIN TRANSACTION", "BEGIN WORK", "START TRANSACTION"}
+_TXN_CLOSE = {"COMMIT", "COMMIT TRANSACTION", "COMMIT WORK", "END"}
+
+
+def _merge_explicit_transaction_blocks(statements: list[str]) -> list[str]:
+    """Fold an explicit top-level `BEGIN; ...; COMMIT;` wrapper into one statement.
+
+    Lexical gap this closes: a migration may wrap only *part* of itself (e.g.
+    a `SET LOCAL lock_timeout` scoped over a couple of `ALTER TABLE`
+    statements) in an explicit transaction, while a later `CREATE/DROP INDEX
+    CONCURRENTLY` statement is deliberately left outside it, since
+    CONCURRENTLY can never run inside a transaction block. `_apply_one`
+    detects that CONCURRENTLY and routes the *whole file* through
+    `_apply_one_autocommit`, which executes each split statement in its own
+    `cur.execute()` call. Left unmerged, the literal "BEGIN" and "COMMIT"
+    statements would (a) be handed to Postgres as bare, meaningless
+    statements the test suite (rightly) treats as a splitter bug, and worse,
+    (b) silently discard the migration's own protection: a `SET LOCAL`
+    executed as its own standalone autocommit call loses scope the instant
+    that call returns, so the `ALTER TABLE` statements after it would no
+    longer be bounded by the lock_timeout the migration author wrote them to
+    have.
+
+    The fix folds everything between the BEGIN and its matching COMMIT into
+    one statement, joined with the original `;` separators, and drops the
+    BEGIN/COMMIT keywords themselves. Postgres already treats a multi-command
+    query string sent in one call as an implicit single transaction unless
+    the string itself contains explicit BEGIN/COMMIT -- see the "Multiple
+    Statements in a Simple Query" behavior in the Postgres protocol docs --
+    so sending the interior as one `cur.execute()` call reproduces exactly
+    the atomicity the migration asked for, without ever hitting Postgres with
+    a bare "BEGIN"/"COMMIT". A CONCURRENTLY statement placed *outside* this
+    span (before BEGIN or after COMMIT, as it must be) is untouched and keeps
+    running as its own individual autocommit statement.
+    """
+    merged: list[str] = []
+    i, n = 0, len(statements)
+    while i < n:
+        if statements[i].strip().upper() in _TXN_OPEN:
+            j = i + 1
+            inner: list[str] = []
+            while j < n and statements[j].strip().upper() not in _TXN_CLOSE:
+                inner.append(statements[j])
+                j += 1
+            if j < n:  # found a matching close; fold the span
+                if inner:
+                    merged.append("; ".join(inner))
+                i = j + 1
+                continue
+            # No matching COMMIT/END found (malformed/truncated transaction) --
+            # leave the BEGIN as-is rather than silently dropping it; the
+            # existing keyword-allowlist test will flag it loudly instead of
+            # this function guessing at intent.
+        merged.append(statements[i])
+        i += 1
+    return merged
 
 
 def _checksum(path: Path) -> str:

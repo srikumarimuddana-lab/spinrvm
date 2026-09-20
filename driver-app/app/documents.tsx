@@ -282,7 +282,7 @@ export default function DocumentsScreen() {
 
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}>
                 <View style={styles.infoBox}>
-                    <Ionicons name="information-circle-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                    <Ionicons name="information-circle-outline" size={20} color={colors.primary} style={{ marginRight: SPACING.sm }} />
                     <Text style={styles.infoText}>
                         Keep your documents up to date to maintain your driver status.
                     </Text>
@@ -296,7 +296,7 @@ export default function DocumentsScreen() {
                     status logic itself. */}
                 {showLegacyDocsGapNotice && (
                     <View style={styles.legacyInfoBox}>
-                        <Ionicons name="time-outline" size={20} color={colors.textDim} style={{ marginRight: 8 }} />
+                        <Ionicons name="time-outline" size={20} color={colors.textDim} style={{ marginRight: SPACING.sm }} />
                         <Text style={styles.legacyInfoText}>
                             Your documents from your previous Spinr account weren&apos;t part of
                             this transfer — that&apos;s a data-migration gap, not a sign

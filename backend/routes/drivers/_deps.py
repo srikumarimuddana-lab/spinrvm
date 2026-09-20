@@ -80,6 +80,7 @@ try:
         dsar_export_limit,
         heatmap_read_limit,
         location_update_limit,
+        ride_read_limit,
         tax_doc_email_limit,
     )
     from ...utils.referral_terms import (
@@ -138,6 +139,7 @@ except ImportError:
         dsar_export_limit,
         heatmap_read_limit,
         location_update_limit,
+        ride_read_limit,
         tax_doc_email_limit,
     )
     from utils.referral_terms import (  # type: ignore

@@ -27159,7 +27159,28 @@ how much they de-risk a public launch._
   (`admin_debug_ride_offer`, `_stringify_fcm`).
 
 ### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
-- [ ] **Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382,
+- [x] **Status:** CLOSED (2026-09-20). All three endpoints (`get_active_ride`,
+  `get_ride_offer`, `get_ride_history`) now carry `@ride_read_limit` (the same
+  `120/minute` limiter `routes/rides/queries.py` already uses for the
+  rider-facing equivalents), applied in one pass per this entry's own
+  recommendation rather than only to the newest endpoint. `ride_read_limit`
+  was already defined in `utils/rate_limiter.py` — it just needed re-exporting
+  through `routes/drivers/_deps.py`'s existing dual-import block (this
+  entry's "lives in `routes/rides/_deps.py`" note was about where it's
+  *imported from* in that package, not where it's *defined*; the underlying
+  object is shared). Each endpoint gained `request: Request = None`
+  (`AsyncLimiter.limit()` requires a `request`/`websocket` parameter on the
+  decorated function's signature), matching `routes/rides/queries.py`'s
+  exact existing pattern. New regression test
+  `backend/tests/test_driver_ride_reads_rate_limit.py` pins that all three
+  endpoints are decorated and separately proves the underlying `AsyncLimiter`
+  mechanism raises `RateLimitExceeded` once its limit is hit. Blast-radius
+  grep confirmed `backend/ai/tools_rides.py`'s same-named
+  `get_active_ride`/`get_ride_history` functions are unrelated (different
+  signature, no `request` param, not the same code). 436/436 targeted tests
+  pass; `ruff check`/`ruff format --check` clean. See
+  `docs/change-log/2026-09-20-c114-driver-ride-reads-rate-limit.md`.
+- **(historical) Status:** OPEN. Found by `spinr-security-auditor`'s adversarial review of PR #5382,
   while auditing the new `GET /rides/{ride_id}/offer` endpoint added there.
 - **Issue/gap:** none of `get_active_ride`, `get_ride_history`, or the new `get_ride_offer`
   (all in `backend/routes/drivers/ride_reads.py`) carry a rate-limit decorator, unlike

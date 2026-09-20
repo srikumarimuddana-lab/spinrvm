@@ -40,7 +40,14 @@ against current `main` in multiple modes, never reproduced. Conclusion:
 the code has nothing to fix today; closing this out as a code defect
 would be guessing. Left open with instructions to watch for recurrence
 rather than treated as solved, since the original CI failure was real
-and unexplained, not disproven. Prior: C122 ADDED (open): `locationIntegrity.test.ts`'s
+and unexplained, not disproven. Prior: C120 CLOSED: the driver-app authStore
+logout()/setTokens() race (deadlock + missed server-side revoke) was
+confirmed real, bisected to a 2026-09-16 regression, and found already
+fixed on `main` by PRs #5524/#5526/#5530 (CR-2026-035, issue #5516) before
+this item was picked up for investigation — verified via 8 clean local
+test runs against current `main` plus a direct trace of the fix commits'
+root-cause writeup against the current code. No code change needed here;
+see C120's entry for full detail. Prior: C122 ADDED (open): `locationIntegrity.test.ts`'s
 mock-GPS-detection test failed in CI on PR #5538 (an infra-only diff) but
 passed locally on the identical commit — filed as a suspected flake since
 re-running to confirm hit a 403 (no permission). Prior: C121 ADDED (open, partial): Fly deploys a
@@ -19520,6 +19527,50 @@ how much they de-risk a public launch._
   billing checks (all need a human to create the underlying API
   credentials), GCP Billing Budgets coverage for Google Maps/Firebase, and
   E4 itself (still no live external synthetic monitor).
+- [ ] **E14. Stray `origin/staging` branch has unrelated git history to `main`
+  — not the E1 staging environment, needs a human decision** — found
+  2026-09-20 while trying to port a CI test fix (PR #5533, the
+  scheduled-timing-guards frozen-clock fix) onto `staging` at the user's
+  request. A branch literally named `staging` already exists on
+  `origin`, but it is **not** the staging environment E1 describes:
+  - `git merge-base origin/staging origin/main` returns nothing and
+    `git merge` refuses with "refusing to merge unrelated histories" —
+    the two branches do not share a common ancestor at all.
+  - `origin/staging` has **7,284 commits**, its own distinct "Initial
+    commit," and was last updated **2026-09-04**. `origin/main` has only
+    **217 commits** total, tracing back to a *different* "Initial commit."
+    Neither is a subset, superset, or lagging copy of the other — they are
+    two independent codebase histories that happen to collide on the
+    branch name `staging`.
+  - This directly contradicts E1's own scaffolding comment
+    (`.github/workflows/deploy-backend-staging.yml`'s header: *"the
+    `staging` branch ... does not exist yet either"*) and
+    `docs/runbooks/staging-environment.md` (*"Status: scaffolding only,
+    not live. Nothing described here has been provisioned yet"*). E1's
+    design assumes a real `staging` branch will eventually be cut fresh
+    from `main` once the manual Fly/Supabase/secrets setup is done — this
+    existing branch is not that, and using it as-is would be actively
+    wrong (any attempt to reconcile it with `main` requires forcing
+    `--allow-unrelated-histories` and manually resolving every file
+    across two unrelated codebases — not a safe or meaningful operation).
+  - **No action taken on the branch itself** — confirmed via
+    `AskUserQuestion` with the user that this needed a human decision
+    rather than a forced merge; this entry is that decision request.
+  - **Needs a human to**: (1) confirm whether `origin/staging` is a
+    genuine leftover/import artifact (e.g. from a pre-history-rewrite
+    copy of the repo, or an unrelated project that once shared this repo
+    name) with no current purpose, and if so (2) either delete it or
+    rename it out of the way (e.g. `archive/staging-unrelated-history`)
+    so the name `staging` is free for E1's real branch once that
+    environment is actually provisioned. Until this is resolved, do not
+    push, merge, or cherry-pick anything into `origin/staging` — nothing
+    currently on it needs to end up in `main`'s lineage, and nothing on
+    `main` can be safely reconciled onto it in place.
+  - **Once E1's real infra exists**: cut a fresh `staging` branch directly
+    from `main`'s tip at that time (not from today's stray branch), and
+    only then does a recurring/periodic "keep `staging` in sync with
+    `main`" task make sense — that is future work gated on E1, not
+    something to build today against the current stray branch.
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated
@@ -27465,42 +27516,76 @@ as evidence that the thing it configures exists.
 
 ### C120. `driver-app/__tests__/store/authStore.refreshRace.test.ts` — 2 of its rotation-race tests are red on `main`'s own tip
 
-- [ ] **Status: OPEN, filed 2026-09-20.**
-- **What's wrong:** `driver-app-test` fails on `main`'s current tip
-  (commit `ea3c6be9`, PR #5518's merge) with 2 of the suite's own
-  concurrency tests failing:
-  - `does not let delayed go-offline cleanup wipe a new login` — times out
-    at Jest's default 15000ms.
-  - `revokes persisted background credentials even if foreground memory
-    has no access token` — `expect(mockPost).toHaveBeenCalledWith('/auth/logout',
-    {refresh_token: 'background-refresh'})`, actual call count 0.
+- [x] **Status: CLOSED 2026-09-20 — already fixed on `main` by other work before this item was picked up. No further action needed.**
+- **What was wrong (confirmed real, not a flake):** `driver-app-test` failed
+  on `main`'s tip at the time (commit `ea3c6be9`, PR #5518's merge — CI run
+  `35488765211`, job `106020014859`, 2026-09-20 04:20 UTC) with 3
+  deterministically-failing tests across 2 files, all downstream of the
+  same root cause in `shared/store/authStore.ts`:
+  - `authStore.refreshRace.test.ts › does not let delayed go-offline
+    cleanup wipe a new login` — timed out at Jest's default 15000ms
+    (a real deadlock, not a slow test).
+  - `authStore.refreshRace.test.ts › revokes persisted background
+    credentials even if foreground memory has no access token` —
+    `mockPost` never called (0 calls) — a real missed server-side revoke.
+  - `driverProfileScreen.test.tsx › handleLogoutAll confirms then signs
+    out of every device and routes to /login` — `router.replace('/login')`
+    never called — downstream of the same `logout()` deadlock.
   Reproduced identically on an unrelated PR (#5525, a pure
   `.github/workflows/`/`dependabot.yml`/`deploy/backend-required-env.txt`
-  change that touches zero driver-app files) — ruling out that PR's diff
-  as the cause.
-- **What the test actually covers:** `authStore.refreshTokens — rotation-race
-  recovery` is a suite specifically testing async ordering between
-  `logout()`, `refreshTokens()`, and `setTokens()` racing each other, using
-  manually-controlled promise resolution (`let finish!: () => void; ...
-  new Promise(resolve => { finish = resolve; })`) to force specific
-  interleavings. Both failing tests are in that same manually-sequenced
-  style, so this could be either a genuine, deterministic regression in
-  the auth store's real race-handling logic, or a timing assumption in the
-  test itself that no longer holds — not yet determined which.
-- **Not investigated further here** — found while driving an unrelated
-  CI/CD audit PR (#5525) to green; this needs its own session with the
-  time to actually read `authStore.ts`'s current `logout()`/`refreshTokens()`
-  interleaving logic against what the test expects, given this is
-  auth/session-state code (CLAUDE.md: treat with extra caution).
-- **Action:** run `npx jest __tests__/store/authStore.refreshRace.test.ts`
-  locally against current `main`, confirm which of the two failures is
-  reproducible standalone (not just in the full suite, in case of
-  cross-test state leakage), then read the corresponding
-  `logout()`/`refreshTokens()` code path in `driver-app/store/authStore.ts`
-  to determine root cause before changing either the test or the
-  implementation.
-- **Files:** `driver-app/__tests__/store/authStore.refreshRace.test.ts`,
-  `driver-app/store/authStore.ts` (not yet inspected for this issue).
+  change that touches zero driver-app files) at the time, ruling out that
+  PR's diff as the cause — but NOT a pre-existing-forever issue either:
+  bisected via `git log` to commit `09a1ab8ee` ("fix(auth): stop
+  sign-out-all hanging before the login screen", 2026-09-16), which
+  introduced the regression while fixing a different bug.
+- **Root cause (3 distinct bugs in `logout()`/`setTokens()`), per the
+  actual fix commit's own root-cause writeup:**
+  1. `logout()` awaited the go-offline PUT *inside* the session lock via
+     `Promise.all`, despite starting it outside the lock specifically to
+     avoid blocking — a slow/hung PUT deadlocked any operation queued
+     behind the logout (e.g. a fresh `setTokens()` from a new login). →
+     the 15000ms timeout.
+  2. `logout()`'s `liveCredential` latched `false` from the in-memory
+     token alone, before the locked callback ever read the persisted
+     `fg_access_token` — so a background-rotated credential (foreground
+     memory empty, SecureStore holding a fresh pair) never got its
+     server-side session revoked. → the 0-calls failure.
+  3. `setTokens()` bumped the module-level `loginGeneration` counter
+     *inside* its own locked callback, too late for a `logout()` already
+     queued ahead of it to see the new generation and correctly bail out
+     as stale.
+- **Fixed by (already merged, before this item was picked up):**
+  - PR #5524 (`b77702348`, "fix(auth): stop logout deadlock and close
+    background-token revocation gap", merged 2026-09-20 04:54 UTC — 34 min
+    after the failure above) — fixed bugs 1 and 2/3 independently.
+  - PR #5526 (`e5407e296`) — fixed the stale `driverProfileScreen.test.tsx`
+    expectation to match a separate, deliberate 2026-09-15 product decision
+    (commit `d1c106e3`: report failed sign-out-all via toast rather than
+    navigating away regardless of outcome) rather than the pre-2026-09-15
+    always-navigate behavior the stale test still asserted.
+  - PR #5530 / CR-2026-035 (`01e400319`, issue #5516) — a second,
+    independently-landed fix for the same 3 bugs from a parallel task;
+    reconciled against #5524's already-merged fix on merge conflict,
+    correctly kept `shared/store/authStore.ts`'s fix (identical resolution
+    reached twice) and reverted a wrong incidental change to
+    `driver-app/app/driver/profile.tsx` that would have reversed the
+    2026-09-15 decision PR #5526 had just correctly aligned with. Also
+    added a 3s-timeout race around the go-offline PUT (post-fix
+    `spinr-security-auditor` finding) so decoupling it from the lock
+    couldn't leave `drivers.is_online` stuck `true` server-side.
+- **Verified here (2026-09-20, before closing):** 8 local runs against
+  current `main` (standalone, with CI's exact `--ci --coverage
+  --forceExit` flags, `--runInBand`, and inside the full 1813-test suite)
+  — `authStore.refreshRace.test.ts` and `driverProfileScreen.test.tsx`
+  passed every time (38/38 tests across both files in the final check).
+  Traced the current `logout()`/`setTokens()`/`withSessionLock` code
+  against both previously-failing tests' logic and confirmed it matches
+  the fix commits' description — no remaining race for either symptom.
+- **Files:** `shared/store/authStore.ts`, `shared/auth/sessionLock.ts`,
+  `driver-app/__tests__/store/authStore.refreshRace.test.ts`,
+  `driver-app/__tests__/app/driverProfileScreen.test.tsx`,
+  `driver-app/app/driver/profile.tsx` — all already fixed on `main`, no
+  changes made by this entry's closure.
 
 ### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 7 more tables — safety/regulatory-sensitive, deliberately not fixed alongside C107
 - [ ] **Status:** OPEN — found during C107's review (2026-09-20) by grepping every migration for

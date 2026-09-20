@@ -882,8 +882,25 @@ jobs:
       # its result is masked to 'success' here and cannot trip this check;
       # path-filtered `skipped` results also still pass. Only a genuine
       # `failure`/`cancelled` from a blocking gate now fails this job.
+      #
+      # CR #5572: the `cancelled` half above is correct for a gate cancelled
+      # mid-scan, but it could not tell that apart from THE WHOLE RUN being
+      # superseded. This workflow sets `concurrency: cancel-in-progress: true`
+      # on `github.ref`, so any force-push cancels the in-flight gate jobs;
+      # this job (`if: always()`) then survived, saw a `needs` list full of
+      # `cancelled`, and went red on an abandoned sha for a run where no gate
+      # had found anything. Observed on run 35523325854: 1 failed job out of
+      # 21, and that one job was this aggregator.
+      #
+      # `!cancelled()` is true only when the workflow itself was not
+      # cancelled, so it distinguishes the two. Note the clause placement: a
+      # real `failure` still fails this job UNCONDITIONALLY. Only the
+      # `cancelled` branch is gated. That ordering is deliberate -- if
+      # `cancelled()` ever behaves differently than expected here, the worst
+      # case is a superseded run going red again, NOT a blocking gate's
+      # failure being swallowed. C74's hole stays closed either way.
       - name: Fail if any blocking security gate failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || (!cancelled() && contains(needs.*.result, 'cancelled')) }}
         run: |
           echo "::error::one or more blocking security gates failed — see the summary above"
           exit 1

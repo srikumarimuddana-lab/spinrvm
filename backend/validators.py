@@ -249,7 +249,7 @@ def validate_uuid(uuid_value: str, raise_exception: bool = True) -> Tuple[bool, 
     """
     if not uuid_value or not isinstance(uuid_value, str):
         if raise_exception:
-            raise HTTPException(status_code=400, detail="UUID is required")
+            raise HTTPException(status_code=400, detail="A required ID is missing.")
         return False, None
 
     try:
@@ -257,7 +257,7 @@ def validate_uuid(uuid_value: str, raise_exception: bool = True) -> Tuple[bool, 
         return True, str(parsed)
     except ValueError:
         if raise_exception:
-            raise HTTPException(status_code=400, detail="Invalid UUID format") from None
+            raise HTTPException(status_code=400, detail="That ID is not in a valid format.") from None
         return False, None
 
 
@@ -411,7 +411,9 @@ def validate_datetime(
                     raise ValueError(f"Unable to parse datetime: {dt_value}")
     except (ValueError, TypeError, OSError):
         if raise_exception:
-            raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO 8601 format.") from None
+            raise HTTPException(
+                status_code=400, detail="We couldn't read that date and time. Please choose it again."
+            ) from None
         return False, None
 
     now = datetime.now(timezone.utc)

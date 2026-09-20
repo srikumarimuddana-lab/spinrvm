@@ -50,7 +50,7 @@ router = APIRouter()
 
 def _require_super_admin(admin: dict) -> None:
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Driver-repair pass requires super_admin")
+        raise HTTPException(status_code=403, detail="Driver-repair pass requires super admin access.")
 
 
 async def _build_plan() -> svc.DriverRepairPlan:

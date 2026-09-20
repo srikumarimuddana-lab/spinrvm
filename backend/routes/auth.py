@@ -1288,7 +1288,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # leak here exposes Supabase row IDs, Firebase JWT errors, and
         # internal stack frames to anyone with internet access. The
         # framework sanitiser (utils/error_handling.py) already replaces
-        # 5xx detail with "Internal server error", but the manual
+        # 5xx detail with the generic sentence, but the manual
         # str(e) made the leak's intent explicit; clean it up so the
         # next contributor doesn't copy the pattern. logger.exception
         # captures the full traceback server-side automatically.

@@ -521,7 +521,7 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest, admin: dict =
 
     valid_modes = ["flat", "per_km", "percentage"]
     if req.calc_mode not in valid_modes:
-        raise HTTPException(status_code=400, detail=f"calc_mode must be one of: {valid_modes}")
+        raise HTTPException(status_code=400, detail="Choose a calculation mode: flat, per kilometre, or percentage.")
 
     fee = {
         "id": str(uuid.uuid4()),
@@ -553,7 +553,7 @@ async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest, 
             update_data[field] = val
 
     if "calc_mode" in update_data and update_data["calc_mode"] not in ["flat", "per_km", "percentage"]:
-        raise HTTPException(status_code=400, detail="calc_mode must be flat, per_km, or percentage")
+        raise HTTPException(status_code=400, detail="Choose a calculation mode: flat, per kilometre, or percentage.")
 
     await db_supabase.update_one("area_fees", {"id": fee_id, "service_area_id": area_id}, update_data)
     await log_admin_action(
@@ -1028,7 +1028,9 @@ async def schedule_ride(req: ScheduleRideRequest, current_user: dict = Depends(g
     try:
         scheduled_dt = datetime.fromisoformat(req.scheduled_time.replace("Z", "+00:00"))
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid scheduled_time format. Use ISO 8601.") from None
+        raise HTTPException(
+            status_code=400, detail="We couldn't read that pickup time. Please choose a date and time again."
+        ) from None
 
     if scheduled_dt < datetime.now(timezone.utc) + timedelta(minutes=15):
         raise HTTPException(status_code=400, detail="Scheduled time must be at least 15 minutes from now.")
@@ -1716,11 +1718,22 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
 
     async def _write() -> None:
         try:
-            row = {"id": str(uuid.uuid4()), "user_id": user_id, "title": title,
-                   "body": body, "type": notification_type, "data": data or {}, "is_read": False}
-            if notification_type in {"scheduled_ride_reminder", "scheduled_driver_reminder"} and (data or {}).get("ride_id"):
+            row = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "title": title,
+                "body": body,
+                "type": notification_type,
+                "data": data or {},
+                "is_read": False,
+            }
+            if notification_type in {"scheduled_ride_reminder", "scheduled_driver_reminder"} and (data or {}).get(
+                "ride_id"
+            ):
                 # Retries preserve the first inbox row, including its read state.
-                row["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"spinr:{notification_type}:{data['ride_id']}:{user_id}"))
+                row["id"] = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"spinr:{notification_type}:{data['ride_id']}:{user_id}")
+                )
                 await db.insert_many_ignore_conflicts("notifications", [row], on_conflict="id")
             else:
                 await db.insert_one("notifications", row)

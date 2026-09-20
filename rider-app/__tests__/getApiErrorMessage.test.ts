@@ -11,6 +11,7 @@
  */
 
 import { getApiErrorMessage, clampToastMessage, TOAST_MESSAGE_MAX } from '@shared/api/client';
+import { SENTINEL_MESSAGES } from '@shared/errors/sentinelMessages';
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -248,6 +249,47 @@ describe('getApiErrorMessage', () => {
       };
       expect(getApiErrorMessage(err, OTP_FALLBACK)).toBe("That code didn't match. Please try again.");
     });
+  });
+});
+
+describe('mapped ERR_* sentinels become real copy', () => {
+  const GENERIC = 'Something went wrong. Please try again.';
+
+  it('prefers the mapped sentence over the caller fallback (FastAPI detail)', () => {
+    const err = { response: { status: 400, data: { detail: 'ERR_TIP_DUPLICATE' } } };
+    expect(getApiErrorMessage(err, GENERIC)).toBe("You've already added a tip for this ride.");
+  });
+
+  it('prefers the mapped sentence when the sentinel is in error.message', () => {
+    const err = {
+      response: { status: 401, data: { error: { message: 'ERR_SESSION_REVOKED', code: 401 } } },
+    };
+    expect(getApiErrorMessage(err, GENERIC)).toBe("You've been signed out. Please sign in again.");
+  });
+
+  it('prefers the mapped sentence when the sentinel is rethrown as err.message', () => {
+    expect(getApiErrorMessage(new Error('ERR_RIDE_NOT_PAYABLE'), GENERIC)).toBe(
+      "This ride can't be paid for right now.",
+    );
+  });
+
+  it('never renders the raw token for any mapped sentinel', () => {
+    for (const sentinel of Object.keys(SENTINEL_MESSAGES)) {
+      const out = getApiErrorMessage({ response: { status: 400, data: { detail: sentinel } } }, GENERIC);
+      expect(out).not.toContain('ERR_');
+      expect(out).not.toBe(GENERIC);
+    }
+  });
+
+  it('leaves an unmapped sentinel on the caller fallback, as before', () => {
+    const err = { response: { status: 400, data: { detail: 'ERR_SOMETHING_WE_DO_NOT_MAP' } } };
+    expect(getApiErrorMessage(err, GENERIC)).toBe(GENERIC);
+  });
+
+  it('keeps every mapped sentence inside the toast budget', () => {
+    for (const copy of Object.values(SENTINEL_MESSAGES)) {
+      expect(copy.length).toBeLessThanOrEqual(TOAST_MESSAGE_MAX);
+    }
   });
 });
 

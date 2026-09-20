@@ -151,7 +151,7 @@ class TestChatNonStreaming:
             # that control and gets replaced with a generic message, so the
             # original `code` no longer reaches the client on 5xx responses.
             body = resp.json()
-            assert body["detail"] == "Internal server error"
+            assert body["detail"] == "Something went wrong on our end. Please try again in a moment."
             assert body["error"]["sanitised"] is True
         else:
             assert resp.json()["detail"]["code"] == code

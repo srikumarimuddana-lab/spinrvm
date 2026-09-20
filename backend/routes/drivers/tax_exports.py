@@ -476,11 +476,11 @@ async def email_driver_statement(
         from utils.driver_statement import PERIOD_TYPES, build_statement  # type: ignore
 
     if period_type not in PERIOD_TYPES:
-        raise HTTPException(status_code=422, detail="period_type must be weekly or monthly")
+        raise HTTPException(status_code=422, detail="Choose either a weekly or a monthly statement.")
     try:
         start_d = _date.fromisoformat(period_start)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail="period_start must be YYYY-MM-DD") from e
+        raise HTTPException(status_code=422, detail="We couldn't read that start date. Please choose it again.") from e
 
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)

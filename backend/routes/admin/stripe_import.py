@@ -66,7 +66,7 @@ def _require_super_admin(admin: dict) -> None:
     """403 unless super_admin. Payout-destination writes are above any module
     grant — the "drivers" module also covers read-only ops screens."""
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Stripe mapping import requires super_admin")
+        raise HTTPException(status_code=403, detail="Stripe mapping import requires super admin access.")
 
 
 def _serialize_items(items: list[import_svc.StripeMappingErrorItem]) -> list[dict[str, str]]:

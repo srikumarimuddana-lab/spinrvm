@@ -58,7 +58,7 @@ class TestListDataTransferJobs:
     def test_non_super_admin_is_403(self, test_client, regular_admin_override):
         resp = test_client.get("/api/admin/data-transfer/jobs")
         assert resp.status_code == 403
-        assert "super_admin" in resp.json()["detail"]
+        assert "super admin" in resp.json()["detail"]
 
     def test_super_admin_sees_jobs(self, test_client, super_admin_override):
         with patch(
@@ -76,7 +76,7 @@ class TestGetDataTransferJob:
     def test_non_super_admin_is_403(self, test_client, regular_admin_override):
         resp = test_client.get("/api/admin/data-transfer/jobs/job_1")
         assert resp.status_code == 403
-        assert "super_admin" in resp.json()["detail"]
+        assert "super admin" in resp.json()["detail"]
 
     def test_super_admin_gets_job(self, test_client, super_admin_override):
         with patch(
@@ -95,7 +95,7 @@ class TestRegenerateJobDownload:
         with patch("backend.routes.admin.data_transfer_jobs.supabase") as mock_supabase:
             resp = test_client.get("/api/admin/data-transfer/jobs/job_1/download")
         assert resp.status_code == 403
-        assert "super_admin" in resp.json()["detail"]
+        assert "super admin" in resp.json()["detail"]
         mock_supabase.storage.from_.assert_not_called()
 
     def test_super_admin_regenerates_link(self, test_client, super_admin_override):

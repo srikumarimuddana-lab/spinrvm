@@ -3474,7 +3474,7 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
     per-driver entry point must not be a privilege loophole around that.
     """
     if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super admin access.")
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
@@ -3732,7 +3732,7 @@ async def admin_refresh_all_driver_stripe_payouts(
     per-driver button and the dedicated /admin/stripe/* sync routes.
     """
     if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super admin access.")
 
     try:
         from ...services import stripe_payout_sync_service as sync_svc
@@ -3872,7 +3872,7 @@ async def admin_refresh_all_driver_kyc(body: RefreshAllKycRequest, admin: dict =
     if (admin or {}).get("role") != "super_admin":
         # Fleet-wide Stripe reads (and optionally fleet-wide retires) are a
         # bigger hammer than the per-driver button; keep it super_admin.
-        raise HTTPException(status_code=403, detail="Bulk KYC refresh requires super_admin")
+        raise HTTPException(status_code=403, detail="Bulk KYC refresh requires super admin access.")
 
     try:
         from ..services.stripe_kyc_sync import refresh_driver_kyc
@@ -3952,7 +3952,7 @@ async def admin_reveal_driver_sin(request: Request, driver_id: str, admin: dict 
     # Hard-gated to super_admin. Defence in depth alongside the audit row: even
     # with a leaked admin token, the reveal path stays closed.
     if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="reveal_sin requires super_admin role")
+        raise HTTPException(status_code=403, detail="Revealing a SIN requires super admin access.")
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
@@ -4035,7 +4035,7 @@ async def admin_update_driver_sin(
          response, never silently dropped.
     """
     if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="update_sin requires super_admin role")
+        raise HTTPException(status_code=403, detail="Updating a SIN requires super admin access.")
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:

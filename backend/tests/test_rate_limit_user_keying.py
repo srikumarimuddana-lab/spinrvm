@@ -16,16 +16,17 @@ import pytest
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
+from core.config import settings
 from utils.rate_limiter import get_user_or_ip_key
 
 CARRIER_NAT_IP = "203.0.113.7"
 
 
-def _token(user_id: str) -> str:
-    """A bearer token. Signature is irrelevant — the key func decodes without
-    verifying, and the real `get_current_user` dependency still gates the
-    handler (see `_extract_unverified_user_id`'s docstring)."""
-    return jwt.encode({"user_id": user_id}, "irrelevant-test-secret", algorithm="HS256")
+def _token(user_id: str, secret: str = settings.JWT_SECRET, **claims) -> str:
+    """A bearer token signed with the real secret. Only a verifying signature
+    selects a user bucket (see `_extract_verified_user_id`'s docstring) —
+    `secret=` lets a test mint a forged one."""
+    return jwt.encode({"user_id": user_id, **claims}, secret, algorithm="HS256")
 
 
 def _fake_request(*, user_id: str | None = None, ip: str = CARRIER_NAT_IP, raw_auth: str | None = None) -> Request:
@@ -94,15 +95,54 @@ def test_malformed_authorization_falls_back_to_ip(raw_auth):
 
 
 def test_token_without_user_claim_falls_back_to_ip():
-    token = jwt.encode({"role": "rider"}, "irrelevant-test-secret", algorithm="HS256")
+    token = jwt.encode({"role": "rider"}, settings.JWT_SECRET, algorithm="HS256")
     key = get_user_or_ip_key(_fake_request(ip="203.0.113.5", raw_auth=f"Bearer {token}"))
     assert key == "ip:203.0.113.5"
 
 
 def test_sub_claim_is_accepted_as_user_id():
-    token = jwt.encode({"sub": "rider_from_sub"}, "irrelevant-test-secret", algorithm="HS256")
+    token = jwt.encode({"sub": "rider_from_sub"}, settings.JWT_SECRET, algorithm="HS256")
     key = get_user_or_ip_key(_fake_request(raw_auth=f"Bearer {token}"))
     assert key == "user:rider_from_sub"
+
+
+# --------------------------------------------------------------------------
+# Forged tokens must never select another user's bucket (2026-09-20, C6)
+# --------------------------------------------------------------------------
+
+
+def test_token_signed_with_wrong_secret_falls_back_to_ip():
+    """Before C6 the key func decoded with verify_signature=False, so anyone
+    could name a victim's user_id and burn their per-user quota — 20 requests
+    against ride_action_limit and the victim driver is 429'd on
+    accept/arrive/start for the rest of the window."""
+    forged = _token("victim_driver", secret="attacker-secret")
+    key = get_user_or_ip_key(_fake_request(ip="203.0.113.5", raw_auth=f"Bearer {forged}"))
+    assert key == "ip:203.0.113.5"
+
+
+def test_alg_none_token_falls_back_to_ip():
+    """`{"alg": "none"}` is the cheapest forgery — no secret needed at all."""
+    forged = jwt.encode({"user_id": "victim_driver"}, key=None, algorithm="none")
+    key = get_user_or_ip_key(_fake_request(ip="203.0.113.5", raw_auth=f"Bearer {forged}"))
+    assert key == "ip:203.0.113.5"
+
+
+def test_forged_token_cannot_share_the_victims_bucket():
+    victim = get_user_or_ip_key(_fake_request(user_id="victim_driver", ip="198.51.100.9"))
+    forged = _token("victim_driver", secret="attacker-secret")
+    attacker = get_user_or_ip_key(_fake_request(ip="203.0.113.5", raw_auth=f"Bearer {forged}"))
+    assert victim == "user:victim_driver"
+    assert attacker != victim
+
+
+def test_expired_but_genuine_token_keeps_the_user_bucket():
+    """Expiry is checked downstream by get_current_user; for keying, an
+    expired token is still the real user's, and a 15-minute access-token
+    rotation must not hand them a fresh quota."""
+    token = _token("rider_abc", exp=1)  # 1970 — long expired
+    key = get_user_or_ip_key(_fake_request(raw_auth=f"Bearer {token}"))
+    assert key == "user:rider_abc"
 
 
 # --------------------------------------------------------------------------
@@ -199,7 +239,7 @@ def test_expired_token_still_keys_to_its_user():
     bucket at exactly the moment they need the limit to be theirs alone."""
     expired = jwt.encode(
         {"user_id": "rider_expired", "exp": 1000000000},  # 2001
-        "irrelevant-test-secret",
+        settings.JWT_SECRET,
         algorithm="HS256",
     )
     assert get_user_or_ip_key(_fake_request(raw_auth=f"Bearer {expired}")) == "user:rider_expired"

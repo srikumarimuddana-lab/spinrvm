@@ -1986,38 +1986,6 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 await asyncio.sleep(remaining)
                 current_ride = await _deps.db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
-            scheduled_claimed = False
-            if current_ride.get("is_scheduled"):
-                claimed = await _deps.db_supabase.update_one(
-                    "rides", {"id": r_id, "status": RideStatus.SEARCHING},
-                    {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc),
-                     "updated_at": datetime.now(timezone.utc), "cancelled_by": "system",
-                     "cancellation_type": "no_drivers_found",
-                     "cancellation_reason": "No nearby drivers found. Please try again."},
-                )
-                if not claimed:
-                    return
-                scheduled_claimed = True
-            # WS-8 (finding 11): release the booking-time pre-auth hold
-            # so the rider's card isn't blocked for 7 days after timeout.
-            _booking_pi = current_ride.get("payment_intent_id")
-            _auth = (current_ride.get("auth_status") or "").lower()
-            if scheduled_claimed:
-                try:
-                    from ...utils.card_hold_release import release_open_hold
-                except ImportError:
-                    from utils.card_hold_release import release_open_hold
-                await release_open_hold(current_ride, source="scheduled_timeout")
-            elif _booking_pi and _auth in ("authorized", "fare_only"):
-                try:
-                    _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
-                    if _released:
-                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id={} pi={}", r_id, _booking_pi)
-                except Exception as _rel_exc:
-                    logger.opt(exception=True).error(
-                        "[AUTO-CANCEL] pre-auth release failed ride_id={}: {}", r_id, _rel_exc
-                    )
-
             now = datetime.now(timezone.utc)
             base_update = {
                 "status": RideStatus.CANCELLED,
@@ -2025,28 +1993,89 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "cancellation_reason": "No nearby drivers found. Please try again.",
                 "updated_at": now,
             }
-            if _booking_pi and _auth in ("authorized", "fare_only"):
-                base_update["auth_status"] = "released"
-            # Migration 38 adds cancelled_by / cancellation_type so the
-            # admin panel can filter "No Driver Found" separately. Fall
-            # back to base_update on PGRST204 ("column does not exist")
-            # so the rider-facing cancel still succeeds before the
-            # migration lands in prod.
-            if not scheduled_claimed:
-                try:
-                    await _deps.db_supabase.update_ride(
+            # Claim the cancel with a compare-and-swap on status='searching'
+            # FIRST — before the hold release, before any Stripe call. The
+            # read above is only a hint: accept_ride's own CAS (routes/drivers/
+            # ride_flow.py) can land between it and this write, and this
+            # timer must then be a no-op. Zero rows back == not ours to cancel.
+            #
+            # The previous shape only did this for scheduled rides. The common
+            # path checked the in-memory status, awaited cancel_authorization
+            # (a live Stripe round-trip — a race window one network call
+            # wide), then wrote CANCELLED via update_ride, which filters on id
+            # only: a ride accepted at t≈300s was overwritten to cancelled with
+            # its hold already released — driver en route to a "cancelled"
+            # ride whose fare could never be captured, Period 2 never closed.
+            #
+            # Migration 38 adds cancelled_by / cancellation_type so the admin
+            # panel can filter "No Driver Found" separately. Fall back to
+            # base_update on PGRST204 ("column does not exist") so the
+            # rider-facing cancel still succeeds before the migration lands.
+            claim_filter = {"id": r_id, "status": RideStatus.SEARCHING}
+            try:
+                claimed = await _deps.db_supabase.update_one(
+                    "rides",
+                    claim_filter,
+                    {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                )
+            except Exception as _col_exc:
+                logger.opt(exception=True).error(
+                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                )
+                claimed = await _deps.db_supabase.update_one("rides", claim_filter, base_update)
+            if not claimed:
+                # A falsy result is not conclusively "someone else won".
+                # update_one goes through run_sync WITHOUT a retry_policy, so
+                # it inherits the default "read" policy — 3 attempts — on a
+                # non-idempotent write, and the transient classifier covers
+                # exactly the committed-but-ack-lost faults (ConnectionTerminated,
+                # RemoteProtocolError/"Server disconnected", httpx timeouts, the
+                # H2 stream race). When attempt 1 commits and its ack is lost,
+                # the retry re-runs the same CAS, legitimately matches zero rows
+                # and returns a clean None — on a ride THIS call just cancelled.
+                # Returning here would skip the hold release, the cancellation
+                # metric, the rider ride_cancelled WS event, the push and the
+                # guest SMS, leaving the rider's app on "searching" for a
+                # cancelled ride and undercounting the cancellation-rate KPI.
+                #
+                # Same shape as accept_ride's re-read (routes/drivers/
+                # ride_flow.py): before concluding we lost, look at the row.
+                # Only our own attribution values can have been written by this
+                # timer, so matching them means the write was ours.
+                _fresh = await _deps.db_supabase.get_ride(r_id)
+                _ours = (
+                    _fresh
+                    and _fresh.get("status") == RideStatus.CANCELLED
+                    and _fresh.get("cancelled_by") == "system"
+                    and _fresh.get("cancellation_type") == "no_drivers_found"
+                )
+                if not _ours:
+                    logger.info(
+                        "[AUTO-CANCEL] ride {} not claimed (left 'searching' first, or the write was skipped) — no-op",
                         r_id,
-                        {
-                            **base_update,
-                            "cancelled_by": "system",
-                            "cancellation_type": "no_drivers_found",
-                        },
                     )
-                except Exception as _col_exc:
-                    logger.opt(exception=True).error(
-                        f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-                    )
-                    await _deps.db_supabase.update_ride(r_id, base_update)
+                    return
+                logger.warning(
+                    "[AUTO-CANCEL] ride {} claim returned no row but the row is our cancel — "
+                    "treating a lost ack as a win and running the side effects",
+                    r_id,
+                )
+            # WS-8 (finding 11): release the booking-time pre-auth hold so the
+            # rider's card isn't blocked for 7 days after timeout — only now
+            # that the cancel is ours. release_open_hold cancels the
+            # PaymentIntent and marks auth_status='released' ONLY on success;
+            # a failed release leaves the row open so utils/orphaned_hold_
+            # reconciler picks it up. (The old inline path wrote 'released'
+            # regardless of the Stripe outcome, hiding a still-live hold from
+            # every reconciler.) Best-effort by construction — never raises.
+            try:
+                from ...utils.card_hold_release import release_open_hold
+            except ImportError:
+                from utils.card_hold_release import release_open_hold
+            await release_open_hold(
+                current_ride,
+                source="scheduled_timeout" if current_ride.get("is_scheduled") else "search_timeout",
+            )
             # 2026-08-18 fleet audit: ride-state-transition metric — one of
             # the most common real cancellation reasons ("no drivers found"),
             # so leaving it uncounted would materially undercount the

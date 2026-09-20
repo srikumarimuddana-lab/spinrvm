@@ -2,8 +2,36 @@ name: EAS Mobile Update
 
 # ─── What this does ────────────────────────────────────────────────────────
 # On every push to main that touches rider-app / driver-app / shared:
-#   → Publishes an OTA JS-only update to the `production` channel for the
-#     affected app. Phones on that channel pick it up on next launch.
+#   → Publishes an OTA JS-only update for the affected app.
+#     • preview channel   — immediately, ungated (internal-distribution APKs
+#                           handed to live testers).
+#     • production channel — behind the `production-ota` GitHub Environment
+#                           (required reviewer), as a percentage ROLLOUT
+#                           (default 10%). Phones on that channel pick it up
+#                           on next launch.
+#   → Uploads the exported source maps to Sentry after each publish so
+#     post-OTA crashes symbolicate (see .github/actions/eas-ota-publish).
+#
+# 2026-09-20 (review item C7): before this, every merge to main published
+# straight to `production` for both apps with no approval, no rollout and no
+# sourcemaps — a JS-only regression reached every production handset on next
+# launch, unsymbolicated, with no kill switch short of another `eas update`.
+#
+# OPERATOR NOTES
+#   • The `production-ota` environment must exist in repo Settings →
+#     Environments with at least one required reviewer. GitHub auto-creates
+#     a referenced environment with NO protection rules, so until a human
+#     adds the reviewer this gate is inert — check before relying on it.
+#   • Expo allows ONE active per-update rollout per branch. While a
+#     production rollout is in progress the next production publish to that
+#     branch is refused by Expo (this job fails loudly). End it first:
+#         eas update:edit                    # ramp to 100
+#         eas update:revert-update-rollout   # or roll back
+#     (docs.expo.dev/eas-update/rollouts). `eas update:list --branch
+#     production` shows the state.
+#   • Sentry upload needs repo secret SENTRY_AUTH_TOKEN and variables
+#     SENTRY_ORG, SENTRY_PROJECT_RIDER, SENTRY_PROJECT_DRIVER. When unset the
+#     upload step warns and skips (the publish still happens).
 #
 # OTA updates are JS-only. Native changes (new deps with native side, plugin
 # changes, Info.plist, permission additions, runtimeVersion bumps) still
@@ -30,15 +58,44 @@ on:
         default: "preview"
         type: choice
         options: [test, preview, production]
+      rollout_percentage:
+        description: "Production only: share of devices that receive the update (1-100). Ignored for preview/test."
+        required: false
+        default: "10"
+        type: string
+
+# Channel routing background (kept from the original single-job version):
+# `github.event.inputs.*` is only populated for workflow_dispatch, so a push
+# must not fall through to a default profile. Real store builds live on two
+# channels: iOS App Store submissions use the `production` build profile /
+# channel; Android has two live populations — every internal-distribution APK
+# handed to live testers is on `preview`, and Play production installs (first
+# cut 2026-09-09 from the `production` build profile) are on `production`.
+# A push therefore publishes android to BOTH channels (preview ungated,
+# production gated) and ios to `production` (gated). workflow_dispatch keeps
+# the operator's explicit choice uniform across platforms.
+#
+# Publishing is always by --branch (same name as the channel): `eas update
+# --channel` requires the channel to be linked to exactly one branch and
+# fails with "Channel has no branches associated with it" otherwise; the
+# same-named channel routes builds to this branch (one-time
+# `eas channel:edit <name> --branch <name>`).
 
 # Detect which app(s) changed so push-triggered runs only process the affected
 # app. Shared changes hit both.
 jobs:
   detect:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       rider: ${{ steps.filter.outputs.rider }}
       driver: ${{ steps.filter.outputs.driver }}
+      # Resolved once so the four publish jobs share one definition.
+      is_production: ${{ steps.mode.outputs.is_production }}
+      preview_pairs: ${{ steps.mode.outputs.preview_pairs }}
+      production_pairs: ${{ steps.mode.outputs.production_pairs }}
+      rollout: ${{ steps.mode.outputs.rollout }}
+      message: ${{ steps.mode.outputs.message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -51,197 +108,123 @@ jobs:
             driver:
               - 'driver-app/**'
               - 'shared/**'
-
-  rider:
-    needs: detect
-    if: |
-      (github.event_name == 'push' && needs.detect.outputs.rider == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both'))
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: rider-app
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Node 22, not 20: eas-cli's own dependency tree pulls in
-      # @oclif/plugin-autocomplete, which bumped its own engines.node to
-      # >=22.0.0 in 3.3.0 (2026-08-2x) independent of eas-cli's own
-      # (unchanged) >=20.0.0 requirement. yarn classic hard-fails the
-      # install on that mismatch (not just a warning), which is why every run
-      # of this workflow failed from that release onward. Before this change,
-      # confirmed rider-app's and driver-app's own yarn install
-      # --frozen-lockfile (below) succeed under Node 22 in a local sandbox —
-      # that's evidence the app toolchain tolerates Node 22, NOT evidence the
-      # "Setup EAS" step's own eas-cli install succeeds on a real GitHub
-      # Actions runner under Node 22; that remains unverified until this
-      # workflow actually runs.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
-        with:
-          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
-          eas-version: 24.7.0
-          token: ${{ secrets.EXPO_TOKEN }}
-      - run: yarn install --frozen-lockfile
-
-      - name: Publish OTA update
+      - id: mode
         env:
-          INPUT_PROFILE: ${{ github.event.inputs.profile }}
           EVENT_NAME: ${{ github.event_name }}
+          INPUT_PROFILE: ${{ github.event.inputs.profile }}
+          INPUT_ROLLOUT: ${{ github.event.inputs.rollout_percentage }}
           MSG: ${{ github.event.head_commit.message }}
         run: |
-          # `github.event.inputs.*` is only populated for workflow_dispatch —
-          # on the ordinary `push` trigger it is always empty, so
-          # `github.event.inputs.profile || 'preview'` silently fell through to
-          # 'preview' on every push, even though this workflow's own header
-          # comment documents "publishes ... to the `production` channel" on
-          # push to main. Confirmed via a real run's log (CHANNEL: preview on
-          # a push-triggered run) — every push-triggered OTA update since this
-          # workflow existed went to `preview`, never `production`.
-          #
-          # That fix alone is still wrong for Android: the real Expo build
-          # history (checked against the dashboard, not assumed) shows every
-          # actual Android Play Store submission for both apps — rider-app's
-          # own production-track builds and driver-app's `android-auto`
-          # profile alike — was cut with a build profile whose `channel` is
-          # `preview` in eas.json, never `production`. Only iOS's real App
-          # Store submissions use the `production` profile/channel. So a
-          # single CHANNEL for both platforms would either strand Android on
-          # `preview` (fine) while wrongly assuming `production` (if uniform
-          # production), or fail to route iOS to where its real installs
-          # actually are (if uniform preview). Each platform now gets the
-          # channel its real store builds are actually on; workflow_dispatch
-          # keeps the operator's explicit choice uniform across platforms,
-          # since that's a deliberate manual override, not the push default
-          # this bug is about.
-          # Update 2026-09-09: android now publishes to BOTH channels on push.
-          # The paragraph above is still accurate about history, but its
-          # premise ("Android store builds are always channel preview") stopped
-          # holding the moment the first Play production AAB was cut from the
-          # `production` build profile, whose eas.json channel is `production`.
-          # Two live Android populations now exist and they read different
-          # branches:
-          #   • preview    — every internal-distribution APK handed to live
-          #                  testers (all Android store builds before this).
-          #   • production — Play production installs.
-          # Publishing android only to `preview` would leave every
-          # Play-installed user with no reachable OTA update at all: branch
-          # `production` receives only --platform ios publishes, so an Android
-          # device on that channel finds nothing applicable and the OTA hotfix
-          # path silently does not exist for it. Additive on purpose — preview
-          # keeps receiving exactly what it received before.
-          if [ -n "$INPUT_PROFILE" ]; then
-            PAIRS="ios:$INPUT_PROFILE android:$INPUT_PROFILE"
-          elif [ "$EVENT_NAME" = "push" ]; then
-            PAIRS="ios:production android:preview android:production"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            # Ungated preview leg + gated production leg (android on both).
+            echo "preview_pairs=android:preview" >> "$GITHUB_OUTPUT"
+            echo "production_pairs=ios:production android:production" >> "$GITHUB_OUTPUT"
+            echo "is_production=true" >> "$GITHUB_OUTPUT"
+            echo "rollout=10" >> "$GITHUB_OUTPUT"
+          elif [ "$INPUT_PROFILE" = "production" ]; then
+            echo "preview_pairs=" >> "$GITHUB_OUTPUT"
+            echo "production_pairs=ios:production android:production" >> "$GITHUB_OUTPUT"
+            echo "is_production=true" >> "$GITHUB_OUTPUT"
+            echo "rollout=${INPUT_ROLLOUT:-10}" >> "$GITHUB_OUTPUT"
           else
-            PAIRS="ios:preview android:preview"
+            # test / preview: one ungated leg on the chosen channel.
+            echo "preview_pairs=ios:${INPUT_PROFILE} android:${INPUT_PROFILE}" >> "$GITHUB_OUTPUT"
+            echo "production_pairs=" >> "$GITHUB_OUTPUT"
+            echo "is_production=false" >> "$GITHUB_OUTPUT"
+            echo "rollout=100" >> "$GITHUB_OUTPUT"
           fi
-          MESSAGE="${MSG:-manual update}"
-          # eas update truncates at 1024 chars; keep just the first line.
-          MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          # Publish to the branch of the same name as the channel (branch
-          # `preview`/`production`/`test`). `eas update --channel` requires the
-          # channel to already be linked to exactly one branch and fails with
-          # "Channel has no branches associated with it" otherwise; publishing
-          # by --branch is unambiguous. The same-named channel routes builds to
-          # this branch (one-time `eas channel:edit <name> --branch <name>`).
-          #
-          # --environment is REQUIRED, not optional. EXPO_PUBLIC_* vars are
-          # inlined into the JS bundle when it is built, and `eas update`
-          # rebuilds the bundle. Without an environment it loads none of the EAS
-          # environment variables, so every EXPO_PUBLIC_* value ships as an
-          # empty string and the OTA silently strips config the binary had.
-          # This is the "known EAS / OTA hazard" already documented at
-          # driver-app/hooks/useDriverDashboard.ts:89, which cost a crash when
-          # EXPO_PUBLIC_BACKEND_URL went empty. `test` has no matching EAS
-          # environment (they are development/preview/production), so it maps to
-          # preview alongside the preview channel.
-          #
-          # One --platform-scoped publish per entry in $PAIRS (not a single
-          # unscoped call): the platforms legitimately target different
-          # channels, and android deliberately appears twice on push so both
-          # the preview and production channels are served (see above).
-          for pair in $PAIRS; do
-            platform="${pair%%:*}"
-            channel="${pair#*:}"
-            case "$channel" in
-              production) env=production ;;
-              *)          env=preview ;;
-            esac
-            eas update --platform "$platform" --branch "$channel" \
-              --environment "$env" --non-interactive --message "$MESSAGE"
-          done
+          # Single-line, bounded message (multi-line output would need a
+          # heredoc delimiter; the action truncates to 1000 chars anyway).
+          echo "message=$(printf '%s' "${MSG:-manual update}" | head -1 | cut -c1-1000)" >> "$GITHUB_OUTPUT"
 
-  driver:
+  # ── Preview (ungated) ─────────────────────────────────────────────────────
+  rider-preview:
     needs: detect
     if: |
-      (github.event_name == 'push' && needs.detect.outputs.driver == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both'))
+      needs.detect.outputs.preview_pairs != '' && (
+        (github.event_name == 'push' && needs.detect.outputs.rider == 'true') ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both'))
+      )
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: driver-app
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Node 22 — see the rider job's comment above for why.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: ./.github/actions/eas-ota-publish
         with:
-          node-version: 22
-      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
-        with:
-          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
-          eas-version: 24.7.0
-          token: ${{ secrets.EXPO_TOKEN }}
-      - run: yarn install --frozen-lockfile
+          app_dir: rider-app
+          pairs: ${{ needs.detect.outputs.preview_pairs }}
+          message: ${{ needs.detect.outputs.message }}
+          expo_token: ${{ secrets.EXPO_TOKEN }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_project: ${{ vars.SENTRY_PROJECT_RIDER }}
 
-      - name: Publish OTA update
-        env:
-          INPUT_PROFILE: ${{ github.event.inputs.profile }}
-          EVENT_NAME: ${{ github.event_name }}
-          MSG: ${{ github.event.head_commit.message }}
-        run: |
-          # See rider job above for why this can't be `inputs.profile || 'preview'`,
-          # and why iOS and Android need different channels on push (real
-          # Android Play Store submissions — driver-app's own `android-auto`
-          # profile included — have so far always used channel `preview`,
-          # never `production`).
-          # Update 2026-09-09: android now publishes to BOTH channels on push.
-          # The paragraph above is still accurate about history, but its
-          # premise ("Android store builds are always channel preview") stopped
-          # holding the moment the first Play production AAB was cut from the
-          # `production` build profile, whose eas.json channel is `production`.
-          # Two live Android populations now exist and they read different
-          # branches:
-          #   • preview    — every internal-distribution APK handed to live
-          #                  testers (all Android store builds before this).
-          #   • production — Play production installs.
-          # Publishing android only to `preview` would leave every
-          # Play-installed user with no reachable OTA update at all: branch
-          # `production` receives only --platform ios publishes, so an Android
-          # device on that channel finds nothing applicable and the OTA hotfix
-          # path silently does not exist for it. Additive on purpose — preview
-          # keeps receiving exactly what it received before.
-          if [ -n "$INPUT_PROFILE" ]; then
-            PAIRS="ios:$INPUT_PROFILE android:$INPUT_PROFILE"
-          elif [ "$EVENT_NAME" = "push" ]; then
-            PAIRS="ios:production android:preview android:production"
-          else
-            PAIRS="ios:preview android:preview"
-          fi
-          MESSAGE="${MSG:-manual update}"
-          MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          # See rider job above — publish by branch, always with an explicit
-          # --environment, and one --platform-scoped call per platform since
-          # the two channels can now differ.
-          for pair in $PAIRS; do
-            platform="${pair%%:*}"
-            channel="${pair#*:}"
-            case "$channel" in
-              production) env=production ;;
-              *)          env=preview ;;
-            esac
-            eas update --platform "$platform" --branch "$channel" \
-              --environment "$env" --non-interactive --message "$MESSAGE"
-          done
+  driver-preview:
+    needs: detect
+    if: |
+      needs.detect.outputs.preview_pairs != '' && (
+        (github.event_name == 'push' && needs.detect.outputs.driver == 'true') ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/eas-ota-publish
+        with:
+          app_dir: driver-app
+          pairs: ${{ needs.detect.outputs.preview_pairs }}
+          message: ${{ needs.detect.outputs.message }}
+          expo_token: ${{ secrets.EXPO_TOKEN }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_project: ${{ vars.SENTRY_PROJECT_DRIVER }}
+
+  # ── Production (gated: required reviewer on the `production-ota` environment,
+  #    percentage rollout) ────────────────────────────────────────────────────
+  rider-production:
+    needs: detect
+    if: |
+      needs.detect.outputs.is_production == 'true' && (
+        (github.event_name == 'push' && needs.detect.outputs.rider == 'true') ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-ota
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/eas-ota-publish
+        with:
+          app_dir: rider-app
+          pairs: ${{ needs.detect.outputs.production_pairs }}
+          message: ${{ needs.detect.outputs.message }}
+          rollout_percentage: ${{ needs.detect.outputs.rollout }}
+          expo_token: ${{ secrets.EXPO_TOKEN }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_project: ${{ vars.SENTRY_PROJECT_RIDER }}
+
+  driver-production:
+    needs: detect
+    if: |
+      needs.detect.outputs.is_production == 'true' && (
+        (github.event_name == 'push' && needs.detect.outputs.driver == 'true') ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-ota
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/eas-ota-publish
+        with:
+          app_dir: driver-app
+          pairs: ${{ needs.detect.outputs.production_pairs }}
+          message: ${{ needs.detect.outputs.message }}
+          rollout_percentage: ${{ needs.detect.outputs.rollout }}
+          expo_token: ${{ secrets.EXPO_TOKEN }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_project: ${{ vars.SENTRY_PROJECT_DRIVER }}

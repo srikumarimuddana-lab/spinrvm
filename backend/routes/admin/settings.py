@@ -455,6 +455,16 @@ class SettingsUpdateRequest(BaseModel):
     # generally, checked at the top of POST /rides. Same plain-boolean shape
     # as the four flags above, no super-admin gate needed.
     new_ride_requests_enabled: Optional[bool] = None
+    # Excludes completed rides whose fare was never collected (failed card
+    # charge) from driver-payable money: /drivers/balance, the weekly
+    # auto_payout batch, and driver statements. Default OFF — the filter is
+    # correct going forward but switching it on retroactively drives drivers
+    # already paid out for such a ride to a negative payable_balance, which
+    # then nets silently against their future collected fares. Read
+    # utils/payment_collection.payable_ride_filter and run
+    # scripts/reconcile_uncollected_ride_payouts.sql against a read replica
+    # to size the affected cohort BEFORE enabling.
+    uncollected_rides_excluded_from_payable: Optional[bool] = None
     # Rolling-window cap on referrer_reward payouts per referrer
     # (utils/referral_payout.py, ranked blocker #6 / audit finding N2,
     # 2026-08-19) — closes a real-money leak (a $0-cost first_ride_only promo

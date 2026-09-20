@@ -316,11 +316,20 @@ function ProfileScreenInner() {
           text: 'Sign out everywhere',
           style: 'destructive',
           onPress: async () => {
+            // Unlike the single-device handleLogout above, this always
+            // navigates to /login even if logoutAll() throws: it exists for
+            // a lost/stolen-phone or compromised-account scenario, so the
+            // user must never be left sitting on an authenticated screen
+            // just because the network call that revokes other sessions
+            // failed. logoutAll() itself already falls through to a local
+            // logout() on failure — this only guards a remaining edge case
+            // (e.g. the local cleanup step itself throwing).
             try {
               await logoutAll();
-              router.replace('/login' as any);
             } catch {
-              showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
+              showToast('error', 'Sign Out Failed', 'Your other sessions may not have been fully revoked, but you have been signed out on this device.');
+            } finally {
+              router.replace('/login' as any);
             }
           },
         },

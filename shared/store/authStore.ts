@@ -340,10 +340,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
-  setTokens: (token, refreshToken, expiresIn, csrfToken) => withSessionLock(async () => {
+  setTokens: (token, refreshToken, expiresIn, csrfToken) => {
+    // Bumped synchronously, before entering the session lock — mirroring how
+    // logout() captures its own `generation` synchronously before queuing
+    // onto the lock. A concurrent logout() queued just ahead of this call
+    // needs to see the new generation by the time its own locked callback
+    // runs, so its "am I stale?" check can bail out instead of tearing down
+    // the login this call is establishing. Incrementing inside the lock body
+    // was too late: it only took effect once this call's own turn in the
+    // (FIFO) queue arrived, by which point a logout queued earlier had
+    // already run to completion under the old (still-current) generation.
     loginGeneration++;
-    await publishTokensUnlocked(token, refreshToken, expiresIn, csrfToken, true);
-  }),
+    return withSessionLock(async () => {
+      await publishTokensUnlocked(token, refreshToken, expiresIn, csrfToken, true);
+    });
+  },
 
   refreshTokens: (): Promise<boolean> => withSessionLock(async () => {
     const ended = await storage.getItem(SESSION_ENDED_KEY);
@@ -742,20 +753,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // interceptor 401, refresh rejected). A PUT/POST here 401s and queues
     // behind a doomed refresh — hanging sign-out so router.replace('/login')
     // never runs. /auth/logout-all now takes the driver offline itself.
-    const liveCredential = options?.revokeServerSession !== false && !!token;
+    const revokeAllowed = options?.revokeServerSession !== false;
+    const liveCredential = revokeAllowed && !!token;
 
-    // Start go-offline immediately so it overlaps /auth/logout rather than
-    // blocking it. Swallow errors — a flaky network must not block sign-out.
+    // Fired immediately, never awaited INSIDE the session lock — it used to
+    // be awaited via Promise.all in the locked section, which defeated the
+    // "overlap, don't block" intent: a slow/hung go-offline PUT held the
+    // lock open, deadlocking any operation queued behind this logout (e.g. a
+    // fresh setTokens() from a new login racing a slow prior logout).
+    // Swallow errors either way — a flaky network must not block sign-out.
     const goOffline =
       liveCredential && driver?.id
         ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
             if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
           })
-        : Promise.resolve();
+        : null;
 
-    return withSessionLock(async () => {
+    const sessionWork = withSessionLock(async () => {
       if (generation !== loginGeneration) {
-        await goOffline;
         return;
       }
       // Background refresh may have replaced BOTH credentials while the UI slept.
@@ -763,7 +778,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (persistedAccess) setInMemoryToken(persistedAccess);
 
       const serverLogout = (async () => {
-        if (!(liveCredential && (persistedAccess || token))) return;
+        // Gate on revokeAllowed + whatever credential actually exists right
+        // now (persisted or in-memory) — NOT the outer liveCredential, which
+        // is computed from in-memory token alone before persistedAccess is
+        // known. A background-only refresh (foreground memory empty, a
+        // freshly rotated pair sitting in SecureStore) previously never
+        // revoked its server-side session because liveCredential had
+        // already latched false.
+        if (!(revokeAllowed && (persistedAccess || token))) return;
         try {
           // F02 (2026-09-08 AI security assessment): this used to POST with no
           // body. The server revokes a refresh token only if one arrives in a
@@ -783,9 +805,41 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       })();
 
-      await Promise.all([goOffline, serverLogout]);
+      await serverLogout;
       await clearLocalSessionUnlocked();
     });
+
+    if (goOffline) {
+      // Give the go-offline PUT a bounded window to actually finish before
+      // logout() resolves. A caller typically navigates away (or the app
+      // gets backgrounded) right after logout() settles, which can cut the
+      // request off mid-flight and leave drivers.is_online stuck true on
+      // the server — a dispatch/match-rate risk, not a data-corruption one,
+      // since it's a fire-and-forget PUT with its own error handling. Racing
+      // it against sessionWork/a timeout — rather than awaiting it inside
+      // withSessionLock above — keeps the lock itself free (see the comment
+      // where goOffline is fired: that's what the earlier deadlock was).
+      // The timer is cleared as soon as anything settles so it never
+      // outlives this call (a bare Promise.race leaves the losing
+      // setTimeout running for its full duration, which showed up as a
+      // dangling-timer warning in tests and would do the same in the app).
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          settled = true;
+          resolve();
+        }, 3000);
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        goOffline.then(settle);
+        sessionWork.then(settle, settle);
+      });
+    }
+    return sessionWork;
   },
 
   // "Sign out of all devices" — closes B-P1-13. Backend bumps

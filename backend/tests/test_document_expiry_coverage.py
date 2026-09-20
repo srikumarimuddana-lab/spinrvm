@@ -277,6 +277,61 @@ class TestCheckExpiringDocuments:
         push.assert_not_awaited()
 
     @pytest.mark.anyio
+    async def test_warn_claim_or_filter_is_mongo_shaped_not_raw_postgrest_string(self, monkeypatch):
+        """Regression test for the production bug seen repeating in Fly.io
+        logs: 'Doc expiry: warn-claim failed / AttributeError: 'str' object
+        has no attribute 'items''.
+
+        The warn-claim $or filter must be a list of Mongo-shaped
+        {col: predicate} dicts — what repositories._base._build_or_clause
+        expects (it does `for col, val in clause.items()` per $or entry) —
+        never a single raw PostgREST-syntax string. Before the fix, the value
+        was `[f"doc_expiry_warned_at.is.null,doc_expiry_warned_at.lt.{cutoff}"]`:
+        a list containing ONE STRING, so `clause.items()` raised
+        AttributeError on every tick. document_expiry.py's except-and-continue
+        swallowed it, so the CAS claim never once succeeded and no
+        expiry-warning push/email ever went out for a document that had not
+        yet expired.
+
+        This deliberately does NOT stub db.update_one (that would bypass the
+        very filter compiler that broke) — it patches
+        repositories._base.supabase (via the autouse mock_supabase_client
+        fixture) so the real db.update_one -> repositories._base.update_one
+        -> _apply_filters/_build_or_clause chain runs for real.
+        """
+        from backend.repositories import _base
+        from backend.utils import document_expiry
+
+        now = datetime.now(timezone.utc)
+        soon = _iso(now + timedelta(days=5))
+        driver = _driver(license_expiry_date=soon)
+        get_rows = AsyncMock(side_effect=[[driver], []])
+        monkeypatch.setattr(document_expiry.db, "get_rows", get_rows)
+
+        # Real update chain: `.table("drivers").update(...).or_(...).execute()`.
+        # Configure it explicitly (rather than relying on incidental MagicMock
+        # auto-chaining) so a "claim won" row comes back once _apply_filters
+        # no longer raises.
+        mock_table = _base.supabase.table.return_value
+        mock_table.update.return_value = mock_table
+        mock_table.or_.return_value = mock_table
+        update_response = MagicMock()
+        update_response.data = [{"id": "driver-1", "user_id": "user-1"}]
+        mock_table.execute = MagicMock(return_value=update_response)
+
+        push = AsyncMock()
+        monkeypatch.setattr(document_expiry, "send_push_notification", push)
+        monkeypatch.setattr(document_expiry, "_email_expiry_notice", AsyncMock())
+
+        await document_expiry.check_expiring_documents()  # must not raise
+
+        # Before the fix this failed here: the AttributeError from the
+        # malformed $or was swallowed and `claimed` stayed falsy, so the
+        # warning notification was silently never sent.
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["data"]["type"] == "document_expiry_warning"
+
+    @pytest.mark.anyio
     async def test_notification_push_failure_is_swallowed(self, monkeypatch):
         from backend.utils import document_expiry
 

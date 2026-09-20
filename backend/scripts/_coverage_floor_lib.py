@@ -86,6 +86,7 @@ def run_gate(
     coverage_json: Path,
     changed_files_file: Path,
     gate_label: str,
+    producer_result: str = "",
 ) -> int:
     changed = load_changed_files(changed_files_file)
     touched_modules = sorted({key for f in changed if (key := coverage_key_for(f, manifest))})
@@ -95,9 +96,34 @@ def run_gate(
         return 0
 
     if not coverage_json.exists():
+        # CR #5576: this used to assert "the pytest --cov run must have failed
+        # outright". That is a cause this gate has never checked -- all it
+        # actually knows is that a local file is absent, which can equally
+        # mean the producing job succeeded but its artifact never arrived.
+        # On run 35526289539 the claim was flatly untrue (the producer
+        # reported success; it had aborted collection and run zero tests, so
+        # no artifact was ever uploaded) and sent readers hunting for a test
+        # failure that did not exist. `producer_result` is
+        # `needs.shared-coverage-run.result` passed through from the
+        # workflow, so the gate can now name which case it is in. Still fails
+        # closed in every case -- only the diagnosis changes.
         print(f"FAIL: expected coverage report at {coverage_json} but it does not exist.")
-        print("The pytest --cov run that should have produced it must have failed outright --")
-        print("that is a real failure, not something this gate should silently pass through.")
+        if producer_result in {"failure", "cancelled", "timed_out"}:
+            print(f"The producing job (shared-coverage-run) reported '{producer_result}'.")
+            print("Fix that job first -- this gate has no coverage data to evaluate.")
+        elif producer_result == "skipped":
+            print("The producing job (shared-coverage-run) was skipped, so no coverage")
+            print("artifact exists. Check that job's `if:` condition for this event type.")
+        elif producer_result == "success":
+            print("The producing job (shared-coverage-run) reported SUCCESS, so this is")
+            print("NOT a test failure. Either it wrote no coverage file (it tolerates")
+            print("individual test failures via `|| true`, and a *collection* error makes")
+            print("it run zero tests -- see CR #5578), or the artifact upload/download")
+            print("did not deliver it. Read that job's log before assuming a broken test.")
+        else:
+            print("The producing job's result was not supplied to this gate, so the cause")
+            print("cannot be narrowed here. Read shared-coverage-run's log directly.")
+        print("Failing closed either way: this gate must not pass without real data.")
         return 1
 
     try:
@@ -146,6 +172,19 @@ def build_arg_parser(description: str) -> argparse.ArgumentParser:
         type=Path,
         help="newline-delimited file of repo-root-relative changed paths for this PR",
     )
+    # CR #5576. Optional and defaulting to "" on purpose: a caller that does
+    # not pass it still gets a correct, fail-closed gate with a message that
+    # says the cause could not be narrowed, rather than a crash. That keeps
+    # local/manual invocations of these scripts working unchanged.
+    parser.add_argument(
+        "--producer-result",
+        default="",
+        help=(
+            "result of the job that produces the coverage artifact "
+            "(needs.shared-coverage-run.result). Used only to explain a missing "
+            "report accurately; never changes pass/fail."
+        ),
+    )
     return parser
 
 
@@ -156,6 +195,7 @@ def main_for(manifest: FloorManifest, gate_label: str, description: str) -> int:
         coverage_json=args.coverage_json,
         changed_files_file=args.changed_files_file,
         gate_label=gate_label,
+        producer_result=args.producer_result,
     )
 
 

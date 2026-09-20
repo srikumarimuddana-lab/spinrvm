@@ -96,7 +96,14 @@ jobs:
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # CR #5541: this job's three real steps (mocked-DB suite + direct-pool +
+    # RLS real-Postgres suites) were sharing a 20-minute budget with ~12s of
+    # slack on a passing run (PR #5536: 19:48) and one real timeout-kill on a
+    # near-identical diff (PR #5537: 20:05, conclusion `cancelled`, not a test
+    # failure). 30 minutes restores real headroom without masking a genuine
+    # slowdown -- if runtime keeps climbing run over run, that's a separate
+    # perf investigation, not another timeout bump.
+    timeout-minutes: 30
     needs: [detect-changes]
     if: |
       always() && (

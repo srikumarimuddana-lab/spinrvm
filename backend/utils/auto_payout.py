@@ -68,6 +68,7 @@ try:
     from ..utils.error_handling import DuplicateRecordError
     from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
     from ..utils.money import dollars_to_cents
+    from ..utils.payment_collection import ONLY_COLLECTED_RIDES
     from ..utils.redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual-import pattern
     import db_supabase  # type: ignore
@@ -584,7 +585,10 @@ async def _compute_payable_balance(driver_id: str) -> Decimal:
     rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
         db_supabase.get_rows(
             "rides",
-            {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
+            # ONLY_COLLECTED_RIDES: an uncollected (failed-charge) fare must
+            # never reach a Stripe Transfer — see utils/payment_collection.
+            # Same filter as routes/drivers/earnings.get_driver_balance.
+            {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES, **ONLY_COLLECTED_RIDES},
             limit=10000,
         ),
         db_supabase.get_rows("rides", {"driver_id": driver_id, "status": "cancelled"}, limit=10000),
@@ -646,7 +650,7 @@ async def _compute_payable_balances_batch(driver_ids: list[str]) -> dict[str, De
 
     rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
         db_supabase.get_rows_batched_in(
-            "rides", "driver_id", driver_ids, {"status": "completed", **EXCLUDE_LEGACY_RIDES}
+            "rides", "driver_id", driver_ids, {"status": "completed", **EXCLUDE_LEGACY_RIDES, **ONLY_COLLECTED_RIDES}
         ),
         db_supabase.get_rows_batched_in("rides", "driver_id", driver_ids, {"status": "cancelled"}),
         db_supabase.get_rows_batched_in("driver_bonuses", "driver_id", driver_ids),

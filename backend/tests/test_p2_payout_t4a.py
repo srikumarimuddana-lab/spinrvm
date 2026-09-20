@@ -69,6 +69,9 @@ def _ride_row(earnings: float = 20.00) -> dict:
         "id": "ride-001",
         "driver_id": DRIVER_ID,
         "status": "completed",
+        # Real rows always carry payment_status (NOT NULL DEFAULT 'pending');
+        # the slip only reports collected fares — see utils/payment_collection.
+        "payment_status": "paid",
         "driver_earnings": earnings,
         "tip_amount": 0,
     }

@@ -35,6 +35,7 @@ try:
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
     )
+    from ...utils.payment_collection import ONLY_COLLECTED_RIDES
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
@@ -63,6 +64,14 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
                 # utils/legacy_rides. Their offsetting 'legacy_import' payout
                 # is dropped below, so the balance arithmetic is unchanged.
                 **EXCLUDE_LEGACY_RIDES,
+                # Only rides whose fare was actually collected are payable —
+                # see utils/payment_collection. A completed ride whose card
+                # charge failed (payment_retry gives up at 'failed') kept its
+                # driver_earnings and flowed into payable_balance, which
+                # bounds the Stripe Transfer: Spinr was paying out fares it
+                # never received. Same filter in utils/auto_payout.py and
+                # utils/driver_statement.py — keep the three in step.
+                **ONLY_COLLECTED_RIDES,
             },
             limit=10000,
         )

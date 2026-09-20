@@ -34,9 +34,11 @@ from ._shared import (  # noqa: F401
 try:
     from ...utils.company_details import load_company_details
     from ...utils.legacy_rides import drop_legacy_rides
+    from ...utils.payment_collection import drop_uncollected_rides
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.company_details import load_company_details  # type: ignore
     from utils.legacy_rides import drop_legacy_rides  # type: ignore
+    from utils.payment_collection import drop_uncollected_rides  # type: ignore
 
 router = APIRouter()
 
@@ -73,14 +75,17 @@ async def get_t4a_years(current_user: dict = Depends(get_current_user)):
     this_year = datetime.now(timezone.utc).year
     earliest = this_year - _T4A_YEAR_LOOKBACK + 1
 
-    # Same two income sources, and the same legacy exclusion, as the slip.
-    rides = drop_legacy_rides(
-        await db_supabase.get_rides_for_driver(
-            driver["id"],
-            statuses=[RideStatus.COMPLETED],
-            from_date=f"{earliest}-01-01",
-            to_date=f"{this_year + 1}-01-01",
-            limit=10000,
+    # Same two income sources, and the same legacy + uncollected exclusions,
+    # as the slip.
+    rides = drop_uncollected_rides(
+        drop_legacy_rides(
+            await db_supabase.get_rides_for_driver(
+                driver["id"],
+                statuses=[RideStatus.COMPLETED],
+                from_date=f"{earliest}-01-01",
+                to_date=f"{this_year + 1}-01-01",
+                limit=10000,
+            )
         )
     )
     synced_rows = await db_supabase.get_rows(
@@ -151,14 +156,20 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     # was paid through Stripe it is already reported below via the
     # 'stripe_sync' rows. Counting both would report the same legacy dollars
     # to the CRA twice. The repo helper takes no extra filters, so the
-    # exclusion is applied here (see utils/legacy_rides).
-    rides = drop_legacy_rides(
-        await db_supabase.get_rides_for_driver(
-            driver["id"],
-            statuses=[RideStatus.COMPLETED],
-            from_date=f"{year}-01-01",
-            to_date=f"{year + 1}-01-01",
-            limit=10000,
+    # exclusion is applied here (see utils/legacy_rides). Likewise a
+    # completed ride whose fare was never collected (failed card charge) is
+    # not income the driver received — the slip must not report it to the
+    # CRA (see utils/payment_collection; same rule /drivers/balance, the
+    # auto_payout batch and driver statements apply).
+    rides = drop_uncollected_rides(
+        drop_legacy_rides(
+            await db_supabase.get_rides_for_driver(
+                driver["id"],
+                statuses=[RideStatus.COMPLETED],
+                from_date=f"{year}-01-01",
+                to_date=f"{year + 1}-01-01",
+                limit=10000,
+            )
         )
     )
 

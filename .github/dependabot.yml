@@ -42,6 +42,27 @@ updates:
       - dependency-name: "stripe"
         update-types: ["version-update:semver-major"]
 
+  # ─── Backend Docker base image ────────────────────────────────────────────
+  # backend/Dockerfile pins its base image to a digest
+  # (python:3.12.13-slim@sha256:...) per docs/runbooks/docker-image-pinning.md
+  # -- refreshing that pin was entirely manual (quarterly / on a Trivy/Grype
+  # alert) with no automated PR the way pip/npm already get. Found in the
+  # 2026-09-20 CI/CD audit.
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Regina
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+
   # ─── Admin Dashboard (Next.js) ────────────────────────────────────────────
   - package-ecosystem: npm
     directory: /admin-dashboard

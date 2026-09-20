@@ -115,7 +115,9 @@ jobs:
 
           summary = "\n\n".join(findings) if findings else "All tracked renewal dates are more than the warn threshold away."
 
-          any_alert = "true" if (overdue or due) else "false"
+          # Include tbd: every row can be "TBD" (the doc's actual current
+          # state) and this must still surface a nudge, not silently no-op.
+          any_alert = "true" if (overdue or due or tbd) else "false"
 
           gh_output = os.environ["GITHUB_OUTPUT"]
           with open(gh_output, "a") as f:

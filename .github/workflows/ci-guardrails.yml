@@ -107,6 +107,14 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     needs: [detect-changes]
+    # C47: this job was previously hit by unexplained external cancellations
+    # (exit 143, "runner has received a shutdown signal") with the root
+    # cause never found -- downstream gates were made fail-open on a missing
+    # artifact, but the job itself had no bound. If that same anomaly ever
+    # manifests as a hang instead of an external kill, this is the single
+    # most expensive job in the workflow (~15-18 min real runtime per the
+    # comment below) and would otherwise run to GitHub's 360-minute default.
+    timeout-minutes: 25
     # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
     # 5): this is the single most expensive job in this workflow (a full
     # `pytest --cov` run, ~15-18 min) -- the real turnaround-time win. Every

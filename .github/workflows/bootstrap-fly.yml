@@ -16,10 +16,9 @@ name: Bootstrap Fly.io app (one-time / manual)
 #                    per-app deploy token does not have create permission.
 #
 # ── Required Fly secrets (set in Fly, not GitHub) ────────────────────────────
-#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET, ADMIN_PASSWORD,
-#   ADMIN_EMAIL, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_DRIVER_APP_ID,
-#   FIREBASE_RIDER_APP_ID, REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL,
-#   ALLOWED_ORIGINS
+#   See deploy/backend-required-env.txt's scope=both list (single source of
+#   truth, read directly by the verification step below -- not duplicated
+#   here anymore, since a hardcoded copy previously drifted from it).
 #
 # Notes (set these correctly in Fly):
 #   - FIREBASE_SERVICE_ACCOUNT_JSON must be raw JSON (core/security.init_firebase()
@@ -93,14 +92,17 @@ jobs:
       - name: Verify required Fly secrets exist
         if: ${{ inputs.deploy }}
         run: |
+          # Reads deploy/backend-required-env.txt's scope=both list directly
+          # (same awk pattern deploy-backend.yml uses for Railway) instead of
+          # a second hardcoded copy -- a hardcoded copy here previously
+          # drifted from the canonical file (missing SENTRY_DSN, found in a
+          # 2026-09-20 CI/CD audit), the exact class of bug the file's own
+          # header comment warns "keep in sync" is meant to prevent.
           present="$(flyctl secrets list -a "${FLY_APP}" 2>/dev/null || true)"
           missing=0
-          for k in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY JWT_SECRET \
-                   ADMIN_PASSWORD ADMIN_EMAIL FIREBASE_SERVICE_ACCOUNT_JSON \
-                   FIREBASE_DRIVER_APP_ID FIREBASE_RIDER_APP_ID REDIS_URL \
-                   RATE_LIMIT_REDIS_URL WS_REDIS_URL ALLOWED_ORIGINS; do
+          for k in $(grep -vE '^\s*(#|$)' deploy/backend-required-env.txt | awk '$2=="both" {print $1}'); do
             if ! printf '%s\n' "$present" | grep -qw "$k"; then
-              echo "::error title=Missing Fly secret::${k} is not set on ${FLY_APP}. Set it with: fly secrets set ${k}=... -a ${FLY_APP}"
+              echo "::error title=Missing Fly secret::${k} is not set on ${FLY_APP}. Set it with: fly secrets set ${k}=... -a ${FLY_APP} (scope + reason: deploy/backend-required-env.txt)"
               missing=1
             fi
           done

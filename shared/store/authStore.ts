@@ -858,19 +858,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // runbook (docs/runbooks/auth-tokens.md) sends compromised users to.
   // Falls through to logout() either way so the local session ends
   // even if the network call failed (we don't want to leave the user
-  // sitting on a screen that thinks they're signed in).
+  // sitting on a screen that thinks they're signed in) — but still
+  // re-throws afterward so a caller can warn that server-side
+  // revocation did NOT happen (found 2026-09-20: the callers' own
+  // catch block assumed this could throw, but it never did, so the
+  // lost/stolen-phone failure path was silently unreachable).
   logoutAll: async () => {
     let revoked = 0;
+    let serverCallFailed = false;
     try {
       const res = await api.post<{ success: boolean; revoked_refresh_tokens: number }>('/auth/logout-all');
       revoked = Number(res.data?.revoked_refresh_tokens ?? 0);
     } catch (error: unknown) {
+      serverCallFailed = true;
       if (__DEV__) console.log('logout-all backend call failed:', isApiError(error) ? (error.message ?? error) : String(error));
     } finally {
       // /auth/logout-all already bumped token_version, revoked every refresh
       // token row, and took an idle driver offline. Skip both the per-session
       // POST /auth/logout and the go-offline PUT — either would 401.
       await get().logout({ revokeServerSession: false });
+    }
+    if (serverCallFailed) {
+      throw new Error('logout-all server call failed');
     }
     return { revoked_refresh_tokens: revoked };
   },

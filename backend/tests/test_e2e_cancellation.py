@@ -264,8 +264,12 @@ class TestRiderCancelIllegalStates:
                 )
 
         assert exc_info.value.status_code == 409
-        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
-        assert status in str(text)
+        # The guard's message deliberately no longer interpolates the raw status
+        # (2026-09-18 user-facing-message rewrite, _RIDER_RIDE_STATE_PHRASE) --
+        # assert against the structured field it still carries instead of
+        # scraping human copy, so this stays correct if the wording changes again.
+        details = getattr(exc_info.value, "details", None) or {}
+        assert details.get("current_status") == status
 
     async def test_cancel_unknown_ride_raises_404(self):
         from fastapi import HTTPException

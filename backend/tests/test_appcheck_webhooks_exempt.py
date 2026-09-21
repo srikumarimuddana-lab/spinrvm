@@ -54,3 +54,13 @@ def test_ses_and_app_endpoints_stay_enforced(enforced_client, path):
 def test_exemptions_are_exact_webhook_paths_not_the_whole_prefix():
     assert "/api/v1/webhooks/" not in _APP_CHECK_EXEMPT_PREFIXES
     assert set(EXEMPT_WEBHOOKS) <= set(_APP_CHECK_EXEMPT_PREFIXES)
+
+
+def test_exempt_paths_are_the_real_webhook_routes():
+    # The stub app above can't notice the webhooks router moving; this pins the
+    # exempted strings to the paths the real app actually serves.
+    from backend.server import app
+
+    served = {getattr(route, "path", None) for route in app.routes}
+    assert set(EXEMPT_WEBHOOKS) <= served
+    assert "/api/v1/webhooks/ses" in served  # still served, just App-Check-enforced

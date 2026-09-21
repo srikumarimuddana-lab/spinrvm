@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useContext, useEffect, useRef, useState, useMemo } from 'react';
 import { computeTipOptions, isTipLadderReady, reconcileSelectedTip } from '../components/tipPresets';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
@@ -28,7 +28,8 @@ import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { onRideRated } from '@shared/utils/appRating';
-import { getCustomTipAmount } from '../utils/customTipSchema';
+import { customTipMinimumError, getCustomTipAmount } from '../utils/customTipSchema';
+import { MinTipAmountContext } from '../utils/minTipContext';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -169,7 +170,8 @@ function RideCompletedScreenContent() {
   // Depends on `fare`, NOT on `currentRide`: the store hands back a fresh object
   // on every WS event and on the 3s route-refresh poll, so a `[currentRide]` dep
   // would recompute the ladder for reasons that have nothing to do with money.
-  const tipOptions = useMemo(() => computeTipOptions(fare), [fare]);
+  const minTip = useContext(MinTipAmountContext);
+  const tipOptions = useMemo(() => computeTipOptions(fare, minTip), [fare, minTip]);
 
   // The ladder degenerates to [1,2,3] before the fare loads, which looks like a
   // deliberate low-value ladder rather than a placeholder. This screen is
@@ -184,6 +186,9 @@ function RideCompletedScreenContent() {
   // the one frame an effect would take to catch up. (Also what
   // react-hooks/set-state-in-effect is asking for.)
   const effectiveTip = reconcileSelectedTip(selectedTip, tipOptions);
+  // A custom tip between $0 and the minimum can't be submitted: the rider stays
+  // here, sees why, and fixes it (the server rejects it too — never dropped).
+  const tipMinimumError = effectiveTip ? null : customTipMinimumError(getCustomTipAmount(customTip), minTip);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
@@ -346,6 +351,7 @@ function RideCompletedScreenContent() {
 
   const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
+    if (tipMinimumError) return; // button is disabled; guards the retry path too
     if (overrideCardId) activeOverrideCardRef.current = overrideCardId;
     setIsSubmitting(true);
     setSubmitPhase('rating');
@@ -359,8 +365,15 @@ function RideCompletedScreenContent() {
       if (!hasRatedRef.current) {
         try {
           await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
-        } catch { /* rating may fail if already rated */ }
-        hasRatedRef.current = true;
+          hasRatedRef.current = true;
+        } catch (e) {
+          // 409 = already rated (an earlier attempt landed). Any other failure —
+          // e.g. a 400 "Minimum tip is $X" because the minimum changed after the
+          // app loaded it — leaves the rating unsent so the next attempt re-sends
+          // it instead of losing it. Safe: the server's already-rated 409 sits
+          // before its tip write, so a re-send can never double-credit a tip.
+          if ((e as { response?: { status?: number } })?.response?.status === 409) hasRatedRef.current = true;
+        }
       }
 
       // 2. Process payment. If the rider has already paid (came back to
@@ -451,7 +464,7 @@ function RideCompletedScreenContent() {
   // pay without re-entering a card. Only shown for card payment rides on
   // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
   const handleGooglePay = async () => {
-    if (isSubmitting || sheetLoading || alreadyPaid) return;
+    if (isSubmitting || sheetLoading || alreadyPaid || tipMinimumError) return;
     const tipAmount = effectiveTip || getCustomTipAmount(customTip);
     const result = await presentSheet({
       rideId: rideId as string,
@@ -632,6 +645,11 @@ function RideCompletedScreenContent() {
                 />
               </View>
             </View>
+            {tipMinimumError && (
+              <Text style={styles.tipMinError} accessibilityRole="alert" accessibilityLiveRegion="polite">
+                {tipMinimumError}
+              </Text>
+            )}
         </View>
 
         {/* ═══ 3. Fare + Stats ═══ */}
@@ -845,11 +863,11 @@ function RideCompletedScreenContent() {
           <TouchableOpacity
             style={[styles.submitBtn, styles.googlePayBtn]}
             onPress={handleGooglePay}
-            disabled={isSubmitting || sheetLoading}
+            disabled={isSubmitting || sheetLoading || !!tipMinimumError}
             activeOpacity={0.8}
             accessibilityRole="button"
             accessibilityLabel="Pay with Google Pay"
-            accessibilityState={{ disabled: isSubmitting || sheetLoading }}
+            accessibilityState={{ disabled: isSubmitting || sheetLoading || !!tipMinimumError }}
           >
             {sheetLoading ? (
               <ActivityIndicator size="small" color="#FFF" />
@@ -864,11 +882,11 @@ function RideCompletedScreenContent() {
         <TouchableOpacity
           style={styles.submitBtn}
           onPress={() => handleSubmit()}
-          disabled={isSubmitting || sheetLoading}
+          disabled={isSubmitting || sheetLoading || !!tipMinimumError}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
-          accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
+          accessibilityState={{ disabled: isSubmitting || sheetLoading || !!tipMinimumError, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <>
@@ -1081,6 +1099,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2,
     },
     tipRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
+    tipMinError: { color: colors.error, fontSize: FONT.bodySm, fontWeight: '600', textAlign: 'center', marginTop: SPACING.sm },
     tipBtn: {
       paddingHorizontal: 18, paddingVertical: 12, borderRadius: 14,
       backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,

@@ -1211,6 +1211,29 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Tips (migration 438) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Tips</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-2">
+                            <Label htmlFor="min-tip-amount">Minimum tip (CAD)</Label>
+                            <Input
+                                id="min-tip-amount"
+                                type="number"
+                                min={0} max={50} step={0.01}
+                                value={settings.min_tip_amount ?? 1}
+                                onChange={(e) => update("min_tip_amount", e.target.value === "" ? null : parseFloat(e.target.value))}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Riders can leave no tip, or at least this amount — anything in between is blocked in
+                                the app with a &ldquo;Minimum tip&rdquo; message and rejected by the server. Set 0 to
+                                turn the rule off. Applies within a minute; no app release needed.
+                            </p>
+                        </CardContent>
+                    </Card>
+
                     {/* Kill Switches (ACTION_ITEMS.md E5) */}
                     <Card className="border-border/50">
                         <CardHeader>

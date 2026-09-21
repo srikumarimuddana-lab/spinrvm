@@ -30,3 +30,17 @@ export function getCustomTipAmount(customTip: string): number {
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   return parsed;
 }
+
+/**
+ * The message to show under the custom-tip box when the amount is between $0
+ * and the minimum (settings.min_tip_amount, default $1.00), else null. "No
+ * tip" (empty / 0) is always allowed, and a minimum of 0 switches the rule off.
+ * The server enforces the same rule (backend/utils/tip_policy.py); this lets
+ * the rider fix it on the screen before submitting. Background: a $0.05 tip
+ * became a separate Stripe charge under Stripe's $0.50 minimum and silently
+ * failed — never charged, never paid to the driver.
+ */
+export function customTipMinimumError(amount: number, minTip: number): string | null {
+  if (!(minTip > 0) || !(amount > 0) || amount >= minTip) return null;
+  return `Minimum tip is $${minTip.toFixed(2)}`;
+}

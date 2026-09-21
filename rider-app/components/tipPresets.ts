@@ -22,9 +22,12 @@ export const TIP_PERCENTAGES = [0.15, 0.18, 0.2] as const;
  * A zero/unknown fare yields [1, 2, 3]. That is a placeholder, not a design —
  * callers must not let it be selected (see `isTipLadderReady`).
  */
-export function computeTipOptions(fare: number): number[] {
+export function computeTipOptions(fare: number, minTip = 1): number[] {
   const base = Number.isFinite(fare) && fare > 0 ? fare : 0;
-  const values = TIP_PERCENTAGES.map((pct) => Math.max(1, Math.round(base * pct)));
+  // Never below the configured minimum tip (settings.min_tip_amount) — a preset
+  // the server would reject is worse than none. Whole dollars, so round it up.
+  const floor = Math.max(1, Math.ceil(Number.isFinite(minTip) ? minTip : 1));
+  const values = TIP_PERCENTAGES.map((pct) => Math.max(floor, Math.round(base * pct)));
   for (let i = 1; i < values.length; i += 1) {
     if (values[i] <= values[i - 1]) values[i] = values[i - 1] + 1;
   }

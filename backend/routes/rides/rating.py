@@ -6,8 +6,10 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 try:
     from ...services.fare_service import driver_earnings_with_tip
+    from ...utils.tip_policy import enforce_min_tip
 except ImportError:
     from services.fare_service import driver_earnings_with_tip  # type: ignore
+    from utils.tip_policy import enforce_min_tip  # type: ignore
 
 from . import _deps
 from ._deps import (  # noqa: F401
@@ -64,6 +66,10 @@ async def rate_driver(
     # average (and their earnings, via the tip path below).
     if ride.get("legacy_import_metadata"):
         raise HTTPException(status_code=400, detail="Imported historical rides cannot be rated")
+
+    # Before the rating is written: a sub-minimum tip rejects the whole request
+    # so the rider fixes it on the rating screen (utils/tip_policy.py).
+    await enforce_min_tip(rating_data.tip_amount)
 
     _pay_status = (ride.get("payment_status") or "").lower()
     if rating_data.tip_amount > 0 and _pay_status not in ("pending", "failed", ""):

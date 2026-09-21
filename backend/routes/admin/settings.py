@@ -265,6 +265,9 @@ class SettingsUpdateRequest(BaseModel):
     cancellation_fee_admin: Optional[float] = Field(default=None, ge=0, le=50)
     cancellation_fee_driver: Optional[float] = Field(default=None, ge=0, le=50)
     platform_fee_percent: Optional[float] = Field(default=None, ge=0, le=1.0)
+    # Migration 438: smallest non-zero tip a rider may give (CAD); 0 switches
+    # the rule off (utils/tip_policy.py). Capped at $50 like the fee fields.
+    min_tip_amount: Optional[Decimal] = Field(default=None, ge=0, le=50, decimal_places=2)
     require_driver_subscription: Optional[bool] = None
     terms_of_service_text: Optional[str] = None
     privacy_policy_text: Optional[str] = None
@@ -571,6 +574,15 @@ class SettingsUpdateRequest(BaseModel):
     # above. Default False; requires human device verification before True has
     # any real effect in production.
     minimal_fcm_offer_payload_enabled: Optional[bool] = None
+
+    @field_validator("min_tip_amount")
+    @classmethod
+    def _min_tip_off_or_chargeable(cls, v):
+        # 0 = rule off. Anything between 0 and $0.50 would let through tips
+        # Stripe can't charge on their own — the silent-drop bug this rule fixes.
+        if v is not None and Decimal("0") < v < Decimal("0.50"):
+            raise ValueError("min_tip_amount must be 0 (off) or at least 0.50")
+        return v
 
     @field_validator("dispatch_geo_provider")
     @classmethod

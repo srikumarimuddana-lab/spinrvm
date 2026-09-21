@@ -1656,19 +1656,11 @@ async def _offer_timeout_handler(
             # Period 0: driver is fully offline (personal insurance only).
             await _deps.record_period_transition(driver_id, 0)
         else:
-            # Normal timeout — release driver back to the available pool.
-            # Use set_driver_available() so the is_available ⇒ is_online
-            # invariant is enforced (clamps to False if driver went offline
-            # between the offer being sent and the timeout firing).
-            released = await _deps.db_supabase.set_driver_available(driver_id, available=True)
-            # Only record Period 1 (online, no ride) if the release actually
-            # made the driver available. If they went offline between offer
-            # dispatch and this timeout, set_driver_available clamps
-            # is_available→False; their go-offline already logged Period 0, so
-            # opening a Period 1 audit row here would falsely reopen an
-            # online/commercial-insurance window for an offline driver.
-            if isinstance(released, dict) and released.get("is_available"):
-                await _deps.record_period_transition(driver_id, 1)
+            # Normal timeout — release the driver back to the available pool
+            # and close the Period 2 their claim opened, with whatever they
+            # actually are now. See the helper for why this is neither a
+            # blanket Period 1 nor silence.
+            await _deps.release_driver_and_close_period(driver_id, reason="offer_timeout", ride_id=ride_id)
 
         # Notify rider via WebSocket.
         if rider_id:
@@ -1874,14 +1866,10 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
         await reset_miss_streak(driver_id)
         await _deps.record_period_transition(driver_id, 0)
     else:
-        # Only open Period 1 (online, no ride) if the release actually made the
-        # driver available. If they went offline between offer dispatch and this
-        # timeout, set_driver_available clamps is_available→False; recording
-        # Period 1 here would falsely reopen a commercial-insurance window for an
-        # offline driver. Mirrors the single-offer guard at _offer_timeout_handler.
-        released = await _deps.db_supabase.set_driver_available(driver_id, True)
-        if isinstance(released, dict) and released.get("is_available"):
-            await _deps.record_period_transition(driver_id, 1)
+        # Release and close the Period 2 this driver's claim opened, with
+        # whatever they actually are now. See the helper for why this is
+        # neither a blanket Period 1 nor silence.
+        await _deps.release_driver_and_close_period(driver_id, reason="offer_timeout", ride_id=ride_id)
 
     try:
         await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)

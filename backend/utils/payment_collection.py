@@ -66,22 +66,6 @@ COLLECTED_PAYMENT_STATUSES: tuple[str, ...] = (
 # ``failed`` — turning a collected ride into an uncollected one.
 SETTLED_PAYMENT_STATUSES = COLLECTED_PAYMENT_STATUSES
 
-# Spread into a ``rides`` money query next to ``EXCLUDE_LEGACY_RIDES``
-# (``utils/legacy_rides.py``) — same shape, same purpose: a filter that
-# governs money math only. Never apply it to activity counts (trip totals),
-# which should keep showing every completed ride.
-#
-# Prefer ``payable_ride_filter()`` for anything that feeds a driver-visible
-# balance or a payout: applying this unconditionally retroactively changes
-# balances for drivers already paid out under the old behaviour. See that
-# function's docstring.
-ONLY_COLLECTED_RIDES: dict[str, Any] = {"payment_status": {"$in": list(COLLECTED_PAYMENT_STATUSES)}}
-
-# app_settings flag gating the payable-money filter. Default OFF: the filter
-# is correct going forward but is NOT safe to switch on blind — see
-# ``payable_ride_filter``.
-PAYABLE_FILTER_FLAG = "uncollected_rides_excluded_from_payable"
-
 
 def is_collected(ride: dict[str, Any]) -> bool:
     """True when this ride's fare has been collected (or waived) and is payable."""
@@ -89,54 +73,10 @@ def is_collected(ride: dict[str, Any]) -> bool:
 
 
 def drop_uncollected_rides(rides: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Post-fetch companion to ``ONLY_COLLECTED_RIDES``.
+    """Post-fetch filter on ``COLLECTED_PAYMENT_STATUSES``.
 
     For callers that cannot add a filter to their query (repository helpers
     with a fixed signature such as ``get_rides_for_driver``, or rows already
     in hand) — same shape as ``legacy_rides.drop_legacy_rides``.
     """
     return [r for r in rides if is_collected(r)]
-
-
-async def payable_ride_filter(app_settings: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``ONLY_COLLECTED_RIDES`` when the flag is on, ``{}`` (no filter) otherwise.
-
-    **Why this is flagged rather than always on.** ``payable_balance`` is a
-    live recompute — ``total_earnings - total_payouts`` (``routes/drivers/
-    earnings.py``, ``utils/auto_payout._balance_from_rows``) — with no floor.
-    Filtering uncollected rides shrinks ``total_earnings``, but a payout
-    already sent for such a ride stays in ``total_payouts``. Every driver paid
-    out under the old behaviour would go negative the moment this switched on,
-    and each future collected fare would silently net against that past
-    overpayment until they climbed back to zero.
-
-    That is an automatic clawback with no ledger row and no human decision —
-    exactly what ``scripts/reconcile_uncollected_ride_payouts.sql`` refuses to
-    build ("a driver still drove the trip, and whether Spinr recovers an
-    uncollected fare from the rider or absorbs it is a per-case business
-    decision"), and the same argument this module makes for keeping
-    ``disputed`` rides payable.
-
-    So the mechanism ships dark. Before flipping the flag on: run that report
-    against a read replica to size the affected cohort, decide how the
-    existing overpayment is handled, and note that with the flag ON
-    ``/drivers/balance`` and ``/drivers/earnings`` report different totals for
-    the same period (ACTION_ITEMS.md A28 decided they should agree — revisit
-    it, or carry the filter to ``get_driver_earnings`` at the same time).
-
-    Pass ``app_settings`` when the caller already loaded it; otherwise it is
-    fetched through the 60s-cached ``settings_loader.get_app_settings``.
-    Fails CLOSED (no filter, i.e. today's behaviour) if the settings read
-    fails — a flag read must never be the reason a driver's balance moves.
-    """
-    if app_settings is None:
-        try:
-            try:
-                from ..settings_loader import get_app_settings
-            except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-                from settings_loader import get_app_settings  # type: ignore
-
-            app_settings = await get_app_settings()
-        except Exception:
-            return {}
-    return dict(ONLY_COLLECTED_RIDES) if (app_settings or {}).get(PAYABLE_FILTER_FLAG, False) else {}

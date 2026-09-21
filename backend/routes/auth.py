@@ -637,8 +637,20 @@ async def _issue_company_email_session(
             raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
         user = dict(existing_user)
         try:
-            await db_supabase.update_one("users", {"id": user["id"]}, {"current_session_id": session_id})
-            user["current_session_id"] = session_id
+            # Completing this OTP IS proof the person controls the inbox, so
+            # stamp email_verified alongside the session. Without it the flag
+            # stayed false forever for company-email accounts — the only other
+            # writer is the rider-app verify flow (routes/users.py), which has
+            # no UI for this population — and /corporate/join-domain's
+            # email_verified gate then 403'd exactly the employees it exists
+            # for (2026-09-20 review, C5).
+            _verify_patch = {
+                "current_session_id": session_id,
+                "email_verified": True,
+                "email_verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
+            user.update(_verify_patch)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -660,6 +672,10 @@ async def _issue_company_email_session(
             "profile_complete": False,
             "current_session_id": session_id,
             "token_version": 0,
+            # The emailed OTP just proved inbox control — see the existing-user
+            # branch above for why this must be set here too (C5).
+            "email_verified": True,
+            "email_verified_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
             created = await db_supabase.create_user(user)

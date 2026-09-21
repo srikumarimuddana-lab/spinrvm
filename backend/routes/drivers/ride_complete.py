@@ -884,6 +884,7 @@ async def complete_ride(
                 "Ride Completed! ✅",
                 f"Your ride has finished. Total fare: ${rider_bill}",
                 data={"type": "ride_completed", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
 

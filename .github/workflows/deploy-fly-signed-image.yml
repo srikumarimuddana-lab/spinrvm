@@ -67,7 +67,17 @@ jobs:
   deploy-signed-image:
     name: Deploy signed GHCR image to Fly.io
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # up to 30 min polling for the image + normal deploy time
+    # ACTION_ITEMS.md C127: this budget must stay ahead of the upstream
+    # image-build chain the poll step below waits on (backend-test's own
+    # timeout-minutes + docker-image-scan's, both in ci.yml) plus this job's
+    # own deploy/readiness/verify steps. As of 2026-09-21 that chain is 35
+    # (backend-test) + 10 (docker-image-scan) = 45 min worst case -- rechecked
+    # against ci.yml directly, not copied from this item's original 40 min
+    # estimate, which was stale (backend-test moved 30->35 under CR #5579
+    # after this item was filed). 70 = 50 min poll (below) + ~20 min margin
+    # for setup/login/deploy/scale/readiness(3m)/verify(2m). Re-derive both
+    # numbers from ci.yml's current timeout-minutes values if they change.
+    timeout-minutes: 70
     env:
       FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
@@ -135,19 +145,22 @@ jobs:
         run: |
           set -uo pipefail
           echo "Waiting for ${IMAGE_REF} to exist and be cosign-signed"
-          echo "(ci.yml's docker-image-scan job: backend-test ~13-14 min, then build+push+sign) ..."
-          for i in $(seq 1 30); do
+          echo "(ci.yml's docker-image-scan job needs: [backend-test] -- worst case"
+          echo "35 min backend-test + 10 min docker-image-scan = 45 min; see this"
+          echo "job's timeout-minutes comment for how the 50 min budget below and"
+          echo "the job-level 70 min ceiling were derived) ..."
+          for i in $(seq 1 50); do
             if cosign verify "${IMAGE_REF}" \
                 --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
                 >/tmp/cosign-verify.log 2>&1; then
-              echo "Signature verified after attempt ${i}/30."
+              echo "Signature verified after attempt ${i}/50."
               exit 0
             fi
-            echo "  attempt ${i}/30: not ready yet ($(tail -1 /tmp/cosign-verify.log))"
+            echo "  attempt ${i}/50: not ready yet ($(tail -1 /tmp/cosign-verify.log))"
             sleep 60
           done
-          echo "::error::Timed out after 30 minutes waiting for a verified signed image at ${IMAGE_REF}."
+          echo "::error::Timed out after 50 minutes waiting for a verified signed image at ${IMAGE_REF}."
           cat /tmp/cosign-verify.log
           exit 1
 

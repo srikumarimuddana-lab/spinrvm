@@ -35,13 +35,11 @@ try:
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
     )
-    from ...utils.payment_collection import payable_ride_filter
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
     )
-    from utils.payment_collection import payable_ride_filter  # type: ignore
 
 router = APIRouter()
 
@@ -56,7 +54,6 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Driver not found")
 
     try:
-        _collected_filter = await payable_ride_filter()
         rides = await db_supabase.get_rows(
             "rides",
             {
@@ -66,16 +63,17 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
                 # utils/legacy_rides. Their offsetting 'legacy_import' payout
                 # is dropped below, so the balance arithmetic is unchanged.
                 **EXCLUDE_LEGACY_RIDES,
-                # Only rides whose fare was actually collected are payable —
-                # see utils/payment_collection. A completed ride whose card
-                # charge failed (payment_retry gives up at 'failed') keeps its
-                # driver_earnings and flows into payable_balance, which bounds
-                # the Stripe Transfer: Spinr pays out fares it never received.
-                # Flag-gated and OFF by default — switching it on retroactively
-                # drives already-paid-out drivers negative, so read
-                # payable_ride_filter's docstring first. Same call in
-                # utils/auto_payout.py and utils/driver_statement.py.
-                **_collected_filter,
+                # A completed ride is payable REGARDLESS of whether its fare
+                # was collected. That is deliberate product policy, not an
+                # oversight: the driver drove the trip, so Spinr pays them and
+                # absorbs a failed card charge, then pursues the rider — the
+                # same posture Uber and Lyft take. Recovery is the rider's
+                # booking block (routes/rides/booking.py), the retry loop
+                # (utils/payment_retry.py) and the admin payable invoice
+                # (POST /admin/rides/{id}/send-invoice), NOT withholding the
+                # driver's money. An earlier flag that filtered these out of
+                # payable balances was removed — see
+                # docs/change-log/2026-09-21-uncollected-rides-stay-payable.md.
             },
             limit=10000,
         )

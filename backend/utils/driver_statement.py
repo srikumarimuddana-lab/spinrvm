@@ -36,14 +36,12 @@ from zoneinfo import ZoneInfo
 try:
     from .. import db_supabase
     from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
-    from .payment_collection import payable_ride_filter
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
     )
-    from utils.payment_collection import payable_ride_filter  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -231,12 +229,9 @@ async def _build(
     # stamped with the import date, so the two halves land in different
     # periods — one statement showing inflated earnings with no offset, another
     # showing a large payout with no earnings. See utils/legacy_rides.
-    # A statement reports what the driver is owed/was paid, so a completed
-    # ride whose fare was never collected (failed card charge) is not income
-    # on it — the same rule /drivers/balance and the weekly auto_payout batch
-    # apply. Flag-gated and OFF by default: see payment_collection.
-    # payable_ride_filter for why switching it on is not a blind change.
-    _collected_filter = await payable_ride_filter()
+    # A completed ride is income on the statement whether or not its fare was
+    # collected: Spinr pays the driver and absorbs a failed card charge by
+    # policy, then pursues the rider separately. See routes/drivers/earnings.py.
     rides = (
         await db_supabase.get_rows(
             "rides",
@@ -245,7 +240,6 @@ async def _build(
                 "status": "completed",
                 "ride_completed_at": window,
                 **EXCLUDE_LEGACY_RIDES,
-                **_collected_filter,
             },
             limit=10000,
         )

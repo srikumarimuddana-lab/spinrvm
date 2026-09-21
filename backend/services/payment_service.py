@@ -2238,7 +2238,43 @@ async def settle_card(
                     target_app="rider",
                 )
             except Exception as _push_err:
-                logger.debug(f"Payment failure push to rider failed: {_push_err}")
+                # This is the rider's first and fastest notice that their card
+                # was declined and the ride is now payment_status='failed'. At
+                # debug it was invisible: nobody could tell a rider who was
+                # never told from one who ignored the notice.
+                #
+                # ERROR, not WARNING. A first draft used WARNING on the grounds
+                # that payment_retry "re-tries and re-notifies" — that is wrong,
+                # and worth recording so it is not reasoned back into place.
+                # utils/payment_retry.py only pushes the rider on the FINAL
+                # exhausted retry, and only from its except-branch; its normal
+                # decline path alerts admins, not the rider
+                # (_alert_admins_payment_exhausted). So there is no prompt
+                # compensating notice: if this push is lost, the rider's only
+                # remaining signal is being blocked at their next booking
+                # attempt. That is not "degraded but recovered", so CLAUDE.md's
+                # warning+metric row does not apply.
+                #
+                # ERROR also matches the established precedent for this exact
+                # notification: routes/webhooks.py:1151 logs the same lost
+                # "Payment Failed" push at ERROR.
+                #
+                # send_push_notification records spinr_push_send_total{outcome}
+                # internally, but only once it reaches the send itself — an
+                # exception raised before that (e.g. the token lookup) never
+                # reaches it, which is exactly the case this branch catches.
+                logger.opt(exception=True).error(
+                    "[PAYMENT] rider payment-failure push failed for ride {}: {}",
+                    ride_id,
+                    _push_err,
+                )
+                # Local import: this module imports metrics per-function, not at
+                # module scope (see settle_corporate, :1008).
+                try:
+                    from ..utils.metrics import inc as _metric_inc
+                except ImportError:  # pragma: no cover - dual import
+                    from utils.metrics import inc as _metric_inc  # type: ignore
+                _metric_inc("spinr_payment_rider_notice_failed_total", {"reason": "card_declined"})
         return PaymentResult(
             success=False,
             error_code="card_declined",
@@ -2285,7 +2321,19 @@ async def settle_card(
                 target_app="rider",
             )
         except Exception as _push_err:
-            logger.debug(f"Payment failure push to rider failed: {_push_err}")
+            # Same reasoning as the 'declined' branch above — see the comment
+            # there for why this is ERROR and why spinr_push_send_total does not
+            # already cover this path.
+            logger.opt(exception=True).error(
+                "[PAYMENT] rider payment-failure push failed for ride {}: {}",
+                ride_id,
+                _push_err,
+            )
+            try:
+                from ..utils.metrics import inc as _metric_inc
+            except ImportError:  # pragma: no cover - dual import
+                from utils.metrics import inc as _metric_inc  # type: ignore
+            _metric_inc("spinr_payment_rider_notice_failed_total", {"reason": "payment_error"})
     return PaymentResult(
         success=False,
         error_code="payment_error",

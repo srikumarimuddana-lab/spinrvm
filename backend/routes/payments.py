@@ -987,15 +987,28 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
     try:
         data = await request.json()
     except Exception as exc:
+        # Body did not parse at all — truncated upload, wrong content-type,
+        # proxy mangling. Logged (no body, which may carry a PAN) so a support
+        # ticket can tell this apart from the well-formed-but-wrong-shape case
+        # below; the two used to return one identical string with no logging.
+        logger.error(
+            "add_card: request body did not parse as JSON for user=%s",
+            current_user.get("id"),
+        )
         raise HTTPException(
             status_code=400,
-            detail="We couldn't read that request. Please try again.",
+            detail="We couldn't read that request. Please check your connection and try again.",
         ) from exc
 
     if not isinstance(data, dict):
+        logger.error(
+            "add_card: request body parsed but was %s, not an object, for user=%s",
+            type(data).__name__,
+            current_user.get("id"),
+        )
         raise HTTPException(
             status_code=400,
-            detail="We couldn't read that request. Please try again.",
+            detail="We couldn't read those card details. Please try adding the card again.",
         )
 
     forbidden = _RAW_CARD_FIELDS.intersection(data.keys())

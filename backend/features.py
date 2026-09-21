@@ -426,11 +426,14 @@ async def get_faqs(
 #     /api/admin/... (routes/admin/support.py, support_tickets.py, faqs.py,
 #     service_areas.py), which is what actually serves the admin UI.
 # Only admin_reset_surge_to_auto below is real: admin-dashboard's
-# resetSurgeToAuto() calls PUT /api/v1/service-areas/{id}/surge/auto
-# directly (admin-dashboard/src/lib/api/pricing.ts), and no /api/admin/...
-# equivalent exists — routes/admin/service_areas.py only has the manual
-# override (PUT .../surge), not an auto-reset. Kept as-is, only the router
-# it lives on lost its other 8 (formerly dead) siblings.
+# resetSurgeToAuto() targets PUT /api/admin/service-areas/{id}/surge/auto
+# (admin-dashboard/src/lib/api/pricing.ts), though no UI currently calls it —
+# the "Reset to auto-surge" button saves via PUT /api/admin/service-areas/{id}.
+# server.py mounts this router under /api/admin (gated on the service_areas
+# module) as well as /api/v1, because /api/v1 is App-Check-enforced and the
+# browser dashboard can't send that header. routes/admin/service_areas.py only
+# has the manual override (PUT .../surge), not an auto-reset. Kept as-is, only
+# the router it lives on lost its other 8 (formerly dead) siblings.
 
 
 @admin_support_router.put("/service-areas/{area_id}/surge/auto")

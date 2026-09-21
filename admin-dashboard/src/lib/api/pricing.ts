@@ -92,7 +92,7 @@ export const deleteIncentive = (id: string) =>
 export const getSurgeStatus = () =>
     request<any[]>("/api/admin/surge/status");
 export const resetSurgeToAuto = (id: string) =>
-    request<any>(`/api/v1/service-areas/${id}/surge/auto`, { method: "PUT" });
+    request<any>(`/api/admin/service-areas/${id}/surge/auto`, { method: "PUT" });
 
 /* ── Vehicle Types ────────────────────────── */
 export const getVehicleTypes = () =>

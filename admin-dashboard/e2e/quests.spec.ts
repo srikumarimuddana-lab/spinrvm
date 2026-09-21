@@ -26,9 +26,9 @@ async function mockQuests(page: any) {
   await setupAdminMocks(page, {
     extra: async (route, url, method, json) => {
       if (url.includes('/participants')) return json(200, []);
-      if (method === 'POST' && url.includes('/quests/admin/create')) return json(200, MOCK_QUEST);
-      if (method === 'PATCH' && url.match(/\/quests\/admin\/quest_e2e_1/)) return json(200, MOCK_QUEST);
-      if (url.includes('/quests/admin/list')) return json(200, [MOCK_QUEST]);
+      if (method === 'POST' && url.includes('/api/admin/quests/create')) return json(200, MOCK_QUEST);
+      if (method === 'PATCH' && url.match(/\/api\/admin\/quests\/quest_e2e_1/)) return json(200, MOCK_QUEST);
+      if (url.includes('/api/admin/quests/list')) return json(200, [MOCK_QUEST]);
       // getServiceAreas() returns a raw array — see drivers.spec.ts lesson.
       if (url.includes('/service-areas')) return json(200, [{ id: 'saskatoon', name: 'Saskatoon' }]);
       return null;

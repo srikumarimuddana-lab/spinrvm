@@ -1,11 +1,16 @@
 -- 437_notifications_rls.sql
 --
--- `notifications` (migration 48) is the one user-data table that never
--- shipped RLS. It has no ENABLE ROW LEVEL SECURITY and no policies, and no
--- later migration added any — confirmed by grepping every file in
--- backend/migrations/ for "ON notifications" / "TABLE notifications", which
--- matches only migration 48 itself. Every other user-data table follows the
--- pattern root CLAUDE.md mandates; this one was missed.
+-- `notifications` (migration 48) never shipped RLS. It has no ENABLE ROW LEVEL
+-- SECURITY and no policies, and no later migration added any — confirmed by
+-- grepping every file in backend/migrations/ for "ON notifications" /
+-- "TABLE notifications", which matches only migration 48 itself.
+--
+-- NOT the only table in this state: `notification_preferences`, created by
+-- that same migration 48, also has no RLS anywhere in migration history (the
+-- only later files touching it — 224, 300, 304 — add none). This migration
+-- deliberately covers `notifications` only, because that is the table the
+-- audience work touches; do not read it as closing the gap for the whole
+-- table family. notification_preferences remains open.
 --
 -- Found while adding the `audience` column (migration 436). Reported rather
 -- than silently folded into that change, and deliberately kept as its own

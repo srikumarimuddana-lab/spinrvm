@@ -32,15 +32,38 @@
 -- narrow set. Leading with user_id then audience would force a BitmapOr or
 -- MergeAppend across the two IN values and lose the ordered scan, while
 -- adding write amplification to an append-hot table every push writes to.
--- Revisit only if EXPLAIN on real inbox volume says otherwise.
+-- This is an execution-plan argument, not a measurement. Two caveats worth
+-- knowing before treating it as settled: the per-user row count above is
+-- asserted rather than observed, and there is no retention/purge job for
+-- `notifications` anywhere in the backend (utils/retention_purge.py does not
+-- cover it and no DELETE FROM notifications exists outside the user-initiated
+-- clear endpoint), so rows accumulate indefinitely for a long-tenured user.
+-- Worth confirming against production before relying on it:
+--   EXPLAIN ANALYZE SELECT * FROM notifications
+--    WHERE user_id = '<busy user>' AND audience IN ('rider','both')
+--    ORDER BY created_at DESC LIMIT 30;
+--   SELECT user_id, count(*) FROM notifications GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
 --
 -- Rollback plan (no second deploy needed — the reader treats a missing
 -- column as "no scoping" only if it is also reverted, so revert the app code
 -- first, then optionally):
 --   ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_audience_check;
 --   ALTER TABLE notifications DROP COLUMN IF EXISTS audience;
--- Dropping the column is safe at any time: it carries no FK, nothing else
--- reads it, and every row is reconstructible as 'both'.
+-- ORDERING IS LOAD-BEARING — revert the app code FIRST. routes/notifications.py
+-- filters on this column with no try/except, so dropping it while the new code
+-- is live makes GET /notifications, PUT /read-all and DELETE /notifications
+-- return 503 for every user on both apps. Once the code is reverted the drop
+-- itself is unconstrained: no FK, no other reader, and every row is
+-- reconstructible as 'both'.
+
+-- lock_timeout, matching migration 428's precedent for this same
+-- ADD COLUMN ... NOT NULL DEFAULT shape. Each ALTER below needs a brief
+-- ACCESS EXCLUSIVE lock for a catalog-only update, which is fine uncontended
+-- — but if one queues behind a lock another transaction already holds on this
+-- table, every INSERT from the ~95 push call sites that write here queues
+-- behind it too. Without a timeout that pileup is unbounded; with one the
+-- migration aborts and can be retried instead.
+SET lock_timeout = '5s';
 
 ALTER TABLE notifications
     ADD COLUMN IF NOT EXISTS audience TEXT NOT NULL DEFAULT 'both';
@@ -63,3 +86,5 @@ ALTER TABLE notifications
     CHECK (audience IN ('rider', 'driver', 'both')) NOT VALID;
 ALTER TABLE notifications
     VALIDATE CONSTRAINT notifications_audience_check;
+
+RESET lock_timeout;

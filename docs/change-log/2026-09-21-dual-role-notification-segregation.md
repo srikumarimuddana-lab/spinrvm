@@ -90,11 +90,27 @@ Specifically checked and found **not** to regress:
   changed only which token column their push reads).
 
 **Residual risks:**
-1. **Deploy ordering is load-bearing.** The code now sends an `audience` key on insert. If the
-   backend deploys *before* migration 436 runs, every inbox insert raises "column does not exist".
-   It degrades rather than breaks — `_record_inbox_notification`'s `_write()` catches and logs, so
-   push *delivery* is unaffected — but the Notifications page would stop gaining rows until the
-   migration lands. **Run 436 before deploying.**
+1. **Deploy ordering is load-bearing — this is a lockstep deploy, NOT git-revert-safe.**
+   **Correction (post-review):** an earlier draft of this log said the pre-migration failure mode
+   "degrades rather than breaks". That is true only of the *write* path and was wrong as a general
+   claim. The `spinr-migration-reviewer` pass caught it and the correction is material:
+
+   - **Write path — degrades.** `_record_inbox_notification` runs as a spawned fire-and-forget
+     task whose `_write()` catches and logs at ERROR level. Push *delivery* is unaffected; the
+     Notifications page just stops gaining rows.
+   - **Read path — hard-fails.** `get_notifications`, `mark_all_read` and `clear_notifications`
+     call `get_rows` / `update_one` / `delete_many` with an unconditional `audience` filter and
+     **no try/except**. Against a database without the column, `repositories/_base.py` raises,
+     `utils/error_handling.py` wraps it as a `DatabaseError` → **503**, and it propagates to the
+     global handler. Both apps send `X-App-Platform` on every request today, so `_audience_filter`
+     returns a filter on essentially all real traffic — meaning **a full outage of the
+     Notifications tab, the unread bell, mark-as-read and clear-all, for every user on both apps**,
+     for the entire code-deployed-but-migration-not-applied window.
+
+   This matters because nothing in the repo sequences the two: no workflow invokes
+   `run_migrations.py`, Railway and Fly auto-deploy from `main` on merge, and migrations are a
+   separate manual step. **Migration 436 must be applied before this code reaches production.**
+   Treat the PR as requiring a coordinated deploy, not as revert-safe.
 2. **A notification narrowed to the wrong app disappears from the other one.** This is why an
    unset or unrecognised `target_app` maps to `'both'` and is never guessed from `data['type']` or
    the user's role flags: a wrong narrowing hides a message, which is worse than the duplicate it
@@ -290,5 +306,20 @@ State plainly, because silence would imply coverage that does not exist:
 
 ## 11. Reviewer findings
 
-_Pending — `spinr-notification-ux-reviewer` and `spinr-migration-reviewer` were run against the
-actual diff per CLAUDE.md gate 10. Findings and their resolutions are recorded here._
+Both reviewers were run against the actual diff (not the description) per CLAUDE.md gate 10.
+
+### `spinr-migration-reviewer` — verdict: FIX BLOCKERS
+
+| # | Finding | Resolution |
+|---|---|---|
+| B1 | **Deploy ordering.** Read path has no try/except, so code-before-migration = 503 outage of Notifications on both apps, not a graceful degrade | **Confirmed by reading the code, not taken on trust.** §4.1 corrected above. Residual decision on whether to add a guard is open — see below |
+| W1 | No `lock_timeout` on 436's ALTERs, despite the file itself calling the table append-hot; migration 428 has the idiom | **Fixed** — `SET lock_timeout = '5s'` / `RESET`, matching 428 |
+| W2 | "No index" reasoning asserted, not measured; no purge job bounds per-user row growth | **Fixed** — comment now states it as an execution-plan argument with the two caveats, and carries the exact `EXPLAIN` + row-count queries to confirm it |
+| W3 | 436's rollback said "safe at any time" two lines after establishing it is not | **Fixed** — replaced with the explicit revert-code-first ordering and why |
+| W4 | 437 overclaimed `notifications` as "the one" table without RLS; `notification_preferences` also has none | **Fixed** — corrected, and `notification_preferences` recorded as still open |
+| — | NOT VALID/VALIDATE split | **Upheld as correct.** `VALIDATE` takes SHARE UPDATE EXCLUSIVE, which does not conflict with writers' ROW EXCLUSIVE — the lighter lock is the point, independent of the outcome being a foregone conclusion |
+| — | RLS (437) | **Upheld.** Reviewer independently reconfirmed no Supabase client in either app and no `from('notifications')` in any surface |
+
+### `spinr-notification-ux-reviewer`
+
+_Running at the time of writing; findings to be appended._

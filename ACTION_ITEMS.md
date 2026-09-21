@@ -13616,6 +13616,91 @@ record of what was assumed vs. what was actually true</summary>
   actual Sentry data was not performed as part of shipping this, since
   doing so risked opening a real fix PR before the human-review posture
   could be confirmed working as designed).
+- **Update (2026-09-21, cadence + correlation):** extended before the
+  first live run, per user request:
+  1. **Dual cadence, not single**: a daily `--severity-only` scan
+     (`domain=payments|auth|dispatch|safety`, `error`/`fatal`, last 24h)
+     plus the original weekly full-window run — both as Routines, not a
+     live webhook. A `watch_url`-minted webhook was considered for a
+     real-time severity trigger and rejected: it's scoped to the session
+     that creates it and doesn't survive a container restart, so it can't
+     back a durable trigger, and this session has no Sentry write access
+     to configure an alert rule's webhook action anyway. The daily scan
+     is the reliable substitute at the cost of up to ~24h latency instead
+     of near-real-time — an accepted tradeoff given the tooling
+     constraint, not a design preference.
+  2. **Correlation step wired into the EXISTING `correlate_incident.py`
+     tool, not a new one.** Before implementing the extension, verified
+     directly (a first research pass had missed this file entirely,
+     caught by a second, targeted grep) that
+     `scripts/incident-analysis/correlate_incident.py` +
+     `test_correlate_incident.py` already exist — built 2026-09-19 as
+     Phase 3 of the security-automation roadmap, scaffolded against mocked
+     data specifically for "the moment Sentry is authorized," which is
+     now. The investigator agent now maps its `search_events`/
+     `search_issues` results into that module's documented input shape
+     and calls it via `Bash`, rather than reimplementing request_id-join/
+     severity-ranking logic inline. `log_lines`/`audit_rows` correlation
+     (the other two of the module's three inputs) is explicitly **not**
+     wired in this pass — it would need a new Supabase-read-only and/or
+     Railway/Fly-log tool grant to the investigator agent, which is its
+     own connector-scoping decision this change deliberately does not
+     make unilaterally. The investigator's report says plainly when
+     log/audit correlation wasn't available, rather than presenting a
+     Sentry-only partial timeline as complete.
+  3. **No duplication of other repo automation confirmed** — a research
+     pass checked all 11 currently-scheduled GitHub Actions workflows
+     (doc/tracker-freshness checks and scan re-runs; none does RCA/log
+     correlation/narrative reporting) and every `scripts/security/*.py`
+     script (SAST/dependency-audit summarization only, no Sentry/log/audit
+     correlation) — no overlap found. **Note:** that first research pass
+     missed a real, already-built module — `scripts/incident-analysis/
+     correlate_incident.py` (Phase 3 of the 2026-09-19 security-automation
+     roadmap, scaffolded against mocked data specifically for "the moment
+     Sentry is authorized"). Caught by a second, targeted `find`/`grep`
+     pass before any correlation code was written. The investigator agent
+     now calls this existing module (via `Bash`, mapping its own
+     `search_events` results into the module's documented input shape)
+     instead of reimplementing request_id-join/severity-ranking logic —
+     see the agent's "5. Correlate" step. `log_lines`/`audit_rows`
+     correlation (the module's other two inputs) remains unwired — it
+     needs a live log-aggregation source and DB access the investigator
+     doesn't have, a deliberate connector-scoping decision left open.
+  4. **Adversarial review (2026-09-21) found 5 real issues, all fixed
+     before merge:**
+     - `correlate_incident.py`'s `LEVEL_RANK` had no `"fatal"` entry, so a
+       genuine fatal-level event would rank at the bottom of severity
+       ordering (tied with `debug`) — the exact inverse of what the new
+       daily severity-scoped mode needs. Fixed (`"fatal": 4` added), plus
+       a regression test (`test_correlate_ranks_fatal_above_error`).
+     - The new investigator "Correlated timeline" report field had no
+       corresponding key in `scripts/observability/
+       generate_sentry_weekly_report.py`'s `_render_issue()` — the
+       disclosure (including "log/audit correlation not available this
+       run") would silently never reach the durable, published weekly
+       report even when the investigator's own output correctly included
+       it. Fixed — `correlated_timeline` now renders, with a regression
+       test asserting the disclosure text survives into the report.
+     - The daily severity-scoped cadence and the weekly full-window
+       cadence would have written the same `YYYY-MM-DD-weekly-report.md`
+       filename pattern, causing the weekly run's window-discovery step to
+       treat a narrow 24h daily scan as if it were a real 7-day audit —
+       silently shrinking every subsequent weekly window, and risking a
+       duplicate fix PR for an issue the daily run already actioned. Fixed
+       — the daily cadence no longer writes a persisted report file at
+       all (PR-driving only); the weekly run now checks open/merged PRs by
+       Sentry short-id before treating an issue as new.
+     - Two `.claude/agents/spinr-sentry-triage-investigator.md` heading/
+       description issues (a duplicate `## 6.` heading from an incomplete
+       renumbering, and a description overclaiming which correlation
+       sources are actually wired) — both fixed.
+     - **Deferred, not built this pass** (non-blocking INFO from the
+       observability review): a `spinr_admin_sentry_triage_run_total{cadence,
+       outcome}`-style metric so a human would notice if a Routine silently
+       stopped firing, the same way the 42 backend background loops are
+       watchdog-monitored. Would need backend/metrics-layer changes beyond
+       this PR's `.claude/`+`scripts/` scope — left as future backlog here
+       rather than expanding scope unilaterally.
 
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify

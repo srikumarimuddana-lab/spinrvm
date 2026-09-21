@@ -25,7 +25,7 @@ Expected input shapes (each a JSON array of objects):
     {
       "id": str,
       "title": str,
-      "level": "error" | "warning" | "info",
+      "level": "fatal" | "error" | "warning" | "info",
       "timestamp": ISO8601 str,
       "tags": {
         "domain": one of CLAUDE.md's Sentry domain tags (dispatch, payments,
@@ -90,7 +90,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-LEVEL_RANK = {"error": 3, "critical": 3, "warning": 2, "warn": 2, "info": 1, "debug": 0}
+LEVEL_RANK = {"fatal": 4, "error": 3, "critical": 3, "warning": 2, "warn": 2, "info": 1, "debug": 0}
 
 # Defense-in-depth redaction for free-text fields (Sentry event `title`,
 # log line `message`) -- see the module docstring's "PII defense-in-depth"

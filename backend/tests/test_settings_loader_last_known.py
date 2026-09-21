@@ -104,8 +104,23 @@ class TestFailedReadDoesNotClobber:
             settings_loader.db_supabase,
             "get_rows",
             AsyncMock(return_value=[{"id": "app_settings", "new_ride_requests_enabled": False}]),
-        ):
+        ) as mock_get_rows:
             loaded = await settings_loader.get_app_settings()
+        # TEMPORARY DIAGNOSTIC (C130) -- remove before merge. Prints full
+        # state on failure to find the actual pollution mechanism, since the
+        # leaked-task/event-loop-race hypothesis is disproven (nothing can
+        # interleave between the synchronous reset above and the synchronous
+        # start of get_app_settings()'s own cache check).
+        if "new_ride_requests_enabled" not in loaded:
+            import backend.schemas as _schemas_mod
+
+            print(f"C130 DIAG loaded={loaded!r}", flush=True)
+            print(f"C130 DIAG mock_get_rows.await_count={mock_get_rows.await_count}", flush=True)
+            print(f"C130 DIAG defaults={settings_loader._defaults_dict()!r}", flush=True)
+            print(f"C130 DIAG id(settings_loader)={id(settings_loader)}", flush=True)
+            print(f"C130 DIAG id(settings_loader.db_supabase)={id(settings_loader.db_supabase)}", flush=True)
+            print(f"C130 DIAG id(_schemas_mod.AppSettings)={id(_schemas_mod.AppSettings)}", flush=True)
+            print(f"C130 DIAG id(settings_loader.AppSettings)={id(settings_loader.AppSettings)}", flush=True)
         assert loaded["new_ride_requests_enabled"] is False
 
         # Expire the cache so the next call actually attempts a read, then make

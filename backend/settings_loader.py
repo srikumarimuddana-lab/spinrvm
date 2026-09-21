@@ -55,6 +55,33 @@ async def get_app_settings() -> Dict[str, Any]:
     return result
 
 
+def get_last_known_app_settings() -> Optional[Dict[str, Any]]:
+    """The last settings this process loaded successfully, **however old**, or
+    ``None`` if it has never completed one.
+
+    For callers that must still make a decision when :func:`get_app_settings`
+    *raises*. ``get_app_settings`` only writes ``_settings_cache`` after a
+    successful read, so whatever is in there is by construction the last known
+    good value — a failed read never overwrites it.
+
+    Deliberately ignores ``_SETTINGS_TTL``, which is the whole point and the
+    only difference from :func:`get_cached_app_settings`. The TTL exists to
+    decide *when to refresh*; it is not a claim that a value older than 60 s is
+    worthless. When the refresh itself is failing, a minute-old flag is a far
+    better basis for a decision than a hardcoded default — in particular for an
+    incident kill switch, where the hardcoded default (``True``, "not killing
+    anything") is exactly the wrong answer during the incident the switch was
+    flipped for.
+
+    Returns the live cached dict, not a copy, matching
+    :func:`get_cached_app_settings` and :func:`get_app_settings` — every reader
+    in this codebase treats settings as read-only.
+    """
+    if _settings_cache is None:
+        return None
+    return _settings_cache[1]
+
+
 def get_cached_app_settings() -> Optional[Dict[str, Any]]:
     """The last-loaded settings if still within the TTL, else None. Never loads.
 

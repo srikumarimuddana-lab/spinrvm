@@ -51,7 +51,7 @@ try:
         rank_by_eta_with_acceptance,
     )
     from ...services.fare_service import build_fare_breakdown_lines, calculate_fare
-    from ...settings_loader import get_app_settings
+    from ...settings_loader import get_app_settings, get_last_known_app_settings
     from ...sms_service import send_sms
     from ...socket_manager import manager
     from ...utils.address_verification import verify_address_matches_coordinate
@@ -105,7 +105,7 @@ except ImportError:
         rank_by_eta_with_acceptance,
     )
     from services.fare_service import build_fare_breakdown_lines, calculate_fare
-    from settings_loader import get_app_settings
+    from settings_loader import get_app_settings, get_last_known_app_settings
     from sms_service import send_sms
     from socket_manager import manager
     from utils.address_verification import verify_address_matches_coordinate

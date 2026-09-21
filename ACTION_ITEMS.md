@@ -17287,9 +17287,10 @@ record of what was assumed vs. what was actually true</summary>
   added to `AppSettings`, checked at the very top of `POST /rides`
   (`create_ride`, `routes/rides/booking.py`), before `validate_ride_location`
   or any DB write. Flipping it off returns a clean `503 "Ride requests are
-  temporarily unavailable. Please try again shortly."`. Fails open on a
+  temporarily unavailable. Please try again shortly."`. ~~Fails open on a
   settings-read error, same convention as `settle_corporate`'s
-  `corporate_billing_enabled` check. Added to `SettingsUpdateRequest`
+  `corporate_billing_enabled` check.~~ **Superseded 2026-09-21 — see the
+  amendment below.** Added to `SettingsUpdateRequest`
   (`routes/admin/settings.py`) so it's admin-settable via the existing
   generic PUT handler, same shape as the four E5 flags (no super-admin gate
   needed). `saskatoon-launch.md` §N-4 updated to document it as a third
@@ -17302,6 +17303,39 @@ record of what was assumed vs. what was actually true</summary>
   normal operation (default `true`). Full backend suite: `12774 passed, 8
   skipped, 1 xfailed, 0 failed`. See
   `docs/change-log/2026-08-22-g5-new-ride-requests-kill-switch.md`.
+- **Amendment (2026-09-21) — the fail-open behaviour above was replaced.**
+  2026-09-20 review finding E2. The original reasoning was sound as far as it
+  went (this flag gates *every* booking platform-wide, so a degraded
+  `app_settings` read must not by itself take the product's demand side down —
+  unlike `corporate_billing_enabled`, whose blast radius is one settlement).
+  What it missed: the flag's default is `True` ("not killing anything"), so a
+  read failure silently **resumed** bookings during exactly the incident an
+  operator had paused them for — and "paused" and "DB degrading" are strongly
+  correlated, because operators pause bookings precisely when infrastructure is
+  failing. A kill switch that stops working when things break is not a kill
+  switch.
+  It now falls back to the **last successfully-read value** of the flag, via the
+  new `get_last_known_app_settings()` in `settings_loader.py` (safe because
+  `get_app_settings()` writes its cache only after a successful read, so a
+  failed read never overwrites it). Paused + DB degrades → still paused;
+  steady-state + transient blip → booking proceeds; cold start with no prior
+  read → proceeds, matching the original posture. Read failures now log at
+  ERROR and increment
+  `spinr_rides_settings_read_failed_total{flag,fallback}`.
+  Also fixed while there: `.get(flag, True)` only supplies its default when the
+  key is **absent**, so a column present but explicitly `NULL` returned `None`
+  and `bool(None)` is `False` — a null column would have paused every booking
+  platform-wide. All three "no opinion recorded" cases (absent, NULL, never
+  read) now read as enabled.
+  `test_booking_new_ride_requests_kill_switch.py`'s
+  `test_settings_lookup_failure_fails_open` is **gone**, replaced by six tests
+  covering each fallback case. See
+  `docs/change-log/2026-09-21-booking-kill-switch-last-known-good.md`.
+  **Still fail-open, not yet revisited:** `promo_redemption_enabled`
+  (`routes/promotions.py`) and `scheduled_dispatch_enabled`
+  (`utils/scheduled_rides.py`) carry the same superseded "same convention as
+  every other kill switch" comment. Each is a separate domain with its own
+  blast radius and needs its own decision.
 - **(historical) Status:** open — identified 2026-08-21. **Not a re-proposal of E5** (CLOSED
   2026-08-11 — `scheduled_dispatch_enabled`, `surge_engine_enabled`,
   `promo_redemption_enabled`, `corporate_billing_enabled`); this is an additional flag

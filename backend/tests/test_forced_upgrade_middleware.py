@@ -42,6 +42,25 @@ def _restore_core_config_settings():
         _core_config_mod.settings = _original_settings
 
 
+@pytest.fixture(autouse=True)
+def _restore_get_app_settings():
+    """`_client_with_min_version()` below replaces `settings_loader.get_app_settings`
+    with a raw module-attribute reassignment (not `mock.patch`/`monkeypatch`),
+    so nothing restores it automatically. Left unrestored, this file's last
+    fixture-configured fake permanently replaces the real implementation for
+    the rest of the pytest session -- confirmed via ACTION_ITEMS.md C130: it
+    deterministically broke `test_settings_loader_last_known.py`, which runs
+    later in collection order and got back this file's own last-configured
+    stub (`{"min_driver_app_version": "", "min_rider_app_version": ""}` from
+    `TestNoMinimumConfiguredStillPassesThrough`) instead of exercising a real
+    settings read."""
+    import settings_loader
+
+    original = settings_loader.get_app_settings
+    yield
+    settings_loader.get_app_settings = original
+
+
 def _make_app() -> FastAPI:
     """Minimal FastAPI app with ForcedUpgradeMiddleware attached, mirroring
     the real driver-app route shapes involved in the trip-completion flow."""

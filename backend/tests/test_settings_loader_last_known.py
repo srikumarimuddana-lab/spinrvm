@@ -19,7 +19,6 @@ flag beats a hardcoded default.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -28,27 +27,6 @@ import pytest
 from backend import settings_loader
 
 pytestmark = pytest.mark.anyio
-
-
-async def _drain_leaked_tasks() -> None:
-    """Flush the event loop's ready queue before touching ``_settings_cache``.
-
-    ACTION_ITEMS.md C130: pytest-asyncio's legacy wrapper for class-based
-    async tests reuses one ambient event loop across many test functions
-    (not a fresh loop per test), so a fire-and-forget task leaked by an
-    earlier, unrelated async test can still be pending when this class's
-    tests start. Left unaddressed, such a task can call the real
-    ``get_app_settings()`` and populate ``_settings_cache`` between this
-    fixture's reset and this test's own (patched) read, so the cache-hit
-    fast path (``settings_loader.py``'s ``if _settings_cache is not None``
-    branch) silently returns someone else's value instead of exercising the
-    patch under test — confirmed as the mechanism behind C130's
-    full-suite-only ``KeyError``/``TypeError`` failures. A bounded number of
-    ``sleep(0)`` ticks lets any such task fully unwind (its own awaits all
-    resolve near-instantly against mocked I/O) without risking a hang.
-    """
-    for _ in range(50):
-        await asyncio.sleep(0)
 
 
 @pytest.fixture(autouse=True)
@@ -98,29 +76,12 @@ class TestFailedReadDoesNotClobber:
         DB degrades. The next read raises — and the cached False must still be
         there afterwards, or the switch silently un-pauses.
         """
-        await _drain_leaked_tasks()
-        settings_loader._settings_cache = None
         with patch.object(
             settings_loader.db_supabase,
             "get_rows",
             AsyncMock(return_value=[{"id": "app_settings", "new_ride_requests_enabled": False}]),
-        ) as mock_get_rows:
+        ):
             loaded = await settings_loader.get_app_settings()
-        # TEMPORARY DIAGNOSTIC (C130) -- remove before merge. Prints full
-        # state on failure to find the actual pollution mechanism, since the
-        # leaked-task/event-loop-race hypothesis is disproven (nothing can
-        # interleave between the synchronous reset above and the synchronous
-        # start of get_app_settings()'s own cache check).
-        if "new_ride_requests_enabled" not in loaded:
-            import backend.schemas as _schemas_mod
-
-            print(f"C130 DIAG loaded={loaded!r}", flush=True)
-            print(f"C130 DIAG mock_get_rows.await_count={mock_get_rows.await_count}", flush=True)
-            print(f"C130 DIAG defaults={settings_loader._defaults_dict()!r}", flush=True)
-            print(f"C130 DIAG id(settings_loader)={id(settings_loader)}", flush=True)
-            print(f"C130 DIAG id(settings_loader.db_supabase)={id(settings_loader.db_supabase)}", flush=True)
-            print(f"C130 DIAG id(_schemas_mod.AppSettings)={id(_schemas_mod.AppSettings)}", flush=True)
-            print(f"C130 DIAG id(settings_loader.AppSettings)={id(settings_loader.AppSettings)}", flush=True)
         assert loaded["new_ride_requests_enabled"] is False
 
         # Expire the cache so the next call actually attempts a read, then make
@@ -143,8 +104,6 @@ class TestFailedReadDoesNotClobber:
     async def test_a_successful_read_does_advance_it(self):
         """The other direction: once the read recovers and says True, the stale
         False must not linger."""
-        await _drain_leaked_tasks()
-        settings_loader._settings_cache = None
         with patch.object(
             settings_loader.db_supabase,
             "get_rows",

@@ -28543,86 +28543,70 @@ as evidence that the thing it configures exists.
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
-### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
+### C130. `test_forced_upgrade_middleware.py` permanently monkeypatches `settings_loader.get_app_settings` with no restoration — broke `test_settings_loader_last_known.py` under full-suite ordering
 
-- [ ] **Status:** OPEN — first fix attempt DISPROVEN by CI 2026-09-21
-  (branch `fix/settings-loader-cache-isolation`, PR #5648). Found while
-  root-causing `backend-test` CI failures for PR #5612/#5634 (the
-  #5614-fallout fix round). A first attempt hardened per this entry's own
-  suggested fallback (drain the event loop's ready queue, 50×`await
-  asyncio.sleep(0)`, then re-null `_settings_cache` as each async test's
-  own first statement, on top of the existing autouse fixture) on the
-  theory that a task leaked by an earlier test races the cache reset via a
-  shared event loop. **CI's real full-suite run proved this wrong**: both
-  tests still fail with the identical errors on the commit containing the
-  fix. The theory doesn't hold up under scrutiny either — there is no
-  `await` between the explicit synchronous reset and
-  `get_app_settings()`'s own synchronous cache-hit check, so nothing else
-  on the event loop can interleave there regardless of what's pending; the
-  `[asyncio]` parametrize suffix on the failing test IDs also confirms
-  this file runs under the real `anyio` pytest plugin, not the
-  pytest-asyncio class-test wrapper the theory was built on. A diagnostic
-  commit (prints `loaded`, the mock's call count, `_defaults_dict()`'s
-  actual contents, and object identities for `settings_loader`/
-  `db_supabase`/`AppSettings`, gated on the failure reproducing) is
-  pushed and awaiting a CI run's captured stdout — see PR #5648 for the
-  next update once that lands. Real bisection/instrumentation per the
-  rest of this entry remains the fallback if the diagnostic doesn't
-  pin it down.
-- **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
-  (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
-  fixture that sets `settings_loader._settings_cache = None` before each
-  test and restores it after. Despite that, running the *entire*
-  `backend/tests/` suite in real collection order (confirmed twice,
-  independently: a full 16166-test run and a 794-file prefix-subset run
-  both up to and including this file) reliably fails both
-  `TestFailedReadDoesNotClobber` tests:
-  `test_last_known_survives_a_raising_read` → `KeyError: 'new_ride_requests_enabled'`
-  on the very first `get_app_settings()` call in the test, immediately
-  after mocking `db_supabase.get_rows` to return a row containing that
-  key; `test_a_successful_read_does_advance_it` → `TypeError: 'NoneType'
-  object is not subscriptable`. Both tests pass individually, and pass
-  paired with their immediate neighbor file
-  (`test_settings_column_parity.py`) — the pollution only reproduces
-  under the true, much-longer preceding chain.
+- [x] **Status:** FIXED 2026-09-21 (branch `fix/settings-loader-cache-isolation`,
+  PR #5648). Found while root-causing `backend-test` CI failures for PR
+  #5612/#5634 (the #5614-fallout fix round). Two earlier fix attempts on
+  this branch were wrong and disproven by CI before the real cause was
+  found — see the branch's own commit history / PR #5648 for that trail;
+  this entry records only the confirmed final state.
+- **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`'s two
+  `TestFailedReadDoesNotClobber` tests pass individually and paired with
+  their immediate neighbor file, but reliably fail under real full-suite
+  collection order:
+  `test_last_known_survives_a_raising_read` → `KeyError: 'new_ride_requests_enabled'`;
+  `test_a_successful_read_does_advance_it` → `TypeError: 'NoneType' object
+  is not subscriptable`.
+- **Root cause (confirmed):** `backend/tests/test_forced_upgrade_middleware.py`'s
+  `_client_with_min_version()` helper does
+  `settings_loader.get_app_settings = AsyncMock(side_effect=_fake_get_app_settings)`
+  — a raw module-attribute reassignment, not `mock.patch()` or
+  `monkeypatch.setattr()` — so nothing ever restores the real function.
+  Every test in that file re-triggers this helper, and the last one to run
+  (`TestNoMinimumConfiguredStillPassesThrough::test_empty_minimum_passes_through`)
+  leaves `settings_loader.get_app_settings` permanently replaced by a fake
+  that unconditionally returns
+  `{"min_driver_app_version": "", "min_rider_app_version": ""}` for the
+  rest of the pytest process. `test_forced_upgrade_middleware.py` sorts
+  before `test_settings_loader_last_known.py` in collection order, so by
+  the time the latter runs, `settings_loader.get_app_settings()` no longer
+  runs its real implementation at all — confirmed via a temporary
+  diagnostic commit's CI output: `loaded` was exactly that fake dict and
+  the `db_supabase.get_rows` mock had `await_count=0`, proving the real
+  function body (and `_settings_cache`) was never reached. Locally
+  reproduced deterministically by running both files together
+  (`pytest tests/test_forced_upgrade_middleware.py
+  tests/test_settings_loader_last_known.py`) — 2 failures before the fix,
+  0 after.
+  Two earlier hypotheses on this same branch (a leaked task racing
+  `_settings_cache` via a shared event loop; module-identity splitting)
+  were tested and disproven — worth recording so a future session doesn't
+  retread them: the "leaked task" theory in particular is structurally
+  impossible for this failure shape, since there's no `await` between a
+  synchronous cache reset and `get_app_settings()`'s own synchronous
+  cache-hit check for anything to interleave through.
 - **Why this matters:** `_settings_cache` backs the booking kill switch
   (`new_ride_requests_enabled`) — the exact fail-open hole PR #5614's E2
   fix (`docs/change-log/2026-09-20-booking-kill-switch-last-known-good.md`)
-  closed. A test-isolation gap here doesn't affect production (this tier
-  never touches real Supabase), but it does mean this specific regression
-  protection is not reliably exercised in CI's actual execution order —
-  only when run in isolation, which is not how `backend-test` runs it.
-- **Root cause (partial):** confirmed NOT caused by module-identity
-  splitting (the fixture, the test body, and `get_app_settings()` itself
-  all resolve `settings_loader` — and by extension its own
-  `_settings_cache` global — through the same `from backend import
-  settings_loader` reference within this one file, ruling out the
-  dual-import bare-vs-qualified module-splitting hazard `conftest.py`'s
-  `_BareModuleAliasFinder` exists for). Likely candidate, not yet
-  confirmed: a leaked background task/coroutine from an earlier test in
-  the suite (the same class of hazard `pytest.ini`'s own
-  `filterwarnings` block documents at length as "A8" — a fire-and-forget
-  `asyncio.create_task`/`spawn()` call whose coroutine is never
-  awaited/closed) that calls the real, unmocked `get_app_settings()` on a
-  later event-loop tick that happens to fall during this test's own
-  `await`, overwriting `_settings_cache` with a real (or differently-shaped
-  mocked) settings dict that lacks `new_ride_requests_enabled`. Not
-  confirmed which specific earlier test leaks it — would need either
-  bisection over ~790 preceding files or instrumenting
-  `_settings_cache`'s setter to capture a stack trace on any write during
-  this test's execution window.
-- **Action:** bisect or instrument to find the actual leaking test, then
-  either fix its own task/coroutine cleanup (per the A8 pattern already
-  fixed elsewhere) or, if a specific offender proves hard to isolate,
-  harden this file's own tests against the general hazard class (e.g. a
-  final `await asyncio.sleep(0)` drain in the fixture teardown, or
-  re-asserting `_settings_cache is None` immediately before each
-  cache-dependent call within the test body itself, not just in the
-  fixture).
-- **Files:** `backend/tests/test_settings_loader_last_known.py`,
-  `backend/settings_loader.py` (`_settings_cache` global),
-  `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
-  filterwarnings documentation).
+  closed. The leak didn't affect production (test-only state), but it did
+  mean this specific regression protection wasn't reliably exercised in
+  CI's actual execution order — only when run in isolation, which is not
+  how `backend-test` runs it. It's also a general hazard: `get_app_settings`
+  is called from 147+ files across the codebase (routes, services, utils,
+  tests) — any other test added after `test_forced_upgrade_middleware.py`
+  in collection order that calls it for real was equally exposed, not just
+  this one file.
+- **Fix:** added an autouse, function-scoped `_restore_get_app_settings`
+  fixture to `test_forced_upgrade_middleware.py` that saves the original
+  `settings_loader.get_app_settings` before each test and restores it
+  after — mirroring the file's own pre-existing `_restore_core_config_settings`
+  pattern for the same reason.
+- **Files:** `backend/tests/test_forced_upgrade_middleware.py` (the fix),
+  `backend/tests/test_settings_loader_last_known.py` (reverted to its
+  original form — no fix needed there; two earlier, wrong attempts on
+  this branch had modified it), `backend/settings_loader.py`
+  (`_settings_cache` global, unrelated to the actual bug).
 
 ## Recently completed (do not redo)
 

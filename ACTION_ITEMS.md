@@ -28602,6 +28602,49 @@ as evidence that the thing it configures exists.
   `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
   filterwarnings documentation).
 
+### C131. Cloudflare-only origin lock is assumed by `get_real_client_ip()` but enforced nowhere — a direct-to-Fly request can set its own `CF-Connecting-IP`
+
+- [ ] **Status:** OPEN — found 2026-09-21 by `spinr-security-auditor` while
+  reviewing PR #5654 (rider/driver auth recording the Fly proxy IP instead of
+  the user's). Pre-existing; the PR did not introduce it, but did extend the
+  set of things that depend on it.
+- **Issue/gap:** `backend/utils/rate_limiter.py:87-107`'s `get_real_client_ip()`
+  prefers `CF-Connecting-IP`, then `X-Real-IP`, then falls back to slowapi's
+  `get_ipaddr` (leftmost `X-Forwarded-For`). Its own docstring states the
+  precondition plainly: *"Origin hosts must only accept traffic from Cloudflare
+  for this to be airtight against a direct-to-origin bypass — an infra/network
+  control."* Nothing in the repo shows that control exists. `backend/fly.toml`
+  has no IP allowlist or firewall block, and no ACTION_ITEMS entry tracked it
+  before this one. If a request reaches the Fly app directly (e.g. via its
+  `*.fly.dev` hostname) rather than through `api-spinr.spinr.ca`, all three
+  header sources are attacker-settable.
+- **Why it matters / blast radius:** everything keyed on this function trusts
+  the result — `default_limiter`, the login and OTP rate limits,
+  `get_user_or_ip_key`, and all 5 `routes/admin/auth.py` call sites. PR #5654
+  adds `refresh_tokens.ip` (and therefore `audit_logs.details.replayed_ip`,
+  written at `backend/utils/refresh_tokens.py:416` and `:591`) to that set.
+  The new consequence is narrow but specific: an attacker replaying a stolen
+  refresh token could set a false `CF-Connecting-IP` and poison the forensic
+  record of the very theft that field exists to investigate. Not an auth
+  bypass — nothing gates on the value (traced: `is_new_device()` fingerprints
+  on `user_agent` only and its docstring excludes `ip` deliberately).
+- **Suggestive evidence the bypass is real, not theoretical:** the `.env`/
+  `.git/config` scanner traffic that surfaced the original PR #5654 bug was
+  reaching the Fly app and appearing in its logs. That is consistent with an
+  unlocked origin, though not proof on its own — Cloudflare may simply be
+  passing the requests through. **Confirm before assuming either way.**
+- **Suggested remedy (infra, not code):** verify whether the Fly origin already
+  restricts ingress to Cloudflare; if not, restrict it (Fly proxy allowlist or
+  an equivalent control) and note it in `docs/adr/007-fly-primary-railway-standby.md`.
+  Do NOT "fix" this by widening trust in code — e.g. setting uvicorn
+  `--forwarded-allow-ips='*'` would make the leftmost `X-Forwarded-For`
+  authoritative, which is the spoofable path `get_real_client_ip` was written
+  to avoid (P2-7, C5).
+- **Files:** `backend/utils/rate_limiter.py` (`get_real_client_ip`, lines 87-107),
+  `backend/fly.toml` (no allowlist), `backend/utils/refresh_tokens.py:416,591`
+  (`replayed_ip` consumers), `docs/change-log/2026-09-21-auth-real-client-ip.md`
+  (§4 residual risk).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -512,6 +512,29 @@ describe('logout / logoutAll — no second dead-token round trip', () => {
     });
   });
 
+  it('logoutAll rejects when /auth/logout-all fails, but still clears the local session (2026-09-20 full-audit finding)', async () => {
+    // Before this fix, logoutAll() swallowed a failed /auth/logout-all call
+    // and always resolved -- so driver-app's handleLogoutAll try/catch
+    // (which shows a "Sign Out Failed" toast on catch) could never actually
+    // fire, silently giving a driver false assurance that every other
+    // session was revoked when the server call had failed.
+    mockPost.mockRejectedValueOnce(new Error('network down'));
+    useAuthStore.setState({
+      token: 'access',
+      refreshToken: 'refresh',
+      user: { id: 'u1' } as never,
+      driver: { id: 'd1', is_online: true } as never,
+    });
+
+    await expect(useAuthStore.getState().logoutAll()).rejects.toThrow();
+
+    // Local session must still be cleared even though the server call failed
+    // -- a driver must never be left thinking they're still signed in.
+    expect(useAuthStore.getState()).toMatchObject({
+      token: null, user: null, driver: null, refreshToken: null,
+    });
+  });
+
   it('logout({ revokeServerSession: false }) skips go-offline even when the driver is online', async () => {
     useAuthStore.setState({
       token: 'dead-access',

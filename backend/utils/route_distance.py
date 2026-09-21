@@ -99,6 +99,13 @@ _MAX_COMPLETED_ENDPOINT_SNAP_M = 150.0
 # live-trail consumer (live_breadcrumbs.py) is unchanged; the completed-route
 # reconstruction passes the strict value instead.
 _GAP_MAX_EXTRA_KM_DEFAULT = 2.0
+# Multiple of the crow-flies gap a routed answer may reach before it is
+# rejected. This is the term that governs gaps beyond ~125 m, where 5x of the
+# straight line is already larger than the absolute slack above. Kept at the
+# historical value for the live trail; the completed-route path asks for a
+# tighter one, because 5x of a few hundred metres is still a kilometre of
+# distance nobody witnessed.
+_GAP_MAX_DETOUR_RATIO_DEFAULT = 5.0
 # Bearing tolerance (degrees, +/-) applied to a gap endpoint whose direction of
 # travel is known. Wide enough to absorb GPS heading noise, narrow enough to
 # exclude the opposing carriageway.
@@ -660,6 +667,7 @@ async def compute_gap_route_via_osrm(
     start_bearing: Optional[float] = None,
     end_bearing: Optional[float] = None,
     max_extra_km: float = _GAP_MAX_EXTRA_KM_DEFAULT,
+    max_detour_ratio: float = _GAP_MAX_DETOUR_RATIO_DEFAULT,
 ) -> Optional[RoadMatch]:
     """Route one missing completed-trip interval without using OSRM Trip.
 
@@ -689,7 +697,7 @@ async def compute_gap_route_via_osrm(
         return None
     direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
     distance_km = float(routed.get("distance_km") or 0)
-    maximum_km = max(direct_km * 5.0, direct_km + max_extra_km)
+    maximum_km = max(direct_km * max_detour_ratio, direct_km + max_extra_km)
     if distance_km < direct_km or distance_km > maximum_km:
         return None
 
@@ -711,6 +719,7 @@ async def compute_gap_route_via_google(
     api_key: str,
     *,
     max_extra_km: float = _GAP_MAX_EXTRA_KM_DEFAULT,
+    max_detour_ratio: float = _GAP_MAX_DETOUR_RATIO_DEFAULT,
 ) -> Optional[RoadMatch]:
     """Route one missing completed-trip interval via Google Directions.
 
@@ -734,7 +743,7 @@ async def compute_gap_route_via_google(
         return None
     direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
     distance_km = float(routed.get("distance_km") or 0)
-    maximum_km = max(direct_km * 5.0, direct_km + max_extra_km)
+    maximum_km = max(direct_km * max_detour_ratio, direct_km + max_extra_km)
     if distance_km < direct_km or distance_km > maximum_km:
         return None
 

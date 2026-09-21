@@ -43,11 +43,13 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .metrics import inc as _metric_inc
     from .route_distance import compute_gap_route_via_google, compute_gap_route_via_osrm, snap_endpoint_via_osrm
     from .route_reconstruction_projection import bearing_deg, coordinate, distance_m, project_observed_sections
     from .route_segments import MAX_PLAUSIBLE_SPEED_KPH, SegmentedRoute
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.route_distance import (  # type: ignore
         compute_gap_route_via_google,
         compute_gap_route_via_osrm,
@@ -87,6 +89,16 @@ MAX_INFERRED_GAP_SECONDS = 300
 # over-long connector is transient cosmetics; on a finalized route it becomes
 # billed/audited distance, so a completed route asks for the strict value.
 GAP_MAX_EXTRA_KM = 0.5
+# Multiple of the crow-flies gap a routed answer may reach. route_distance's
+# default is 5x, which past ~125 m is the loosest guard in the chain: on a
+# 389 m gap it still admits nearly 2 km of unwitnessed road. A completed route
+# asks for 3x, which with the absolute slack above leaves ordinary
+# around-the-block routing intact while closing that headroom.
+GAP_MAX_DETOUR_RATIO = 3.0
+# A routed connector accepted at more than this multiple is legitimate but
+# worth watching -- it is counted separately so the next bad case shows up on a
+# dashboard rather than in a rider's complaint.
+GAP_DETOUR_WATCH_RATIO = 2.0
 # Physics gate on a routed connector: whatever road path is substituted for the
 # missing GPS must be drivable in the time the gap actually took. A router
 # answering a short gap with a drive to the next legal turnaround and back
@@ -160,6 +172,21 @@ def _speed_refusal_kph(reason: str, distance_km: float, elapsed_seconds: Optiona
     if reason != "internal_gap" and distance_km < ANCHOR_SPEED_GATE_MIN_KM:
         return None
     return implied
+
+
+# Connector outcomes, per CLAUDE.md's spinr_<domain>_<metric>_<unit> naming.
+# Every gap decision lands in exactly one of these, so a dashboard shows how
+# much of the fleet's published distance is evidence and how much is guesswork
+# -- and a rise in routed_high_detour is the early warning that a threshold
+# here needs revisiting, before a rider has to notice.
+_CONNECTOR_METRIC = "spinr_rides_route_connector_total"
+
+
+def _count_connector(outcome: str) -> None:
+    try:
+        _metric_inc(_CONNECTOR_METRIC, {"outcome": outcome})
+    except Exception:  # pragma: no cover — metrics must never break a finalize
+        logger.debug("connector metric emit failed", exc_info=True)
 
 
 def _elapsed_between(start: Any, end: Any) -> Optional[float]:
@@ -295,6 +322,7 @@ async def reconstruct_completed_route(
                 MAX_INFERRED_CONNECTOR_KM,
             )
             failed_gaps.append(f"{reason}_exceeds_distance_cap")
+            _count_connector("refused_distance_cap")
             return
 
         # Time-outage refusal — deliberately internal_gap only. Both sides of
@@ -312,6 +340,7 @@ async def reconstruct_completed_route(
                 MAX_INFERRED_GAP_SECONDS,
             )
             failed_gaps.append(f"{reason}_exceeds_time_cap")
+            _count_connector("refused_time_cap")
             return
 
         connector_attempts += 1
@@ -320,6 +349,7 @@ async def reconstruct_completed_route(
         if connector_attempts > MAX_INFERRED_CONNECTORS:
             straight_connector_km += gap_distance / 1000.0
             output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
+            _count_connector("straight")
             return
 
         routed = None
@@ -334,13 +364,20 @@ async def reconstruct_completed_route(
                 start_bearing=start_bearing,
                 end_bearing=end_bearing,
                 max_extra_km=GAP_MAX_EXTRA_KM,
+                max_detour_ratio=GAP_MAX_DETOUR_RATIO,
             )
 
         provider = "osrm_inferred"
 
         # Tier 2: Google Directions fallback
         if not routed and google_api_key:
-            routed = await compute_gap_route_via_google(start, end, google_api_key, max_extra_km=GAP_MAX_EXTRA_KM)
+            routed = await compute_gap_route_via_google(
+                start,
+                end,
+                google_api_key,
+                max_extra_km=GAP_MAX_EXTRA_KM,
+                max_detour_ratio=GAP_MAX_DETOUR_RATIO,
+            )
             provider = "google_inferred"
 
         if routed:
@@ -360,6 +397,7 @@ async def reconstruct_completed_route(
                     MAX_CONNECTOR_IMPLIED_SPEED_KPH,
                 )
                 failed_gaps.append(f"{reason}_implausible_detour")
+                _count_connector("refused_speed")
                 return
             output.append(
                 {
@@ -372,6 +410,8 @@ async def reconstruct_completed_route(
                 }
             )
             routed_connector_km += float(distance_km)
+            ratio = (float(distance_km) * 1000.0 / gap_distance) if gap_distance > 0 else 0.0
+            _count_connector("routed_high_detour" if ratio > GAP_DETOUR_WATCH_RATIO else "routed")
         else:
             # Tier 3/4: Haversine straight-line — pure math, cannot fail.
             logger.info(
@@ -382,6 +422,7 @@ async def reconstruct_completed_route(
             )
             straight_connector_km += gap_distance / 1000.0
             output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
+            _count_connector("straight")
 
     if observed_sections:
         if start_anchor is not None:

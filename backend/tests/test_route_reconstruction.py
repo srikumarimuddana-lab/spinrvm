@@ -579,3 +579,43 @@ async def test_short_anchor_connector_stays_ungated(monkeypatch):
 
     assert result["failed_gaps"] == []
     assert _has_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_every_connector_decision_is_counted(monkeypatch):
+    """A threshold can always be tuned wrong; the counter is how that surfaces.
+
+    Without it, the only signal that gap fill has gone bad is a rider noticing
+    their distance -- which is exactly how ride 0c24901f was found.
+    """
+    emitted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        reconstruction, "_metric_inc", lambda name, labels=None, **_: emitted.append((name, labels or {}))
+    )
+    segmented, matched, completion = _tight_gap_evidence()
+    # 2.33 km over a 389 m / 20 s hole: refused for speed.
+    gap_route = AsyncMock(return_value=(2.33, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    await reconstruction.reconstruct_completed_route(segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion)
+
+    assert emitted == [(reconstruction._CONNECTOR_METRIC, {"outcome": "refused_speed"})]
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_but_stretched_connector_is_counted_separately(monkeypatch):
+    """Early warning: accepted, but far enough past the straight line to watch."""
+    emitted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        reconstruction, "_metric_inc", lambda name, labels=None, **_: emitted.append((name, labels or {}))
+    )
+    segmented, matched, completion = _tight_gap_evidence()
+    # 0.95 km over the 389 m / 20 s hole: 171 km/h, under the 180 cap so it is
+    # kept, but 2.44x the straight line, over the watch ratio.
+    gap_route = AsyncMock(return_value=(0.95, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    await reconstruction.reconstruct_completed_route(segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion)
+
+    outcomes = [labels.get("outcome") for _, labels in emitted]
+    assert outcomes == ["routed_high_detour"]

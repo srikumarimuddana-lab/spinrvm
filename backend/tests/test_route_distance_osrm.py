@@ -732,3 +732,43 @@ async def test_google_gap_route_honours_the_same_slack(max_extra_km, accepted):
         result = await rd.compute_gap_route_via_google(_GAP_START, _GAP_END, "key", max_extra_km=max_extra_km)
 
     assert (result is not None) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_detour_ratio", "accepted"),
+    [
+        # 1.8 km of road across a ~389 m gap. Over 120 s that is only ~54 km/h,
+        # so the reconstruction speed gate would wave it through -- the ratio is
+        # the only thing that can catch a detour driven slowly.
+        (rd._GAP_MAX_DETOUR_RATIO_DEFAULT, True),
+        (3.0, False),
+    ],
+)
+async def test_detour_ratio_catches_a_detour_slow_enough_to_look_plausible(max_detour_ratio, accepted):
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(1800)))):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, _GAP_END, "http://osrm:5000", max_extra_km=0.5, max_detour_ratio=max_detour_ratio
+        )
+
+    assert (result is not None) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gap_m", "road_m"),
+    [(100, 350), (200, 600), (1000, 2500)],
+)
+async def test_ordinary_around_the_block_routing_survives_the_tighter_ratio(gap_m, road_m):
+    """The tighter ratio must not start refusing real one-way / block routing.
+
+    Short gaps are protected by the absolute slack rather than the ratio, which
+    is why both terms exist.
+    """
+    end = [_GAP_START[0] + gap_m / 111132.0, _GAP_START[1]]
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(road_m)))):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, end, "http://osrm:5000", max_extra_km=0.5, max_detour_ratio=3.0
+        )
+
+    assert result is not None

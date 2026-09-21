@@ -102,7 +102,24 @@ would be defensible either.
    complete. That cap means "GPS was down this long", which only an internal
    gap can evidence, so it is now explicitly scoped to `internal_gap`.
 
-5. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
+5. **Close the last loose guard, and make the next one self-announcing**
+   (follow-up, same branch). The speed gate cannot catch a detour driven
+   *slowly*: 1.8 km across a 389 m gap over 120 s is only ~54 km/h, entirely
+   plausible, and the 5x ratio admitted it. The ratio is now a parameter too,
+   3.0 for a completed route (default 5.0 kept for the live trail). With the
+   0.5 km absolute slack still protecting short gaps, ordinary
+   around-the-block routing is unaffected — verified at 100 m/350 m,
+   200 m/600 m and 1 km/2.5 km.
+
+   Every connector decision now increments
+   `spinr_rides_route_connector_total{outcome}` — `routed`,
+   `routed_high_detour` (accepted but above 2x the straight line),
+   `straight`, `refused_speed`, `refused_distance_cap`, `refused_time_cap`.
+   Thresholds are judgement calls and can be wrong; this is how being wrong
+   surfaces on a dashboard instead of in a rider's complaint, which is exactly
+   how this bug was found.
+
+6. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
    no drawable geometry of its own now suppresses the straight-line fallback and
    shows the two pins plus its existing empty hint.
 
@@ -324,6 +341,10 @@ Stated plainly rather than implied:
   alone. Lower risk than the anchor case that was closed (see below): matchings
   within one segment are chunks of a trace whose points exist, not a dropout.
   The `max_extra_km` tightening is what covers it.
+- **A detour under 3x the straight line and slow enough to be plausible is
+  still accepted.** That is the intended envelope, not an oversight — a real
+  detour looks exactly like this — but it means the guards bound the damage
+  rather than eliminating it. `routed_high_detour` is the compensating control.
 - **Anchor connectors are now clocked, but only above 1 km.** A
   `missing_start`/`missing_tail` connector shorter than
   `ANCHOR_SPEED_GATE_MIN_KM` is deliberately left ungated, because at that

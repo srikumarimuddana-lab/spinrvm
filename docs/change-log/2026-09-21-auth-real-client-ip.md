@@ -210,6 +210,17 @@ to toggle an audit-only field that no user-visible surface reads — more risk t
 - [x] **Reviewed against CLAUDE.md conventions** — dual-import pattern preserved; PIPEDA §"never in
       logs" is unaffected (the IP goes to a DB column, not a log line or Sentry event, and IP is not
       in that section's prohibited list); JWT trust model untouched; no error-swallowing introduced.
+- [x] **CI executed the test suite — this PR's tests pass.** `backend-test` on `3f166f0`:
+      `3 failed, 15210 passed`. `main`'s own tip at `38a3826` (this branch's base):
+      `3 failed, 15209 passed`, with the **identical three failures** —
+      `test_settings_loader_last_known.py::TestFailedReadDoesNotClobber` ×2 (tracked as ACTION_ITEMS
+      C130) and `test_webhooks_main.py::TestStripeWebhookEventLogLevel::test_ignored_lifecycle_event_logs_debug_not_warning`
+      (**untracked** — flagged on the PR). So `backend-test` is red on the base branch for reasons
+      unrelated to this diff, and **this change introduces zero new failures**. The `15209 → 15210`
+      delta is exactly the new guard test `test_rider_auth_resolves_real_client_ip_not_socket_peer`.
+      That confirms what the static checks could only infer: the guard ran and passed, and the 6
+      retargeted `patch.object(auth_mod, "get_real_client_ip", ...)` calls resolve — they would have
+      raised `AttributeError` on a wrong patch target.
 - [x] **`spinr-security-auditor`** run against the actual diff (gate 10). **Verdict: FIX BLOCKERS.**
       It confirmed the `routes/auth.py` change itself is sound, that `client_ip` feeds no security
       decision on any of the 5 paths, and that no other backend surface still resolves IP from the
@@ -221,13 +232,11 @@ to toggle an audit-only field that no user-visible surface reads — more risk t
 
 ## 10. What was NOT verified
 
-- **The pytest suite was never executed.** This environment's network policy blocks package
-  registries (pypi.org returns 403 at the agent proxy gateway; `pip install -r requirements.txt`
-  failed on `aiohappyeyeballs==2.6.1` with "from versions: none"), so `fastapi`/`pytest` could not be
-  installed. The static script in §9 checks the *new* guard test's exact assertions and proves the 6
-  retargeted `patch.object` names now resolve, but **no test actually ran in a Python process.**
-  `tests/test_p1_token_refresh.py` and `tests/test_async_limiter.py` must go green in CI before merge
-  — CI is the first real execution of this change.
+- ~~**The pytest suite was never executed.**~~ **RESOLVED by CI — see §9.** It remains true that the
+  suite could not be run in the authoring environment (pypi.org returns 403 at the agent proxy;
+  `pip install -r requirements.txt` failed on `aiohappyeyeballs==2.6.1` with "from versions: none"),
+  so every test claim in this entry was static until CI ran. CI has now executed it and both test
+  files pass.
 - **Not exercised against a live request.** No staging deploy, no real Cloudflare→Fly round trip. The
   claim that `CF-Connecting-IP` is present in production rests on `get_real_client_ip`'s docstring and
   on `routes/admin/auth.py` already depending on it in production — not on an observed header capture.

@@ -245,7 +245,7 @@ class TestRiderCancelIllegalStates:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
-        from backend.utils.error_handling import SpinrException
+        from backend.utils.error_handling import ErrorCode, SpinrException
 
         # First find_one (state-filter) returns None (ride not in allowed states).
         # Second find_one (existence check) returns the ride in its actual state.
@@ -264,8 +264,14 @@ class TestRiderCancelIllegalStates:
                 )
 
         assert exc_info.value.status_code == 409
-        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
-        assert status in str(text)
+        # CR #5587: assert on the structured fields _require_ride_in_state_rider
+        # actually raises (SpinrException.error_code / .details), not the
+        # human-readable "This ride is {phrase}..." prose, which is exactly
+        # the kind of copy CLAUDE.md's customer-centric tone guidance expects
+        # to keep improving and which broke this assertion once already.
+        assert isinstance(exc_info.value, SpinrException)
+        assert exc_info.value.error_code == ErrorCode.RIDE_INVALID_STATUS
+        assert exc_info.value.details.get("current_status") == status
 
     async def test_cancel_unknown_ride_raises_404(self):
         from fastapi import HTTPException

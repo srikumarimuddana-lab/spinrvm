@@ -28,10 +28,11 @@ but nothing in the repo could render them, so the listing had copy and no imager
 Added `driver-app/store-assets/generate_screenshots.py`, a dependency-free generator that renders
 the 8 marketing artboards with headless Chromium at every store size (1080×1920 Play Store phone,
 1320×2868 / 1290×2796 / 1242×2208 iPhone, 2048×2732 iPad Pro), and committed the resulting 40 PNGs.
-Layout is derived from one reference artboard so all sizes share a composition: the header block is
-centred in the space above the device frame, and the frame is sized to run off the bottom edge. iOS
-artboards draw an iPhone frame (correctly proportioned Dynamic Island, Wi-Fi glyph in the status
-bar); the Android artboard keeps a punch-hole camera.
+Layout is derived from one reference artboard so all sizes share a composition: a 1:2.18 handset
+frame (670×1461 at the reference size, matching the rider-app store set) sitting fully on the canvas
+with its bottom bezel and home indicator visible, and the header block centred in the space above
+it. iOS artboards draw an iPhone frame (correctly proportioned Dynamic Island, Wi-Fi glyph in the
+status bar); the Android artboard keeps a punch-hole camera.
 Phone mock-ups reproduce the real driver-app screens: copy is taken from `driver-app/i18n/en.json`
 (`home.go`/`home.stop`, `dashboard.youreOnline`, `activeRide.*`, `rideOffer.*`, `earnings.*`) and
 layout from `components/dashboard/*`, `components/panels/RideOfferPanel.tsx` and
@@ -84,6 +85,16 @@ Additive; `metadata.json`'s manifest block is the only edit to existing content.
 "android_phone_generated": [ "01-drive-canadian", ... "08-quests" ]              # all 8 committed
 "_generated_note": "... iOS sizes and tablet sizes are not yet produced ..."
 ```
+
+### Correction — device proportion (same day)
+
+A first pass stretched the frame to 670×1524 (1:2.27) so it would bleed off the bottom edge of the
+canvas. That reads as an elongated slab, not a phone, and did not match the rider-app set, whose
+frame sits fully on the canvas with its bottom bezel visible. Caught on review by the requester.
+Corrected to the rider set's own geometry — 670×1461 (1:2.18), top 447, bottom 1908 of 1920 — and a
+home indicator was added now that the bottom of the screen is in frame. The usable screen dropped
+from 907 to 869 logical px as a result, so the two top-anchored screens (earnings, quests) were
+re-rendered and checked to confirm nothing is cut.
 
 ## 8. Rollback plan
 

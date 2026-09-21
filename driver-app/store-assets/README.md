@@ -27,11 +27,17 @@ actually renders. Edit `build_cards()` to change headlines or ordering.
 | `ipad-12.9` | 2048×2732 | iPad Pro 12.9" |
 
 Layout is derived from one reference artboard (1080×1920), so every size shares
-the composition: the header block is centred in the space above the device frame
-and the frame is sized to run off the bottom edge. Add a size by appending to
-`ARTBOARDS` — no per-size layout code. iOS artboards draw an iPhone frame
-(Dynamic Island, Wi-Fi glyph in the status bar); the Android artboard draws a
-punch-hole camera.
+the composition: the device frame is a 1:2.18 handset (670×1461 at the reference
+size, matching the rider-app store set) sitting fully on the canvas with its
+bottom bezel and home indicator visible, and the header block is centred in the
+space above it. Add a size by appending to `ARTBOARDS` — no per-size layout
+code. iOS artboards draw an iPhone frame (Dynamic Island, Wi-Fi glyph in the
+status bar); the Android artboard draws a punch-hole camera.
+
+The frame proportion is deliberate: stretching it taller so it bleeds off the
+bottom edge makes the mock-up read as an elongated slab rather than a phone.
+`FRAME_ASPECT`, `FRAME_H` and `BOTTOM_GAP` at the top of the generator control
+it — keep the aspect near 1:2.18 if you change them.
 
 ### Screens
 

@@ -103,9 +103,9 @@ def font_face_css():
 # into the mock-up frame, so the in-phone UI can use natural sizes. Every
 # artboard derives from the same proportions, so one layout serves all sizes.
 UI_W = 390
-FRAME_ASPECT = 670 / 1524          # phone frame width / height, fixed everywhere
-PHONE_TOP = 447 / 1920             # frame top as a fraction of artboard height
-BLEED = 51 / 1920                  # how far the frame runs past the bottom edge
+FRAME_ASPECT = 670 / 1461          # phone frame width / height -- matches rider-app set
+FRAME_H = 1461 / 1920              # frame height as a fraction of artboard height
+BOTTOM_GAP = 12 / 1920             # canvas left visible below the frame
 
 
 class Board:
@@ -116,9 +116,9 @@ class Board:
         # Scale content by whichever axis is tighter, so a wide canvas (iPad)
         # doesn't blow the type up past the space above the phone.
         self.s = min(w / float(REF_W), h / float(REF_H))
-        self.ph_top = round(PHONE_TOP * h)
-        self.ph_h = round(h + BLEED * h - self.ph_top)
+        self.ph_h = round(FRAME_H * h)
         self.ph_w = round(self.ph_h * FRAME_ASPECT)
+        self.ph_top = h - round(BOTTOM_GAP * h) - self.ph_h
         self.ph_left = (w - self.ph_w) // 2
         f = self.ph_w / 670.0          # frame-local scale (bezel, radius, notch)
         self.bezel = max(6, round(13 * f))
@@ -136,6 +136,9 @@ class Board:
             self.notch_w = self.notch_h = round(13 * f)
             self.notch_top = round(15 * f)
         self.notch_r = self.notch_h // 2
+        self.hi_w = round(0.34 * self.scr_w)
+        self.hi_h = max(3, round(0.006 * self.scr_h))
+        self.hi_bottom = round(0.009 * self.scr_h)
 
     def px(self, v):
         """Scale a reference-artboard measurement to this board."""
@@ -179,6 +182,8 @@ h1 em{font-style:normal;color:%(RED)s;}
   transform:scale(%(SCALE)f);transform-origin:top left;background:#fff;}
 .punch{position:absolute;top:%(notchT)dpx;left:50%%;transform:translateX(-50%%);
   width:%(notchW)dpx;height:%(notchH)dpx;border-radius:%(notchR)dpx;background:#0B0B0C;z-index:60;}
+.home-ind{position:absolute;bottom:%(hiB)dpx;left:50%%;transform:translateX(-50%%);
+  width:%(hiW)dpx;height:%(hiH)dpx;border-radius:%(hiR)dpx;background:rgba(20,22,26,.32);z-index:60;}
 
 /* ---------- red brand card ---------- */
 .card.red{background:%(RED)s;}
@@ -196,6 +201,7 @@ h1 em{font-style:normal;color:%(RED)s;}
            PH_LEFT=b.ph_left, PH_TOP=b.ph_top, SCR_W=b.scr_w, SCR_H=b.scr_h,
            UI_W=UI_W, UI_H=b.ui_h, SCALE=b.scale,
            notchT=b.notch_top, notchW=b.notch_w, notchH=b.notch_h, notchR=b.notch_r,
+           hiB=b.hi_bottom, hiW=b.hi_w, hiH=b.hi_h, hiR=b.hi_h // 2,
            shadY=b.px(38), shadB=b.px(80), shad2=b.px(6), shad3=b.px(18),
            logoWr=b.px(186))
 
@@ -245,7 +251,7 @@ def ui_css():
 
 /* bottom sheets */
 .sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;
-  border-radius:26px 26px 0 0;box-shadow:0 -6px 26px rgba(0,0,0,.13);padding:10px 18px 56px;}
+  border-radius:26px 26px 0 0;box-shadow:0 -6px 26px rgba(0,0,0,.13);padding:10px 18px 34px;}
 .grab{width:38px;height:4px;border-radius:2px;background:#DDE0E4;margin:0 auto 12px;}
 .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;
   font-weight:700;font-size:11.5px;padding:6px 12px;}
@@ -393,7 +399,7 @@ def scr_dashboard(online=False, demand=False):
 </div>
 <div class="fab" style="right:14px;top:170px">%(target)s</div>
 <div class="fab" style="right:14px;top:220px">%(chart)s</div>
-<div style="position:absolute;left:0;right:0;bottom:62px;display:flex;flex-direction:column;
+<div style="position:absolute;left:0;right:0;bottom:44px;display:flex;flex-direction:column;
      align-items:center;gap:11px;">
   <div class="pill" style="background:#fff;color:%(TEXT)s;box-shadow:0 4px 14px rgba(0,0,0,.14);
        padding:7px 8px 7px 13px;font-weight:700;">
@@ -768,7 +774,8 @@ ICONS["leaf"] = ("M12 2.5l1.9 3.6c.2.4.6.3.9.1l1.4-.7-.9 4.3c-.2.8.3 1 .8.5l2.5-
 
 def phone(b, ui, cls="center", style=""):
     return ('<div class="phone %s" style="%s"><div class="screen"><div class="punch"></div>'
-            '<div class="ui">%s</div></div></div>' % (cls, style, ui))
+            '<div class="ui">%s</div><div class="home-ind"></div></div></div>'
+            % (cls, style, ui))
 
 
 def light_card(b, headline, sub, ui, logo):

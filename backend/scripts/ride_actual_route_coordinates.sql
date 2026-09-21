@@ -153,3 +153,92 @@ SELECT
 FROM driver_location_history h
 WHERE h.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
   AND h.lat IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Q6. "I did not drive here" — classify a specific coordinate.
+--
+--     THIS IS THE ONE THAT MATTERS when a rider or driver points at a stretch
+--     of the map. It answers which segment the point belongs to and, above
+--     all, whether that segment is evidence or invention:
+--
+--       kind = 'inferred'  -> GAP FILL. No GPS witnessed it. The router was
+--                             asked to connect two fixes and drew this. Look
+--                             at gap_reason and segment_km.
+--       kind = 'observed'  -> MAP MATCHING. Real fixes existed, but OSRM
+--                             /match snapped them to this road. A wrong road
+--                             here is a DIFFERENT defect from gap fill, and
+--                             the gap-connector guards do not touch it --
+--                             the levers are _osrm_radius (snap search
+--                             radius, clamped 10-50 m) and _osrm_bearing.
+--
+--     Returns the 5 nearest route points to each target, so it answers even
+--     when the coordinate was copied approximately.
+-- ---------------------------------------------------------------------------
+WITH target(label, lat, lng) AS (
+    VALUES
+        ('A', 50.417215, -104.645205),
+        ('B', 50.417006, -104.644034)
+),
+route_point AS (
+    SELECT
+        s.seg_ord,
+        c.pt_ord,
+        s.seg ->> 'geometry_kind'          AS kind,
+        s.seg ->> 'gap_reason'             AS gap_reason,
+        s.seg ->> 'provider'               AS provider,
+        (s.seg ->> 'distance_km')::numeric AS segment_km,
+        (c.pt ->> 0)::double precision     AS lat,
+        (c.pt ->> 1)::double precision     AS lng
+    FROM ride_routes r
+    CROSS JOIN LATERAL jsonb_array_elements(
+        CASE WHEN jsonb_typeof(r.road_matched_segments) = 'array' THEN r.road_matched_segments ELSE '[]'::jsonb END
+    ) WITH ORDINALITY AS s(seg, seg_ord)
+    CROSS JOIN LATERAL jsonb_array_elements(
+        CASE WHEN jsonb_typeof(s.seg -> 'coordinates') = 'array' THEN s.seg -> 'coordinates' ELSE '[]'::jsonb END
+    ) WITH ORDINALITY AS c(pt, pt_ord)
+    WHERE r.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
+)
+SELECT
+    t.label,
+    p.kind,
+    p.gap_reason,
+    p.provider,
+    p.segment_km,
+    p.seg_ord    AS segment_no,
+    p.pt_ord     AS point_no,
+    p.lat,
+    p.lng,
+    round((2 * 6371000 * asin(sqrt(
+        power(sin(radians(p.lat - t.lat) / 2), 2)
+        + cos(radians(t.lat)) * cos(radians(p.lat)) * power(sin(radians(p.lng - t.lng) / 2), 2)
+    )))::numeric, 1) AS metres_from_target
+FROM target t
+CROSS JOIN LATERAL (
+    SELECT rp.*
+    FROM route_point rp
+    ORDER BY (rp.lat - t.lat) ^ 2 + ((rp.lng - t.lng) * cos(radians(t.lat))) ^ 2
+    LIMIT 5
+) p
+ORDER BY t.label, metres_from_target;
+
+-- Q6b. Was there ANY real GPS near that coordinate at all? If Q6 says
+--      'inferred' and this returns nothing, the device genuinely recorded
+--      nothing there and the stretch is pure gap fill.
+SELECT
+    t.label,
+    h."timestamp",
+    h.tracking_phase,
+    h.lat,
+    h.lng,
+    h.accuracy,
+    round((2 * 6371000 * asin(sqrt(
+        power(sin(radians(h.lat - t.lat) / 2), 2)
+        + cos(radians(t.lat)) * cos(radians(h.lat)) * power(sin(radians(h.lng - t.lng) / 2), 2)
+    )))::numeric, 1) AS metres_from_target
+FROM (VALUES ('A', 50.417215, -104.645205), ('B', 50.417006, -104.644034)) AS t(label, lat, lng)
+JOIN driver_location_history h
+  ON h.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
+ AND h.lat IS NOT NULL
+ AND h.lat BETWEEN t.lat - 0.0025 AND t.lat + 0.0025      -- ~+/-275 m
+ AND h.lng BETWEEN t.lng - 0.0040 AND t.lng + 0.0040      -- ~+/-280 m at 50N
+ORDER BY t.label, metres_from_target;

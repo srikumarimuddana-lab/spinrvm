@@ -127,9 +127,11 @@ def _fetch_settings_row() -> dict:
     if not base or not key:
         return {}
     url = f"{base}/rest/v1/settings?id=eq.app_settings&select=*&limit=1"
-    req = urllib.request.Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}"})
+    # noqa S310 x2: the URL is built from the operator's own SUPABASE_URL, not from
+    # user input, and this is a dev/QA preview tool that never runs in production.
+    req = urllib.request.Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}"})  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             rows = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 — a preview must degrade, not crash
         print(f"settings fetch failed ({exc}) — using static fallbacks", file=sys.stderr)
@@ -395,6 +397,7 @@ _STATUS_EMAIL_COPY = [
         "active",
         "You're Approved! \U0001f389",
         "Your driver account is active. You can now go online and start earning!",
+        "Complete your driver training at training.spinr.ca before your first ride. "
         f"Open the {SAMPLE_APP} driver app, tap Go Online, and you'll start receiving ride offers.",
     ),
     (
@@ -432,7 +435,15 @@ for _dtype, _status, _title, _body, _next in _STATUS_EMAIL_COPY:
             trigger=f"Driver enters status '{_status}' (admin action or self-service transition)",
             source="utils/driver_status_notifications.py::_send_status_email",
             subject=_title,
-            html=email_card_html(greeting=f"Hi {SAMPLE_NAME},", heading=_title, paragraphs=[_body, _next]),
+            html=email_card_html(
+                greeting=f"Hi {SAMPLE_NAME},",
+                heading=_title,
+                paragraphs=[_body, _next],
+                # Mirrors _send_status_email: the map is passed only when the
+                # host is actually in the copy, so the other three statuses
+                # preview exactly as they render.
+                links=({"training.spinr.ca": "https://training.spinr.ca"} if "training.spinr.ca" in _next else None),
+            ),
         )
     )
 
@@ -899,7 +910,8 @@ def _find_chrome() -> str | None:
 
 
 def _html_to_pdf(chrome: str, html_path: Path, pdf_path: Path) -> bool:
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 — `chrome` is a path _find_chrome() verified with
+        # is_file() against a fixed candidate list; the args are all literals.
         [
             chrome,
             "--headless",

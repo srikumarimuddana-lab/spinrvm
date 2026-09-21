@@ -38,7 +38,13 @@ logger = logging.getLogger(__name__)
 #: ``lms_api_base_url`` the admin driver-training integration already points at
 #: (see routes/admin's training endpoints and tests/test_admin_driver_training.py),
 #: so the address in this email and the system behind it stay the same one.
-_TRAINING_HOST = "training.spinr.ca"
+#:
+#: Public, and deliberately the only copy of this address in driver-facing email:
+#: ``driver_status_notifications.py`` resolves its ``{training}`` placeholder from
+#: here at send time. A driver is told about training twice — once at signup (the
+#: welcome email below) and again on approval, which is the point they can actually
+#: start driving — so the two must never drift onto different hosts.
+TRAINING_HOST = "training.spinr.ca"
 
 
 def _greeting(user: dict[str, Any] | None) -> Optional[str]:
@@ -77,7 +83,7 @@ async def send_driver_welcome_email(driver: dict[str, Any], user: dict[str, Any]
                     "Upload your driver's licence, vehicle insurance, vehicle inspection, and background "
                     f"check in the {company.app_name} driver app if you haven't already — we'll notify you "
                     "as soon as they've been reviewed.",
-                    f"Complete your driver training at {_TRAINING_HOST} before your first ride.",
+                    f"Complete your driver training at {TRAINING_HOST} before your first ride.",
                     f"{company.app_name} takes 0% commission — apart from fees and taxes, the trip fare "
                     "is 100% yours. No per-trip cut, ever.",
                     "Check the Subscription screen in the driver app for your area's current Spinr Pass "
@@ -94,7 +100,7 @@ async def send_driver_welcome_email(driver: dict[str, Any], user: dict[str, Any]
                 # body text. Written without a scheme so it reads as an address
                 # a driver can also type, which is exactly the form several
                 # clients decline to auto-link — hence the explicit href.
-                links={_TRAINING_HOST: f"https://{_TRAINING_HOST}"},
+                links={TRAINING_HOST: f"https://{TRAINING_HOST}"},
                 company=company,
             ),
             email_type="driver_welcome",

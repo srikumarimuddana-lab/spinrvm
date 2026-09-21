@@ -6,8 +6,8 @@
 ## Regenerating the screenshots
 
 ```bash
-python3 driver-app/store-assets/generate_screenshots.py            # every size
-python3 driver-app/store-assets/generate_screenshots.py ios-6.9    # just one size
+python3 driver-app/store-assets/generate_screenshots.py                  # every size
+python3 driver-app/store-assets/generate_screenshots.py ios-1320x2868    # just one
 ```
 
 Renders the 8 marketing artboards at every store size into `screenshots/` using
@@ -16,15 +16,27 @@ real driver-app screens — copy comes from `driver-app/i18n/en.json` and the
 components under `driver-app/components/`, so the listing shows what the app
 actually renders. Edit `build_cards()` to change headlines or ordering.
 
-### Sizes
+### Sizes — which file goes in which upload slot
 
-| Key | Pixels | Store slot |
+Artboards are keyed by **exact pixel size**, because that is what App Store
+Connect validates. An inch label maps to more than one pixel size (the "6.7-inch"
+label covers both 1290×2796 and 1284×2778, which belong to *different* slots), so
+naming by inches is how a set ends up rejected on upload.
+
+| Upload slot | Accepts | Use these files |
 |---|---|---|
-| `android-phone` | 1080×1920 | Google Play phone |
-| `ios-6.9` | 1320×2868 | iPhone 16 Pro Max class |
-| `ios-6.7` | 1290×2796 | iPhone 15/14 Pro Max class |
-| `ios-5.5` | 1242×2208 | legacy iPhone 8 Plus slot |
-| `ipad-12.9` | 2048×2732 | iPad Pro 12.9" |
+| App Store — 6.9" Display | 1320×2868 **or** 1290×2796 | `ios-1320x2868-*` (or `ios-1290x2796-*`) |
+| App Store — 6.5" Display | 1242×2688 **or** 1284×2778 | `ios-1284x2778-*` |
+| App Store — 5.5" Display | 1242×2208 | `ios-1242x2208-*` |
+| App Store — iPad 12.9"/13" | 2064×2752, 2048×2732 | `ipad-2048x2732-*` |
+| Google Play — phone | flexible | `android-1080x1920-*` |
+
+App Store Connect also offers **"Keep using 6.9-inch Display"** on the smaller
+iPhone slots — tick that and it reuses the 6.9" set, so the 6.5" and 5.5" files
+become optional. They are generated anyway so either route works.
+
+To add a size, append `(key, width, height, notch)` to `ARTBOARDS` — there is no
+per-size layout code.
 
 Layout is derived from one reference artboard (1080×1920), so every size shares
 the composition: a 1:2.12 handset frame sitting fully on the canvas with its

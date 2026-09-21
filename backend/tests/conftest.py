@@ -521,6 +521,60 @@ def reset_db_circuit_breaker() -> None:
             continue
 
 
+@pytest.fixture(autouse=True)
+def _default_env_admin_token_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default admin-001's DB-backed revocation counter to 0 for every test.
+
+    `get_env_admin_token_version()` (utils/env_admin_tokens.py, migration 434)
+    deliberately raises `DatabaseError` rather than defaulting to 0 when the
+    settings row can't be read — correct for production (a stored 0 passes
+    every token ever minted, so silently reading a missing row as 0 would
+    un-revoke everything an operator just killed). But the shared
+    `mock_supabase_client` fixture above returns an empty list for every
+    table by default, so any test that reaches `_verify_admin_payload` /
+    `get_current_user` for the env-admin bootstrap user (`admin-001`)
+    without itself mocking this call now gets an unexpected 503 — found
+    2026-09-21 breaking ~14 unrelated tests (admin auth, offer-timeout
+    dispatch, driver ride flow, JWT modules) across the suite the day this
+    check was added.
+
+    `bump_env_admin_token_version()` reads through the same function
+    internally (`new_version = await get_env_admin_token_version() + 1`), so
+    `routes/admin/auth.py`'s `admin_logout_all` hits the identical 503 on
+    admin-001 unless it's defaulted too — that module imports both names
+    directly from `utils.env_admin_tokens` (not via `dependencies`), so each
+    importing module's own bound name needs patching separately; patching
+    only `utils.env_admin_tokens` itself would miss every module that did
+    `from ...utils.env_admin_tokens import get_env_admin_token_version`.
+
+    A test that needs the real read (test_env_admin_token_version.py's
+    `TestStoredVersionHelpers`, which patches `db_supabase.get_rows` and
+    calls `utils.env_admin_tokens.get_env_admin_token_version()` directly)
+    or a specific version/failure (test_admin_revocation_failopen.py,
+    test_env_admin_token_version.py's `TestVerifyPath`, test_logout_all.py)
+    overrides this with its own `monkeypatch.setattr(dependencies,
+    "get_env_admin_token_version", ...)` (or the `routes.admin.auth`
+    equivalent) — same `monkeypatch` instance as this fixture's, so the later
+    setattr wins during the test and both are undone together afterward.
+    """
+    default_get = AsyncMock(return_value=0)
+    default_bump = AsyncMock(return_value=1)
+    for mod_path, attr, default in (
+        ("backend.dependencies", "get_env_admin_token_version", default_get),
+        ("dependencies", "get_env_admin_token_version", default_get),
+        ("backend.routes.admin.auth", "get_env_admin_token_version", default_get),
+        ("routes.admin.auth", "get_env_admin_token_version", default_get),
+        ("backend.routes.admin.auth", "bump_env_admin_token_version", default_bump),
+        ("routes.admin.auth", "bump_env_admin_token_version", default_bump),
+    ):
+        try:
+            mod = importlib.import_module(mod_path)
+        except (ImportError, ModuleNotFoundError):
+            continue
+        if hasattr(mod, attr):
+            monkeypatch.setattr(mod, attr, default)
+
+
 def _reset_limiter_storage(limiter_obj) -> None:
     """Reset sync SlowAPI or async limits storage before a test."""
     inner = getattr(limiter_obj, "_limiter", None)

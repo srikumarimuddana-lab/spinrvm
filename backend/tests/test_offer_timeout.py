@@ -57,10 +57,9 @@ class TestOfferTimeoutHandler:
             patch("backend.routes.rides._deps.manager") as mock_manager,  # noqa: F841
             patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
             patch(
-                "backend.routes.rides._deps.db_supabase.set_driver_available",
-                AsyncMock(return_value={"id": "driver_1", "is_available": True}),
-            ) as mock_set_available,
-            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
+                "backend.routes.rides._deps.release_driver_and_close_period",
+                AsyncMock(return_value=1),
+            ) as mock_release,
             patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
             patch("utils.driver_presence.reset_miss_streak", AsyncMock()),
             patch("utils.driver_presence.clear_presence", AsyncMock()),
@@ -74,9 +73,14 @@ class TestOfferTimeoutHandler:
 
             await _offer_timeout_handler("ride_1", "driver_1", rider_id="user_rider_1", timeout_seconds=30)
 
-            # Driver released via set_driver_available (below the miss-streak
-            # auto-offline threshold), not a raw db.update_one("drivers", ...).
-            mock_set_available.assert_awaited_once_with("driver_1", available=True)
+            # Driver released via release_driver_and_close_period (below the
+            # miss-streak auto-offline threshold), not a raw
+            # db.update_one("drivers", ...). The old direct
+            # set_driver_available/record_period_transition calls this test
+            # used to assert on were consolidated into this one helper —
+            # utils/insurance_periods.py's own test_insurance_release_helper.py
+            # covers its internal set_driver_available/period-derivation logic.
+            mock_release.assert_awaited_once_with("driver_1", reason="offer_timeout", ride_id="ride_1")
 
             # Ride reset to searching via a conditional db.update_one("rides", ...)
             # scoped to the exact state just observed (race guard, WS-1 subtask 4).
@@ -496,9 +500,9 @@ async def test_process_expired_offer_is_idempotent():
             AsyncMock(side_effect=claim_results),
         ),
         patch(
-            "backend.routes.rides._deps.db_supabase.set_driver_available",
-            AsyncMock(return_value={"is_available": True}),
-        ),
+            "backend.routes.rides._deps.release_driver_and_close_period",
+            AsyncMock(return_value=1),
+        ) as mock_release,
         patch(
             "backend.routes.rides._deps.db_supabase.get_ride",
             AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
@@ -507,7 +511,6 @@ async def test_process_expired_offer_is_idempotent():
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value=None),
         ),
-        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
         patch("backend.routes.rides._deps.manager") as mock_mgr,
         patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
         patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss,
@@ -522,10 +525,14 @@ async def test_process_expired_offer_is_idempotent():
 
     assert won_first is True
     assert won_second is False
-    # Side-effects ran for the winning claim only.
+    # Side-effects ran for the winning claim only. set_driver_available and
+    # record_period_transition were consolidated into release_driver_and_
+    # close_period (utils/insurance_periods.py) -- its own internal
+    # set_driver_available/period-derivation logic is covered by
+    # test_insurance_release_helper.py, so this just checks the call site.
     assert mock_miss.await_count == 1
     assert mock_ar.await_count == 1
-    mock_period.assert_awaited_once_with("d1", 1)
+    mock_release.assert_awaited_once_with("d1", reason="offer_timeout", ride_id="ride_b")
 
 
 @pytest.mark.asyncio

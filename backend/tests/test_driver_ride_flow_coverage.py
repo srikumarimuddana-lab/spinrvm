@@ -858,41 +858,21 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
-    async def test_period_1_recorded_when_release_leaves_driver_available(self):
-        """Insurance Period 2 opens at claim/offer time (matching.py); decline
-        must close it back to Period 1 — but only when the driver is actually
-        still online. Mirrors process_expired_offer's guard."""
-        from backend.routes.drivers.ride_flow import decline_ride
-
-        ride = _ride(status="driver_assigned")
-        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
-        patches[4] = patch(
-            "backend.routes.drivers._deps.db_supabase.set_driver_available",
-            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
-        )
-        with _Patches(*patches) as mocks:
-            period_transition = mocks[5]
-            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
-        assert result == {"success": True}
-        period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
-
-    async def test_period_1_skipped_when_driver_went_offline_before_decline(self):
-        """A driver who toggled offline between the offer being sent and this
-        decline must NOT get a Period 1 row falsely reopened — they're
-        already Period 0 from their own go-offline call."""
-        from backend.routes.drivers.ride_flow import decline_ride
-
-        ride = _ride(status="driver_assigned")
-        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
-        patches[4] = patch(
-            "backend.routes.drivers._deps.db_supabase.set_driver_available",
-            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False, "is_online": False}),
-        )
-        with _Patches(*patches) as mocks:
-            period_transition = mocks[5]
-            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
-        assert result == {"success": True}
-        period_transition.assert_not_awaited()
+    # test_period_1_recorded_when_release_leaves_driver_available and
+    # test_period_1_skipped_when_driver_went_offline_before_decline used to
+    # live here, mocking set_driver_available/record_period_transition
+    # directly and asserting the 0-vs-1 derivation at this call site. The
+    # consolidation into release_driver_and_close_period (this class's own
+    # test_decline_goes_through_the_shared_release_helper above) moved that
+    # derivation into utils/insurance_periods.py, so decline_ride no longer
+    # calls either mock directly — the first test broke (release now calls
+    # set_driver_available positionally inside the helper, never through
+    # _deps), and the second started passing vacuously (asserting
+    # record_period_transition was "not awaited" when nothing in this
+    # call path awaits it anymore, regardless of driver state). Both
+    # scenarios are covered at the correct layer by
+    # test_insurance_release_helper.py's test_online_driver_is_closed_out_to_
+    # period_1 / test_offline_driver_is_closed_out_to_period_0.
 
 
 class TestDeclineAdminAssignedRideRecovery:

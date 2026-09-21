@@ -28305,6 +28305,68 @@ as evidence that the thing it configures exists.
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
+### C129. `backend-test` job red on `main` since the 2026-09-20/21 review commits — mostly fixed, one order-dependent gap still open
+
+- [x] **Status: MOSTLY CLOSED 2026-09-21** — found while diagnosing an
+  unrelated PR's (#5616) `backend-test` failure. Reproduced identically on a
+  clean `origin/main` checkout with zero diff before touching anything,
+  confirming it was base-branch-red, not that PR's fault (CLAUDE.md's CI-red
+  handling protocol) — but with 14 failing tests blocking `backend-test` for
+  *every* PR against main, not just the one that surfaced it, so fixed here
+  directly rather than just standing down.
+- **Root cause (two independent staleness gaps from PR #5602/`9731279` and
+  PR #5614/`e7cfa20`, both landed 2026-09-20/21):**
+  1. `utils/env_admin_tokens.py` (migration 434) added a mandatory
+     `get_env_admin_token_version()` DB read to the admin-001 auth path that
+     deliberately raises (503) rather than defaulting to 0 on a missing row
+     — correct in production, but the shared autouse `mock_supabase_client`
+     fixture returns `[]` for every table by default, so any test reaching
+     that path without its own mock broke: 7 tests across 5 unrelated files
+     (`test_offer_timeout.py`, `test_rides_matching_coverage.py`,
+     `test_p3_admin_jwt_modules.py`, `test_admin_token_aud_lockdown.py`,
+     `test_admin_auth_coverage_gap.py`).
+  2. The same review consolidated 5 hand-mirrored insurance-period-release
+     call sites into one `release_driver_and_close_period()` helper
+     (`utils/insurance_periods.py`) but missed updating 5 caller tests: 3
+     still mocked the old direct calls (now unreachable), 2 had gone from
+     correct to vacuously-passing (asserting a mock "not awaited" that
+     nothing on the new path calls regardless of driver state).
+  3. A fourth, unrelated case (`test_logout_all.py::
+     test_refuses_admin_001_super_admin`) asserted the exact OLD behavior
+     (400 refusal) that the env-admin-token-version feature explicitly
+     replaced by design.
+- **Fixed:** new autouse fixture in `tests/conftest.py` defaulting
+  `get_env_admin_token_version`/`bump_env_admin_token_version` to sane values
+  for both modules that import them directly (`dependencies`,
+  `routes.admin.auth`); 3 tests updated to assert the consolidated call site;
+  2 redundant tests removed (scenario already covered by
+  `test_insurance_release_helper.py`); 1 test rewritten to assert the new
+  intended behavior instead of the replaced one. Full detail and before/after
+  in `docs/change-log/2026-09-21-backend-test-suite-post-review-drift.md`.
+- **Verified:** full local mocked-suite run both on the fix branch and,
+  separately, on a clean `origin/main` checkout — 15174 passed / 2 failed
+  here vs. 15164 passed / 14 failed on main (difference reconciles exactly:
+  12 fixed, 2 tests removed, 2 renamed with no count change). Test-only
+  change, no production code touched.
+- **NOT fixed — still OPEN:** `tests/test_settings_loader_last_known.py::
+  TestFailedReadDoesNotClobber` (2 tests) fails only in the full-suite run
+  (order-dependent), not in isolation or in a narrower subset. Its one module
+  global (`_settings_cache`) is already correctly saved/restored by the
+  file's own autouse `_isolate_cache` fixture, so the leak isn't there; the
+  actual returned dict from `get_app_settings()` is missing the mocked row's
+  key entirely (`KeyError`) rather than showing stale cached data, which
+  doesn't fit a simple cache-not-reset theory. Not root-caused further given
+  the ~17-minute full-suite iteration cost per attempt — left open rather
+  than guessed at. Next step: bisect which earlier test(s) in full-suite
+  collection order interact with `settings_loader.get_app_settings`/
+  `db_supabase.get_rows("settings", ...)` in a way that survives this file's
+  own cache reset (candidate: a leaked un-awaited background task from an
+  earlier test, per pytest.ini's own "A8" leaked-coroutine note).
+- **Files:** `backend/tests/conftest.py`, `backend/tests/test_offer_timeout.py`,
+  `backend/tests/test_rides_matching_coverage.py`,
+  `backend/tests/test_driver_ride_flow_coverage.py`,
+  `backend/tests/test_logout_all.py`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

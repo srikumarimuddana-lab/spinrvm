@@ -434,24 +434,31 @@ class TestAdminLogoutAll:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_refuses_admin_001_super_admin(self):
-        """admin-001 is the env-var super admin — no DB row exists, so
-        bumping token_version is meaningless. Runbook tells operators
-        to rotate ADMIN_PASSWORD; the handler must redirect them
-        there explicitly rather than silently no-op."""
+    async def test_bumps_env_admin_token_version_for_admin_001_super_admin(self):
+        """admin-001 is the env-var super admin — no `admin_staff` row exists,
+        so it used to get a 400 telling the operator to rotate ADMIN_PASSWORD
+        and redeploy, the one account that could not be force-logged-out at
+        all. migration 434 / utils/env_admin_tokens.py replaced that with a
+        DB-backed token_version on the settings row (2026-09-20 review,
+        finding C8) — this now succeeds and bumps it exactly like the staff
+        branch bumps `admin_staff.token_version`, rather than refusing.
+        Bump-path internals (missing row, concurrent bump, etc.) are covered
+        by test_env_admin_token_version.py; this only pins the route's choice
+        of branch."""
         from backend.routes.admin.auth import admin_logout_all
 
         token = _admin_jwt("admin-001")
         inner = _resolve_inner(admin_logout_all)
         request = MagicMock()
 
-        with pytest.raises(HTTPException) as exc:
-            await inner(request, authorization=f"Bearer {token}")
+        with patch(
+            "backend.routes.admin.auth.bump_env_admin_token_version",
+            AsyncMock(return_value=4),
+        ) as mock_bump:
+            result = await inner(request, authorization=f"Bearer {token}")
 
-        assert exc.value.status_code == 400
-        # Must explicitly mention the rotation path so the operator
-        # doesn't have to grep the runbook for the recovery step.
-        assert "ADMIN_PASSWORD" in exc.value.detail
+        mock_bump.assert_awaited_once()
+        assert result["success"] is True
 
     @pytest.mark.asyncio
     async def test_404_when_staff_not_found(self):

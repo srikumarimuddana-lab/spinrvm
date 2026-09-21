@@ -64,7 +64,7 @@ test.describe('driver-app: cancellation flow', () => {
         status: 409,
         contentType: 'application/json',
         body: JSON.stringify({
-          detail: "Ride is in status 'completed'; cannot cancel after trip starts.",
+          detail: 'Ride can no longer be cancelled (it has started or already ended)',
         }),
       });
     });

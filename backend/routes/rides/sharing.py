@@ -21,6 +21,7 @@ from ._deps import (  # noqa: F401
     logger,
     ride_action_limit,
     secrets,
+    share_track_limit,
     timedelta,
     timezone,
     uuid,
@@ -195,6 +196,13 @@ async def share_trip_with_contact(
                 "share_token": share_token,
                 "ride_id": ride_id,
             },
+            # target_app deliberately unset (audience 'both'). Unlike the tip
+            # and rating pushes that share this forwarder, the recipient here
+            # is not a role at all — it is whoever owns the phone number the
+            # rider typed, found by a bare users lookup on `phone`. They may be
+            # a rider, a driver, both, or neither, and nothing on this path
+            # tells us which app they will open. Narrowing on a guess would
+            # hide the share from the only app they use.
             _ctx=f"[SHARE] contact {contact_user['id']}",
         )
 
@@ -219,7 +227,8 @@ async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_cur
 
 
 @router.get("/track/{share_token}")
-async def track_shared_ride(share_token: str):
+@share_track_limit
+async def track_shared_ride(share_token: str, request: Request = None):
     """Public endpoint - Get ride status via share token (no auth required)."""
     ride = (lambda _r: _r[0] if _r else None)(
         await _deps.db_supabase.get_rows("rides", {"shared_trip_token": share_token}, limit=1)

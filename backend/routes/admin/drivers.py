@@ -867,6 +867,7 @@ async def admin_search_drivers(
     """Typeahead search for drivers via POST body to keep search terms out of server logs."""
     return await admin_get_drivers(
         limit=body.limit,
+        offset=0,
         search=body.search,
         is_online=body.is_online,
         is_available=body.is_available,

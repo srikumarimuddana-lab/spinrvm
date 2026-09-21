@@ -266,9 +266,17 @@ async def admin_get_user_details(user_id: str, admin: dict = Depends(get_admin_u
 
 @router.put("/users/{user_id}/status")
 async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
-    """Suspend, ban, or reactivate a rider account (Uber/Lyft-style moderation).
+    """Suspend, ban, or reactivate a user account (Uber/Lyft-style moderation).
 
-    - suspended / banned require a `reason` (stored + audited + shown to the rider).
+    Operates on the generic `users` table with no is_rider/is_driver filter,
+    and the admin dashboard's single Users page (which lists riders, drivers
+    and dual-role accounts alike) posts here for all of them — so despite what
+    this docstring said until 2026-09-21, this is NOT a rider-only endpoint.
+    There is a separate driver-specific path
+    (PUT /drivers/{driver_id}/status-override) but nothing routes driver
+    accounts to it exclusively.
+
+    - suspended / banned require a `reason` (stored + audited + shown to the user).
     - `suspended_until` makes a suspension temporary (auto-lifts at booking time);
       omit it for an indefinite suspension that an admin must reactivate.
     - reactivating (status='active') clears the reason and the suspension timer.
@@ -352,9 +360,22 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
                 title, body = "Account suspended", reason or "Your account has been suspended. Contact support."
             else:
                 title, body = "Account reactivated", "Your account is active again. Welcome back!"
-            await send_push_notification(
-                user_id, title, body, data={"type": "account_status", "status": new_status}, target_app="rider"
-            )
+            # target_app deliberately unset (audience 'both'). It used to be
+            # hardcoded "rider", which was wrong the moment an admin used this
+            # endpoint on a driver-only account — and harmless only while the
+            # inbox ignored target_app. Since migration 436 derives the inbox
+            # row's audience from it, "rider" would file a driver's own ban
+            # notice under audience='rider' and hide it permanently from the
+            # only app that account opens — exactly when they most need to
+            # read why they were banned.
+            #
+            # Account status is account-level, not role-level: users.role is
+            # admin-RBAC only (migration 256) and an account can be both via
+            # is_rider/is_driver, so there is no single correct value to
+            # resolve. 'both' reaches whichever app they use. This now matches
+            # what utils/suspension_reactivation.py's automated sibling does,
+            # and what its comment already (incorrectly) claimed this one did.
+            await send_push_notification(user_id, title, body, data={"type": "account_status", "status": new_status})
         except Exception:
             logger.warning("account status push failed", exc_info=True, extra={"domain": "admin", "user_id": user_id})
 

@@ -23,6 +23,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/quests", tags=["Quests"])
+# Admin handlers live on their own router so server.py can also mount them at
+# /api/admin/quests/*. The admin dashboard is a browser app that cannot attach
+# an X-Firebase-AppCheck header, and only /api/admin/ is App-Check-exempt
+# (core/middleware.py) — at /api/v1/quests/admin/* every dashboard call got a
+# 401 "App Check token required", which the dashboard's 401 handler treated
+# as an expired session and logged the admin out. Still included into
+# api_router at the bottom of this file so /api/v1/quests/admin/* keeps working.
+admin_router = APIRouter(tags=["Quests"])
 
 _TWO = Decimal("0.01")
 
@@ -416,7 +424,7 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
 # ── Admin Endpoints ──────────────────────────────────────────────────
 
 
-@api_router.post("/admin/create")
+@admin_router.post("/create")
 async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_admin_user)):
     """Create a new quest (admin only)."""
     quest_data = {
@@ -442,7 +450,7 @@ async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_
     return quest_data
 
 
-@api_router.get("/admin/list")
+@admin_router.get("/list")
 async def admin_list_quests(
     is_active: Optional[bool] = None,
     limit: int = Query(50, ge=1, le=200),
@@ -495,7 +503,7 @@ async def admin_list_quests(
     return result
 
 
-@api_router.patch("/admin/{quest_id}")
+@admin_router.patch("/{quest_id}")
 async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)):
     """Update a quest (admin only)."""
     quest = await db.find_one("quests", {"id": quest_id})
@@ -519,7 +527,7 @@ async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict
     return {**quest, **update_data}
 
 
-@api_router.get("/admin/{quest_id}/participants")
+@admin_router.get("/{quest_id}/participants")
 async def admin_get_quest_participants(
     quest_id: str,
     status: Optional[str] = None,
@@ -577,3 +585,8 @@ async def admin_get_quest_participants(
         )
 
     return result
+
+
+# Must run after every admin_router route above is registered — include_router
+# copies routes at call time.
+api_router.include_router(admin_router, prefix="/admin")

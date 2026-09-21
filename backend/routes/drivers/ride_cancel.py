@@ -258,6 +258,7 @@ async def cancel_ride(
                 "Ride Cancelled ❌",
                 "Your driver has cancelled the ride.",
                 data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
     # Surfaced to admins so a scheduled ride's driver-cancel (unconditionally
@@ -718,6 +719,7 @@ async def mark_rider_noshow(
                 "Ride Cancelled",
                 f"Your driver waited but you didn't show up. A ${float(total_fee.quantize(Decimal('0.01'))):.2f} no-show fee has been charged.",
                 data={"type": "ride_noshow", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
         # A charge the rider did not choose to make needs a written record they

@@ -342,11 +342,25 @@ def pg_conn(pg_test_dbname):
     cur.execute(rls_sql)
 
     # --- financial_events: migrations 58 (create+policies), 70 (select
-    # policy fix), 290 (grant lockdown) applied in order, verbatim. ---
+    # policy fix), 289 (flag-gated DELETE for the 7-year DSAR purge -- added
+    # by the C49 financial-ledger-extension round; the harness previously
+    # jumped straight from 70 to 290 and skipped it, leaving
+    # _financial_events_immutable() on its ORIGINAL unconditional-RAISE body
+    # instead of 289's GUC-gated one, so any test exercising a real DELETE
+    # here -- as financial_event_entries' own CASCADE test now does --
+    # reproduced the wrong, pre-fix production behavior. 289 also redefines
+    # purge_pii_retention(), which references many tables outside this
+    # harness's build scope (ride_routes, price_searches,
+    # driver_location_history, ...) -- safe to apply regardless, since
+    # plpgsql only resolves table names at EXECUTION time, not CREATE time,
+    # and no test here calls purge_pii_retention() itself, only the trigger
+    # function it shares a file with), 290 (grant lockdown) applied in
+    # filename-sort order, verbatim. ---
     migrations_dir = _BACKEND_DIR / "migrations"
     for fname in (
         "58_financial_events.sql",
         "70_fix_financial_events_rls.sql",
+        "289_financial_events_purge_delete_gate.sql",
         "290_financial_events_grant_lockdown.sql",
     ):
         sql = (migrations_dir / fname).read_text()
@@ -917,6 +931,99 @@ def pg_conn(pg_test_dbname):
         "TO anon, authenticated, service_role"
     )
 
+    # --- financial ledger extension (ACTION_ITEMS.md C49): three
+    # self-contained, single-migration tables (confirmed by a repo-wide grep
+    # on each table name -- 287/292/293 only add functions/indexes with no
+    # RLS/grant effect on the base tables, and 186/188 are additive columns
+    # with zero grant/policy statements, so none of the five are applied
+    # here, matching this fixture's established "only the migration that
+    # actually defines the policies" precedent).
+    #
+    # `financial_event_entries` (286): the double-entry leg table extending
+    # financial_events (already built above). Its own migration carries both
+    # the RLS policies AND the REVOKE/GRANT lockdown (unlike financial_events
+    # itself, which needed a separate migration 290 to retrofit the lockdown
+    # -- 286 shipped the lockdown from day one) plus an UPDATE-blocking
+    # trigger and the financial_event_entries_unbalanced view (also
+    # REVOKEd). event_id REFERENCES financial_events(id) ON DELETE CASCADE.
+    #
+    # `reconciliation_discrepancies` (59): single FOR ALL admin-only policy,
+    # deliberately with NO accompanying REVOKE -- unlike every money table
+    # above, this one has no user-writable path and no WITH CHECK-less
+    # permissive INSERT policy for the REVOKE pattern to guard against, so
+    # RLS alone (USING doubling as the INSERT WITH CHECK for a FOR ALL
+    # policy with none specified) is the only gate. Verified, not assumed --
+    # see test_reconciliation_discrepancies_rls.py's anon/authenticated
+    # write tests.
+    #
+    # `subscription_payments` (151): driver-owned SELECT (own rows via
+    # drivers.user_id) + REVOKE/GRANT write lockdown -- and deliberately NO
+    # admin SELECT policy at all (the migration's own comment: "admin stats
+    # endpoint reads via the service role... a direct authenticated-role
+    # admin read would see zero rows by design"), distinct from its two
+    # money-table siblings above, both of which DO carry an admin read path.
+    # Extracted up to its own "Backfill realized revenue" comment -- the
+    # backfill INSERT reads FROM public.driver_subscriptions, a table
+    # outside this harness's build scope (out of scope for RLS coverage: a
+    # one-time historical-data migration, not a policy/grant statement), so
+    # applying it verbatim would raise UndefinedTable. Same "read only the
+    # section this harness needs" technique already used for migration 340
+    # above.
+    #
+    # Real, previously-undiscovered finding (not fixed here -- filed as a
+    # new ACTION_ITEMS.md item): financial_event_entries_select (286) and
+    # reconciliation_discrepancies' recon_admin_only (59) both gate access
+    # on `(SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'` --
+    # the exact pattern migrations 430/432/433 (ACTION_ITEMS.md C107/C123)
+    # found permanently unreachable in production (migration 256's
+    # chk_users_role_not_admin CHECK means users.role can never BE 'admin';
+    # real admin identity lives in admin_staff instead) and systematically
+    # replaced elsewhere. A repo-wide grep confirms neither table appears in
+    # any of 430/432/433 -- this pair was missed by all three sweeps. Applied
+    # verbatim here regardless (this harness never applies migration 256, by
+    # the same deliberate omission its own comment above explains, precisely
+    # so admin-role tests across every file -- this pair included -- can
+    # still seed and exercise the policy as originally designed), which is
+    # what lets the tests below prove the policy logic works in isolation
+    # while the ACTION_ITEMS.md entry separately documents that it is dead
+    # in production today.
+    cur.execute((migrations_dir / "59_reconciliation_discrepancies.sql").read_text())
+    cur.execute((migrations_dir / "286_financial_event_entries.sql").read_text())
+    migration_151_sql = (migrations_dir / "151_subscription_payments_ledger.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_151_sql,
+            "CREATE TABLE IF NOT EXISTS public.subscription_payments",
+            "-- Backfill realized revenue",
+        )
+    )
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON reconciliation_discrepancies, "
+        "financial_event_entries, subscription_payments "
+        "TO anon, authenticated, service_role"
+    )
+    # Re-apply financial_event_entries' own lockdown: the blanket grant above
+    # would otherwise silently re-open the exact hole 286's own REVOKE
+    # closed, same reasoning as the financial_events re-revoke earlier in
+    # this fixture (286's statements ran once already, inside the file
+    # itself, but that execution preceded this by-name grant, not followed
+    # it -- a redundant no-op if the ordering were reversed, but explicit
+    # here since it isn't).
+    cur.execute("REVOKE ALL ON financial_event_entries FROM anon")
+    cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON financial_event_entries FROM authenticated")
+    cur.execute("GRANT SELECT ON financial_event_entries TO authenticated")
+    cur.execute("REVOKE ALL ON financial_event_entries_unbalanced FROM anon, authenticated")
+    # service_role has BYPASSRLS (skips row-security policy evaluation) but
+    # BYPASSRLS does not skip ordinary object-level GRANT checks -- a view
+    # created by this fixture's own bootstrap/superuser connection grants
+    # nothing to service_role by default, so it needs the same explicit
+    # per-object grant every other new relation gets in this fixture.
+    cur.execute("GRANT SELECT ON financial_event_entries_unbalanced TO service_role")
+    cur.execute("REVOKE ALL ON subscription_payments FROM anon")
+    cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON subscription_payments FROM authenticated")
+    cur.execute("GRANT SELECT ON subscription_payments TO authenticated")
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -976,6 +1083,9 @@ def pg_cur(pg_conn):
         "ride_location_gap_events",
         "ride_distance_recomputes",
         "ride_distance_integrity_events",
+        "reconciliation_discrepancies",
+        "financial_event_entries",
+        "subscription_payments",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

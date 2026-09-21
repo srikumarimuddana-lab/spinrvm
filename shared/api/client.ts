@@ -1095,7 +1095,24 @@ const handleApiError = async (
   // caller's promise never settled, and the user only saw an error when a
   // fetch in the loop eventually failed at the network layer — surfacing a
   // misleading "unable to reach server" instead of the server's message.
-  if (response.status === 503 && retryFn && url !== '/auth/refresh' && !_inflight503Retries.has(`${method} ${url}`)) {
+  //
+  // /auth/verify-otp is excluded for a different reason than /auth/refresh:
+  // the request is NOT idempotent. The backend deletes the OTP record as soon
+  // as the code matches, BEFORE the work that can 503 (the session_id write).
+  // retryFn resends the closure-captured original body — the same phone and
+  // the same now-spent code — which can only come back as ERR_OTP_INVALID and
+  // burns one of OTP_MAX_FAILURES (5/hour → 24h lockout). Auto-retrying here
+  // tells a user who typed the RIGHT code that it was wrong, and walks them
+  // toward a day-long lockout without them doing anything. The backend now
+  // signals this case as errors.auth.session_setup_failed so both apps can
+  // prompt for a fresh code; that only works if we don't eat it first.
+  if (
+    response.status === 503 &&
+    retryFn &&
+    url !== '/auth/refresh' &&
+    url !== '/auth/verify-otp' &&
+    !_inflight503Retries.has(`${method} ${url}`)
+  ) {
     const retryKey = `${method} ${url}`;
     _inflight503Retries.add(retryKey);
     try {

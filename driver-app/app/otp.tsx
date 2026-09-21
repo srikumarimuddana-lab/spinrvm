@@ -262,6 +262,25 @@ export default function OtpScreen() {
         );
         return;
       }
+      // errors.auth.session_setup_failed — same spent-OTP hazard as the
+      // consent branch above, different cause. The code was CORRECT and was
+      // consumed, but the server couldn't finish establishing the session.
+      // Resending it can only return ERR_OTP_INVALID and burns one of the
+      // 5 hourly OTP-failure attempts toward a 24h lockout, so offer a fresh
+      // code immediately rather than telling the driver their code was wrong.
+      // (shared/api/client.ts also excludes /auth/verify-otp from its blind
+      // 503 auto-retry so this reaches us at all.)
+      if (err?.messageKey === 'errors.auth.session_setup_failed') {
+        setCode('');
+        setCountdown(0);
+        setCanResend(true);
+        showToast(
+          'warning',
+          'Almost There',
+          "Your code was correct, but we couldn't finish signing you in. Tap Resend for a new code.",
+        );
+        return;
+      }
       triggerShake();
       setCode('');
       showToast('error', 'Verification Failed', resolveOtpErrorCopy(err));

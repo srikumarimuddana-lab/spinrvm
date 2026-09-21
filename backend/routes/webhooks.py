@@ -810,6 +810,14 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                         title="Wallet Topped Up",
                         body=f"${amount} has been added to your wallet.",
                         data={"type": "wallet_topup", "amount": str(amount)},
+                        # target_app deliberately left unset (audience='both').
+                        # The personal wallet is role-agnostic — see
+                        # routes/admin/wallet.py::_wallet_target_app, whose own
+                        # docstring notes get_or_create_wallet does not care
+                        # about role, and POST /wallet/topup is gated on plain
+                        # get_current_user with no role check. For a dual-role
+                        # user the topped-up balance is genuinely the same
+                        # balance in both apps, so this notice belongs in both.
                     )
                 except Exception:
                     logger.warning("Push notification failed for wallet_topup", exc_info=True)
@@ -965,6 +973,10 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     "Payment Confirmed ✅",
                     "Your payment has been processed successfully.",
                     {"type": "payment_confirmed", "ride_id": ride_id or ""},
+                    # The payer is the rider: user_id here is the ride PI's
+                    # metadata user_id, the same id the receipt build above
+                    # falls back to ride.rider_id for.
+                    target_app="rider",
                 )
             except Exception as _push_err:
                 logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
@@ -1146,6 +1158,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     "Payment Failed ❌",
                     f"Your payment could not be processed: {failure_message}",
                     {"type": "payment_failed", "ride_id": ride_id or ""},
+                    target_app="rider",
                 )
             except Exception as _push_err:
                 logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
@@ -1175,6 +1188,10 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                             "ride_id": ride_id,
                             "deeplink": "/driver/earnings",
                         },
+                        # Sibling of the rider-facing copy above: same Stripe
+                        # event, different recipient. driver_user_id is
+                        # resolved via rides.driver_id → drivers.user_id.
+                        target_app="driver",
                     )
                 except Exception:
                     logger.warning(
@@ -1502,6 +1519,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                                 # refunded when this event only refunded $10.
                                 f"Your refund of ${delta_amount:.2f} has been processed by your bank.",
                                 data={"type": "refund_processed", "ride_id": ride_id},
+                                target_app="rider",
                             )
                         except Exception as _e:
                             logger.debug(f"Refund push failed: {_e}")
@@ -1816,6 +1834,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                             "type": "subscription_cancelled",
                             "deeplink": "/driver/subscription",
                         },
+                        target_app="driver",
                     )
                 except Exception as _e:
                     logger.debug(f"Subscription cancel push failed: {_e}")
@@ -2030,6 +2049,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                                 "Spinr Pass renewed",
                                 "Your Spinr Pass renewed. You're all set to keep accepting rides.",
                                 data={"type": "subscription_renewed", "deeplink": "/driver/subscription"},
+                                target_app="driver",
                             )
                         except Exception:
                             logger.warning(
@@ -2073,6 +2093,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                         "Spinr Pass payment failed",
                         "We couldn't renew your Spinr Pass. Please update your card to keep accepting rides.",
                         data={"type": "subscription_past_due", "deeplink": "/driver/subscription"},
+                        target_app="driver",
                     )
                 except Exception:
                     logger.warning(
@@ -2191,6 +2212,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                         "Payout failed",
                         "Your payout could not be deposited. Please check your bank details and try again.",
                         data={"type": "payout_failed", "deeplink": "/driver/earnings"},
+                        target_app="driver",
                     )
                 except Exception:
                     logger.warning(
@@ -2214,6 +2236,12 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
+            # Stamp processed_at so the reconciler doesn't re-flag these as
+            # stuck on every daily run. These are known-harmless lifecycle
+            # events — leaving them NULL was masking real stuck events behind
+            # 500+ historical entries (CRIMSON-SMOKE-7445-HC).
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "ignored": True, "event_id": event_id}
         else:
             logger.warning(
                 "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
@@ -2221,7 +2249,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
-        # Leave processed_at NULL for unknown/unhandled events so
+        # Leave processed_at NULL for genuinely unknown/unhandled events so
         # utils/stripe_reconcile.py's daily sweep surfaces them for manual
         # review if they later become actionable (it does not auto-replay
         # -- see _reconcile_stuck_stripe_events, ACTION_ITEMS.md C10).

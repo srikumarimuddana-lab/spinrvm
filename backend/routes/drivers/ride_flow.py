@@ -539,6 +539,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 "Driver Assigned! 🚗",
                 "Your driver has accepted the ride and is on the way.",
                 data={"type": "driver_accepted", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
         if ride.get("guest_booking"):
@@ -958,6 +959,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 "Driver Arrived! 📍",
                 "Your driver has arrived at the pickup location.",
                 data={"type": "driver_arrived", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
         if ride.get("guest_booking"):
@@ -998,6 +1000,7 @@ def _notify_rider_pickup_otp_lockout(ride: dict) -> None:
             "Your driver entered the wrong pickup code too many times. "
             "Check you are with the right driver — you can cancel if something feels wrong.",
             data={"type": "pickup_otp_locked", "ride_id": ride_id},
+            target_app="rider",
         )
     )
 
@@ -1090,6 +1093,7 @@ async def verify_pickup_otp(
                 "Ride Started! ▶️",
                 "Your ride has started. Have a safe trip!",
                 data={"type": "ride_started", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
     await _deps.manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
@@ -1163,6 +1167,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
                 "Ride Started! ▶️",
                 "Your ride has started. Have a safe trip!",
                 data={"type": "ride_started", "ride_id": str(ride_id)},
+                target_app="rider",
             )
         )
     await _deps.manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))

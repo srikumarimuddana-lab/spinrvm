@@ -69,6 +69,13 @@ function buildCsp(nonce: string): string {
     // is same-origin — it requires blob: explicitly here. Without this the
     // worker is blocked and the map canvas stays blank.
     "worker-src blob: 'self'",
+    // The driver-approval document reviewer shows PDFs with
+    // <embed src={signed Supabase storage URL}>, which is governed by
+    // object-src. With no object-src set it fell back to default-src 'self',
+    // so every PDF was blocked ("Loading plugin data ... violates ...
+    // default-src 'self'") and reviewers saw a blank viewer. Images are
+    // unaffected — img-src already allows https:.
+    "object-src 'self' https://*.supabase.co",
     "frame-ancestors 'none'",
     // Google reCAPTCHA Enterprise (Firebase App Check on the public
     // /register/driver page — classic reCAPTCHA v3 was the original choice

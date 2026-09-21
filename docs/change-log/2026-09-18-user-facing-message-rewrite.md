@@ -62,10 +62,16 @@ change.**
 - **The 5xx sanitiser contract is intact** — route detail still discarded unless it matches the
   `ERR_*` pattern, full text still logged with the request id, `error.sanitised` still set. Only the
   replacement string changed.
-- **`shared/api/client.ts` is imported by both apps**, so the sentinel map is genuinely cross-surface.
-  It is additive: a mapped sentinel now renders copy, an unmapped one falls back exactly as before.
-  The existing "sentinels never become toast copy" tests cover OTP sentinels, which are deliberately
-  left unmapped and keep passing.
+- **`shared/api/client.ts` is imported by both apps**, so the sentinel map is cross-surface in
+  production. It is additive: a mapped sentinel now renders copy, an unmapped one falls back exactly
+  as before. The existing "sentinels never become toast copy" tests cover OTP sentinels, which are
+  deliberately left unmapped and keep passing.
+- **Correction (2026-09-21):** this originally read "genuinely cross-surface", which overstated the
+  *test* coverage. driver-app maps every `@shared/*` import into `__mocks__`, and its client stub
+  reimplemented `getApiErrorMessage` as "return `detail` verbatim" — so no driver-app test touched
+  the map, and all six new tests were rider-app only. Per CLAUDE.md pre-merge gate 1 that is zero
+  real coverage and had to be stated as such. The stub now delegates to the real (pure,
+  dependency-free) helpers and driver-app has its own test file.
 - **`backend/validators.py` is the widest change** — its UUID/datetime validators back many routes, so
   that wording surfaces across surfaces including admin. Text only; validation logic untouched.
 
@@ -81,7 +87,12 @@ change.**
   an improvement in legibility: no message became less specific, and several became more specific
   (the 17 sentinels went from "Something went wrong" to a real reason).
 - **Reviewed against the customer-centric tone standard:** every new message is specific,
-  non-technical and states what the user can do next. All fit the 140-char `clampToastMessage` budget.
+  non-technical and states what the user can do next.
+- **Correction (2026-09-21):** this section originally claimed every new message fit the 140-char
+  `clampToastMessage` budget. That was asserted, not measured, and it was false — the
+  `driver_accepted` guard produced a 146-character message, so the client truncated its closing
+  instruction away. The phrase maps now live in `backend/utils/ride_state_copy.py` and
+  `backend/tests/test_ride_state_copy.py` asserts the length per state. Longest is now 116.
 
 ## 6. Files modified
 
@@ -223,10 +234,49 @@ A re-run of the sweep leaves 36 non-sentinel flags, all accounted for:
 
 The 32 remaining `ERR_*` rows are the mapped sentinels, which the client never renders.
 
+## Second pass — review findings (2026-09-21)
+
+A Codex-style correctness review of this branch returned 15 findings, 14 confirmed against the code.
+All are fixed. The four that mattered most were mine:
+
+1. **The rider twin was never fixed.** `routes/rides/_shared.py` carried the identical message this
+   log calls the worst offender, on the rider surface. It was invisible because the sweep only
+   scanned `HTTPException(detail=...)`, and the rider guard raises `SpinrException(message=...)` —
+   which reaches the client through the same `detail` field. ~70 such raise sites were never looked
+   at. Both maps now live in one module, `backend/utils/ride_state_copy.py`, and
+   `backend/tests/test_user_facing_message_hygiene.py` fails CI on either shape.
+
+2. **A crash in the safe-fallback helper.** `SENTINEL_MESSAGES[raw.trim()]` indexed a plain object
+   literal, so a `detail` of `"constructor"` or `"__proto__"` returned a function and threw
+   `message.trim is not a function` out of `getApiErrorMessage`. Now guarded.
+
+3. **Three new driver messages stated things that are false.** None of those handlers has a status
+   pre-check, so the branch fires for earlier states too: a duplicate tap on a running trip was told
+   to go mark itself arrived, a live unaccepted offer was told it had "already moved on", and a ride
+   the driver still held was told it went to another driver. They now read the actual state.
+
+4. **The corporate audience was wrong.** `routes/corporate_subscriptions.py` is mounted behind
+   `get_admin_user`; the reader is Spinr staff, not a customer. The rewrite replaced the one
+   actionable fact with "contact Spinr support" — telling an operator to contact their own support
+   desk — and the commit message asserted the opposite. Reverted to name the setting, which is the
+   useful thing for that reader. The audit's `surface` column was derived from the file path, and
+   this log's own "Surface attribution is heuristic" caveat is exactly what went unheeded.
+
+Also fixed: `_http_error` still returned eight raw tokens including the one "fixed" 95 lines below
+it; `ERR_ACCOUNT_DELETED` asserted permanence to users who can still self-reactivate; three sentinel
+entries overrode better call-site copy on the wallet-pay path; four more could never render because
+they are admin-only and the map is React-Native-only; and the two `add_card` body failures had been
+collapsed into one unlogged string.
+
 ## Residual risk
 
-1. **The suite has not been run.** Seven assertions were updated by hand against a grep sweep. If one
-   was missed, CI catches it — but that is the first place it will be caught.
+1. **The suite has still not been run.** PyPI and npm remain blocked in this environment. Twelve
+   assertions have now been updated by hand across both passes, and three new test files were added
+   (`test_ride_state_copy.py`, `test_user_facing_message_hygiene.py`,
+   `driver-app/__tests__/sentinelMessages.test.ts`) that have never executed. The hygiene test's
+   collector was exercised directly — clean on the current tree, and catching a seeded file
+   containing each bug shape — but that is not the same as running it under pytest. **CI is the
+   first place any of this is really verified.**
 2. **New English copy is untranslated.** `fr`, `fr-CA`, `es`, `zh` locale files were not touched, and
    these backend strings are not routed through i18n at all.
 3. **No visual check.** rider-app and driver-app have no visual-regression tooling, so longer messages

@@ -168,19 +168,19 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | ERR_DRIVER_ONLY | FLAG | constant: ERR_DRIVER_ONLY | `backend/routes/rides/lifecycle.py:107` |
-| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:56` |
-| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:114` |
-| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:192` |
-| ☐ | HTTP 403 | Not available in production | OK |  | `backend/routes/rides/lifecycle.py:51` |
-| ☐ | HTTP 400 | Ride is not in progress | OK |  | `backend/routes/rides/lifecycle.py:194` |
-| ☐ | HTTP 409 | Ride is not in progress | OK |  | `backend/routes/rides/lifecycle.py:209` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:54` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:110` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:190` |
-| ☐ | HTTP 400 | This trip can't be started yet. Make sure you've arrived at the pickup first. | OK |  | `backend/routes/rides/lifecycle.py:116` |
-| ☐ | HTTP 410 | Use POST /drivers/rides/{ride_id}/verify-otp to start a ride in production. | OK |  | `backend/routes/rides/lifecycle.py:101` |
-| ☐ | HTTP 409 | We couldn't start this trip. Make sure you've marked yourself as arrived, then refresh to see the ride's current status. | OK |  | `backend/routes/rides/lifecycle.py:133` |
+| ☐ | HTTP 403 | ERR_DRIVER_ONLY | FLAG | constant: ERR_DRIVER_ONLY | `backend/routes/rides/lifecycle.py:112` |
+| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:61` |
+| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:119` |
+| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/lifecycle.py:199` |
+| ☐ | HTTP 403 | Not available in production | OK |  | `backend/routes/rides/lifecycle.py:56` |
+| ☐ | HTTP 400 | Ride is not in progress | OK |  | `backend/routes/rides/lifecycle.py:201` |
+| ☐ | HTTP 409 | Ride is not in progress | OK |  | `backend/routes/rides/lifecycle.py:216` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:59` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:115` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/lifecycle.py:197` |
+| ☐ | HTTP 400 | This trip can't be started yet. Make sure you've arrived at the pickup first. | OK |  | `backend/routes/rides/lifecycle.py:121` |
+| ☐ | HTTP 410 | Use POST /drivers/rides/{ride_id}/verify-otp to start a ride in production. | OK |  | `backend/routes/rides/lifecycle.py:106` |
+| ☐ | HTTP 409 | f"We couldn't start this trip — it's {_guard_phrase}. Refresh to see its latest status." if _guard_phrase else "We couldn't start this trip. Refresh to see its latest status." | OK |  | `backend/routes/rides/lifecycle.py:139` |
 
 ### `login`  (5)
 
@@ -271,39 +271,39 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 400 | Can only tip completed rides | OK |  | `backend/routes/rides/payments.py:144` |
-| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1247` |
-| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1175` |
-| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1155` |
-| ☐ | HTTP 400 | ERR_TIP_DUPLICATE | FLAG | constant: ERR_TIP_DUPLICATE | `backend/routes/rides/payments.py:161` |
-| ☐ | HTTP 400 | For your security, card details have to be entered in the secure card form. Please add your card again from the payment screen. | OK |  | `backend/routes/payments.py:1008` |
-| ☐ | HTTP 400 | Imported historical rides cannot be tipped | OK |  | `backend/routes/rides/payments.py:156` |
+| ☐ | HTTP 400 | Can only tip completed rides | OK |  | `backend/routes/rides/payments.py:164` |
+| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1260` |
+| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1188` |
+| ☐ | HTTP 404 | Card not found | OK |  | `backend/routes/payments.py:1168` |
+| ☐ | HTTP 400 | ERR_TIP_DUPLICATE | FLAG | constant: ERR_TIP_DUPLICATE | `backend/routes/rides/payments.py:181` |
+| ☐ | HTTP 400 | For your security, card details have to be entered in the secure card form. Please add your card again from the payment screen. | OK |  | `backend/routes/payments.py:1021` |
+| ☐ | HTTP 400 | Imported historical rides cannot be tipped | OK |  | `backend/routes/rides/payments.py:176` |
 | ☐ | HTTP 400 | Mock payments are not supported in production | OK |  | `backend/routes/payments.py:611` |
-| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/payments.py:385` |
+| ☐ | HTTP 403 | Not authorized | OK |  | `backend/routes/rides/payments.py:405` |
 | ☐ | HTTP 403 | Not authorized to confirm this payment | OK |  | `backend/routes/payments.py:692` |
 | ☐ | HTTP 403 | Not authorized to pay for this ride | OK |  | `backend/routes/payments.py:76` |
-| ☐ | HTTP 403 | Not authorized to tip this ride | OK |  | `backend/routes/rides/payments.py:141` |
+| ☐ | HTTP 403 | Not authorized to tip this ride | OK |  | `backend/routes/rides/payments.py:161` |
 | ☐ | HTTP 403 | Payment does not match this ride | OK |  | `backend/routes/payments.py:719` |
-| ☐ | HTTP 409 | Payment is processing; please retry in a moment. | OK |  | `backend/routes/rides/payments.py:581` |
-| ☐ | HTTP 409 | Payment retry already in progress. Please try again in a moment. | OK |  | `backend/routes/rides/payments.py:551` |
-| ☐ | HTTP 409 | Ride is in status '{_ride_status}'; payment requires completed state. | OK |  | `backend/routes/rides/payments.py:389` |
+| ☐ | HTTP 409 | Payment is processing; please retry in a moment. | OK |  | `backend/routes/rides/payments.py:605` |
+| ☐ | HTTP 409 | Payment retry already in progress. Please try again in a moment. | OK |  | `backend/routes/rides/payments.py:575` |
 | ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/payments.py:74` |
 | ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/payments.py:625` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/payments.py:138` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/payments.py:383` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/payments.py:158` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/rides/payments.py:403` |
 | ☐ | HTTP 409 | This payment is already being processed. Give it a moment before trying again. | OK |  | `backend/routes/payments.py:664` |
 | ☐ | HTTP 403 | This ride belongs to a different account, so you can't pay for it. | OK |  | `backend/routes/payments.py:627` |
-| ☐ | HTTP 400 | Tip amount cannot be negative | OK |  | `backend/routes/rides/payments.py:502` |
-| ☐ | HTTP 400 | Tip amount exceeds maximum ($500) | OK |  | `backend/routes/rides/payments.py:504` |
-| ☐ | HTTP 400 | Tip amount must be greater than zero | OK |  | `backend/routes/rides/payments.py:134` |
+| ☐ | HTTP 400 | Tip amount cannot be negative | OK |  | `backend/routes/rides/payments.py:526` |
+| ☐ | HTTP 400 | Tip amount exceeds maximum ($500) | OK |  | `backend/routes/rides/payments.py:528` |
+| ☐ | HTTP 400 | Tip amount must be greater than zero | OK |  | `backend/routes/rides/payments.py:154` |
 | ☐ | HTTP 404 | User not found | OK |  | `backend/routes/payments.py:285` |
 | ☐ | HTTP 404 | User not found during Stripe customer creation | OK |  | `backend/routes/payments.py:326` |
-| ☐ | HTTP 400 | We couldn't read that card. Please check the details and try again. | OK |  | `backend/routes/payments.py:1033` |
-| ☐ | HTTP 400 | We couldn't read that request. Please try again. | OK |  | `backend/routes/payments.py:996` |
-| ☐ | HTTP 400 | We couldn't read that request. Please try again. | OK |  | `backend/routes/payments.py:990` |
-| ☐ | HTTP 409 | You need at least one card on file. Add another card before removing this one. | OK |  | `backend/routes/payments.py:1237` |
+| ☐ | HTTP 400 | We couldn't read that card. Please check the details and try again. | OK |  | `backend/routes/payments.py:1046` |
+| ☐ | HTTP 400 | We couldn't read that request. Please check your connection and try again. | OK |  | `backend/routes/payments.py:998` |
+| ☐ | HTTP 400 | We couldn't read those card details. Please try adding the card again. | OK |  | `backend/routes/payments.py:1009` |
+| ☐ | HTTP 409 | You need at least one card on file. Add another card before removing this one. | OK |  | `backend/routes/payments.py:1250` |
+| ☐ | HTTP 409 | _not_payable_message(_ride_status) | OK |  | `backend/routes/rides/payments.py:409` |
 | ☐ | HTTP 402 | {'code': 'AMOUNT_MISMATCH', 'message': 'Payment amount does not cover the fare.'} | OK |  | `backend/routes/payments.py:738` |
-| ☐ | HTTP 409 | {'code': 'invoice_issued', 'message': 'An invoice has been emailed for this ride. Please pay using the link in your email.'} | OK |  | `backend/routes/rides/payments.py:442` |
+| ☐ | HTTP 409 | {'code': 'invoice_issued', 'message': 'An invoice has been emailed for this ride. Please pay using the link in your email.'} | OK |  | `backend/routes/rides/payments.py:462` |
 
 ### `privacy-settings`  (10)
 
@@ -691,7 +691,7 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 
 ---
 
-## DRIVER APP  (471 messages)
+## DRIVER APP  (469 messages)
 
 ### `RideOfferPanel`  (3)
 
@@ -705,10 +705,10 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/_shared.py:930` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/_shared.py:914` |
-| ☐ | HTTP 429 | Too many incorrect pickup codes for this ride — try again later | OK |  | `backend/routes/drivers/_shared.py:380` |
-| ☐ | HTTP 409 | f"This ride is {phrase}, so that action isn't available right now. Refresh to see its latest status." if phrase else "That action isn't available for this ride right now. Refresh to see its latest status." | OK |  | `backend/routes/drivers/_shared.py:906` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/_shared.py:912` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/_shared.py:896` |
+| ☐ | HTTP 429 | Too many incorrect pickup codes for this ride — try again later | OK |  | `backend/routes/drivers/_shared.py:385` |
+| ☐ | HTTP 409 | unavailable_message(driver_phrase(current)) | FLAG | code identifier: driver_phrase, unavailable_message | `backend/routes/drivers/_shared.py:892` |
 
 ### `addresses`  (20)
 
@@ -1145,32 +1145,30 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 | ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_complete.py:377` |
 | ☐ | HTTP 409 | {'code': 'completion_confirmation_required', 'distance_band': distance_band, 'distance_meters': distance_meters} | OK |  | `backend/routes/drivers/ride_complete.py:295` |
 
-### `ride_flow`  (22)
+### `ride_flow`  (20)
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Cannot accept your own ride | OK |  | `backend/routes/drivers/ride_flow.py:120` |
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:63` |
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:592` |
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:884` |
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:1018` |
-| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:1128` |
-| ☐ | HTTP 400 | Invalid OTP | OK |  | `backend/routes/drivers/ride_flow.py:1056` |
-| ☐ | HTTP 403 | No active offer for this ride | OK |  | `backend/routes/drivers/ride_flow.py:312` |
-| ☐ | HTTP 403 | Not authorized to decline this ride | OK |  | `backend/routes/drivers/ride_flow.py:635` |
-| ☐ | HTTP 400 | Ride not assigned to you | OK |  | `backend/routes/drivers/ride_flow.py:319` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:115` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:596` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:890` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:1024` |
-| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:1134` |
-| ☐ | HTTP 409 | This ride can no longer be declined — it has already moved on to another driver or been cancelled. | OK |  | `backend/routes/drivers/ride_flow.py:598` |
-| ☐ | HTTP 409 | This ride has already moved on, so we couldn't mark you as arrived. Refresh to see its current status. | OK |  | `backend/routes/drivers/ride_flow.py:932` |
-| ☐ | HTTP 409 | This ride has no pickup code — contact support to start it | OK |  | `backend/routes/drivers/ride_flow.py:1043` |
-| ☐ | HTTP 410 | Use POST /rides/{ride_id}/verify-otp to start a ride in production. | OK |  | `backend/routes/drivers/ride_flow.py:1120` |
-| ☐ | HTTP 409 | We couldn't start this trip. Make sure you've marked yourself as arrived, then refresh to see the ride's current status. | OK |  | `backend/routes/drivers/ride_flow.py:1074` |
-| ☐ | HTTP 409 | We couldn't start this trip. Make sure you've marked yourself as arrived, then refresh to see the ride's current status. | OK |  | `backend/routes/drivers/ride_flow.py:1148` |
-| ☐ | HTTP 400 | You are {distance_m}m away from the pickup. Please move within 200m of the pickup location to mark arrival. | OK |  | `backend/routes/drivers/ride_flow.py:910` |
+| ☐ | HTTP 403 | Cannot accept your own ride | OK |  | `backend/routes/drivers/ride_flow.py:152` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:95` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:624` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:919` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:1048` |
+| ☐ | HTTP 404 | Driver not found | OK |  | `backend/routes/drivers/ride_flow.py:1152` |
+| ☐ | HTTP 400 | Invalid OTP | OK |  | `backend/routes/drivers/ride_flow.py:1086` |
+| ☐ | HTTP 403 | No active offer for this ride | OK |  | `backend/routes/drivers/ride_flow.py:344` |
+| ☐ | HTTP 403 | Not authorized to decline this ride | OK |  | `backend/routes/drivers/ride_flow.py:670` |
+| ☐ | HTTP 400 | Ride not assigned to you | OK |  | `backend/routes/drivers/ride_flow.py:351` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:147` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:628` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:925` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:1054` |
+| ☐ | HTTP 404 | Ride not found | OK |  | `backend/routes/drivers/ride_flow.py:1158` |
+| ☐ | HTTP 409 | This ride has no pickup code — contact support to start it | OK |  | `backend/routes/drivers/ride_flow.py:1073` |
+| ☐ | HTTP 410 | Use POST /rides/{ride_id}/verify-otp to start a ride in production. | OK |  | `backend/routes/drivers/ride_flow.py:1144` |
+| ☐ | HTTP 400 | You are {distance_m}m away from the pickup. Please move within 200m of the pickup location to mark arrival. | OK |  | `backend/routes/drivers/ride_flow.py:945` |
+| ☐ | HTTP 409 | detail | FLAG | bare machine token, not a sentence | `backend/routes/drivers/ride_flow.py:68` |
+| ☐ | HTTP 409 | f"This ride can no longer be declined — it's {_decline_phrase}." if _decline_phrase else 'This ride can no longer be declined.' | OK |  | `backend/routes/drivers/ride_flow.py:631` |
 
 ### `ride_reads`  (9)
 
@@ -1808,8 +1806,8 @@ grouped by surface then by screen/route. Tick each row as you trigger it in the 
 
 | ✓ | Trigger | Message the user sees | Verdict | Issue | Source |
 |---|---|---|---|---|---|
-| ☐ | HTTP 403 | Subscription billing is not available for your account yet. Please contact Spinr support. | OK |  | `backend/routes/corporate_subscriptions.py:116` |
-| ☐ | HTTP 404 | We couldn't find that company account. | OK |  | `backend/routes/corporate_subscriptions.py:163` |
+| ☐ | HTTP 403 | Corporate subscription billing is turned off. A super admin can enable the corporate_subscription_billing_enabled setting once it has been verified in staging. | FLAG | code identifier: corporate_subscription_billing_enabled | `backend/routes/corporate_subscriptions.py:137` |
+| ☐ | HTTP 404 | We couldn't find that company account. | OK |  | `backend/routes/corporate_subscriptions.py:192` |
 
 ### `corporate_wallet`  (7)
 

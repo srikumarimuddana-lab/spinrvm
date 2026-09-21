@@ -13,6 +13,15 @@ Change Impact & Risk entry: **`docs/change-log/2026-09-18-user-facing-message-re
 
 ## 1. Headline
 
+> **Correction (2026-09-21).** The sweep behind this audit only scanned
+> `HTTPException(detail=...)`. It never saw `SpinrException(message=...)` — ~70 raise sites in
+> `backend/routes/` that reach the client through the same `detail` field — and it stripped
+> `{placeholders}` before looking for leaks, so a message whose leak was the *interpolated value*
+> read as clean. That is how the rider-facing twin of F2's "worst offender" survived this audit and
+> a full review cycle. Both gaps are now closed in code and guarded by
+> `backend/tests/test_user_facing_message_hygiene.py`. Treat the counts below as the state after
+> both passes.
+
 **No function name was displayed to a user anywhere.** No `handleX()`, no `claim_driver_atomic`, no
 `corporate_wallet_apply_delta`, no stack frames. Every hardcoded in-app message in rider-app and
 driver-app was already plain prose.
@@ -188,7 +197,8 @@ Sanitising itself is untouched.
 
 ## 6. What was NOT verified
 
-- **No tests were run.** PyPI and npm are both blocked by this environment's network policy
+- **No tests were run, across either pass.** PyPI and npm are both blocked by this environment's
+  network policy
   (`pip install pytest` and `npm install` both fail), so the backend suite and the Jest suites could
   not be executed here. Verification was: `ruff check` + `ruff format` clean on every touched file,
   `python -m py_compile` on each, `tsc --noEmit --strict` on the new TypeScript file, and a grep

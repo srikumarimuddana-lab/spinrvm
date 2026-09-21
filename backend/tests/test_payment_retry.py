@@ -535,3 +535,80 @@ def test_payment_retry_loop_reacquires_its_own_lock_on_the_next_wake():
         "the single replica must tick once per interval; a TTL longer than the "
         "minimum sleep makes it skip its own next wake and halves the cadence"
     )
+
+
+@pytest.mark.anyio
+async def test_exhausted_retry_push_failure_is_logged_and_counted():
+    """The LAST notice a rider ever gets about a failed payment must not vanish.
+
+    2026-09-20 review finding E2. When the retry counter crosses MAX_RETRIES,
+    this loop pushes the rider one final "Payment failed" notice. That push was
+    wrapped in ``except Exception: logger.debug(...)`` — gated off in
+    production, so a rider who was never told was indistinguishable from one who
+    ignored it. It is the most consequential of the three sites that had this
+    bug (the other two are in ``settle_card``), because retries are finished:
+    nothing follows this push, and the rider's only remaining signal is being
+    blocked at their next booking attempt.
+
+    It is now ``logger.error(..., exc_info=True)`` plus
+    ``spinr_payment_rider_notice_failed_total{reason="retry_exhausted"}``.
+
+    Reaching this branch needs three things at once, which is why no existing
+    test covered it: ``stripe.PaymentIntent.retrieve`` must raise (entering the
+    outer ``except``), ``payment_retry_count`` must be MAX_RETRIES - 1 so the
+    bumped count *crosses* the threshold, and the push itself must raise.
+    """
+    import stripe as stripe_module
+
+    from backend.utils import metrics
+
+    def _counter() -> float:
+        return (
+            metrics.snapshot()["counters"]
+            .get("spinr_payment_rider_notice_failed_total", {})
+            .get((("reason", "retry_exhausted"),), 0)
+        )
+
+    from utils import payment_retry
+
+    # One short of the cap, so this attempt's bump crosses it.
+    ride = _make_ride(payment_retry_count=payment_retry.MAX_RETRIES - 1)
+
+    # A truthy update_one also satisfies _claim_exhausted_alert's compare-and-swap,
+    # so this caller "wins" the one-notice-per-ride claim and reaches the push.
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_push = AsyncMock(side_effect=RuntimeError("FCM unreachable"))
+    mock_alert = AsyncMock()
+
+    before = _counter()
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch(
+            "utils.payment_retry.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET}),
+        ),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", mock_push),
+        patch("utils.payment_retry._alert_admins_payment_exhausted", mock_alert),
+        patch(
+            "stripe.PaymentIntent.retrieve",
+            MagicMock(side_effect=stripe_module.error.StripeError("network error")),
+        ),
+    ):
+        await payment_retry.retry_failed_payments()
+
+    # The push was attempted and blew up...
+    mock_push.assert_awaited_once()
+    # ...and that failure is now countable instead of swallowed at debug.
+    assert _counter() == before + 1
+
+    # The sweep must not be derailed by it: the ride is still marked failed with
+    # the bumped counter, and the admin alert still fired. A lost rider push is
+    # best-effort; losing the state write or the admin alert would not be.
+    failed_calls = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "failed"
+    ]
+    assert len(failed_calls) == 1
+    assert failed_calls[0][0][2]["$set"]["payment_retry_count"] == payment_retry.MAX_RETRIES
+    mock_alert.assert_awaited_once()

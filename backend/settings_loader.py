@@ -7,6 +7,8 @@ All readers use get_app_settings() for consistent defaults and shape.
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from loguru import logger
+
 try:
     from . import db_supabase
     from .schemas import AppSettings
@@ -41,6 +43,29 @@ async def get_app_settings() -> Dict[str, Any]:
 
     defaults = _defaults_dict()
     row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1))
+    if not row and _settings_cache is not None:
+        # A ROWLESS read is not an error — get_rows returns [] without raising
+        # (repositories/_base.py) when the row is missing, RLS hides it, the
+        # schema cache blips, or the client is uninitialised on a replica. The
+        # old code overwrote the cache with schema defaults in that case, which
+        # for a kill switch means its default (True, "not killing anything")
+        # silently replaces an operator's pause — the same hole the raise path
+        # was fixed for, but quieter, because nothing raised and nothing logged.
+        #
+        # So: once this process has ever loaded settings successfully, a rowless
+        # read keeps the last known values rather than reverting to defaults,
+        # and says so. A cold process with no cache still falls back to
+        # defaults, which is the only thing it can do.
+        # ERROR, not warning: this branch can only fire when settings loaded
+        # successfully at least once and then stopped returning a row, which is
+        # a real anomaly rather than a cold start. Bounded to roughly one event
+        # per process per TTL (60s), so it cannot flood Sentry.
+        logger.bind(domain="admin").error(
+            "settings row 'app_settings' came back empty — keeping the last known values "
+            "rather than reverting to schema defaults (a kill switch would silently un-pause)"
+        )
+        _settings_cache = (now, _settings_cache[1])
+        return _settings_cache[1]
     if not row:
         result = defaults
     else:
@@ -53,6 +78,33 @@ async def get_app_settings() -> Dict[str, Any]:
 
     _settings_cache = (now, result)
     return result
+
+
+def get_last_known_app_settings() -> Optional[Dict[str, Any]]:
+    """The last settings this process loaded successfully, **however old**, or
+    ``None`` if it has never completed one.
+
+    For callers that must still make a decision when :func:`get_app_settings`
+    *raises*. ``get_app_settings`` only writes ``_settings_cache`` after a
+    successful read, so whatever is in there is by construction the last known
+    good value — a failed read never overwrites it.
+
+    Deliberately ignores ``_SETTINGS_TTL``, which is the whole point and the
+    only difference from :func:`get_cached_app_settings`. The TTL exists to
+    decide *when to refresh*; it is not a claim that a value older than 60 s is
+    worthless. When the refresh itself is failing, a minute-old flag is a far
+    better basis for a decision than a hardcoded default — in particular for an
+    incident kill switch, where the hardcoded default (``True``, "not killing
+    anything") is exactly the wrong answer during the incident the switch was
+    flipped for.
+
+    Returns the live cached dict, not a copy, matching
+    :func:`get_cached_app_settings` and :func:`get_app_settings` — every reader
+    in this codebase treats settings as read-only.
+    """
+    if _settings_cache is None:
+        return None
+    return _settings_cache[1]
 
 
 def get_cached_app_settings() -> Optional[Dict[str, Any]]:

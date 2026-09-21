@@ -116,3 +116,40 @@ SELECT
 FROM driver_location_history h
 WHERE h.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
 ORDER BY h."timestamp";
+
+-- ---------------------------------------------------------------------------
+-- Q5. Precision audit — how many decimal places are ACTUALLY stored.
+--     Reads the raw JSON text, so nothing in this query can round anything.
+--     Expect max 6. JSON drops trailing zeros, so 50.452 is 50.452000 stored
+--     at 3 "decimals" — that is display, not precision loss. What would be a
+--     real finding is a MAXIMUM of 4 across many points.
+-- ---------------------------------------------------------------------------
+SELECT
+    s.seg ->> 'geometry_kind'                                  AS kind,
+    s.seg ->> 'provider'                                       AS provider,
+    count(*)                                                   AS points,
+    max(length(split_part(c.pt ->> 0, '.', 2)))                AS max_lat_decimals,
+    max(length(split_part(c.pt ->> 1, '.', 2)))                AS max_lng_decimals,
+    round(avg(length(split_part(c.pt ->> 0, '.', 2))), 2)      AS avg_lat_decimals
+FROM ride_routes r
+CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(r.road_matched_segments) = 'array' THEN r.road_matched_segments ELSE '[]'::jsonb END
+) WITH ORDINALITY AS s(seg, seg_ord)
+CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(s.seg -> 'coordinates') = 'array' THEN s.seg -> 'coordinates' ELSE '[]'::jsonb END
+) WITH ORDINALITY AS c(pt, pt_ord)
+WHERE r.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+-- Q5b. The same for the raw device fixes, plus the accuracy the phone itself
+--      reported. That accuracy — not our storage precision — is what decides
+--      whether a fix can land on the wrong carriageway.
+SELECT
+    count(*)                                   AS fixes,
+    min(h.accuracy)                            AS best_accuracy_m,
+    round(avg(h.accuracy)::numeric, 1)         AS avg_accuracy_m,
+    max(h.accuracy)                            AS worst_accuracy_m
+FROM driver_location_history h
+WHERE h.ride_id = '0c24901f-7c9e-4de5-9792-19f954b713a5'
+  AND h.lat IS NOT NULL;

@@ -268,6 +268,17 @@ entries overrode better call-site copy on the wallet-pay path; four more could n
 they are admin-only and the map is React-Native-only; and the two `add_card` body failures had been
 collapsed into one unlogged string.
 
+## Parallel work merged (2026-09-21)
+
+Another Claude session (`session_01PrzvVcs22h4g34N7t9c6qx`) fixed three of the same findings on this
+branch concurrently, in commits `06abbd8` and `bb8bd54`. Merged, not overwritten.
+
+| File | Resolution |
+|---|---|
+| `routes/rides/_shared.py` | Kept this branch's shared `utils/ride_state_copy.py` over their local phrase table — a forked twin is what let this bug survive a review cycle, so re-forking it to settle a conflict would reintroduce the cause. Their wording was better and was adopted into the rider map; their two `TestCancelStateGuardRider` assertions pass unchanged against the shared module. |
+| `routes/corporate_subscriptions.py` | Same conclusion reached independently. Took their phrasing and their assertion; kept this branch's `_ERROR_MESSAGE` map for the eight tokens `_http_error` leaked. |
+| `routes/payments.py` | Took their `add_card` wording over mine — they are right that the card is already tokenized by Stripe.js before that request, so "check the details and try again" sends a rider into a re-entry loop over a card that is fine. Kept this branch's split of the two body-failure branches and their logging. |
+
 ## Residual risk
 
 1. **The suite has still not been run.** PyPI and npm remain blocked in this environment. Twelve
@@ -279,7 +290,10 @@ collapsed into one unlogged string.
    first place any of this is really verified.**
 2. **New English copy is untranslated.** `fr`, `fr-CA`, `es`, `zh` locale files were not touched, and
    these backend strings are not routed through i18n at all.
-3. **No visual check.** rider-app and driver-app have no visual-regression tooling, so longer messages
-   (the state-guard ones are ~110–120 chars vs ~35 before) were reasoned about against the 140-char
-   clamp and the 2-line toast box, not screenshotted. Worth one device pass on the driver arrive/start
-   error path specifically.
+3. **No visual check.** rider-app and driver-app have no visual-regression tooling. The state-guard
+   messages now measure 92–126 chars (was ~35 before), verified per state by
+   `test_ride_state_copy.py` against the 140-char clamp — but fitting the clamp is not the same as
+   looking right in a 2-line toast box. Worth one device pass on the driver arrive/start error path
+   and the rider cancel path specifically.
+4. **Two sessions edited this branch at once.** The merge above was resolved by reading both diffs,
+   but the two sets of changes were never exercised together by a test run.

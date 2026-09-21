@@ -446,12 +446,13 @@ async def test_gap_router_is_given_observed_headings_and_the_strict_slack(monkey
 
 
 @pytest.mark.asyncio
-async def test_missing_start_and_tail_connectors_are_not_speed_gated(monkeypatch):
-    """Anchor connectors carry no device clock, so the speed gate cannot apply.
+async def test_anchor_connectors_carry_no_clock_without_lifecycle_bounds(monkeypatch):
+    """With no lifecycle passed, an anchor connector has no clock at all.
 
-    Only an internal gap has a real captured_at on both sides. A start/tail
-    connector is bounded by the distance cap alone — gating it on a speed
-    derived from a timestamp it does not have would refuse valid geometry.
+    Only an internal gap has a real captured_at on both sides. Absent ride
+    lifecycle bounds a start/tail connector is bounded by the distance cap
+    alone — gating it on a speed derived from a timestamp it does not have
+    would refuse valid geometry.
     """
     segmented, matched, completion = _tight_gap_evidence()
     gap_route = AsyncMock(return_value=(0.42, [[50.4520, -104.6210], [50.4555, -104.6210]]))
@@ -469,3 +470,112 @@ async def test_missing_start_and_tail_connectors_are_not_speed_gated(monkeypatch
     # The start anchor has no preceding geometry, so no heading is asserted for it.
     assert gap_route.await_args_list[0].kwargs["start_bearing"] is None
     assert gap_route.await_args_list[0].kwargs["end_bearing"] is not None
+
+
+def _lifecycle_bounds(completed_seconds: int) -> dict:
+    """Ride window ending ``completed_seconds`` after start — the only clock an
+    anchor connector can be held to."""
+    return {
+        "ride_started_at": BASE_TIME.isoformat(),
+        "ride_completed_at": (BASE_TIME + timedelta(seconds=completed_seconds)).isoformat(),
+    }
+
+
+async def _reconstruct_with_tail_anchor(monkeypatch, *, anchor, routed_tail_km, completed_seconds, lifecycle=True):
+    """Drive a tail connector to ``anchor`` and report whether it survived.
+
+    The internal gap always gets a plausible answer so only the tail is
+    under test.
+    """
+    segmented, matched, _ = _tight_gap_evidence()
+
+    async def gap_route(start, end, osrm_url, **kwargs):
+        # The tail is the only connector whose endpoint is the far anchor.
+        if end[0] >= 50.457:
+            return (routed_tail_km, [list(start), list(end)])
+        return (0.42, [list(start), list(end)])
+
+    monkeypatch.setattr(reconstruction, "get_app_settings", AsyncMock(return_value={"osrm_url": "http://osrm:5000"}))
+    monkeypatch.setattr(reconstruction, "snap_endpoint_via_osrm", AsyncMock(return_value=None))
+    monkeypatch.setattr(reconstruction, "compute_gap_route_via_osrm", gap_route)
+
+    completion = {"lat": anchor[0], "lng": anchor[1], "accuracy": 8}
+    return await reconstruction.reconstruct_completed_route(
+        segmented,
+        matched,
+        {"lat": 50.4510, "lng": -104.6210},
+        completion,
+        _lifecycle_bounds(completed_seconds) if lifecycle else None,
+    )
+
+
+def _has_tail(result) -> bool:
+    return any(section.get("gap_reason") == "missing_tail" for section in result["segments"])
+
+
+# ~3.7 km from the last observed fix — above ANCHOR_SPEED_GATE_MIN_KM.
+_FAR_ANCHOR = (50.4900, -104.6210)
+# ~0.2 km from it — anchor-error scale, below the gate.
+_NEAR_ANCHOR = (50.4583, -104.6210)
+
+
+@pytest.mark.asyncio
+async def test_long_tail_connector_refused_when_the_ride_left_no_time_for_it(monkeypatch):
+    """The tail connector was the largest unclocked fabrication left.
+
+    Bounded only by MAX_INFERRED_CONNECTOR_KM, a tail could contribute up to
+    10 km of invented distance with nothing asking whether the driver had time
+    to cover it. The ride lifecycle is that missing clock: 3.8 km of road in
+    the 5 s between the last fix and completion is ~2700 km/h.
+    """
+    result = await _reconstruct_with_tail_anchor(
+        monkeypatch, anchor=_FAR_ANCHOR, routed_tail_km=3.8, completed_seconds=45
+    )
+
+    assert result["failed_gaps"] == ["missing_tail_implausible_detour"]
+    assert not _has_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_long_tail_connector_kept_when_there_was_time_to_drive_it(monkeypatch):
+    """Same geometry, a realistic ride window — 3.8 km over 6 min is ~38 km/h."""
+    result = await _reconstruct_with_tail_anchor(
+        monkeypatch, anchor=_FAR_ANCHOR, routed_tail_km=3.8, completed_seconds=400
+    )
+
+    assert result["failed_gaps"] == []
+    assert _has_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_anchor_elapsed_does_not_trip_the_internal_outage_cap(monkeypatch):
+    """An anchor's elapsed time is not a tracking outage.
+
+    MAX_INFERRED_GAP_SECONDS means "GPS was down this long", which only an
+    internal gap can evidence. A driver may sit parked for ten minutes before
+    tapping complete with nothing having failed, so a 400 s ride window must
+    not refuse the tail the way a 400 s mid-trip dropout would.
+    """
+    result = await _reconstruct_with_tail_anchor(
+        monkeypatch, anchor=_FAR_ANCHOR, routed_tail_km=3.8, completed_seconds=400
+    )
+
+    assert not any("exceeds_time_cap" in reason for reason in result["failed_gaps"])
+    assert _has_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_short_anchor_connector_stays_ungated(monkeypatch):
+    """Below ANCHOR_SPEED_GATE_MIN_KM the geometry is anchor error, not travel.
+
+    A booked-dropoff substitution or an off-road pickup snap puts a few hundred
+    metres between the last fix and the anchor with no travel implied. Holding
+    that to a driving speed would refuse correct geometry, so only connectors
+    long enough for the guess to matter are gated.
+    """
+    result = await _reconstruct_with_tail_anchor(
+        monkeypatch, anchor=_NEAR_ANCHOR, routed_tail_km=0.25, completed_seconds=42
+    )
+
+    assert result["failed_gaps"] == []
+    assert _has_tail(result)

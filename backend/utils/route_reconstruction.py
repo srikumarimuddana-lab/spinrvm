@@ -17,7 +17,9 @@ when it is not plausible: farther than ``MAX_INFERRED_CONNECTOR_KM``
 regardless of reason, or (for an internal gap between two observed segments,
 where real device timestamps bound both sides) longer than
 ``MAX_INFERRED_GAP_SECONDS``, or a routed answer that could not have been
-driven in the gap's own elapsed time (``MAX_CONNECTOR_IMPLIED_SPEED_KPH``).
+driven in the time available (``MAX_CONNECTOR_IMPLIED_SPEED_KPH`` — measured
+against two device fixes for an internal gap, and against the ride lifecycle
+for an anchor connector once it is longer than ``ANCHOR_SPEED_GATE_MIN_KM``).
 This is deliberate: a straight line across an implausible distance, a routed
 guess across an outage too long to trust, or a detour nobody could have driven
 is worse for the insurance/regulatory audit trail than an honest gap.
@@ -40,10 +42,12 @@ except ImportError:
     from settings_loader import get_app_settings  # type: ignore
 
 try:
+    from .datetime_utils import parse_iso_utc
     from .route_distance import compute_gap_route_via_google, compute_gap_route_via_osrm, snap_endpoint_via_osrm
     from .route_reconstruction_projection import bearing_deg, coordinate, distance_m, project_observed_sections
     from .route_segments import MAX_PLAUSIBLE_SPEED_KPH, SegmentedRoute
 except ImportError:
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.route_distance import (  # type: ignore
         compute_gap_route_via_google,
         compute_gap_route_via_osrm,
@@ -89,6 +93,16 @@ GAP_MAX_EXTRA_KM = 0.5
 # (opposite carriageways of a divided road) fails this by a wide margin. Shares
 # route_segments' plausibility bar so both layers call the same speed impossible.
 MAX_CONNECTOR_IMPLIED_SPEED_KPH = MAX_PLAUSIBLE_SPEED_KPH
+# The speed gate above needs a clock on both sides of the gap. An internal gap
+# has one: two real device fixes. An anchor connector (missing_start /
+# missing_tail) does not — its only clock is the ride lifecycle, and its
+# geometry may be anchor error rather than travel (a booked-dropoff
+# substitution, an off-road pickup snapped from a parking lot). Below this
+# length an anchor connector is therefore left to the distance guards, exactly
+# as before; above it the fabrication is large enough to be worth holding to
+# the same physics, which is what stops a tail connector running to
+# MAX_INFERRED_CONNECTOR_KM unchallenged.
+ANCHOR_SPEED_GATE_MIN_KM = 1.0
 
 
 def _straight_line_segment(
@@ -134,6 +148,28 @@ def _implied_speed_kph(distance_km: float, elapsed_seconds: Optional[float]) -> 
     return distance_km / (elapsed_seconds / 3600.0)
 
 
+def _speed_refusal_kph(reason: str, distance_km: float, elapsed_seconds: Optional[float]) -> Optional[float]:
+    """The implied speed a connector should be refused for, or None to keep it.
+
+    Anchor connectors are held to the same ceiling but only once they are long
+    enough for the guess to matter — see ``ANCHOR_SPEED_GATE_MIN_KM``.
+    """
+    implied = _implied_speed_kph(distance_km, elapsed_seconds)
+    if implied is None or implied <= MAX_CONNECTOR_IMPLIED_SPEED_KPH:
+        return None
+    if reason != "internal_gap" and distance_km < ANCHOR_SPEED_GATE_MIN_KM:
+        return None
+    return implied
+
+
+def _elapsed_between(start: Any, end: Any) -> Optional[float]:
+    """Seconds between two datetimes, or None when either is missing/inverted."""
+    if start is None or end is None:
+        return None
+    seconds = (end - start).total_seconds()
+    return seconds if seconds >= 0 else None
+
+
 _INTERNAL_PROJECTION_FIELDS = ("segment_start_captured_at", "segment_end_captured_at")
 
 
@@ -176,6 +212,7 @@ async def reconstruct_completed_route(
     matched_route: Dict[str, Any],
     pickup_point: Dict[str, Any],
     completion_point: Dict[str, Any],
+    lifecycle: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Insert bounded route sections between ordered observed evidence.
 
@@ -185,6 +222,14 @@ async def reconstruct_completed_route(
     empty list means every gap was closed with evidence-backed geometry.
     """
     observed_sections = project_observed_sections(segmented, matched_route)
+    # Ride lifecycle bounds, when the caller has them. They are the only clock
+    # an anchor connector can be held to — the pickup/completion anchors carry
+    # no device timestamp of their own. Optional so the offline evidence
+    # analyser can keep calling without one.
+    trip_started_at = parse_iso_utc((lifecycle or {}).get("ride_started_at") or (lifecycle or {}).get("started_at"))
+    trip_completed_at = parse_iso_utc(
+        (lifecycle or {}).get("ride_completed_at") or (lifecycle or {}).get("completed_at")
+    )
     app_settings = await get_app_settings() or {}
     osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
     google_api_key = (app_settings.get("google_maps_api_key") or "").strip()
@@ -252,10 +297,14 @@ async def reconstruct_completed_route(
             failed_gaps.append(f"{reason}_exceeds_distance_cap")
             return
 
-        # Time-outage refusal — only meaningful when both sides of the gap
-        # carry a real device timestamp (internal_gap between two observed
-        # segments); missing_start/missing_tail anchors have none.
-        if elapsed_seconds is not None and elapsed_seconds > MAX_INFERRED_GAP_SECONDS:
+        # Time-outage refusal — deliberately internal_gap only. Both sides of
+        # an internal gap are real device fixes, so a long interval there is a
+        # genuine tracking outage. Anchors now carry an elapsed time too (the
+        # ride lifecycle), but it measures something different: a driver can
+        # sit parked for ten minutes before tapping complete without any
+        # tracking having failed, so that interval must not read as an outage.
+        # Anchors are held to the speed ceiling below instead.
+        if reason == "internal_gap" and elapsed_seconds is not None and elapsed_seconds > MAX_INFERRED_GAP_SECONDS:
             logger.info(
                 "gap fill refused for %s: %.0fs outage exceeds the %ds plausibility cap",
                 reason,
@@ -300,8 +349,8 @@ async def reconstruct_completed_route(
             # the gap's own elapsed time is not what happened, so it is left
             # unbridged rather than swapped for a straight line that would
             # read as real evidence on the audit map.
-            implied_kph = _implied_speed_kph(float(distance_km), elapsed_seconds)
-            if implied_kph is not None and implied_kph > MAX_CONNECTOR_IMPLIED_SPEED_KPH:
+            implied_kph = _speed_refusal_kph(reason, float(distance_km), elapsed_seconds)
+            if implied_kph is not None:
                 logger.info(
                     "gap fill refused for %s: routed %.3f km over %.0fs implies %.0f km/h (cap %d)",
                     reason,
@@ -336,10 +385,12 @@ async def reconstruct_completed_route(
 
     if observed_sections:
         if start_anchor is not None:
+            # Lead-in: ride start -> first recorded fix.
             await append_connector(
                 start_anchor,
                 observed_sections[0]["coordinates"][0],
                 "missing_start",
+                _elapsed_between(trip_started_at, observed_sections[0].get("segment_start_captured_at")),
                 end_bearing=_entry_bearing(observed_sections[0]),
             )
         # else: no pickup coordinate at all — skip start connector.
@@ -369,16 +420,22 @@ async def reconstruct_completed_route(
             output.append(_strip_internal_projection_fields(section))
 
         if end_anchor is not None:
+            # Tail age: last recorded fix -> ride completion. Same quantity
+            # route_segments._tail_quality already computes for reporting; this
+            # is the first time it reaches the connector decision.
             await append_connector(
                 observed_sections[-1]["coordinates"][-1],
                 end_anchor,
                 "missing_tail",
+                _elapsed_between(observed_sections[-1].get("segment_end_captured_at"), trip_completed_at),
                 start_bearing=_exit_bearing(observed_sections[-1]),
             )
         # else: no completion coordinate at all — skip tail connector.
     else:
         if start_anchor is not None and end_anchor is not None:
-            await append_connector(start_anchor, end_anchor, "missing_start")
+            await append_connector(
+                start_anchor, end_anchor, "missing_start", _elapsed_between(trip_started_at, trip_completed_at)
+            )
 
     observed_distance_km = round(sum(float(section.get("distance_km") or 0) for section in observed_sections), 3)
     routed_connector_distance_km = round(routed_connector_km, 3)

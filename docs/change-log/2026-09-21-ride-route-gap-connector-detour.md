@@ -87,7 +87,22 @@ on the SGI/dispute screen than a short honest line. Outright refusal is
 reserved for the *physically impossible* case (guard 2), where no straight line
 would be defensible either.
 
-4. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
+4. **Clock the anchor connectors too** (follow-up, same branch). A
+   `missing_start`/`missing_tail` connector had no timestamp on either side and
+   was bounded only by `MAX_INFERRED_CONNECTOR_KM`, so a tail could contribute
+   up to **10 km** of invented distance with nothing asking whether the driver
+   had time to cover it. The ride lifecycle is that missing clock, and
+   `route_segments._tail_quality` already computed the same interval for
+   reporting — it simply never reached the connector decision. It does now,
+   above `ANCHOR_SPEED_GATE_MIN_KM` (1.0 km).
+
+   Care was needed in one place: giving anchors an `elapsed_seconds` would
+   otherwise have activated `MAX_INFERRED_GAP_SECONDS` for them too, refusing
+   any tail on a ride where the driver took more than 5 minutes to tap
+   complete. That cap means "GPS was down this long", which only an internal
+   gap can evidence, so it is now explicitly scoped to `internal_gap`.
+
+5. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
    no drawable geometry of its own now suppresses the straight-line fallback and
    shows the two pins plus its existing empty hint.
 
@@ -302,15 +317,21 @@ Stated plainly rather than implied:
   the *misleading* line; it does not make the Phase-2 trail appear. If that flag
   is off in production, the pickup leg will still draw nothing (correctly, with
   its hint) even though breadcrumbs exist. Turning it on is a separate change.
-- **The speed refusal does not cover every connector.** `elapsed_seconds` is
-  only populated for a gap between two *different* observed segments, where
-  real device timestamps bound both sides; `project_observed_sections`
-  deliberately attaches whole-segment bounds only ("never within one"). A
-  connector inserted between two OSRM matchings *inside* one observed segment,
-  or an anchor (`missing_start`/`missing_tail`) connector, therefore has no
-  clock and is governed by the distance guards alone. That is why the
-  `max_extra_km` tightening matters independently of the speed gate, and it is
-  the residual gap if a detour ever appears at a same-segment boundary.
+- **The speed refusal still does not cover every connector.** A connector
+  inserted between two OSRM matchings *inside* one observed segment has no
+  clock — `project_observed_sections` deliberately attaches whole-segment
+  bounds only ("never within one") — so it is governed by the distance guards
+  alone. Lower risk than the anchor case that was closed (see below): matchings
+  within one segment are chunks of a trace whose points exist, not a dropout.
+  The `max_extra_km` tightening is what covers it.
+- **Anchor connectors are now clocked, but only above 1 km.** A
+  `missing_start`/`missing_tail` connector shorter than
+  `ANCHOR_SPEED_GATE_MIN_KM` is deliberately left ungated, because at that
+  scale the geometry is usually anchor *error* — a booked-dropoff substitution
+  or an off-road pickup snap — rather than travel, and holding it to a driving
+  speed would refuse correct geometry. A connector between 0 and 1 km can
+  therefore still be fabricated without a physics check. The threshold is a
+  judgement call, not a measured one.
 - **No load/perf measurement.** The bearing retry adds at most one extra OSRM
   call per gap, and only when a bearing-constrained request fails; the finalizer
   is a background loop with no stated P95 SLA, so this was reasoned about, not

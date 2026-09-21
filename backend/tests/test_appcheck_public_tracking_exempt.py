@@ -109,25 +109,114 @@ async def test_sibling_rides_routes_still_401_without_token(path: str):
     assert response.status_code == 401
 
 
-def test_prefix_collision_is_bounded_by_route_level_auth():
-    """A ride_id of literal "track" string-matches the exempt prefix.
+def _resolve_endpoint(method: str, path: str):
+    """Return the endpoint function the real router resolves (method, path) to.
 
-    FastAPI would route e.g. GET /api/v1/rides/track/share to
-    get_share_trip_link(ride_id="track"), which skips App Check by prefix. That
-    is acceptable and deliberate: GET /track/{share_token} is the ONLY
-    unauthenticated route under /api/v1/rides/ — every sibling still declares
-    Depends(get_current_user), so the caller needs a valid rider JWT and then
-    gets a 404 for the nonexistent ride. App Check is an attestation layer, not
-    an authorisation one; dropping it here grants no access.
-
-    This test pins the assumption: if a NEW unauthenticated route is ever added
-    under /api/v1/rides/, revisit the exemption's prefix form.
+    Pure Starlette route matching — no DB, no auth, no middleware. This is the
+    same first-full-match-wins walk that decides the live behaviour, so it pins
+    the mechanism instead of assuming it.
     """
-    sharing = (__import__("pathlib").Path(__file__).resolve().parents[1] / "routes" / "rides" / "sharing.py").read_text(
-        encoding="utf-8"
-    )
+    from starlette.routing import Match
 
-    # track_shared_ride is the only handler in the rides package declared
-    # without an auth dependency; it takes share_token, not current_user.
-    assert "async def track_shared_ride(share_token: str):" in sharing
-    assert "current_user" not in sharing.split("async def track_shared_ride")[1].split("@router")[0]
+    from backend.server import app
+
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+    }
+    for route in app.routes:
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return getattr(route, "endpoint", None)
+    return None
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # sharing.py defines these BEFORE /track/{share_token} (lines 41 and
+        # 210 vs 221), so the sibling handler wins and still demands a JWT.
+        ("/api/v1/rides/track/share", "get_share_trip_link"),
+        ("/api/v1/rides/track/shared-contacts", "get_shared_contacts"),
+        # These live in routers registered AFTER `sharing` in
+        # routes/rides/__init__.py, so /track/{share_token} matches first and
+        # track_shared_ride handles them — looking up a share token literally
+        # named "receipt"/"chat-status"/..., finding none, and 404ing.
+        ("/api/v1/rides/track/receipt", "track_shared_ride"),
+        ("/api/v1/rides/track/chat-status", "track_shared_ride"),
+        ("/api/v1/rides/track/live-route", "track_shared_ride"),
+        ("/api/v1/rides/track/navigation-steps", "track_shared_ride"),
+    ],
+)
+def test_get_collision_resolves_as_documented(path: str, expected: str):
+    """A ride_id of the literal string "track" collides with the exempt prefix.
+
+    Which handler it reaches depends on router registration order, and it is NOT
+    uniformly the sibling handler — the comment in core/middleware.py spells out
+    both cases. Either resolution is safe (the sibling keeps
+    Depends(get_current_user); track_shared_ride is public by design and 404s on
+    a token that isn't one), but pinning it here means a future reordering of
+    routes/rides/__init__.py or of sharing.py surfaces as a failing test rather
+    than a silent change in which handler serves a colliding URL.
+    """
+    endpoint = _resolve_endpoint("GET", path)
+
+    assert endpoint is not None, f"{path} resolved to no route at all"
+    assert endpoint.__name__ == expected
+
+
+def test_track_route_is_get_only_so_write_siblings_never_collide():
+    """track_shared_ride is GET-only, so it must never intercept a write sibling.
+
+    Asserted as "is not track_shared_ride" rather than by handler name: these
+    routes carry wrapping decorators (@cancel_ride_limit, @ride_rating_limit,
+    @idempotent_endpoint), and the invariant that matters is that a POST is
+    never swallowed by the public read endpoint — not what the handler is called.
+    """
+    for path in (
+        "/api/v1/rides/track/cancel",
+        "/api/v1/rides/track/rate",
+        "/api/v1/rides/track/start",
+        "/api/v1/rides/track/complete",
+    ):
+        endpoint = _resolve_endpoint("POST", path)
+        assert endpoint is not None, f"POST {path} resolved to no route at all"
+        assert endpoint.__name__ != "track_shared_ride", (
+            f"POST {path} resolved to track_shared_ride; it is GET-only and must never intercept a write sibling"
+        )
+
+
+def test_track_shared_ride_is_the_only_unauthenticated_rides_route():
+    """If a NEW unauthenticated route appears under routes/rides/, the prefix
+    form of this exemption needs revisiting — fail loudly when that happens.
+
+    Keyed on ``__module__`` (preserved through functools.wraps) rather than
+    ``inspect.getfile``, which reports the decorator's file for a wrapped
+    handler and would silently skip every rate-limited route.
+    """
+    import inspect
+
+    from backend.server import app
+
+    unauthenticated: set[str] = set()
+
+    for route in app.routes:
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        module = getattr(endpoint, "__module__", "") or ""
+        if "routes.rides" not in module:
+            continue
+        params = inspect.signature(inspect.unwrap(endpoint)).parameters
+        if not any(p in params for p in ("current_user", "user")):
+            unauthenticated.add(endpoint.__name__)
+
+    assert unauthenticated == {"track_shared_ride"}, (
+        f"unauthenticated routes under routes/rides/ changed: {sorted(unauthenticated)}. "
+        "The /api/v1/rides/track/ App Check exemption is a str.startswith prefix — "
+        "re-check that it still cannot expose a newly-public sibling."
+    )

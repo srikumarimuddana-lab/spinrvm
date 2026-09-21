@@ -77,11 +77,25 @@ purely additive and invalidates no outstanding link.
   /track/{share_token}` is the **only** one without `Depends(get_current_user)`.
   App Check is an attestation layer, not an authorisation one.
 - **Prefix collision, accepted.** The match is `str.startswith`, so a ride_id of
-  the literal string `"track"` makes e.g. `/api/v1/rides/track/share` match and
-  route to `get_share_trip_link(ride_id="track")`. That handler still requires a
-  valid rider JWT and then 404s on the nonexistent ride, so nothing is granted.
-  A test pins this assumption so a future unauthenticated route under
-  `/api/v1/rides/` forces the prefix form to be revisited.
+  the literal string `"track"` also lands inside the prefix. Which handler a
+  collision reaches depends on router registration order, and it is **not**
+  uniformly the sibling handler — an earlier draft of this entry said it was, and
+  a `spinr-security-auditor` pass caught that. The real behaviour
+  (`routes/rides/__init__.py` assembles 14 sub-routers; `sharing` is 5th):
+  - `GET /rides/track/share` and `/rides/track/shared-contacts` reach the
+    **sibling** handler, because `sharing.py` defines `/{ride_id}/share` (line 41)
+    and `/{ride_id}/shared-contacts` (line 210) *before* `/track/{share_token}`
+    (line 221). Both keep `Depends(get_current_user)` → 401 without a JWT.
+  - Every other GET sibling (`receipt`, `chat-status`, `live-route`,
+    `navigation-steps`, …) sits in a router registered *after* `sharing`, so
+    `/track/{share_token}` matches first and **`track_shared_ride` handles it** —
+    looking up a share token literally named `"receipt"`, finding none, 404.
+  - POST/PATCH/DELETE siblings never collide: `track` is GET-only.
+
+  Either resolution is safe — nothing unauthenticated becomes reachable that was
+  not already — but the distinction is now pinned by tests that resolve these
+  paths through the **real router** rather than asserting on source text, so a
+  future reordering surfaces as a failing test instead of a silent change.
 - No change to the ride state machine, money/wallet deltas, or any background loop.
 - Other middleware on this path were checked and need no change: `ForcedUpgrade`
   passes through when `X-App-Platform`/`X-App-Version` are absent
@@ -207,6 +221,23 @@ Stating the boundary explicitly, per CLAUDE.md:
 
 Noted per the "mention, don't delete" rule:
 
+- **`track_shared_ride` has no rate limit at all** (`sharing.py:221-222`) — no
+  `@api_rate_limit`/`@ride_read_limit` decorator, and no `request: Request`
+  parameter for one to key on. Confirmed there is no blanket fallback: the
+  project registers `app.state.limiter` but never adds `SlowAPIMiddleware`, so an
+  undecorated route is genuinely unlimited. This is **pre-existing**, but this
+  diff is what makes it reachable — App Check was previously blocking 100% of
+  browser traffic to this endpoint, which incidentally masked the gap. The
+  closest precedent in the codebase, `routes/offer_card.py:57-58`, is also
+  App-Check-exempt and token-authorised and *does* carry
+  `@default_limiter.limit("60/minute")` for exactly this reason.
+  Brute-forcing the token itself is not the concern — `secrets.token_urlsafe(32)`
+  is 256 bits — but unauthenticated unlimited polling is a DB-load surface, and
+  no index on `rides.shared_trip_token` was found in `backend/migrations/`.
+  **Deliberately not fixed in this PR** (it widens the diff into `sharing.py` and
+  `rate_limiter.py`, and sizing the limit wrong would break legitimate
+  multi-viewer tracking on one link); raised to the repo owner as a follow-up
+  decision. Surfaced by the `spinr-security-auditor` pass.
 - `backend/routes/rides/sharing.py:241-243` — a malformed
   `shared_trip_token_created_at` **fails open** (access allowed, error logged)
   rather than closed. Pre-existing, unchanged by this diff, but it is an

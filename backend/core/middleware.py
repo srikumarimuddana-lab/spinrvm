@@ -157,6 +157,25 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # Prefix safety: GET /track/{share_token} is the ONLY unauthenticated route
     # under /api/v1/rides/ — every sibling keeps its get_current_user
     # dependency, so this prefix cannot widen access to any of them.
+    #
+    # The match is a plain str.startswith, so a ride_id of the literal string
+    # "track" also lands inside this prefix. Still safe, but NOT for one single
+    # reason — which handler a collision actually reaches depends on router
+    # registration order (routes/rides/__init__.py assembles the sub-routers;
+    # `sharing` is 5th of 14):
+    #   - GET /rides/track/share and /rides/track/shared-contacts reach the
+    #     SIBLING handler, because sharing.py defines /{ride_id}/share (line 41)
+    #     and /{ride_id}/shared-contacts (line 210) *before* /track/{share_token}
+    #     (line 221). Both keep Depends(get_current_user) -> 401 without a JWT.
+    #   - Every other GET sibling (receipt, chat-status, live-route,
+    #     navigation-steps, ...) lives in a router registered AFTER `sharing`, so
+    #     /track/{share_token} matches FIRST and track_shared_ride handles it —
+    #     looking up a share token literally named "receipt", finding none, 404.
+    #   - POST/PATCH/DELETE siblings never collide at all: track is GET-only.
+    # Either way nothing unauthenticated becomes reachable that was not already:
+    # track_shared_ride is public by design, and every sibling keeps its own auth
+    # dependency. Pinned by test_appcheck_public_tracking_exempt.py, which
+    # resolves these paths through the real router rather than assuming.
     "/api/v1/rides/track/",
 )
 

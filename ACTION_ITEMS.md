@@ -28552,6 +28552,59 @@ as evidence that the thing it configures exists.
   `backend/settings_loader.py` (`_settings_cache` global, unaffected —
   documented here for context, not because it changed).
 
+### C131. `tests/test_webhooks_main.py::TestStripeWebhookEventLogLevel::test_ignored_lifecycle_event_logs_debug_not_warning` fails only under full-suite ordering — real code path returns a dict shape that doesn't exist anywhere in `routes/webhooks.py`'s current source
+
+- [ ] **Status:** OPEN — found 2026-09-21 on PR #5624's merge-commit CI run
+  (`ea2a465`, `backend-test` job, `Run backend tests` step). Same general
+  bug class as C130 above (a test-order-dependent full-suite-only failure
+  that doesn't reproduce in isolation) but a different subsystem and, on
+  first look, a different specific mechanism — not yet confirmed to be
+  the exact same "bare unscoped mock assignment" pattern C130 turned out
+  to be.
+- **Issue/gap:** the test asserts `result.get("unhandled") is True` for
+  `payment_intent.created`/`payment_intent.amount_capturable_updated`/
+  `charge.succeeded` (routine, deliberately-ignored Stripe lifecycle
+  events). CI's full-suite run failed with `result ==
+  {'received': True, 'ignored': True, 'event_id': 'evt_test_1'}` instead —
+  note `'ignored': True` as a literal boolean. Confirmed by grep: no
+  `return` statement anywhere in `routes/webhooks.py` produces that exact
+  shape (`_STRIPE_IGNORED_EVENTS` membership, the only place ignored
+  lifecycle events are handled, falls through to the shared `{"received":
+  True, "unhandled": True, "event_id": event_id}` return at the bottom of
+  the dispatch `if/elif/else`; the only two literal `"ignored":` returns
+  in the file use a string value — `"bad_message"` or `msg_type` — not
+  `True`, and neither carries an `event_id` key). This means `wh.
+  stripe_webhook` resolved to something other than the real function
+  during that failing run.
+- **Why this matters:** the test protects a real 2026-09-XX fix (routine
+  lifecycle echoes must log at `debug`, not `warning`, so they don't drown
+  out genuinely unexpected event types) — same class of regression
+  protection concern as C130's kill-switch coverage. Confirmed NOT caused
+  by this session's PR #5624 diff (which touches only `tests/
+  test_forced_upgrade_middleware.py` and this file) — the test passes in
+  isolation locally (`pytest tests/test_webhooks_main.py::
+  TestStripeWebhookEventLogLevel`) and passed in a full local mocked-suite
+  run of the *exact* failing commit (`ea2a465`, 15198 passed, 0 failed)
+  run minutes before the CI failure. No re-run was possible to confirm
+  flake-vs-real (`actions_run_trigger`'s `rerun_failed_jobs` returned
+  `403 Resource not accessible by integration` for this session).
+- **Root cause:** not yet found. Ruled out: `stripe_webhook` itself has no
+  `@limiter.limit` (or other) decorator that a mocked `slowapi` module
+  could wrap into something with a different behavior — it's a bare
+  `@api_router.post("/stripe")`, and FastAPI's route decorator returns the
+  original function unchanged. `_STRIPE_IGNORED_EVENTS` is a `frozenset`
+  (immutable, can't be the leaked-mutable-state class of bug C130 was).
+  Not yet checked: whether some other test in the suite patches `routes.
+  webhooks.stripe_webhook` (the whole function, not just a dependency)
+  without a scoped `patch()`/teardown — the same general shape as C130's
+  actual bug, just a different call site — or whether `event_obj`'s
+  MagicMock `.get`/`to_dict_recursive` lambda closures interact badly with
+  some cached/memoized state from an earlier test.
+- **Action:** bisect the same way C130 was solved (binary search over the
+  full test suite with `--no-cov` for a ~5x speedup per iteration) to find
+  the specific earlier test producing the leak, then fix its mock scoping.
+- **Files:** `backend/tests/test_webhooks_main.py`, `backend/routes/webhooks.py`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

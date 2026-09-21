@@ -194,3 +194,34 @@ production code, no config/flag, and touches no live data.
 - [x] Blast radius is stated, not assumed
 - [x] No silent behavior change to an already-shipped flow — there is no
   behavior change at all, this is test-coverage-only
+
+## 11. Merge conflict & debug log
+
+Three merge commits landed on this branch after the original PR content
+above was written, per CLAUDE.md's CI-red escalation gate (§8) — none
+change anything described in sections 1–10; they only keep the branch
+current and get `backend-test` green:
+
+- `ddb880807` / `f242c7a4f` — routine `git merge origin/main`, no conflicts
+  (main only moved 5 commits ahead at each point, none touching this PR's
+  4 files).
+- `9ab557e7c` — merged the validated fix branch `fix/backend-test-5614-fallout`
+  (PR #5634) in, per gate 8: `backend-test` was showing 14 pre-existing
+  failures caused by PR #5614's production changes, unrelated to this PR's
+  own diff (this PR's own new RLS suite passed 424/424 in the same CI run).
+  #5634 already fixes 12 of the 14 and was validated green in real CI
+  before being ported here, rather than waiting for it to merge to `main`
+  first.
+  - **Files conflicted:** `ACTION_ITEMS.md` only.
+  - **Decision rule:** merged manually — kept both sides' entries (this
+    PR's `C129`, the fallout PR's `C130`). They are independent, non-
+    overlapping backlog entries with no shared text; nothing was dropped.
+  - **Why:** both are real, distinct tracked findings from the same day's
+    work; the conflict was purely positional (both inserted after the same
+    preceding entry), not a competing edit to the same content.
+
+The 2 remaining `backend-test` failures after this merge
+(`test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber`
+tests) are a separate, order-dependent test-isolation bug — not fixed here,
+tracked as [issue #5636](https://github.com/srikumarimuddana-lab/spinrvm/issues/5636)
+(CR-2026-091 / ACTION_ITEMS.md C130).

@@ -201,6 +201,80 @@ class TestCompanyEmailOtpVerify:
             {"id": otp["id"]},
             {"verified": True},
         )
+        # C5 (2026-09-20 review): completing this OTP proves inbox control, so
+        # the user row must be stamped verified. Nothing else writes
+        # email_verified for company-email accounts (the only other writer is
+        # the rider-app flow in routes/users.py, which has no UI for this
+        # population), so without this /corporate/join-domain's
+        # email_verified gate 403'd exactly the employees it exists for.
+        _user_writes = [c for c in update_one.await_args_list if c.args[0] == "users"]
+        assert _user_writes, "the user row was never updated"
+        _patch = _user_writes[0].args[2]
+        assert _patch["email_verified"] is True
+        assert _patch["email_verified_at"]
+        # The session write it rides along with is preserved.
+        assert _patch["current_session_id"]
+
+    def test_verify_company_email_otp_marks_new_user_verified(self):
+        """Same proof, the account-creation branch. A first-time company-email
+        signup must land verified too, or they cannot join their own domain."""
+        from backend.routes.auth import CompanyEmailOtpVerifyRequest, verify_company_email_otp
+        from backend.utils.crypto import hash_otp
+
+        otp = {
+            "id": "otp-new",
+            "email": NORMALIZED_EMAIL,
+            "code_hash": hash_otp("1234"),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "verified": False,
+        }
+
+        async def fake_get_rows(table: str, filters=None, **kwargs):
+            if table == "corporate_email_otp_records":
+                return [otp]
+            return []  # no existing user, no invite
+
+        created: dict = {}
+
+        async def fake_create_user(row):
+            created.update(row)
+            return row
+
+        response = MagicMock()
+        with (
+            _LOCKOUT_NOOP,
+            _RECORD_FAIL_NOOP,
+            _CLEAR_FAIL_NOOP,
+            patch("backend.routes.auth.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.auth.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.create_user", AsyncMock(side_effect=fake_create_user)),
+            patch("backend.routes.auth.redis_set", AsyncMock()),
+            patch("backend.routes.auth.create_jwt_token", return_value="access-token"),
+            patch(
+                "backend.routes.auth.issue_refresh_token",
+                AsyncMock(
+                    return_value=(
+                        "refresh-token",
+                        "refresh-hash",
+                        datetime.now(timezone.utc) + timedelta(days=30),
+                    )
+                ),
+            ),
+            patch("backend.routes.auth.generate_csrf_token", return_value="csrf-token"),
+            patch("backend.routes.auth.set_csrf_cookie"),
+        ):
+            asyncio.run(
+                verify_company_email_otp(
+                    _request(),
+                    response,
+                    CompanyEmailOtpVerifyRequest(email=EMAIL, code="1234"),
+                )
+            )
+
+        assert created, "no user row was created"
+        assert created["email"] == NORMALIZED_EMAIL
+        assert created["email_verified"] is True
+        assert created["email_verified_at"]
 
     def test_verify_company_email_otp_rejects_invalid_code_without_session(self):
         from backend.routes.auth import CompanyEmailOtpVerifyRequest, verify_company_email_otp

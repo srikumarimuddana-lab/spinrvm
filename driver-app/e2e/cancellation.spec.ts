@@ -64,7 +64,8 @@ test.describe('driver-app: cancellation flow', () => {
         status: 409,
         contentType: 'application/json',
         body: JSON.stringify({
-          detail: "Ride is in status 'completed'; cannot cancel after trip starts.",
+          detail:
+            "This ride is already finished, so that action isn't available right now. Refresh to see its latest status.",
         }),
       });
     });
@@ -112,7 +113,10 @@ test.describe('driver-app: cancellation flow', () => {
       await route.fulfill({
         status: 409,
         contentType: 'application/json',
-        body: JSON.stringify({ detail: "Cannot cancel a ride in state 'in_progress'" }),
+        body: JSON.stringify({
+          detail:
+            "This ride is already in progress, so that action isn't available right now. Refresh to see its latest status.",
+        }),
       });
     });
 

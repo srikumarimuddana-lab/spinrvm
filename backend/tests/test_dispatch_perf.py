@@ -24,17 +24,25 @@ def test_redis_mget_aligns_results_and_handles_empty():
 
 
 def test_dispatch_retry_stops_at_attempt_cap():
-    """Past the cap, _dispatch_retry must not re-query or re-dispatch — the
-    stuck-ride sweeper owns resolution from there."""
+    """Past the cap, _dispatch_retry must not re-dispatch -- the stuck-ride
+    sweeper owns resolution from there. A get_ride fetch DOES still happen
+    (needed to check whether this is a scheduled ride exempt from the flat
+    cap via scheduled_search_deadline -- see routes/rides/matching.py); what
+    must not happen is match_driver_to_ride/a re-arm past the cap for a
+    non-scheduled ride. Mocking a plain SEARCHING, non-scheduled ride here
+    exercises exactly that branch (an unconfigured AsyncMock's default
+    truthy-Mock return would instead exercise the earlier not-ride/wrong-
+    status short-circuit, not the attempt-cap check this test names)."""
     from backend.routes import rides
 
+    searching = {"id": "r1", "status": "searching"}
     with (
-        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock()) as get_ride,
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)) as get_ride,
         patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()) as match,
     ):
         asyncio.run(rides._dispatch_retry("r1", delay=0, attempt=rides._MAX_DISPATCH_ATTEMPTS + 1))
 
-    get_ride.assert_not_awaited()
+    get_ride.assert_awaited_once_with("r1")
     match.assert_not_awaited()
 
 

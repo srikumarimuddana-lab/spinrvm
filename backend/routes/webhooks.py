@@ -16,6 +16,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars, dollars_to_cents
+    from ..utils.payment_collection import SETTLED_PAYMENT_STATUSES
     from ..utils.rate_limiter import default_limiter
     from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
 except ImportError:
@@ -32,6 +33,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars, dollars_to_cents
+    from utils.payment_collection import SETTLED_PAYMENT_STATUSES
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email
 import asyncio
@@ -49,7 +51,14 @@ logger = logging.getLogger(__name__)
 # payment_intent.payment_failed branch below. Mirrors the `_already_settled`
 # set used by the payment_succeeded branch, minus "processing": a ride still
 # processing has not settled, so a genuine failure on it must still be recorded.
-_SETTLED_PAYMENT_STATUSES = ("paid", "waived_admin", "refunded")
+#
+# Sourced from utils/payment_collection so there is ONE definition of "money
+# came in". This tuple used to be spelled out here as ("paid", "waived_admin",
+# "refunded"), which left "partially_refunded", "disputed" and "dispute_lost"
+# — all states a ride only reaches AFTER a successful charge — falling through
+# to the CAS below that writes "failed", relabelling a collected ride as
+# uncollected.
+_SETTLED_PAYMENT_STATUSES = SETTLED_PAYMENT_STATUSES
 
 # metadata.source stamped by utils/stripe_charge.authorize_ride on the
 # booking-time hold. That PaymentIntent is created BEFORE the ride row exists
@@ -2205,6 +2214,12 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
+            # Stamp processed_at so the reconciler doesn't re-flag these as
+            # stuck on every daily run. These are known-harmless lifecycle
+            # events — leaving them NULL was masking real stuck events behind
+            # 500+ historical entries (CRIMSON-SMOKE-7445-HC).
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "ignored": True, "event_id": event_id}
         else:
             logger.warning(
                 "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
@@ -2212,7 +2227,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
-        # Leave processed_at NULL for unknown/unhandled events so
+        # Leave processed_at NULL for genuinely unknown/unhandled events so
         # utils/stripe_reconcile.py's daily sweep surfaces them for manual
         # review if they later become actionable (it does not auto-replay
         # -- see _reconcile_stuck_stripe_events, ACTION_ITEMS.md C10).

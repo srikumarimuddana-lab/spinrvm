@@ -519,7 +519,7 @@ function PayoutScreen() {
                                         {b.kind === 'referral' ? 'Referral bonus' : 'Quest bonus'} · {new Date(b.created_at).toLocaleDateString()}
                                     </Text>
                                 </View>
-                                <Text style={{ fontSize: 15, fontWeight: '800', color: colors.success }}>
+                                <Text style={{ fontSize: FONT.bodyMd, fontWeight: '800', color: colors.success }}>
                                     +{formatCurrency(b.amount)}
                                 </Text>
                             </View>

@@ -183,6 +183,25 @@ class TestNoDataLoss:
         assert f.emitted_text == emitted
         assert "jane.doe+spinr@example.ca" not in f.emitted_text
 
+    @pytest.mark.parametrize("chunk_size", [1, 7, 29, 97])
+    def test_official_support_email_survives_incremental_release(self, chunk_size):
+        """Same property as the other fixtures — must exceed holdback so
+        feed() actually releases, otherwise this would pass vacuously at
+        flush(). Chunk sizes span the same range as the non-preserve
+        differential suite; the original stream-filter defects were all
+        position-dependent."""
+        text = "Email us at help@northern.test, not jane@x.ca. " + _PAD
+        preserve = ("help@northern.test",)
+        f = StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT, preserve=preserve)
+        out = [f.feed(text[i : i + chunk_size]) for i in range(0, len(text), chunk_size)]
+        out.append(f.flush())
+        emitted = "".join(out)
+        expected = filter_tool_leakage(scrub_pii(text, policy=ScrubPolicy.AI_CHAT, preserve=preserve))
+        assert emitted == expected
+        assert "help@northern.test" in emitted
+        assert "jane@x.ca" not in emitted
+        assert any(out[:-1]), "feed() never emitted — the release path is untested"
+
 
 class TestFailureHandling:
     def test_a_scrub_failure_withholds_rather_than_emitting_raw(self):

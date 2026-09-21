@@ -16,7 +16,7 @@ data-minimization mitigation — see the pattern list below for specifics.
 
 import re
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 # (category, pattern, replacement). The category tag is what a ScrubPolicy
 # skips by (see _POLICY_SKIPS) so this list stays the single source of truth.
@@ -201,15 +201,89 @@ def _check_policy(policy: Any) -> None:
         raise TypeError(f"policy must be a ScrubPolicy with a _POLICY_SKIPS entry, got {policy!r}")
 
 
-def scrub_pii(text: str, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> str:
+def official_contact_preserve(settings: Optional[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Admin Settings company email/phone — public marketing contact, not PII.
+
+    The in-app assistant is supposed to quote these (get_company_info, and
+    the support-contact tail on the system prompt). Passing the result into
+    ``scrub_pii(..., preserve=...)`` keeps them while still redacting a
+    rider's own address. Empty / whitespace values are dropped so they can
+    never accidentally preserve everything.
+    """
+    if not settings:
+        return ()
+    out: list[str] = []
+    for key in ("company_email", "company_phone"):
+        raw = settings.get(key)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text:
+                out.append(text)
+    return tuple(out)
+
+
+def _phone_digits(value: str) -> str:
+    digits = "".join(c for c in value if c.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
+def _preserve_sets(preserve: Optional[Iterable[str]]) -> tuple[set[str], set[str]]:
+    emails: set[str] = set()
+    phones: set[str] = set()
+    if not preserve:
+        return emails, phones
+    for value in preserve:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text:
+            continue
+        if "@" in text:
+            emails.add(text.lower())
+        else:
+            digits = _phone_digits(text)
+            if digits:
+                phones.add(digits)
+    return emails, phones
+
+
+def _preserve_replacer(token: str, category: str, preserve_emails: set[str], preserve_phones: set[str]):
+    def _repl(match: re.Match) -> str:
+        raw = match.group(0)
+        if category == "email" and raw.lower() in preserve_emails:
+            return raw
+        if category == "phone":
+            digits = _phone_digits(raw)
+            if digits and digits in preserve_phones:
+                return raw
+        return token
+
+    return _repl
+
+
+def scrub_pii(
+    text: str,
+    *,
+    policy: ScrubPolicy = ScrubPolicy.STRICT,
+    preserve: Optional[Iterable[str]] = None,
+) -> str:
     """Replace high-risk identifiers with redaction tokens.
 
     ``policy`` names the egress boundary being protected (see ScrubPolicy).
     STRICT is the default; only the authenticated in-app assistant passes
     AI_CHAT, which keeps bracketed trip pins and Canadian postal codes.
+
+    ``preserve`` is an allowlist of official contact strings (typically
+    ``official_contact_preserve(app_settings)``) that must survive the
+    email/phone pass. Compared as whole regex matches — case-insensitive
+    for emails, digit-normalized for phones — so a lookalike address is
+    not kept just because it contains the official one as a substring.
     """
     _check_policy(policy)
     skips = _POLICY_SKIPS[policy]
+    preserve_emails, preserve_phones = _preserve_sets(preserve)
     protected: list[str] = []
 
     def _stash(match: re.Match) -> str:
@@ -221,7 +295,10 @@ def scrub_pii(text: str, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> str:
     for category, pattern, token in _PII_PATTERNS:
         if category in skips:
             continue
-        text = pattern.sub(token, text)
+        if (category == "email" and preserve_emails) or (category == "phone" and preserve_phones):
+            text = pattern.sub(_preserve_replacer(token, category, preserve_emails, preserve_phones), text)
+        else:
+            text = pattern.sub(token, text)
     for index, original in enumerate(protected):
         text = text.replace(f"\x00{index}\x00", original)
     return text
@@ -263,7 +340,13 @@ def filter_tool_leakage(text: str) -> str:
 _MAX_SCRUB_DEPTH = 6
 
 
-def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> Any:
+def scrub_pii_deep(
+    value: Any,
+    depth: int = 0,
+    *,
+    policy: ScrubPolicy = ScrubPolicy.STRICT,
+    preserve: Optional[Iterable[str]] = None,
+) -> Any:
     """Recursively apply scrub_pii to every string leaf in a JSON-like tool
     result (nested dicts/lists/tuples). Value-pattern scrubbing only --
     deliberately NOT key-name-based like utils/sentry_scrub.py's _scrub_deep,
@@ -284,7 +367,7 @@ def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPol
     recursion below runs unchecked so the check is never inside the swallow.
     """
     _check_policy(policy)
-    return _scrub_deep(value, depth, policy)
+    return _scrub_deep(value, depth, policy, preserve)
 
 
 # ── Key-name denylist (F06) ──────────────────────────────────────────────────
@@ -392,18 +475,18 @@ def _redact_numeric_leaves(value: Any, depth: int, token: str) -> Any:
     return value
 
 
-def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
+def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy, preserve: Optional[Iterable[str]]) -> Any:
     if depth >= _MAX_SCRUB_DEPTH:
         return value
     try:
         if isinstance(value, str):
-            return scrub_pii(value, policy=policy)
+            return scrub_pii(value, policy=policy, preserve=preserve)
         if isinstance(value, dict):
             out = {}
             for k, v in value.items():
                 token = _redaction_for_key(k, policy)
                 if token is None:
-                    out[k] = _scrub_deep(v, depth + 1, policy)
+                    out[k] = _scrub_deep(v, depth + 1, policy, preserve)
                 elif isinstance(v, (dict, list, tuple)):
                     # Structure is preserved (a caller may depend on the shape)
                     # but every NUMERIC leaf inside is redacted — floats are
@@ -411,12 +494,12 @@ def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
                     # {"lat": [52.13]} and GeoJSON {"location": [lng, lat]}
                     # previously shipped raw to /mcp. Strings inside still get
                     # the normal pattern scrub.
-                    out[k] = _scrub_deep(_redact_numeric_leaves(v, depth + 1, token), depth + 1, policy)
+                    out[k] = _scrub_deep(_redact_numeric_leaves(v, depth + 1, token), depth + 1, policy, preserve)
                 else:
                     out[k] = token
             return out
         if isinstance(value, (list, tuple)):
-            return type(value)(_scrub_deep(v, depth + 1, policy) for v in value)
+            return type(value)(_scrub_deep(v, depth + 1, policy, preserve) for v in value)
     except Exception:  # noqa: BLE001 - never let scrubbing break a tool result
         return value
     return value

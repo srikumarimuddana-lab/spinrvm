@@ -724,7 +724,7 @@ if sentry_dsn:
     # (Merge note: main added an unconditional capture_message here; this
     # branch's production-gated version supersedes it — dev boots stay quiet.)
     if getattr(settings, "ENV", "development") == "production":
-        sentry_sdk.capture_message("spinr backend started — Sentry pipeline verified", level="info")
+        logger.info("spinr backend started — Sentry pipeline verified")
 elif getattr(settings, "ENV", "development") == "production":
     # Same precedent as the Redis-missing check (L-P1-1): observability
     # degradation must not take the API down, but it must be impossible to

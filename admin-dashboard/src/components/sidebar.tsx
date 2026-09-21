@@ -12,6 +12,7 @@ import {
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
     PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard, Compass,
+    Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -75,7 +76,20 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Operations",
         items: [
             { href: "/dashboard/monitoring", label: "Live Monitoring", icon: LayoutDashboard, module: "rides" },
-            { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
+            {
+                href: "/dashboard/rides",
+                label: "Rides",
+                icon: Car,
+                module: "rides",
+                children: [
+                    // Completed rides whose fare was never collected. The
+                    // backend list endpoint predates this entry by a long way
+                    // and had no UI at all, so these reached an admin only as
+                    // a transient push/WS alert — miss it and the ride was
+                    // invisible. This is the queue.
+                    { href: "/dashboard/rides/unpaid", label: "Unpaid Rides", icon: Receipt, module: "rides" },
+                ],
+            },
             {
                 href: "/dashboard/drivers",
                 label: "Drivers",

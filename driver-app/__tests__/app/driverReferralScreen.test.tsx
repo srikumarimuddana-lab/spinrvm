@@ -62,7 +62,6 @@ const REFERRAL_INFO = {
   referrer_reward: '25.00',
   referee_reward: '0',
   referred_by: null,
-  referral_link: 'https://spinr.ca/r/DRV-ABC123',
   terms: 'Reward paid after 10 qualifying rides.',
 };
 

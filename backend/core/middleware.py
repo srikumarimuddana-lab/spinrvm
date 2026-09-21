@@ -57,19 +57,22 @@ _CSRF_EXEMPT_EXACT = frozenset(
 _CSRF_EXEMPT_PREFIXES = ("/ws/",)
 
 # ── Firebase App Check Middleware ─────────────────────────────────────
-# Enforcement is tied to ENV: on in production, off in development/staging.
-# When off, missing or invalid tokens are logged but requests still go
-# through — this lets dev builds (Expo Go, unregistered debug devices)
-# reach the API without Firebase Console setup.
+# Default: on in production, off in development/staging (see
+# Settings.app_check_enforced). Override with APP_CHECK_ENFORCEMENT=off
+# without dropping ENV=production. When off, missing or invalid tokens
+# are logged but requests still go through — this lets dev builds (Expo
+# Go, unregistered debug devices) reach the API without Firebase Console
+# setup.
 #
-# IMPORTANT — before flipping ENV=production, complete these manual steps:
+# IMPORTANT — before enforcing in production, complete these manual steps:
 #   iOS  : register bundle ID with Apple DeviceCheck in
 #          Firebase Console → App Check → Apps
 #   Android: register package name with Play Integrity in
 #          Firebase Console → App Check → Apps
 # Until those steps are done, production devices will get 401s. For local
 # dev builds, add a debug token in Firebase Console → App Check → Apps →
-# overflow menu → "Manage debug tokens".
+# overflow menu → "Manage debug tokens". If those steps are not done yet,
+# set APP_CHECK_ENFORCEMENT=off rather than reverting ENV=development.
 
 # Paths that must never require App Check:
 #   - WebSocket connections (no HTTP headers)
@@ -811,16 +814,21 @@ def init_middleware(app):
     _validate_production_config()
 
     is_production = settings.ENV.lower() == "production"
+    app_check_on = settings.app_check_enforced()
 
     # CORS Middleware
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
-    # Always allow the admin and default apps explicitly regardless of env variables
+    # Always allow the admin and default apps explicitly regardless of env variables.
+    # Only Spinr-controlled origins belong here. spinr.app / www.spinr.app /
+    # spinr-track.app / www.spinr-track.app were removed 2026-09-14: none of the
+    # four resolve (NXDOMAIN, no A and no NS records) and none is registered to
+    # Spinr, so each was an allowlist entry for a hostname any third party could
+    # buy. Every backend cookie is SameSite=Strict, so this was defence-in-depth
+    # rather than a live bypass — but a future cookie without Strict would have
+    # silently turned it into one. See
+    # docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
     always_allowed = [
-        "https://spinr.app",
-        "https://www.spinr.app",
-        "https://spinr-track.app",
-        "https://www.spinr-track.app",
         "https://track.spinr.ca",
         "https://admin-spinr.spinr.ca",
         "http://localhost:3000",
@@ -883,11 +891,10 @@ def init_middleware(app):
     app.add_middleware(RequestIDMiddleware)
 
     # Firebase App Check — verify that requests originate from genuine
-    # Spinr builds. Enforced in production; logged-only in dev/staging so
-    # unregistered debug devices aren't blocked. See the IMPORTANT comment
-    # above FirebaseAppCheckMiddleware for the manual Firebase Console
-    # steps required before shipping to production.
-    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
+    # Spinr builds. Default on in production; APP_CHECK_ENFORCEMENT=off
+    # keeps ENV=production while DeviceCheck/Play Integrity is unfinished.
+    # See the IMPORTANT comment above FirebaseAppCheckMiddleware.
+    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=app_check_on)
 
     # Forced-upgrade gate — ships dark (see ForcedUpgradeMiddleware docstring);
     # no ENV branch needed, it self-disables whenever the admin-configured
@@ -1046,5 +1053,5 @@ def init_middleware(app):
 
     logger.info(
         f"Middleware initialized: CORS, CSRF, Security Headers (HSTS={'on' if is_production else 'off'}), "
-        f"App Check enforcement={'on' if is_production else 'off'}, Rate Limiting"
+        f"App Check enforcement={'on' if app_check_on else 'off'}, Rate Limiting"
     )

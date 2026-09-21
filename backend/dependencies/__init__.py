@@ -20,16 +20,20 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.env_admin_tokens import ENV_ADMIN_USER_ID, get_env_admin_token_version
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
     from .utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from .utils.metrics import inc as _metric_inc
     from .utils.pii import redact_error_detail
     from .utils.redis_client import redis_get
     from .utils.session_revocation import is_session_revoked
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.env_admin_tokens import ENV_ADMIN_USER_ID, get_env_admin_token_version
     from utils.error_handling import DatabaseError, ServiceUnavailableException
     from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from utils.metrics import inc as _metric_inc
     from utils.pii import redact_error_detail
     from utils.redis_client import redis_get
     from utils.session_revocation import is_session_revoked
@@ -321,7 +325,33 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED") from _bg_err
         if not _bg_active:
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
-    elif user_id != "admin-001":
+    elif user_id == ENV_ADMIN_USER_ID:
+        # Env-credential super admin (ADMIN_EMAIL/ADMIN_PASSWORD). No admin_staff
+        # row exists, so is_active / idle-timeout cannot apply — but token_version
+        # can, and it is the one control that makes the account revocable without
+        # a redeploy. It lives on the settings row; see utils/env_admin_tokens.py
+        # for why the DB and not a Redis allowlist like break-glass.
+        #
+        # FAIL CLOSED on a read error. Defaulting to 0 here would silently
+        # un-revoke every token an operator had just killed with logout-all,
+        # which is precisely the fail-open hole this replaces. 503 (not 401) so
+        # the client retries rather than discarding a token that is probably
+        # still valid.
+        try:
+            _env_admin_version = await get_env_admin_token_version()
+        except Exception as _env_err:
+            # loguru: exc_info= is silently swallowed as a str.format kwarg, so
+            # the traceback has to come from .opt(exception=True) — CLAUDE.md,
+            # Observability Conventions.
+            logger.opt(exception=True).error(
+                f"[auth] env-admin token_version unreadable — failing CLOSED for {ENV_ADMIN_USER_ID}: {_env_err}"
+            )
+            raise HTTPException(
+                status_code=503, detail="Sign-in is temporarily unavailable. Please try again."
+            ) from _env_err
+        if _token_version_mismatch(payload, {"token_version": _env_admin_version}):
+            raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+    else:
         staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
         staff = staff_rows[0] if staff_rows else None
         if not staff or not staff.get("is_active", True):
@@ -349,7 +379,33 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             except HTTPException:
                 raise
             except Exception as _ts_err:
-                logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
+                # An unparseable last_activity_at silently DISABLES the 30-minute
+                # idle timeout for this admin: parsing failed, so the > _IDLE_SECONDS
+                # check never ran and the request is let through. The let-through
+                # is deliberate — locking an operator out of the dashboard over one
+                # bad column value is worse than a late timeout — but at WARNING it
+                # sat below server.py's Sentry event_level=ERROR threshold, so a
+                # session that never expires produced no signal anywhere. Migration
+                # 233 documents this exact pattern as a real incident.
+                #
+                # loguru: exc_info= is silently swallowed as a str.format keyword and
+                # no traceback is ever captured, so it has to come from
+                # .opt(exception=True) (CLAUDE.md, Observability Conventions; gated
+                # by tests/test_loguru_call_conventions.py).
+                # .bind(domain=...) is not decoration: server.py's loguru→Sentry
+                # sink only promotes tags out of record["extra"], via
+                # tags_from_log_extra(). Without the bind this lands in Sentry
+                # with surface/env but NO domain, which is exactly the
+                # untriageable event CLAUDE.md's Sentry-tag rule exists to
+                # prevent — and the whole point of raising this to ERROR was to
+                # get it into Sentry usefully. user_id is promoted to a
+                # filterable tag too, and is an ID, not PII.
+                logger.bind(domain="auth", user_id=user_id).opt(exception=True).error(
+                    "[auth] malformed last_activity_at for staff {} — idle timeout NOT enforced on this request: {}",
+                    user_id,
+                    _ts_err,
+                )
+                _metric_inc("spinr_auth_admin_idle_touch_failed_total", {"reason": "malformed_timestamp"})
         activity_is_fresh = (
             last_active_parsed is not None
             and (datetime.now(timezone.utc) - last_active_parsed).total_seconds() < _ACTIVITY_TOUCH_INTERVAL_S
@@ -360,7 +416,22 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
                     "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
                 )
             except Exception as _upd_err:
-                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
+                # A DB write failure on the admin auth path — CLAUDE.md is explicit
+                # that these never get warning-and-continue. The request is still let
+                # through (one failed activity touch must not cost an operator the
+                # dashboard mid-incident), but the consequence is silent and
+                # cumulative: last_activity_at stops advancing, so every subsequent
+                # request measures idleness against an ever-older timestamp and the
+                # admin gets logged out ~30 minutes after the writes began failing,
+                # while actively working. Without this signal that reads as a random
+                # logout bug, not as a DB fault.
+                # domain/user_id bound for the same reason as the branch above.
+                logger.bind(domain="auth", user_id=user_id).opt(exception=True).error(
+                    "[auth] last_activity_at touch failed for staff {} — idle-timeout state is now stale: {}",
+                    user_id,
+                    _upd_err,
+                )
+                _metric_inc("spinr_auth_admin_idle_touch_failed_total", {"reason": "touch_write_failed"})
     return {
         "id": user_id,
         "email": payload.get("email"),
@@ -484,13 +555,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
-    except Exception as e:
-        # Never log the signing secret, even partially — it's a credential.
-        logger.error(f"JWT verification failed: {e}")
+    except HTTPException as e:
+        if e.detail == "Token has expired":
+            # Expired tokens are a normal part of the client refresh cycle —
+            # the mobile app retries with a fresh token after the 401.
+            logger.warning("JWT expired (normal client refresh cycle)")
+        else:
+            logger.error(f"JWT verification failed: {e}")
         # Static client message (C4): interpolating the PyJWT reason lets an
         # attacker fingerprint which claim failed (alg/aud/exp/sig). The real
         # cause is in the server log above; the client only learns the token is
         # invalid — matching every other auth path.
+        raise HTTPException(status_code=401, detail="Invalid token") from e
+    except Exception as e:
+        logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     # A reactivation token is single-purpose (POST /auth/reactivate); it must
@@ -802,7 +880,7 @@ def require_module(module: str):
         if module not in modules:
             raise HTTPException(
                 status_code=403,
-                detail=f"Access denied — module '{module}' not in your role permissions",
+                detail=("You don't have access to this section. Ask a super admin to grant it."),
             )
         return current_user
 
@@ -821,7 +899,7 @@ async def require_super_admin(current_user: dict = Depends(get_admin_user)) -> d
         admin_router.include_router(some_router, dependencies=[Depends(require_super_admin)])
     """
     if current_user.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="This module requires super_admin")
+        raise HTTPException(status_code=403, detail="This section is restricted to super admins.")
     return current_user
 
 

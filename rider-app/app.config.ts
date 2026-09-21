@@ -4,6 +4,12 @@ const APP_NAME = 'Spinr';
 const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spinr.driver (no clash)
 const SCHEME = 'spinr-user';
 
+// R8 is opt-in for Android release builds via SPINR_ANDROID_MINIFY=1.
+// preview and production are on; test/development are debug clients (off).
+// Sentry Java/Kotlin mapping upload is still not wired — JS frames are fine.
+// See docs/android-build-strategy.md for the rollout and rebuild-only rollback.
+const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
@@ -51,10 +57,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // obsolete `react-native-google-maps` pod, which react-native-maps 1.x no
         // longer ships → `pod install` fails. Google Maps stays Android-only
         // (see android.config.googleMaps.apiKey below).
-        associatedDomains: [
-            'applinks:spinr.app',
-            'applinks:spinr-track.app',
-        ],
+        // No associatedDomains / App Links. Universal Links were declared for
+        // spinr.app (and spinr-track.app) until 2026-09-14, but the feature has
+        // never worked on any domain: no .well-known/apple-app-site-association
+        // or assetlinks.json is served anywhere, neither app has inbound URL
+        // handling, and no route file matches the prefixes that were declared.
+        // spinr.app does not resolve and is not registered to Spinr, so the
+        // declaration was inert. Removed rather than repointed at spinr.ca:
+        // pointing applinks at a host that resolves but serves no association
+        // file makes things worse, because Apple's CDN negatively caches that
+        // failure for ~24h even after it is fixed. The custom spinr-user://
+        // scheme below is unaffected and still routes via expo-router.
+        // See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
         // Purpose strings — Apple rejects uploads with ITMS-90683 if any
         // dependency calls a permission-gated API without a matching string.
         // Only declare keys for capabilities actually used; declaring unused
@@ -106,6 +120,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     },
     android: {
+        // Matches the Android-only native marker patch; iOS runtime is unchanged.
+        runtimeVersion: '2.2.0',
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
@@ -125,19 +141,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
             }
         },
-        intentFilters: [
-            {
-                action: 'VIEW',
-                autoVerify: true,
-                data: [
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/ride' },
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/promo' },
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/join' },
-                    { scheme: 'https', host: 'spinr-track.app', pathPrefix: '/' },
-                ],
-                category: ['BROWSABLE', 'DEFAULT'],
-            },
-        ],
+        // No intentFilters / Android App Links — see the note on the iOS side
+        // above. autoVerify:true was declared for spinr.app, which does not
+        // resolve, so verification could never succeed; and with no matching
+        // route files a verified link would have opened the app into nothing.
     },
     web: {
         bundler: 'metro',
@@ -215,8 +222,34 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
-                targetSdkVersion: 35,
+                targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
+                // Code shrinking + obfuscation + optimization (R8). Without it
+                // Play Console's App optimization panel reports Optimization,
+                // Shrinking and R8 configuration as "-" and rates the app Low;
+                // the ~2% obfuscation it does report is vendor AARs that ship
+                // pre-obfuscated, not anything this build did.
+                //
+                // Resource shrinking is deliberately NOT enabled alongside it.
+                // Play's three percentages are R8 *code* metrics, so it earns
+                // nothing on that panel, and shrinkResources drops resources
+                // reachable only by name — a real hazard for the sibling driver
+                // app (its Notifee ride-offer channel names res/raw). Keeping
+                // both apps on code-only minification keeps them comparable.
+                enableMinifyInReleaseBuilds: ANDROID_MINIFY,
+                enableShrinkResourcesInReleaseBuilds: false,
+                // Stripe Issuing "add card to Google Wallet" is an optional
+                // native module. @stripe/stripe-react-native still *references*
+                // com.stripe.android.pushProvisioning, but that AAR is not on
+                // the classpath (we don't ship Issuing). Unminified release
+                // builds ignore the missing classes; R8 treats them as errors.
+                // First minified production build (EAS 04071f79, 2026-09-15)
+                // failed :app:minifyReleaseWithR8 on PushProvisioningActivity$f
+                // and PushProvisioningActivityStarter*. -dontwarn is the
+                // documented fix (stripe-react-native#1489/#1700). Do not add
+                // the Issuing AAR just to satisfy R8.
+                extraProguardRules:
+                    '-dontwarn com.stripe.android.pushProvisioning.**',
             },
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).
             ios: {
@@ -260,6 +293,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
         '@logrocket/react-native',
+        // Do not add 'posthog-react-native/expo': that plugin always applies
+        // posthog.gradle / posthog-xcode.sh, which exec posthog-cli during
+        // release bundling. EAS has no usable CLI (versionCode 26–28 failed
+        // on createBundleReleaseJsAndAssets_PostHogUpload). Autolinking still
+        // ships the JS SDK + native replay module from package.json.
         // Meta (Facebook) app events — install/activation attribution and the
         // client half of CompleteRegistration. See shared/analytics/meta.ts
         // and META_EVENTS.md.

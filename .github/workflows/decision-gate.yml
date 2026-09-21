@@ -1,0 +1,96 @@
+name: Security Decision Gate
+
+# Phase 5 of the 2026-09-19 security automation roadmap
+# (docs/audit/2026-09-19-security-automation-roadmap.md). Posts (or
+# updates, idempotently) a single PR comment summarizing every dependency
+# advisory in docs/security/tracked-advisories.json still awaiting a human
+# decision. PR-comment delivery only, per explicit instruction -- no
+# Slack/email dispatch here.
+#
+# NOT a required, merge-blocking check. Making this (or any check)
+# required is a repo-settings change (Settings -> Branches -> branch
+# protection) only a human with admin access can make -- see
+# scripts/security/decision_gate.py's module docstring. This workflow
+# only produces and posts the signal.
+#
+# Uses the plain `pull_request` trigger (never `pull_request_target`), so
+# a fork PR automatically gets GitHub's own read-only GITHUB_TOKEN with no
+# write access to secrets -- unlike security-report.yml's workflow_run
+# trigger, which does hand over a real token and needed an explicit
+# fork-trust check, there's no elevated token here for a fork PR to
+# reach in the first place.
+#
+# Correction: on a fork PR the "Post or update PR comment" step below
+# does NOT gracefully no-op -- gh api's POST/PATCH hard-fails (403) with
+# no continue-on-error, so the whole job goes red regardless of the
+# actual GO/NO_GO verdict. That's a real, if cosmetic, ambiguity (a red X
+# on a fork PR here means "no token permissions," not "NO_GO") --
+# flagged by spinr-cicd-infra-reviewer, left as-is since this check is
+# explicitly non-required/non-blocking either way and the repo's fork-PR
+# volume for a path this narrow is expected to be low.
+
+on:
+  pull_request:
+    paths:
+      - "docs/security/tracked-advisories.json"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: decision-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  decision-gate:
+    name: Post decision-gate summary
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Render decision-gate comment
+        id: render
+        run: |
+          python3 scripts/security/decision_gate.py \
+            --tracked-advisories docs/security/tracked-advisories.json \
+            --output /tmp/gate_comment.md | tee /tmp/gate_stdout.txt
+          VERDICT=$(grep -oE 'Verdict: (GO|NO_GO)' /tmp/gate_stdout.txt | cut -d' ' -f2)
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        run: |
+          MARKER="<!-- spinr-decision-gate -->"
+          EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")
+
+          # NOTE: must be -F/--field, not -f/--raw-field. Only -F does the
+          # "@filename reads the value from that file" substitution; -f
+          # takes an @-prefixed value as a literal string, so the comment
+          # body ends up being the literal text "@/tmp/gate_comment.md"
+          # instead of the rendered file's contents. Found 2026-09-20 when
+          # this exact literal string was posted on PR #5512.
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/$REPO/issues/comments/$EXISTING_ID" -X PATCH -F body=@/tmp/gate_comment.md
+          else
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -X POST -F body=@/tmp/gate_comment.md
+          fi
+
+      # Deliberately DOES fail this job's own status (a visible red X in
+      # the PR's checks list) on NO_GO -- but since no branch-protection
+      # rule marks this check "required" (see the file header comment),
+      # a red X here cannot block a merge. It's a clear signal without
+      # being an enforced gate, until a human wires it up as required.
+      - name: Reflect NO_GO verdict in job status
+        if: steps.render.outputs.verdict == 'NO_GO'
+        run: |
+          echo "::warning::Security decision gate is NO-GO -- see the PR comment for open decisions."
+          exit 1

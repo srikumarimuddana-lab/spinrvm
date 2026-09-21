@@ -26,10 +26,10 @@ concurrency:
 
 env:
   # 22, not 20: build-mobile-test/ota-update-test below both run "Setup EAS"
-  # (expo/expo-github-action, eas-version: latest), which always pulls
-  # eas-cli's current dependency tree — @oclif/plugin-autocomplete bumped its
-  # own engines.node to >=22.0.0 in 3.3.0, independent of eas-cli's own
-  # (unchanged) >=20.0.0 requirement, and yarn classic hard-fails that
+  # (expo/expo-github-action), whose eas-cli dependency tree pulls in
+  # @oclif/plugin-autocomplete — it bumped its own engines.node to >=22.0.0
+  # in 3.3.0, independent of eas-cli's own (unchanged) >=20.0.0 requirement,
+  # and yarn classic hard-fails that
   # install under any older Node. Same root cause as
   # eas-build.yml/eas-native-build.yml/deploy-driver-play-testing.yml/
   # ci.yml's mobile-build/maestro-e2e.yml — see eas-build.yml's comment for
@@ -173,7 +173,8 @@ jobs:
       - name: Setup EAS
         uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
 
       # Rider App — development build
@@ -219,7 +220,8 @@ jobs:
       - name: Setup EAS
         uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install rider-app deps

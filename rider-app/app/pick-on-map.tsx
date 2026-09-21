@@ -252,7 +252,7 @@ export default function PickOnMapScreen() {
           }]} />
           <View style={styles.addressContent}>
             {geocoding ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.sm }}>
                 <ActivityIndicator size="small" color={colors.textDim} />
                 <Text style={styles.addressLoading}>Finding address...</Text>
               </View>

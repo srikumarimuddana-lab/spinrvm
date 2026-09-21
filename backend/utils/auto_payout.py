@@ -581,6 +581,8 @@ async def _compute_payable_balance(driver_id: str) -> Decimal:
     admin "Weekly Payouts" preflight an effectively unbounded-latency
     endpoint.
     """
+    # Uncollected (failed-charge) fares ARE payable and do reach a Stripe
+    # Transfer — deliberate policy, see routes/drivers/earnings.py.
     rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
         db_supabase.get_rows(
             "rides",

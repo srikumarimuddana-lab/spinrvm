@@ -294,6 +294,90 @@ class TestWalletPay:
 
         assert resp.status_code == 403
 
+    # ── C4 (2026-09-20 review): the amount band must be grand_total ──────
+    #
+    # This endpoint's guard used to read total_fare — the PRE-TAX subtotal —
+    # while the wallet_pay_for_ride RPC it calls reads
+    # COALESCE(grand_total, total_fare, 0) (migrations/111). On any ride
+    # carrying tax the two disagreed by exactly the tax, so the endpoint could
+    # not be satisfied from either side: paying grand_total tripped
+    # ERR_FARE_EXCEEDED in the route, paying total_fare tripped the RPC's
+    # fare_underpaid. No test covered the band, so it went unnoticed.
+
+    TAXED_RIDE = {
+        "id": "ride_taxed",
+        "rider_id": "user_123",
+        "status": "completed",
+        "total_fare": 40.00,  # pre-tax subtotal
+        "tax_amount": 4.40,  # 5% GST + 6% PST
+        "grand_total": 44.40,  # what the rider actually owes
+    }
+
+    def test_pay_taxed_ride_accepts_grand_total(self, client):
+        """The rider pays what they owe — grand_total, tax included."""
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, self.TAXED_RIDE])
+
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_pay_for_ride", AsyncMock(return_value=Decimal("5.60"))) as rpc,
+        ):
+            resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_taxed", "amount": 44.40})
+
+        assert resp.status_code == 200, resp.json()
+        # The RPC is handed the full grand_total, which is what its own
+        # fare_underpaid guard compares against.
+        assert rpc.await_args.args[2] == Decimal("44.40")
+
+    def test_pay_taxed_ride_rejects_pre_tax_subtotal(self, client):
+        """Paying only total_fare underpays by the tax and must be refused
+        here rather than reaching the RPC (which would raise fare_underpaid)."""
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, self.TAXED_RIDE])
+
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_pay_for_ride", AsyncMock()) as rpc,
+        ):
+            resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_taxed", "amount": 40.00})
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "ERR_FARE_UNDERPAID"
+        rpc.assert_not_awaited()
+
+    def test_pay_falls_back_to_total_fare_when_grand_total_absent(self, client):
+        """Legacy rows predating the grand_total column still settle — the
+        route mirrors the RPC's COALESCE(grand_total, total_fare, 0)."""
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, SAMPLE_RIDE])
+
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_pay_for_ride", AsyncMock(return_value=Decimal("35.00"))),
+        ):
+            resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_123", "amount": 15.0})
+
+        assert resp.status_code == 200
+
+    def test_pay_zero_grand_total_is_not_treated_as_missing(self, client):
+        """`or` would fall back to total_fare on a legitimately free ride and
+        demand payment for it; an explicit None check does not."""
+        free_ride = {**SAMPLE_RIDE, "id": "ride_free", "total_fare": 15.0, "grand_total": 0}
+        mock_db = make_mock_db()
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, free_ride])
+
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_pay_for_ride", AsyncMock()) as rpc,
+        ):
+            resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_free", "amount": 15.0})
+
+        # 15.00 is far above a 0.00 owed total → rejected as an overpayment,
+        # not silently accepted against the stale pre-tax subtotal.
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "ERR_FARE_EXCEEDED"
+        rpc.assert_not_awaited()
+
 
 class TestGetTransactions:
     """GET /api/v1/wallet/transactions"""

@@ -115,7 +115,7 @@ async def rider_start_ride(
     if ride.get("status") != RideStatus.DRIVER_ARRIVED:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start ride with status: {ride.get('status')}",
+            detail=("This trip can't be started yet. Make sure you've arrived at the pickup first."),
         )
 
     # Atomic transition guards against duplicate taps / a concurrent driver-side
@@ -130,7 +130,13 @@ async def rider_start_ride(
         },
     )
     if guard is None:
-        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "We couldn't start this trip. Make sure you've marked yourself as "
+                "arrived, then refresh to see the ride's current status."
+            ),
+        )
 
     # Insurance Period 3 (passenger aboard — full TNC commercial coverage).
     # Only recorded once the transition actually took effect. Compliance-grade:

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DEFAULT_RASTER_TILE_URL,
   project,
   rasterAttribution,
   rasterTileUrl,
   rasterTileUrlTemplate,
+  selfHostedRasterTemplate,
 } from './static-route-map';
 
 const TILE = 256;
@@ -23,7 +23,7 @@ describe('static route map projection', () => {
   // If this drifts, every request asks for the wrong square of the planet and
   // the panel renders a plausible-looking map of nowhere — which is
   // indistinguishable from "the tile host is down" unless you read the bytes.
-  it('maps Saskatoon (DEFAULT_CENTER) to the verified Carto tile at z13', () => {
+  it('maps Saskatoon (DEFAULT_CENTER) to the independently verified tile at z13', () => {
     expect(tileOf(52.13, -106.67, 13)).toEqual({ x: 1668, y: 2701 });
   });
 
@@ -67,11 +67,78 @@ describe('static route map projection', () => {
 describe('raster tile source', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('defaults to the keyless Carto pyramid, unchanged from before', () => {
-    expect(rasterTileUrlTemplate()).toBe(DEFAULT_RASTER_TILE_URL);
-    expect(rasterTileUrl(13, 1668, 2701)).toBe(
-      'https://basemaps.cartocdn.com/light_all/13/1668/2701.png',
+  // Carto was the keyless default here until 2026-09-14. Removing it means an
+  // unconfigured deployment draws the route and pins over an empty grid rather
+  // than over a third-party CDN's tiles — each <img> just fails its own onError.
+  it('resolves to nothing rather than to a third party when unconfigured', () => {
+    expect(rasterTileUrlTemplate()).toBe('');
+    expect(selfHostedRasterTemplate()).toBe('');
+  });
+
+  it('derives the pyramid from the self-hosted style when no raster URL is set', () => {
+    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', 'https://maps.spinr.ca/styles/basemap/style.json');
+    expect(rasterTileUrlTemplate()).toBe(
+      'https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png',
     );
+    expect(rasterTileUrl(13, 1668, 2701)).toBe(
+      'https://maps.spinr.ca/styles/basemap/13/1668/2701.png',
+    );
+  });
+
+  // Query and fragment belong to the style document, not the pyramid, and the
+  // suffix test runs only after both are stripped. An earlier cut stripped
+  // /style.json FIRST, which let `…/style.json/` and `…/style.json#v2` through
+  // with the suffix still embedded in the middle of the tile path.
+  it('normalises query, fragment and trailing slashes before deriving', () => {
+    const want = 'https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png';
+    for (const style of [
+      'https://maps.spinr.ca/styles/basemap/style.json',
+      'https://maps.spinr.ca/styles/basemap/style.json/',
+      'https://maps.spinr.ca/styles/basemap/style.json?v=2',
+      'https://maps.spinr.ca/styles/basemap/style.json#v2',
+      'https://maps.spinr.ca/styles/basemap/style.json/?v=2#x',
+    ]) {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', style);
+      expect(selfHostedRasterTemplate()).toBe(want);
+    }
+  });
+
+  // NEXT_PUBLIC_MAP_STYLE_URL is a generic provider override, not a promise of
+  // a tileserver-gl layout. Guessing a pyramid for a hosted style yields a
+  // bogus, key-stripped URL that 404s on every tile and is then misreported to
+  // the admin as "blocked — often an ad or privacy blocker". Not guessing beats
+  // guessing wrong.
+  it('refuses to guess a pyramid for a style that is not tileserver-gl', () => {
+    for (const style of [
+      'https://api.protomaps.com/styles/v5/light/en.json?key=abc123',
+      'https://tiles.openfreemap.org/styles/liberty',
+      'https://maps.spinr.ca/styles/basemap/',
+      'https://maps.spinr.ca/styles/basemap',
+    ]) {
+      vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', style);
+      expect(selfHostedRasterTemplate()).toBe('');
+    }
+  });
+
+  // selfHostedStyleUrl() accepts the dark variable as standalone configuration,
+  // so a dark-only deployment must not end up with a working vector basemap and
+  // zero static tiles.
+  it('falls back to the dark style variable when only that is set', () => {
+    vi.stubEnv(
+      'NEXT_PUBLIC_MAP_STYLE_URL_DARK',
+      'https://maps.spinr.ca/styles/basemap-dark/style.json',
+    );
+    expect(selfHostedRasterTemplate()).toBe(
+      'https://maps.spinr.ca/styles/basemap-dark/{z}/{x}/{y}.png',
+    );
+  });
+
+  // An explicit raster URL still wins, for a deployment whose PNGs do not live
+  // in the vector style's own directory.
+  it('prefers an explicit raster URL over the derived one', () => {
+    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', 'https://maps.spinr.ca/styles/basemap/style.json');
+    vi.stubEnv('NEXT_PUBLIC_RASTER_TILE_URL', 'https://raster.spinr.ca/{z}/{x}/{y}.png');
+    expect(rasterTileUrlTemplate()).toBe('https://raster.spinr.ca/{z}/{x}/{y}.png');
   });
 
   it('substitutes every placeholder in a configured template', () => {
@@ -94,7 +161,9 @@ describe('raster tile source', () => {
 
   it('ignores whitespace-only configuration rather than requesting it', () => {
     vi.stubEnv('NEXT_PUBLIC_RASTER_TILE_URL', '   ');
-    expect(rasterTileUrlTemplate()).toBe(DEFAULT_RASTER_TILE_URL);
+    expect(rasterTileUrlTemplate()).toBe('');
+    vi.stubEnv('NEXT_PUBLIC_MAP_STYLE_URL', '   ');
+    expect(selfHostedRasterTemplate()).toBe('');
   });
 
   // Attribution is a licensing condition, not decoration. OSM's is always
@@ -105,8 +174,12 @@ describe('raster tile source', () => {
       .toContain('OpenStreetMap');
   });
 
+  // Carto is no longer a default anywhere, but this branch stays: if an operator
+  // ever points NEXT_PUBLIC_RASTER_TILE_URL at them, the attribution licence
+  // still applies. Deleting it would under-credit them.
   it('credits CARTO only while Carto is serving the tiles', () => {
-    expect(rasterAttribution(DEFAULT_RASTER_TILE_URL)).toContain('CARTO');
+    expect(rasterAttribution('https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'))
+      .toContain('CARTO');
     expect(rasterAttribution('https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'))
       .toContain('CARTO');
     // Crediting Carto for bytes from our own tile server would be false, not

@@ -16,6 +16,7 @@ import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
 import {
     buildPathGradient,
     buildStraightRouteGradient,
+    ROUTE_GRADIENT_START,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
 
@@ -106,6 +107,125 @@ function clearRouteLayers(map: maplibregl.Map): void {
     }
 }
 
+function finiteTrail(
+    pts: { lat: number; lng: number }[] | undefined,
+): { lat: number; lng: number }[] {
+    return (pts ?? []).filter((p) =>
+        Number.isFinite(p.lat) && Number.isFinite(p.lng)
+        && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180,
+    );
+}
+
+function routeLineData(lngLatPath: [number, number][]): GeoJSON.FeatureCollection {
+    const gradient = buildGradientFeatureCollection([lngLatPath]);
+    if (gradient.features.length > 0) return gradient;
+    if (lngLatPath.length < 2) return { type: "FeatureCollection", features: [] };
+    return {
+        type: "FeatureCollection",
+        features: [{
+            type: "Feature",
+            properties: { color: ROUTE_GRADIENT_START },
+            geometry: { type: "LineString", coordinates: lngLatPath },
+        }],
+    };
+}
+
+function restackRouteLayers(map: maplibregl.Map): void {
+    for (const [layerId] of ROUTE_LAYER_PAIRS) {
+        if (map.getLayer(layerId)) map.moveLayer(layerId);
+    }
+}
+
+function hasRouteLayer(map: maplibregl.Map): boolean {
+    return ROUTE_LAYER_PAIRS.some(([layerId]) => !!map.getLayer(layerId));
+}
+
+type OverlayStroke = {
+    coords: [number, number][];
+    color: string;
+    opacity: number;
+};
+
+const OVERLAY_CLASS = "ride-route-svg-overlay";
+const overlayStrokesByMap = new WeakMap<maplibregl.Map, OverlayStroke[]>();
+
+/** Pins are DOM markers, so they stay visible even when a GL line is buried
+ *  under a late-loading basemap fill (or wiped by a styledata redraw). Draw
+ *  the route in that same overlay, projected with map.project(). */
+function syncRouteSvgOverlay(map: maplibregl.Map, strokes: OverlayStroke[]): void {
+    overlayStrokesByMap.set(map, strokes);
+    const root = map.getContainer();
+    const canvasHost = map.getCanvasContainer();
+    let svg = root.querySelector(`svg.${OVERLAY_CLASS}`) as SVGSVGElement | null;
+    if (!svg) {
+        svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", OVERLAY_CLASS);
+        svg.setAttribute("aria-hidden", "true");
+        // Sibling of the canvas (not inside it): map.project() is in container
+        // pixels, and a GL transform on the canvas must not double-offset the
+        // line. z-index 0 keeps MapLibre markers (later siblings) on top.
+        svg.style.cssText =
+            "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible;";
+        canvasHost.after(svg);
+    }
+    const w = root.clientWidth;
+    const h = root.clientHeight;
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+    svg.replaceChildren();
+    for (const stroke of strokes) {
+        if (stroke.coords.length < 2) continue;
+        const points = stroke.coords
+            .map(([lng, lat]) => {
+                const p = map.project([lng, lat]);
+                return `${p.x},${p.y}`;
+            })
+            .join(" ");
+        const casing = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        casing.setAttribute("points", points);
+        casing.setAttribute("fill", "none");
+        casing.setAttribute("stroke", "#ffffff");
+        casing.setAttribute("stroke-opacity", "0.9");
+        casing.setAttribute("stroke-width", String(ROUTE_STROKE_WIDTH + 3));
+        casing.setAttribute("stroke-linecap", "round");
+        casing.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(casing);
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        line.setAttribute("points", points);
+        line.setAttribute("fill", "none");
+        line.setAttribute("stroke", stroke.color);
+        line.setAttribute("stroke-opacity", String(stroke.opacity));
+        line.setAttribute("stroke-width", String(ROUTE_STROKE_WIDTH));
+        line.setAttribute("stroke-linecap", "round");
+        line.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(line);
+    }
+}
+
+function strokesFromLngLatPath(
+    lngLatPath: [number, number][],
+    opacity: number,
+): OverlayStroke[] {
+    const data = routeLineData(lngLatPath);
+    const out: OverlayStroke[] = [];
+    for (const feature of data.features) {
+        if (feature.geometry?.type !== "LineString") continue;
+        const coords = feature.geometry.coordinates
+            .filter((c): c is [number, number] =>
+                Array.isArray(c) && c.length >= 2
+                && Number.isFinite(c[0]) && Number.isFinite(c[1]),
+            )
+            .map(([lng, lat]) => [lng, lat] as [number, number]);
+        if (coords.length < 2) continue;
+        const color = typeof feature.properties?.color === "string"
+            ? feature.properties.color
+            : ROUTE_GRADIENT_START;
+        out.push({ coords, color, opacity });
+    }
+    return out;
+}
+
 export default function RideRouteMap({
     pickupLat,
     pickupLng,
@@ -175,22 +295,28 @@ export default function RideRouteMap({
     // map instead of recreating it.
     useEffect(() => {
         drawRef.current = (map: maplibregl.Map, fit: boolean) => {
-            const hasPickupTrail = !!pickupTrail && pickupTrail.length > 1;
-            const hasTripTrail = !!tripTrail && tripTrail.length > 1;
-            const hasPlannedTrail = !!plannedTrail && plannedTrail.length > 1;
+            const pickupPts = finiteTrail(pickupTrail);
+            const tripPts = finiteTrail(tripTrail);
+            const plannedPts = finiteTrail(plannedTrail);
+            const locationPts = finiteTrail(locationTrail);
+            const hasPickupTrail = pickupPts.length > 1;
+            const hasTripTrail = tripPts.length > 1;
+            const hasPlannedTrail = plannedPts.length > 1;
             const hasActualSegments = actualGeometry.coordinates.length > 0;
             const hasRouteGeometry = hasActualSegments || hasPickupTrail || hasTripTrail || hasPlannedTrail;
+            const overlayStrokes: OverlayStroke[] = [];
 
+            try {
             clearRouteLayers(map);
 
             // Road-following planned route (planned_route_polyline) — orange→red
             // gradient, same as every other route surface.
             if (hasPlannedTrail) {
+                const plannedLngLat = plannedPts.map((p) => [p.lng, p.lat] as [number, number]);
+                overlayStrokes.push(...strokesFromLngLatPath(plannedLngLat, 0.95));
                 map.addSource(PLANNED_SOURCE_ID, {
                     type: "geojson",
-                    data: buildGradientFeatureCollection([
-                        plannedTrail!.map((p) => [p.lng, p.lat] as [number, number]),
-                    ]),
+                    data: routeLineData(plannedLngLat),
                 });
                 map.addLayer({
                     id: PLANNED_LAYER_ID,
@@ -208,6 +334,12 @@ export default function RideRouteMap({
             // V2 captured trail. A MultiLineString preserves every recorded
             // capture gap; MapLibre will not draw a chord between segments.
             if (hasActualSegments) {
+                for (const segment of actualGeometry.coordinates) {
+                    overlayStrokes.push(...strokesFromLngLatPath(
+                        segment.map(([lng, lat]) => [lng, lat] as [number, number]),
+                        0.95,
+                    ));
+                }
                 map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
                     // Each captured segment is coloured independently along the
@@ -231,11 +363,11 @@ export default function RideRouteMap({
             // Phase 2 (driver → pickup) — orange→red gradient, same as
             // every other route. Approximate trails draw at lower opacity.
             if (hasPickupTrail) {
+                const pickupLngLat = pickupPts.map((p) => [p.lng, p.lat] as [number, number]);
+                overlayStrokes.push(...strokesFromLngLatPath(pickupLngLat, pickupApprox ? 0.55 : 0.95));
                 map.addSource(PICKUP_TRAIL_SOURCE_ID, {
                     type: "geojson",
-                    data: buildGradientFeatureCollection([
-                        pickupTrail!.map((p) => [p.lng, p.lat] as [number, number]),
-                    ]),
+                    data: routeLineData(pickupLngLat),
                 });
                 map.addLayer({
                     id: PICKUP_TRAIL_LAYER_ID,
@@ -253,11 +385,11 @@ export default function RideRouteMap({
             // Phase 3 (pickup → dropoff) — the real trip path, coloured as the
             // shared orange→red gradient.
             if (hasTripTrail) {
+                const tripLngLat = tripPts.map((p) => [p.lng, p.lat] as [number, number]);
+                overlayStrokes.push(...strokesFromLngLatPath(tripLngLat, 0.95));
                 map.addSource(TRIP_TRAIL_SOURCE_ID, {
                     type: "geojson",
-                    data: buildGradientFeatureCollection([
-                        tripTrail!.map((p) => [p.lng, p.lat] as [number, number]),
-                    ]),
+                    data: routeLineData(tripLngLat),
                 });
                 map.addLayer({
                     id: TRIP_TRAIL_LAYER_ID,
@@ -275,12 +407,12 @@ export default function RideRouteMap({
             // Legacy combined trail — only render when no v2/phase
             // trail is available (pre-migration-39 rides still go through
             // this path via route_polyline).
-            if (!hasRouteGeometry && locationTrail && locationTrail.length > 1) {
+            if (!hasRouteGeometry && locationPts.length > 1) {
+                const locationLngLat = locationPts.map((p) => [p.lng, p.lat] as [number, number]);
+                overlayStrokes.push(...strokesFromLngLatPath(locationLngLat, 0.9));
                 map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
-                    data: buildGradientFeatureCollection([
-                        locationTrail.map((p) => [p.lng, p.lat] as [number, number]),
-                    ]),
+                    data: routeLineData(locationLngLat),
                 });
                 map.addLayer({
                     id: ACTUAL_LAYER_ID,
@@ -298,7 +430,7 @@ export default function RideRouteMap({
             // Fallback: straight pickup→dropoff gradient when no other
             // route data exists. Uses buildStraightRouteGradient so it
             // matches the orange→red language everywhere else.
-            if (!suppressStraightFallback && !hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
+            if (!suppressStraightFallback && !hasPlannedTrail && !hasRouteGeometry && locationPts.length < 2) {
                 const straightGradient = buildStraightRouteGradient(
                     [pickupLat, pickupLng],
                     [dropoffLat, dropoffLng],
@@ -326,27 +458,59 @@ export default function RideRouteMap({
                         "line-opacity": 0.7,
                     },
                 });
+                for (const seg of straightGradient) {
+                    overlayStrokes.push({
+                        coords: seg.coordinates.map(([lat, lng]) => [lng, lat] as [number, number]),
+                        color: seg.color,
+                        opacity: 0.9,
+                    });
+                }
             }
 
+            } catch (err) {
+                console.error("ride route GL layers failed; SVG overlay will still draw", err);
+            }
+
+            restackRouteLayers(map);
+            syncRouteSvgOverlay(map, overlayStrokes);
+
             if (!fit) return;
+            // Camera math uses the canvas size at call time. The modal can
+            // mount this map before the 280px panel has a non-zero box, which
+            // leaves the default zoom-13 view — about 3 km tall, so an 8 km
+            // pickup→dropoff no longer fits. Resize first; skip until the
+            // container is actually measurable (ResizeObserver retries).
+            map.resize();
+            const box = map.getContainer();
+            if (box.clientWidth < 2 || box.clientHeight < 2) return;
+            const plottable = (p: { lat: number; lng: number }) =>
+                Number.isFinite(p.lat) && Number.isFinite(p.lng)
+                && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180;
             // Fit bounds over every point we actually drew.
             const allPoints: { lat: number; lng: number }[] = [
                 { lat: pickupLat, lng: pickupLng },
                 { lat: dropoffLat, lng: dropoffLng },
-                ...(pickupTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
-                ...(tripTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
-                ...(plannedTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
+                ...pickupPts,
+                ...tripPts,
+                ...plannedPts,
                 ...actualGeometry.coordinates.reduce<{ lat: number; lng: number }[]>(
                     (points, segment) => points.concat(segment.map(([lng, lat]) => ({ lat, lng }))),
                     [],
                 ),
-                ...(!hasRouteGeometry ? (locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })) : []),
-            ];
+                ...(!hasRouteGeometry ? locationPts : []),
+            ].filter(plottable);
+            if (allPoints.length < 1) return;
             // Extra top padding reserves the status banner's footprint. Markers
             // anchor at their centre, so a 22px pin overhangs its own coordinate
             // by ~11px — with a flat 40px the topmost pin could sit underneath
             // the very banner that exists to keep it visible.
-            fitBoundsToPoints(map, allPoints, { top: 52, bottom: 40, left: 40, right: 40 });
+            const padding = { top: 52, bottom: 40, left: 40, right: 40 };
+            if (box.clientHeight <= padding.top + padding.bottom
+                || box.clientWidth <= padding.left + padding.right) {
+                return;
+            }
+            fitBoundsToPoints(map, allPoints, padding);
+            syncRouteSvgOverlay(map, overlayStrokes);
         };
 
         const map = mapRef.current;
@@ -409,12 +573,38 @@ export default function RideRouteMap({
             // Route layers go on as soon as the *style* is parsed, which happens
             // well before (and independently of) tile delivery.
             let fitted = false;
+            let drawing = false;
+            const redrawOverlay = () => {
+                const strokes = overlayStrokesByMap.get(map);
+                if (strokes) syncRouteSvgOverlay(map, strokes);
+            };
             const drawWhenReady = () => {
-                if (disposed || !map.isStyleLoaded()) return;
-                drawRef.current(map, !fitted);
-                fitted = true;
+                if (disposed || drawing || !map.isStyleLoaded()) return;
+                drawing = true;
+                try {
+                    // addLayer/moveLayer emit styledata. Re-running a full
+                    // clear+add on that event would wipe the line every frame
+                    // (DOM pins would still show). Once the camera has fitted,
+                    // only restack and reproject the SVG overlay.
+                    const overlayReady = (overlayStrokesByMap.get(map)?.length ?? 0) > 0;
+                    if (fitted && (hasRouteLayer(map) || overlayReady)) {
+                        restackRouteLayers(map);
+                        redrawOverlay();
+                    } else {
+                        drawRef.current(map, !fitted);
+                    }
+                    const box = map.getContainer();
+                    if (box.clientWidth >= 2 && box.clientHeight >= 2) fitted = true;
+                } finally {
+                    drawing = false;
+                }
             };
             map.on("styledata", drawWhenReady);
+            map.on("load", drawWhenReady);
+            map.on("move", redrawOverlay);
+            map.on("moveend", redrawOverlay);
+            map.on("idle", redrawOverlay);
+            map.on("resize", redrawOverlay);
             drawWhenReady();
 
             detach = attachBasemapFallback(map, chain, attempt, {
@@ -449,8 +639,25 @@ export default function RideRouteMap({
         setBasemapStatus("ok");
         build(0);
 
+        let lastW = 0;
+        let lastH = 0;
+        const ro = new ResizeObserver(() => {
+            const map = current;
+            const el = containerRef.current;
+            if (disposed || !map || !el) return;
+            const w = el.clientWidth;
+            const h = el.clientHeight;
+            if (w < 2 || h < 2 || (w === lastW && h === lastH)) return;
+            lastW = w;
+            lastH = h;
+            map.resize();
+            if (map.isStyleLoaded()) drawRef.current(map, true);
+        });
+        if (containerRef.current) ro.observe(containerRef.current);
+
         return () => {
             disposed = true;
+            ro.disconnect();
             detach?.();
             current?.remove();
             mapRef.current = null;
@@ -468,12 +675,20 @@ export default function RideRouteMap({
                     paths={suppressStraightFallback && staticPaths?.length === 0 ? [] : staticPaths}
                 />
             ) : (
-                <div ref={containerRef} className="absolute inset-0" />
+                <div
+                    ref={containerRef}
+                    className="h-full w-full"
+                    style={{ height: "100%", width: "100%" }}
+                />
             )}
             {/* Only while MapLibre is still failing over. Once the chain is
-                exhausted we hand off to StaticRouteMap, which renders a real
-                basemap from a different host with no WebGL — so the old
-                "basemap unavailable" wording would have been untrue there. */}
+                exhausted we hand off to StaticRouteMap, which draws the route
+                and pins with no WebGL — so the old "basemap unavailable"
+                wording would have been untrue there. Since 2026-09-14 that
+                renderer may legitimately have no basemap at all (Carto was its
+                third-party default and was removed), but it raises its own
+                notice for both the blocked and the unconfigured case, so
+                suppressing this band there still leaves the admin told. */}
             {basemapStatus === "retrying" && !useStatic && (
                 // bg-background (not /90), matching monitoring-map.tsx's demand
                 // legend: a translucent panel over map content puts muted text

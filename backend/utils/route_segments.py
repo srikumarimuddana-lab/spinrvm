@@ -27,6 +27,10 @@ except ImportError:
 MAX_CONTINUOUS_GAP_SECONDS = 60
 MAX_CONTINUOUS_DISPLACEMENT_METERS = 300
 MAX_PLAUSIBLE_SPEED_KPH = 180
+# Bound native foreground/background callback overlap to two 4-second
+# background sampling intervals plus scheduling margin. Longer regressions
+# remain suspect; this is not permission to replay arbitrarily old fixes.
+MAX_CAPTURE_REORDER_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -126,7 +130,9 @@ def _reject(point: Dict[str, Any], reason: str) -> RejectedRoutePoint:
     return RejectedRoutePoint(str(point.get("recording_session_id") or ""), sequence_number, reason)
 
 
-def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint], List[RejectedRoutePoint]]:
+def _parse_points(
+    points: Iterable[Dict[str, Any]], *, allow_interleaved_sources: bool = False
+) -> tuple[List[_ParsedPoint], List[RejectedRoutePoint]]:
     parsed: List[_ParsedPoint] = []
     rejected: List[RejectedRoutePoint] = []
     identities = set()
@@ -177,20 +183,39 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
         identities.add(identity)
         parsed.append(_ParsedPoint(point, captured_at, session_id, sequence_number, input_index, is_legacy))
 
-    # Sequence numbers are monotonic for a recording session. A newer sequence
-    # with an older device timestamp is clock regression, not a route reversal.
+    # Sequences identify enqueue order, not native capture order: foreground
+    # and background callbacks can overlap. Keep a session high-water mark
+    # AND each source's high-water mark so admitting one delayed callback
+    # never moves the clock-regression guard backwards. monotonic_ms cannot
+    # prove ordering: older clients fall back to wall-clock milliseconds.
     accepted: List[_ParsedPoint] = []
+    latest_by_session: Dict[str, _ParsedPoint] = {}
+    latest_by_source: Dict[tuple[str, str], datetime] = {}
     for candidate in sorted(
         parsed, key=lambda item: (item.recording_session_id, item.sequence_number, item.input_index)
     ):
-        prior = next(
-            (point for point in reversed(accepted) if point.recording_session_id == candidate.recording_session_id),
-            None,
-        )
+        prior = latest_by_session.get(candidate.recording_session_id)
+        raw_source = candidate.point.get("source")
+        source = raw_source if isinstance(raw_source, str) else ""
+        source_key = (candidate.recording_session_id, source)
+        source_time = latest_by_source.get(source_key)
         if prior is not None and not candidate.is_legacy and candidate.captured_at < prior.captured_at:
-            rejected.append(_reject(candidate.point, "clock_regression"))
-            continue
+            native_overlap = (
+                allow_interleaved_sources
+                and source in ("foreground", "background")
+                and prior.point.get("source") in ("foreground", "background")
+                and source != prior.point.get("source")
+                and (prior.captured_at - candidate.captured_at).total_seconds() <= MAX_CAPTURE_REORDER_SECONDS
+                and (source_time is None or candidate.captured_at >= source_time)
+            )
+            if not native_overlap:
+                rejected.append(_reject(candidate.point, "clock_regression"))
+                continue
         accepted.append(candidate)
+        if prior is None or candidate.captured_at >= prior.captured_at:
+            latest_by_session[candidate.recording_session_id] = candidate
+        if source_time is None or candidate.captured_at >= source_time:
+            latest_by_source[source_key] = candidate.captured_at
 
     # A completion fix is captured before the WebSocket buffer necessarily
     # finishes flushing. Legacy rows received just afterward can therefore
@@ -369,10 +394,14 @@ def _tail_quality(
 
 
 def segment_route(
-    points: Iterable[Dict[str, Any]], lifecycle: Dict[str, Any], completion_point: Optional[Dict[str, Any]]
+    points: Iterable[Dict[str, Any]],
+    lifecycle: Dict[str, Any],
+    completion_point: Optional[Dict[str, Any]],
+    *,
+    allow_interleaved_sources: bool = False,
 ) -> SegmentedRoute:
     """Create timestamp-ordered observed segments without crossing evidence gaps."""
-    ordered, rejected = _parse_points(points)
+    ordered, rejected = _parse_points(points, allow_interleaved_sources=allow_interleaved_sources)
     segments: List[ObservedRouteSegment] = []
     current_points: List[Dict[str, Any]] = []
     current_boundary: str | None = None

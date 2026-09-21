@@ -60,7 +60,6 @@ class TestOfferTimeoutHandler:
                 "backend.routes.rides._deps.db_supabase.set_driver_available",
                 AsyncMock(return_value={"id": "driver_1", "is_available": True}),
             ) as mock_set_available,
-            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
             patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
             patch("utils.driver_presence.reset_miss_streak", AsyncMock()),
             patch("utils.driver_presence.clear_presence", AsyncMock()),
@@ -76,7 +75,12 @@ class TestOfferTimeoutHandler:
 
             # Driver released via set_driver_available (below the miss-streak
             # auto-offline threshold), not a raw db.update_one("drivers", ...).
-            mock_set_available.assert_awaited_once_with("driver_1", available=True)
+            # Called through the shared release_driver_and_close_period helper
+            # (utils/insurance_periods.py, added 2026-09-20 to de-duplicate 5
+            # call sites) as of that consolidation -- positional, not the
+            # `available=` keyword this call site used before. Functionally
+            # identical; pinning the call rather than its exact spelling.
+            mock_set_available.assert_awaited_once_with("driver_1", True)
 
             # Ride reset to searching via a conditional db.update_one("rides", ...)
             # scoped to the exact state just observed (race guard, WS-1 subtask 4).
@@ -507,7 +511,18 @@ async def test_process_expired_offer_is_idempotent():
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value=None),
         ),
-        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
+        # release_driver_and_close_period (utils/insurance_periods.py, added
+        # 2026-09-20 to de-duplicate this exact call site) is what this
+        # non-auto-offline branch calls now, not `_deps.record_period_transition`
+        # directly -- and it calls its OWN internal record_period_transition,
+        # not the `_deps` copy, so patching only the latter left it running for
+        # real and consuming an unplanned extra `run_sync` call from
+        # `claim_results` above (its own internal DB write), starving the
+        # second `process_expired_offer` call's own claim attempt.
+        patch(
+            "backend.routes.rides._deps.release_driver_and_close_period",
+            new_callable=AsyncMock,
+        ) as mock_release,
         patch("backend.routes.rides._deps.manager") as mock_mgr,
         patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
         patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss,
@@ -525,7 +540,7 @@ async def test_process_expired_offer_is_idempotent():
     # Side-effects ran for the winning claim only.
     assert mock_miss.await_count == 1
     assert mock_ar.await_count == 1
-    mock_period.assert_awaited_once_with("d1", 1)
+    mock_release.assert_awaited_once_with("d1", reason="offer_timeout", ride_id="ride_b")
 
 
 @pytest.mark.asyncio
@@ -745,14 +760,27 @@ async def test_create_demo_drivers_is_a_noop():
 
 @pytest.mark.asyncio
 async def test_dispatch_retry_stops_after_max_attempts():
+    """Past the cap, a non-scheduled ride's chain stops without dispatching.
+    A single get_ride fetch IS expected first -- needed to check for a
+    scheduled-ride exemption via scheduled_search_deadline (see
+    routes/rides/matching.py's _dispatch_retry and
+    test_scheduled_timing_guards.py's test_scheduled_retry_continues_after_
+    normal_attempt_limit). Mocking a plain SEARCHING, non-scheduled ride
+    exercises the attempt-cap branch itself, not the earlier not-ride/
+    wrong-status short-circuit an unconfigured AsyncMock would hit."""
     from backend.routes.rides import matching as m
 
     with (
         patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides._deps.db_supabase.get_ride", new_callable=AsyncMock) as mock_get_ride,
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_k", "status": "searching"}),
+        ) as mock_get_ride,
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_match,
     ):
         await m._dispatch_retry("ride_k", delay=0, attempt=m._MAX_DISPATCH_ATTEMPTS + 1)
-    mock_get_ride.assert_not_awaited()
+    mock_get_ride.assert_awaited_once_with("ride_k")
+    mock_match.assert_not_awaited()
 
 
 @pytest.mark.asyncio

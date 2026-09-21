@@ -52,6 +52,7 @@ module.exports = {
     // Sentry needs native modules; the errorReporting facade is tested
     // against this stub instead.
     '^@sentry/react-native$': '<rootDir>/__mocks__/sentry-react-native.js',
+    '^posthog-react-native$': '<rootDir>/__mocks__/posthog-react-native.js',
     '^expo/src/winter$': '<rootDir>/__mocks__/expo-winter-runtime.js',
     '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-runtime.js',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',

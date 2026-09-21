@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Crosshair, Maximize2 } from "lucide-react";
-import { MAP_STYLE_URL, addStandardControls, makeCircleMarkerEl } from "@/lib/map/maplibre-base";
+import { primaryMapStyle, addStandardControls, makeCircleMarkerEl } from "@/lib/map/maplibre-base";
 
 export interface LatLng {
     lat: number;
@@ -119,7 +119,7 @@ export default function VenueMap({
         if (!containerRef.current || mapRef.current) return;
         const map = new maplibregl.Map({
             container: containerRef.current,
-            style: MAP_STYLE_URL,
+            style: primaryMapStyle(),
             center: [validCenter ? center.lng : -106.67, validCenter ? center.lat : 52.13],
             zoom: validCenter ? 15 : 11,
         });

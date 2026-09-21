@@ -8,12 +8,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SPACING } from '@shared/utils/responsive';
 import { SafetySheetHost } from '../components/SafetySheetHost';
 import * as Updates from 'expo-updates';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api, { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
@@ -48,8 +49,14 @@ import {
 } from '@shared/services/firebase';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 import { setLogRocketInstance } from '@shared/services/logRocketInstance';
+import {
+  identifyPostHogUser,
+  initPostHogReplayFromSettings,
+  resetPostHogReplay,
+  tryCreateNativePostHogClient,
+} from '@shared/services/posthogReplay';
 
-import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import { clearLegacyScheduledReminders, handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import ConfirmSheet from '../components/ConfirmSheet';
 import type { ConfirmSheetButton } from '../components/ConfirmSheet';
@@ -82,6 +89,12 @@ export const DirectionsProxyEnabledContext = React.createContext<boolean>(false)
 // fired.
 SplashScreen.preventAutoHideAsync().catch(() => {
   // Already hidden (fast boot, or a reload in dev). Nothing to keep up.
+});
+
+// Module scope so a 401-driven logout (before this layout's effects) still
+// drops the previous PostHog distinct id.
+registerLogoutCallback(() => {
+  void resetPostHogReplay();
 });
 
 // One-shot, module-scope so a re-render can never hide twice.
@@ -285,6 +298,7 @@ function targetPathForRideStatus(status: string): string | null {
 }
 
 function RootLayout() {
+  useEffect(() => { void clearLegacyScheduledReminders(); }, []);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -378,6 +392,9 @@ function RootLayout() {
           track_base_url?: string;
           rideless_sos_enabled?: boolean;
           directions_proxy_enabled?: boolean;
+          posthog_session_replay_enabled?: boolean;
+          posthog_api_key?: string;
+          posthog_host?: string;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -385,6 +402,12 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        const posthogFactory = tryCreateNativePostHogClient();
+        if (posthogFactory) {
+          await initPostHogReplayFromSettings(res.data, posthogFactory);
+          const uid = useAuthStore.getState().user?.id;
+          if (uid) identifyPostHogUser(uid, 'rider');
+        }
       } catch (e) {
         console.log('[Settings] Failed to fetch public settings:', e);
       }
@@ -405,7 +428,13 @@ function RootLayout() {
         } catch { /* non-fatal */ }
 
         await Promise.all([
-          initializeAuth(),
+          // Keep an unexpected auth rejection from skipping active-ride
+          // hydration and notification/Firebase setup. SecureStore failures
+          // normally settle inside the store; this isolates other failures.
+          // Hydration still requires a usable session and backend response.
+          initializeAuth().catch((e) => {
+            console.error('[Auth] initialize failed; continuing app init:', e);
+          }),
           initializeLocation(),
           hydrateWorkProfile(),
         ]);
@@ -503,6 +532,7 @@ function RootLayout() {
           if (LogRocket) {
             try { LogRocket.identify(uid); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
+          identifyPostHogUser(uid, 'rider');
         }
         Analytics.login();
         console.log('[Push] Rider FCM token registered with backend');
@@ -967,7 +997,7 @@ function RootLayoutInner({
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
           {wsState === 'reconnecting' && (
-            <View style={{ backgroundColor: colors.warning, paddingVertical: 4, alignItems: 'center' }}>
+            <View style={{ backgroundColor: colors.warning, paddingVertical: SPACING.xs, alignItems: 'center' }}>
               <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
                 Reconnecting to ride updates…
               </Text>

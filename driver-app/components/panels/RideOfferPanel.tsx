@@ -53,6 +53,7 @@ interface IncomingRide {
     // falsy-default so an offer payload from a backend that hasn't shipped
     // this field yet renders identically to today (no badge).
     is_scheduled?: boolean;
+    scheduled_time?: string;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
     total_bonus?: number;
@@ -278,16 +279,32 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     </View>
 
                     {/* Scrollable informational body (earnings, badges, incentives,
-                        quest, route). `flex: 1` (not just maxHeight on the card
-                        above) is required here — without it a ScrollView doesn't
-                        actually bound itself to the remaining space and instead
-                        lays out at full content height, which would push the
-                        action bar below past the card's clipped edge instead of
-                        making this section scroll. Bounded this way, a worst-case
-                        content stack scrolls internally here instead of pushing
-                        the timer/header above or the action bar below off the
-                        screen — both of those stay outside this ScrollView. */}
-                    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+                        quest, route). Sized by `styles.scrollBody`
+                        (`flexShrink: 1`) — NOT `flex: 1`. The card above is
+                        auto-height with only a maxHeight cap, and `flex: 1`
+                        resolves to flexBasis 0 in that context: the ScrollView
+                        contributes 0 to the card's measured height, there is no
+                        free space for flexGrow to hand back, and the whole
+                        informational body collapses to zero height (shipped
+                        that way in #5324 — the offer card showed only the
+                        header and the buttons, no earnings, metrics, or
+                        addresses). With flexBasis auto + flexShrink 1 the
+                        ScrollView lays out at its content height normally, and
+                        only shrinks — it is the single shrinkable child, since
+                        RN's flexShrink default is 0 — when the stack would
+                        exceed the cap, so the action bar below never gets
+                        clipped. ActiveRidePanel.tsx caps its own sheet the
+                        same way and passes its ScrollView no flex sizing at
+                        all: a close sibling in shape, but its content has
+                        never been tall enough to actually shrink, so read it
+                        as a second opinion and not as proof. Shrink under a
+                        maxHeight-only, auto-height parent is the one part of
+                        this no test here can cover (jest does no layout, and
+                        driver-app has no visual-regression tooling) — verify a
+                        worst-case offer on a device before trusting the cap.
+                        The timer/header above and the action bar below stay
+                        outside this ScrollView either way. */}
+                    <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
 
                     {/* Earnings hero + trip metrics side by side */}
                     <View style={styles.earningsSection}>
@@ -336,6 +353,11 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     </View>
 
                     {/* Badges row: pre-booked, surge, wav, quiet, cash, payment */}
+                    {incomingRide.is_scheduled && incomingRide.scheduled_time && Number.isFinite(Date.parse(incomingRide.scheduled_time)) && (
+                        <Text style={[styles.badgeText, { color: SCHEDULED_INDIGO }]}>Pickup {new Date(incomingRide.scheduled_time).toLocaleString('en-CA', {
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                        })}</Text>
+                    )}
                     {(incomingRide.is_scheduled || hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
                             {incomingRide.is_scheduled && (
@@ -520,6 +542,12 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             shadowOpacity: 0.2,
             shadowRadius: 16,
             elevation: 20,
+        },
+        // flexShrink only (no flexGrow/flexBasis 0) — see the ScrollView call
+        // site above for why `flex: 1` collapses this body to zero height
+        // under the card's auto-height + maxHeight cap.
+        scrollBody: {
+            flexShrink: 1,
         },
 
         // Timer

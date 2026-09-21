@@ -393,6 +393,9 @@ class TestCompanyInfo:
         with _settings():
             result, ok = await execute_tool("get_company_info", {}, user=RIDER)
         assert ok and result["phone"] == "1-800-SPINR"
+        # Public support address from admin Settings — must reach the model
+        # as the real address, not the PII token the rider then sees quoted.
+        assert result["email"] == "support@spinr.ca"
 
 
 class TestEscalation:

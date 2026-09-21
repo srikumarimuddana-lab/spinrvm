@@ -275,6 +275,40 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // until then rather than guessing a direction.
   const [cameraHeading, setCameraHeading] = useState<number | null>(null);
   const rawHeading = here?.heading ?? null;
+  // The course the CAR MARKER is allowed to veto route geometry with (see
+  // CarMarker's `courseReference` and selectBearing's). This is the half of the
+  // 2026-09-14 head-unit report the camera already got right: the map turns
+  // correctly because it follows this number, while the icon followed route
+  // geometry instead and ended up pointing the opposite way on a course-up map.
+  //
+  // ONLY 'derived' qualifies — a bearing computed from two real positions.
+  //
+  // 'gps' is deliberately excluded despite being the more authoritative-sounding
+  // name. Android's Location carries a separate hasBearing() flag and
+  // getBearing() returns a literal 0.0 when it is false, and resolveHeading
+  // falls through to its 'gps' branch whenever movement could not supply a
+  // course — including when the previous fix is older than the baseline window
+  // (after backgrounding, a tunnel, or Doze), which is exactly when the car may
+  // be moving fast. A placeholder 0 adopted as the reference there would veto a
+  // correct southbound route and pin the icon north: the very defect this
+  // mechanism exists to remove, reintroduced through its own opt-in path and
+  // then latched by hasMovementBearingRef.
+  //
+  // 'carried' and 'none' are excluded too — a bearing carried forward from an
+  // earlier reading is precisely what goes stale through a turn.
+  //
+  // The cost is that the veto is simply inactive whenever the course is not
+  // movement-derived (slow traffic, the first fix after a gap). That degrades
+  // to today's behaviour rather than to a new wrong one, and the `courseRef`
+  // debug fact below reports which case is live.
+  //
+  // Read during render alongside `here` because adoptCarFix writes the fix and
+  // its source in the same call — they describe the same measurement.
+  const headingSource = getHeadingSource();
+  const courseReference =
+    here != null && headingSource === 'derived'
+      ? normalizeHeading(here.heading)
+      : null;
   // Rotation freezes while the driver has dragged the map away from themselves:
   // turning a deliberately-offset view under them is disorienting. Holding the
   // last bearing (rather than snapping back to north, which is what this did
@@ -444,6 +478,16 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
           ? 'north-up (no course yet)'
           : `${cameraHeading.toFixed(0)}° course-up`,
     );
+    // Says whether the icon's bearing was allowed to disagree with the map's.
+    // If a drive still shows a reversed car, this row distinguishes "no
+    // corroborated course, so route geometry went unchecked" from "course was
+    // available and the route agreed with it anyway" — which are different bugs.
+    setDebugFact(
+      'courseRef',
+      courseReference === null
+        ? `none (${headingSource}) — route bearing unchecked`
+        : `${courseReference.toFixed(0)}° (${headingSource}) — vetoes contradicting route`,
+    );
     setDebugFact(
       'pan',
       offsetLat === 0 && offsetLng === 0
@@ -463,7 +507,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         : 'none',
     );
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, earningsHidden, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, earningsHidden, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath, courseReference, headingSource]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -502,11 +546,14 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
 
   // CarMarker hard-imports react-native-maps; require it only after the maps
   // guard above so it can never crash a maps-less context (web / Expo Go).
-  let CarMarker: React.ComponentType<{
-    coordinate: { latitude: number; longitude: number };
-    heading?: number | null;
-    routeCoordinates?: readonly { latitude: number; longitude: number }[] | null;
-  }> | null = null;
+  //
+  // Typed by a type-only `import(...)` of the real component rather than a
+  // hand-written prop shape. Inline type-only imports are fully erased at
+  // compile time (same as mapRef's above), so this cannot defeat the lazy
+  // require below — and unlike the narrow literal it replaces, it cannot drift:
+  // that literal listed three props, so every other prop the marker accepts was
+  // invisible here and passing one was a compile error rather than a feature.
+  let CarMarker: typeof import('../../components/CarMarker').CarMarker | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     CarMarker = require('../../components/CarMarker').CarMarker;
@@ -689,6 +736,10 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
             // icon — which is how the head unit ended up showing a car
             // pointing north while it drove west.
             heading={here.heading}
+            // Lets a route segment pointing the opposite way to actual travel
+            // be refused instead of rendered. Null whenever the course is not
+            // corroborated, which restores the previous behaviour exactly.
+            courseReference={courseReference}
           />
         )}
       </MapView>

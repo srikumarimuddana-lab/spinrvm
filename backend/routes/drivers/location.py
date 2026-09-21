@@ -13,6 +13,7 @@ from pydantic import ValidationError, model_validator
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     APIRouter,
+    BackgroundTasks,
     BaseModel,
     Depends,
     Driver,
@@ -67,6 +68,151 @@ async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id
     force = any(col in update_data for col in _PERIOD1_COLUMNS)
     if await should_write_marker(driver_id, path=path, force=force):
         await db_supabase.update_one("drivers", driver_filter, update_data)
+
+
+_MARKER_ORDER_CACHE_TTL = 120  # seconds; matches location_integrity's teleport-cache TTL
+
+
+async def _newer_than_last_written_marker(driver_id: str, captured_at: datetime) -> bool:
+    """True iff no later point has already updated this driver's live marker.
+
+    Deferring the marker write via BackgroundTasks (see
+    ``_apply_v2_live_marker_update``) removed an ordering guarantee that used
+    to come for free: previously the marker write was awaited before the
+    response returned, so a client that waits for one batch's ack before
+    sending the next could never have two marker writes for the same driver
+    in flight at once. Now the ack returns before the deferred write even
+    starts, so two successive batches' background tasks are independent,
+    unordered asyncio tasks -- an older batch's task finishing after a newer
+    one's would overwrite fresher coordinates with stale ones. This Redis
+    high-water mark (shared across replicas, unlike an in-process lock)
+    makes the write itself order-safe regardless of task scheduling.
+
+    Fails open (returns True) on a Redis error, matching
+    ``check_location_integrity``'s existing degraded-mode precedent -- a
+    transient cache outage must not block real marker writes.
+    """
+    try:
+        from ...utils.redis_client import redis_get, redis_set
+    except ImportError:
+        from utils.redis_client import redis_get, redis_set  # type: ignore
+
+    cache_key = f"loc:marker_hwm:{driver_id}"
+    try:
+        prev_raw = await redis_get(cache_key)
+        if prev_raw:
+            prev_captured_at = datetime.fromisoformat(prev_raw)
+            if prev_captured_at >= captured_at:
+                return False
+        await redis_set(cache_key, captured_at.isoformat(), ttl=_MARKER_ORDER_CACHE_TTL)
+    except Exception:
+        logger.debug("[location] marker order cache check failed for driver_id=%s", driver_id, exc_info=True)
+    return True
+
+
+async def _apply_v2_live_marker_update(
+    driver_id: str,
+    ride_id: str,
+    lat: float,
+    lng: float,
+    heading: float | None,
+    speed: float | None,
+    accuracy: float | None,
+    mocked: bool,
+    is_online: bool,
+    captured_at: datetime,
+    *,
+    refresh_presence: bool = True,
+) -> None:
+    """Background task: GPS-integrity-gated live marker write + presence refresh.
+
+    Split off the response path -- the client's ack (``result.ack.to_dict()``)
+    reflects only durable breadcrumb persistence, which has already completed
+    by the time this task is scheduled. A failure here still surfaces loudly
+    via ``logger.error(exc_info=True)`` per this repo's "do not silently
+    swallow DB errors" rule; it just no longer fails an already-successfully-
+    persisted batch's HTTP response, which previously meant a marker-write
+    failure could make the driver-app outbox re-send points the server had
+    already durably stored.
+    """
+    try:
+        from ...utils.location_integrity import check_location_integrity
+    except ImportError:
+        from utils.location_integrity import check_location_integrity  # type: ignore
+
+    try:
+        trusted, reason = await check_location_integrity(
+            driver_id, lat, lng, speed=speed, accuracy=accuracy, mocked=mocked
+        )
+    except Exception:
+        logger.error(
+            "location-batch v2: integrity check failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
+        )
+        return
+
+    if not trusted:
+        logger.warning(
+            "location-batch v2: rejected live marker update for driver_id=%s ride_id=%s reason=%s",
+            driver_id,
+            ride_id,
+            reason,
+        )
+    elif not await _newer_than_last_written_marker(driver_id, captured_at):
+        logger.info(
+            "location-batch v2: skipped out-of-order marker write for driver_id=%s ride_id=%s", driver_id, ride_id
+        )
+    else:
+        update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+        if heading is not None:
+            update_data["heading"] = heading % 360
+        try:
+            await _write_marker_if_due({"id": driver_id}, update_data, driver_id, "rest_v2_trip")
+        except Exception:
+            logger.error(
+                "location-batch v2: marker write failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
+            )
+        # Live delivery must not depend on whether the DB write was coalesced.
+        if -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+            try:
+                try:
+                    from ...settings_loader import get_app_settings
+                except ImportError:
+                    from settings_loader import get_app_settings
+                settings = await get_app_settings() or {}
+                if settings.get("background_location_fanout_enabled", False):
+                    rides = await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver_id}, limit=1)
+                    ride = rides[0] if rides else {}
+                    if (
+                        ride.get("id") == ride_id
+                        and ride.get("driver_id") == driver_id
+                        and ride.get("status") in {"driver_accepted", "driver_arrived", "in_progress"}
+                        and ride.get("rider_id")
+                    ):
+                        await _deps.manager.send_personal_message(
+                            {
+                                "type": "driver_location_update",
+                                "driver_id": driver_id,
+                                "ride_id": ride_id,
+                                "lat": lat,
+                                "lng": lng,
+                                "heading": heading,
+                                "speed": speed,
+                                "accuracy": accuracy,
+                                "captured_at": captured_at.isoformat(),
+                            },
+                            f"rider_{ride['rider_id']}",
+                            durable=False,
+                        )
+            except Exception:
+                logger.error(
+                    "location-batch v2: rider delivery failed for driver_id=%s ride_id=%s",
+                    driver_id,
+                    ride_id,
+                    exc_info=True,
+                )
+
+    if is_online and refresh_presence:
+        await _deps.mark_present(driver_id)
 
 
 class TripLocationPoint(BaseModel):
@@ -231,14 +377,21 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
     return result.ack.to_dict()
 
 
-async def _persist_v2_location_batch(request: LocationBatchRequest, current_user: dict) -> dict:
+async def _persist_v2_location_batch(
+    request: LocationBatchRequest, current_user: dict, background_tasks: BackgroundTasks
+) -> dict:
     """Authorize and persist one acknowledged v2 outbox batch before marker updates."""
     # The driver row and the ride row are independent reads; issue them
     # together and check ride ownership in Python instead of serialising the
     # second read behind the first. This path is on the < 150 ms driver
     # location-write SLA and measured p50 232 ms / p95 288 ms on 2026-09-11,
     # dominated by sequential Supabase round-trips (~20-25 ms each from Fly
-    # yyz to ca-central-1). Persist-before-marker ordering below is untouched.
+    # yyz to ca-central-1). Persist-before-marker ordering below is untouched:
+    # the live-marker GPS-integrity-check + write + presence refresh (below)
+    # is now deferred via BackgroundTasks instead of awaited inline, since
+    # the response (``result.ack.to_dict()``) only reflects the durable
+    # persist above and never depends on the marker update's outcome -- see
+    # docs/change-log/2026-09-14-location-batch-marker-update-deferred.md.
     driver_rows, rides = await asyncio.gather(
         db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1),
         db_supabase.get_rows("rides", {"id": request.ride_id}, limit=1),
@@ -292,51 +445,48 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
         raise HTTPException(status_code=503, detail="Location persistence unavailable") from exc
 
     rejected_sequences = {rejection.sequence_number for rejection in result.ack.rejected}
-    latest = next(
-        (point for point in reversed(request.points) if point.sequence_number not in rejected_sequences),
-        None,
+    latest = max(
+        (point for point in request.points if point.sequence_number not in rejected_sequences),
+        key=lambda point: parse_iso_utc(point.captured_at.isoformat()),
+        default=None,
     )
+    lat = lng = None
     if latest is not None:
         lat = latest.latitude if latest.latitude is not None else latest.lat
         lng = latest.longitude if latest.longitude is not None else latest.lng
-        if lat is not None and lng is not None:
-            # Same GPS spoofing/teleport guard the legacy (v1) path already
-            # runs before trusting a point for the driver's LIVE marker — see
-            # ACTION_ITEMS.md A40 finding #7. Historical breadcrumbs are
-            # already persisted above (raw `mocked` flag kept for the
-            # settlement-time anomaly filter in utils/trip_distance.py, and
-            # for the regulatory GPS-trace record); this only gates whether a
-            # spoofed point is allowed to move `drivers.lat/lng`, which
-            # dispatch, the rider map, and admin all read as the driver's
-            # real-time position.
-            try:
-                from ...utils.location_integrity import check_location_integrity
-            except ImportError:
-                from utils.location_integrity import check_location_integrity  # type: ignore
 
-            trusted, reason = await check_location_integrity(
-                driver["id"],
-                lat,
-                lng,
-                speed=latest.speed,
-                accuracy=latest.accuracy,
-                mocked=latest.mocked,
-            )
-            if not trusted:
-                logger.warning(
-                    "location-batch v2: rejected live marker update for driver_id=%s ride_id=%s reason=%s",
-                    driver["id"],
-                    request.ride_id,
-                    reason,
-                )
-            else:
-                update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
-                if latest.heading is not None:
-                    update_data["heading"] = latest.heading % 360
-                await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_trip")
+    if lat is not None and lng is not None:
+        # Same GPS spoofing/teleport guard the legacy (v1) path already runs
+        # before trusting a point for the driver's LIVE marker — see
+        # ACTION_ITEMS.md A40 finding #7. Historical breadcrumbs are already
+        # persisted above (raw `mocked` flag kept for the settlement-time
+        # anomaly filter in utils/trip_distance.py, and for the regulatory
+        # GPS-trace record); this only gates whether a spoofed point is
+        # allowed to move `drivers.lat/lng`, which dispatch, the rider map,
+        # and admin all read as the driver's real-time position. Deferred
+        # (see _apply_v2_live_marker_update) since the ack below never
+        # depends on its outcome; that task also does the is_online-gated
+        # presence refresh the synchronous path used to do here, so it is
+        # not scheduled a second time below. `latest.captured_at` is passed
+        # through so the deferred write can detect and skip a stale overwrite
+        # if a later batch's task happens to run first (see
+        # _newer_than_last_written_marker).
+        background_tasks.add_task(
+            _apply_v2_live_marker_update,
+            driver["id"],
+            request.ride_id,
+            lat,
+            lng,
+            latest.heading,
+            latest.speed,
+            latest.accuracy,
+            latest.mocked,
+            bool(driver.get("is_online")),
+            parse_iso_utc(latest.captured_at.isoformat()),
+        )
+    elif driver.get("is_online"):
+        background_tasks.add_task(_deps.mark_present, driver["id"])
 
-    if driver.get("is_online"):
-        await _deps.mark_present(driver["id"])
     return result.ack.to_dict()
 
 
@@ -578,10 +728,79 @@ async def _guard_revoked_session(token_session_id: str | None) -> None:
         raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
 
 
+class LiveLocationRequest(BaseModel):
+    """Ephemeral position, independent of the durable history outbox."""
+
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    captured_at: datetime
+    heading: float | None = Field(default=None, allow_inf_nan=False)
+    speed: float | None = Field(default=None, allow_inf_nan=False)
+    accuracy: float | None = Field(default=None, allow_inf_nan=False)
+    mocked: bool = False
+
+    @model_validator(mode="after")
+    def _reject_missing_position(self):
+        if self.lat == 0 and self.lng == 0:
+            raise ValueError("A real position is required")
+        return self
+
+
+@router.post("/location-live")
+@location_update_limit
+async def update_live_location(
+    point: LiveLocationRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
+):
+    await _guard_revoked_session(token_session_id)
+    drivers = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    if not drivers:
+        raise HTTPException(status_code=403, detail="Driver profile required")
+    driver = drivers[0]
+    if not driver.get("is_online"):
+        raise HTTPException(status_code=409, detail="Driver is not online")
+    captured_at = parse_iso_utc(point.captured_at.isoformat())
+    if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+        raise HTTPException(status_code=422, detail="A recent position is required")
+    # Fresh authenticated GPS is a heartbeat even when optional delivery/history
+    # rollouts are off. Never renew from an offline driver or a stale fix.
+    await _deps.mark_present(driver["id"])
+    # Keep discovery/dispatch coordinates fresh independently of rider fanout.
+    # The marker helper gates rider delivery internally.
+    # Assignment is server-owned; never trust a caller's ride or driver ID.
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "driver_id": driver["id"],
+            "status": {"$in": list(_V2_ACTIVE_RIDE_STATUSES)},
+        },
+        limit=1,
+    )
+    background_tasks.add_task(
+        _apply_v2_live_marker_update,
+        driver["id"],
+        rides[0]["id"] if rides else "",
+        point.lat,
+        point.lng,
+        point.heading,
+        point.speed,
+        point.accuracy,
+        point.mocked,
+        True,
+        captured_at,
+        refresh_presence=False,
+    )
+    return {"accepted": True}
+
+
 @router.post("/location-batch")
 @location_update_limit
 async def update_location_batch(
     batch: Union[List[dict], dict, LocationBatchRequest],
+    background_tasks: BackgroundTasks,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
     token_session_id: str | None = Depends(get_token_session_id),
@@ -601,7 +820,7 @@ async def update_location_batch(
     if isinstance(v2_request, IdleLocationBatchRequest):
         return await _persist_v2_idle_batch(v2_request, current_user)
     if v2_request is not None:
-        return await _persist_v2_location_batch(v2_request, current_user)
+        return await _persist_v2_location_batch(v2_request, current_user, background_tasks)
 
     try:
         from ...utils.location_integrity import check_location_integrity

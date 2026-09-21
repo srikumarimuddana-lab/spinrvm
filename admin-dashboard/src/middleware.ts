@@ -64,12 +64,23 @@ function buildCsp(nonce: string): string {
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "connect-src 'self' https: wss: ws:",
-    // MapLibre GL v5 creates its tile-processing Web Worker from a blob: URL.
+    // MapLibre GL v5+ creates its tile-processing Web Worker from a blob: URL.
     // Chrome does not extend 'self' to cover blob: workers even when the blob
     // is same-origin — it requires blob: explicitly here. Without this the
     // worker is blocked and the map canvas stays blank.
     "worker-src blob: 'self'",
     "frame-ancestors 'none'",
+    // Google reCAPTCHA Enterprise (Firebase App Check on the public
+    // /register/driver page — classic reCAPTCHA v3 was the original choice
+    // but Firebase stopped accepting new classic registrations, see
+    // firebase-app-check.ts) runs its risk-scoring in an invisible iframe
+    // from these origins — Google's own documented CSP requirement covers
+    // both providers identically (https://www.google.com/recaptcha/,
+    // https://recaptcha.google.com/recaptcha/; the bare origins below are a
+    // superset). Without this, default-src 'self' silently blocks the
+    // iframe and App Check tokens can never be minted, with no
+    // CSP-violation telemetry to reveal why.
+    "frame-src https://www.google.com https://recaptcha.google.com",
   ].join("; ");
 }
 

@@ -5,7 +5,7 @@ Background
 A driver appears in the rider app (`/drivers/nearby` map pins and
 `/rides/estimate`) only while a live Redis *presence* key exists for them;
 admin instead reads the durable `drivers.is_online` column. The presence key
-carries a 30s TTL (utils/driver_presence.PRESENCE_TTL) precisely so a flaky
+carries a bounded TTL (utils/driver_presence.PRESENCE_TTL) so a flaky
 mobile connection — socket drops, client reconnects a couple of seconds later
 — does NOT yank the driver out of rider results for the length of the blip.
 
@@ -19,7 +19,7 @@ The regressions this pins
 2. A *revocation* close (Sign out everywhere / token-version bump / Firebase
    session invalidation) is a deliberate server kill — it MUST clear presence
    immediately (inside `heartbeat_task`), or `/drivers/nearby` + dispatch could
-   keep the revoked driver reachable for up to 30s and offer a ride to a socket
+   keep the revoked driver reachable until expiry and offer a ride to a socket
    that no longer exists.
 
 3. BUT that revocation clear must respect ownership: if the driver already
@@ -59,9 +59,7 @@ class TestHeartbeatRevocationPresence:
                 patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
                 patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
             ):
-                await ws_mod.heartbeat_task(
-                    ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1
-                )
+                await ws_mod.heartbeat_task(ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1)
         finally:
             ws_mod.manager.active_connections.pop(key, None)
 
@@ -86,9 +84,7 @@ class TestHeartbeatRevocationPresence:
                 patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
                 patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
             ):
-                await ws_mod.heartbeat_task(
-                    old_ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1
-                )
+                await ws_mod.heartbeat_task(old_ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1)
         finally:
             ws_mod.manager.active_connections.pop(key, None)
 
@@ -117,9 +113,7 @@ class TestHeartbeatRevocationPresence:
             patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
             patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
         ):
-            await ws_mod.heartbeat_task(
-                ws, "driver_u2", user_id="u2", driver_id="drv-2", claim_token_version=3
-            )
+            await ws_mod.heartbeat_task(ws, "driver_u2", user_id="u2", driver_id="drv-2", claim_token_version=3)
 
         assert ping_seen["v"]
         clear_mock.assert_not_awaited()
@@ -127,7 +121,7 @@ class TestHeartbeatRevocationPresence:
 
 def test_involuntary_disconnect_branches_do_not_clear_presence():
     """The WebSocketDisconnect / generic-Exception branches of the endpoint must
-    not clear presence — a plain network drop rides the 30s TTL. (Revocation is
+    not clear presence — a plain network drop rides the presence TTL. (Revocation is
     handled in heartbeat_task, which is a different code region.)"""
     from backend.routes import websocket as ws_mod
 
@@ -153,15 +147,44 @@ def test_go_offline_branch_still_clears_presence():
     # (presence helpers are reached via the _deps seam since the god-file split)
     assert "await _deps.mark_present(driver_id)" in src, "go-online mark_present call missing"
     assert re.search(r"else:\s+await _deps\.clear_presence\(driver_id\)", src), (
-        "the Go Offline branch (else of `if is_online:`) no longer clears the "
-        "driver's presence key"
+        "the Go Offline branch (else of `if is_online:`) no longer clears the driver's presence key"
     )
 
 
-def test_presence_ttl_is_the_grace_window():
-    """Sanity-pin the TTL the network-drop grace relies on: 30s == 3x the 10s WS
-    heartbeat (two missed pings). Shrinking it toward the heartbeat kills the
-    grace; growing it unbounded lets a dead app linger too long."""
-    from backend.utils.driver_presence import PRESENCE_TTL
+@pytest.mark.anyio
+@pytest.mark.parametrize("redis_connected", [False, True])
+async def test_background_presence_renews_and_expires(monkeypatch, redis_connected):
+    """Delayed callbacks keep discovery/matching consistent; silence expires.
 
-    assert PRESENCE_TTL == 30
+    Exercise the common readers against both fallback and Redis MGET paths.
+    """
+    from backend.utils import driver_presence as presence
+    from backend.utils import redis_client as cache
+
+    clock = [1000.0]
+    monkeypatch.setattr(cache.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cache, "_get_redis", AsyncMock(return_value=None))
+    redis = AsyncMock()
+    redis.mget.side_effect = lambda *keys: [cache._local_get(key) for key in keys]
+    monkeypatch.setattr(presence, "_get_redis", AsyncMock(return_value=redis if redis_connected else None))
+    monkeypatch.setattr("backend.utils.h3_location_index.on_driver_offline", AsyncMock())
+    driver_id = "background-presence-regression"
+    try:
+        await presence.mark_present(driver_id)
+        # A callback delayed beyond the old 30s cutoff must still be discoverable.
+        clock[0] += 60
+        assert await presence.present_driver_ids_checked([driver_id]) == ({driver_id}, True)
+        assert await presence.present_driver_ids([driver_id]) == {driver_id}
+        await presence.mark_present(driver_id)
+        # Renewal extends from the latest callback, not initial go-online time.
+        clock[0] += 60
+        assert await presence.is_present(driver_id)
+        clock[0] += 31
+        assert await presence.present_driver_ids([driver_id]) == set()
+        # Resumed delivery restores eligibility; explicit offline clears at once.
+        await presence.mark_present(driver_id)
+        assert await presence.is_present(driver_id)
+        await presence.clear_presence(driver_id)
+        assert await presence.present_driver_ids_checked([driver_id]) == (set(), True)
+    finally:
+        cache._local.pop(presence._key(driver_id), None)

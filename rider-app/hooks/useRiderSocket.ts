@@ -7,6 +7,7 @@ import { ensureFreshToken } from '@shared/api/client';
 import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
 import { RideStatus } from '../constants/rideStatus';
+import { queryClient, queryKeys } from '@shared/api/queryClient';
 
 /**
  * Real-time WebSocket client for the rider app.
@@ -29,6 +30,7 @@ import { RideStatus } from '../constants/rideStatus';
  * | `ride_cancelled`        | Clear ride + alert                                     |
  * | `ride_status_changed`   | Generic catch-all: apply status + fetchRide fallback   |
  * | `chat_message`          | Log (chat screen polls its own messages for now)       |
+ * | `new_notification`      | Merge into the shared notifications query cache        |
  *
  * **Reconnection:** exponential backoff [1s, 2s, 5s, 10s, 30s] with
  * ±500 ms jitter. Reconnects automatically on AppState `active`.
@@ -90,6 +92,7 @@ export function useRiderSocket() {
             data.speed ?? null,
             data.heading ?? null,
             data.eta_seconds ?? null,
+            { rideId: data.ride_id, driverId: data.driver_id, capturedAt: data.captured_at },
           );
         }
         break;
@@ -194,6 +197,32 @@ export function useRiderSocket() {
           Vibration.vibrate(100);
         } else {
           console.warn('[WS] Malformed chat_message payload:', data);
+        }
+        break;
+
+      // In-app notification inbox: push the new row + fresh unread_count
+      // straight into the shared TanStack Query cache the notifications
+      // screen and home-tab bell badge both read via useNotifications() —
+      // no separate WS transport, this reuses the same connection and the
+      // same query-cache-as-source-of-truth pattern the mark-read mutations
+      // already use (see shared/hooks/queries/notificationQueries.ts).
+      // REST polling (see app/(tabs)/index.tsx) remains as a periodic
+      // reconciliation fallback for when this socket isn't connected (it
+      // only opens while the rider has an active ride).
+      case 'new_notification':
+        if (data.notification && typeof data.unread_count === 'number') {
+          queryClient.setQueriesData(
+            { queryKey: queryKeys.notifications.list },
+            (old: any) => {
+              if (!old?.notifications) return old;
+              if (old.notifications.some((n: any) => n.id === data.notification.id)) return old;
+              return {
+                ...old,
+                notifications: [data.notification, ...old.notifications],
+                unread_count: data.unread_count,
+              };
+            },
+          );
         }
         break;
 

@@ -409,6 +409,27 @@ async def _get_active_service_area_for_point(
     return None
 
 
+# Rider-facing phrasing for each ride state. The raw state values are
+# internal vocabulary (`driver_accepted`, `in_progress`, ...) and used to be
+# interpolated straight into the 409 below, so a rider tapping Cancel mid-trip
+# read "Ride is in status 'in_progress'; cannot perform this action from that
+# state (allowed: ['searching', 'driver_assigned', ...])" — the same leak
+# class already fixed for the driver-side sibling in
+# ``backend/routes/drivers/_shared.py``'s ``_require_ride_in_state``.
+# Phrased from the rider's point of view since every caller of this helper is
+# a rider action (cancel, etc.).
+_RIDER_RIDE_STATE_PHRASE = {
+    "scheduled": "scheduled for later",
+    "searching": "still looking for a driver",
+    "driver_assigned": "matched with a driver, but not yet accepted",
+    "driver_accepted": "on its way — your driver has accepted",
+    "driver_arrived": "waiting for you at pickup",
+    "in_progress": "already in progress",
+    "completed": "already finished",
+    "cancelled": "already cancelled",
+}
+
+
 async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
     """Load a rider's ride only if it is in one of allowed_states.
 
@@ -424,8 +445,13 @@ async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_stat
     existing = await _deps.db.find_one("rides", {"id": ride_id, "rider_id": rider_id})
     if existing:
         current = existing.get("status", "unknown")
+        phrase = _RIDER_RIDE_STATE_PHRASE.get(current)
         raise SpinrException(
-            message=f"Ride is in status '{current}'; cannot perform this action from that state (allowed: {list(allowed_states)}).",
+            message=(
+                f"This ride is {phrase}, so that action isn't available right now. Refresh to see its latest status."
+                if phrase
+                else "That action isn't available for this ride right now. Refresh to see its latest status."
+            ),
             error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=409,
             details={"current_status": current, "allowed": list(allowed_states)},

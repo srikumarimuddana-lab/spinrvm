@@ -39,6 +39,7 @@ our Privacy Policy for how we handle your information generally.
 | Google Maps | Route calculation, ETA | Pickup/drop-off address needed to calculate directions | US |
 | Google (Gemini) | AI-assisted in-app support and text features | Text you enter in those specific features; PII is stripped before sending | US |
 | LogRocket | Session diagnostics (rider app + driver app, iOS on by default — currently disabled on Android) | App usage session data, used to reproduce and fix bugs | [CONFIRM REGION] |
+| PostHog | Session replay for rider app and driver app (off by default until an admin enables it) | Masked session recordings used to reproduce and fix bugs. Spinr sends only a user id and role, not your email, phone, or GPS | United States (PostHog Cloud). Off until privacy sign-off |
 | Railway | Backend server hosting | Request traffic passing through the backend | US |
 | Fly.io | Backend server hosting (Toronto region) | Request traffic passing through the backend | Canada (`yyz`) |
 | Vercel | Admin dashboard hosting (not used by the rider or driver apps) | Admin session metadata | Canada (`yyz1`) |
@@ -78,8 +79,12 @@ register for procurement/security review purposes.
    public list only to let it go stale defeats the purpose.
 2. **LogRocket's processing region is unconfirmed** in the internal register
    as of this review — resolve before publishing rather than guessing.
-3. Publishing this page and disclosing Gemini/LogRocket in
+3. **PostHog is US Cloud** (`us.posthog.com`). There is no Canadian region.
+   Do not publish this row as "in use" until Legal signs off and the admin
+   flag is allowed on. Disclosing PostHog in `privacy-policy.md` should
+   happen with that enablement, same as Gemini/LogRocket.
+4. Publishing this page and disclosing Gemini/LogRocket in
    `docs/legal/privacy-policy.md`'s vendor section (§3) should happen
    together — see that file's own pre-publication note #2.
-4. Once published, mark the corresponding rows "disclosed" in
+5. Once published, mark the corresponding rows "disclosed" in
    `docs/vendor-register.md`, consistent with that file's own instruction.

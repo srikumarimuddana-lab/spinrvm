@@ -17,6 +17,23 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "settings, expected",
+    [
+        ({}, False),
+        ({"driver_stationary_tracking_enabled": False}, False),
+        ({"driver_stationary_tracking_enabled": True}, True),
+    ],
+)
+async def test_stationary_tracking_rollout_flag(settings, expected):
+    from backend.routes import settings as settings_mod
+
+    with patch.object(settings_mod, "get_app_settings", AsyncMock(return_value=settings)):
+        result = await settings_mod.get_public_settings()
+    assert result["driver_stationary_tracking_enabled"] is expected
+
+
+@pytest.mark.anyio
 async def test_defaults_flag_off_when_unset():
     from backend.routes import settings as settings_mod
 

@@ -15,16 +15,32 @@ import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScre
 import { TrackBaseUrlContext } from './_layout';
 
 // Hosts that are allowed to load inside the in-app WebView.
-// track.spinr.ca is the current Spinr-controlled live-tracking domain;
-// spinr-track.app is kept for backward compatibility with links already
-// sent out before the domain move. The backend's app_settings.track_base_url
-// must resolve to one of these. Any other origin — including
-// attacker-controlled deep-link injections — is rejected with an error
-// state before the WebView loads.
+// track.spinr.ca is the current Spinr-controlled live-tracking domain, and
+// app_settings.track_base_url should be set to it.
+//
+// Scope, precisely: this Set gates ONLY the caller-supplied `trackingUrl`
+// route param (the deep-link path, sanitized into sanitizedInitialUrl below).
+// It does NOT gate the track_base_url branch — fetchTrackingUrl builds
+// `${trackBaseUrl}/${token}` and sets it directly, without calling
+// isAllowedTrackingUrl. That is deliberate (track_base_url is admin-configured,
+// so it is trusted input, not attacker input), but it means a misconfigured
+// track_base_url fails as a WebView load error, not as "Invalid tracking link."
+// Don't read this allowlist as a blanket guarantee about every URL this screen
+// can load.
+//
+// spinr-track.app / www.spinr-track.app were removed 2026-09-14. They were
+// carried here as "backward compatibility with links already sent out before
+// the domain move", but that domain does not resolve (NXDOMAIN — no A, no NS)
+// and is not registered to Spinr, so no such link has ever worked and the
+// entry protected nothing. It was a live risk rather than dead config: this
+// screen's trackingUrl param is never set by in-app navigation (ride-in-progress
+// passes only rideId), so its sole source is a spinr-user:// deep link, which
+// expo-router routes here natively. Anyone could have registered the domain and
+// rendered their own page inside Spinr's chrome — exactly the phishing vector
+// the allowlist exists to stop.
+// See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
 const ALLOWED_TRACKING_HOSTS = new Set([
   'track.spinr.ca',
-  'spinr-track.app',
-  'www.spinr-track.app',
 ]);
 
 function isAllowedTrackingUrl(raw: string): boolean {
@@ -48,10 +64,11 @@ export default function RideTrackingWebviewScreen() {
 
   const trackBaseUrl = useContext(TrackBaseUrlContext);
 
-  // Validate any caller-supplied trackingUrl before trusting it. Deep links
-  // include broad path patterns (/ride, /promo, /join, spinr-track.app root)
-  // so an attacker could craft spinr-user://ride-tracking-webview?trackingUrl=
-  // https://evil.example/... and render a phishing page inside Spinr's chrome.
+  // Validate any caller-supplied trackingUrl before trusting it. The custom
+  // spinr-user:// scheme is registered (app.config.ts) and expo-router routes
+  // it straight to this screen, so an attacker could craft
+  // spinr-user://ride-tracking-webview?trackingUrl=https://evil.example/...
+  // and render a phishing page inside Spinr's chrome.
   const sanitizedInitialUrl =
     trackingUrl && isAllowedTrackingUrl(trackingUrl) ? trackingUrl : null;
 
@@ -67,7 +84,7 @@ export default function RideTrackingWebviewScreen() {
   const fetchTrackingUrl = useCallback(async (id: string) => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url
     // so ops can rotate the domain without a mobile rebuild. Fail loud if it
-    // isn't configured rather than fall back to a hardcoded spinr-track.app
+    // isn't configured rather than fall back to a hardcoded tracking domain
     // that the admin may have intentionally moved away from.
     if (!trackBaseUrl) {
       setError('Live trip tracking is not set up yet. Please contact support.');
@@ -132,7 +149,7 @@ export default function RideTrackingWebviewScreen() {
         <View style={styles.urlBar}>
           <Ionicons name="lock-closed" size={13} color={colors.success} />
           <Text style={styles.urlText} numberOfLines={1}>{resolvedUrl}</Text>
-          {webLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+          {webLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: SPACING.sm }} />}
         </View>
       ) : null}
 

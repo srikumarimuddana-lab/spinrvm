@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, render, fireEvent } from '@testing-library/react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 import { RideOfferPanel, DECLINE_REASON_SERVICE_ANIMAL } from '../../components/panels/RideOfferPanel';
 
 jest.mock('../../components/AlertDialog', () => ({
@@ -185,6 +186,52 @@ describe('RideOfferPanel', () => {
     expect(declineBtn.props.disabled).toBeFalsy();
   });
 
+  // Regression, #5324 follow-up: the scroll-safety fix above sized that
+  // ScrollView with `flex: 1`. The card around it is auto-height with only a
+  // maxHeight cap and no flexGrow of its own, so there is never free space to
+  // grow back into — `flex: 1`'s flexBasis 0 measured the body as zero and
+  // drivers got an offer card with the header and the Accept/Decline buttons
+  // and nothing in between: no earnings, no km/min, no pickup or drop-off
+  // address.
+  //
+  // jest does no layout, so this asserts the style *shape* rather than a
+  // measured height. It deliberately pins the two ingredients that decide
+  // behaviour, not the exact spelling of the fix: RN's own ScrollView base
+  // style already supplies flexGrow/flexShrink with flexBasis left at `auto`,
+  // so passing no style prop at all (ActiveRidePanel.tsx's idiom) is equally
+  // correct and must not redden this test.
+  it('never sizes the informational body with a flexBasis of 0, and leaves it shrinkable', () => {
+    const { UNSAFE_getByType } = render(<RideOfferPanel {...defaultProps} />);
+
+    const body = StyleSheet.flatten(UNSAFE_getByType(ScrollView).props.style) ?? {};
+
+    // A positive `flex: N` shorthand expands to flexBasis 0 — the collapse.
+    expect(typeof body.flex === 'number' && body.flex > 0).toBe(false);
+    // ...as does setting flexBasis to zero directly, in either spelling.
+    expect(body.flexBasis ?? 'auto').not.toBe(0);
+    expect(body.flexBasis ?? 'auto').not.toBe('0%');
+    // The other half of #5324's contract: the body must stay shrinkable, so a
+    // worst-case stack is absorbed here instead of pushing the action bar past
+    // the card's `overflow: hidden` clip. Undefined inherits RN's own
+    // flexShrink: 1, so only an explicit 0 breaks it.
+    expect(body.flexShrink ?? 1).not.toBe(0);
+  });
+
+  // Companion to the style assertion above: the sections that vanished in
+  // #5324 must all still be rendered by an ordinary offer. Catches a future
+  // change that drops or gates one of them, which no layout-free renderer
+  // could otherwise distinguish from the collapse.
+  it('renders earnings, trip metrics and both addresses for an ordinary offer', () => {
+    const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+
+    expect(getByText('YOUR EARNINGS')).toBeTruthy();
+    expect(getByText('15.50')).toBeTruthy();
+    expect(getByText('2.5')).toBeTruthy();   // distance_km
+    expect(getByText('10')).toBeTruthy();    // duration_minutes
+    expect(getByText('123 Main St')).toBeTruthy();
+    expect(getByText('456 Elm Ave')).toBeTruthy();
+  });
+
   // Gap #13: a pre-accept decline had no reason at all, so trust & safety
   // had no way to detect a driver refusing a service animal. A long-press
   // on Decline now offers a single, optional flag for that reason. The
@@ -347,4 +394,11 @@ describe('RideOfferPanel', () => {
       expect(vibrateSpy).not.toHaveBeenCalled();
     });
   });
+});
+
+
+it('shows booked pickup with explicit readable text color', () => {
+  const view = render(<RideOfferPanel {...defaultProps} incomingRide={{...mockRide, is_scheduled:true, scheduled_time:'2026-09-15T14:00:00Z'}} />);
+  const label = view.getByText(/^Pickup /);
+  expect(StyleSheet.flatten(label.props.style).color).toBeTruthy();
 });

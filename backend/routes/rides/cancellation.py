@@ -124,7 +124,9 @@ async def cancel_ride_rider(
         charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
         total_cancel_fee = _round(charged_admin + charged_driver)
     except Exception as _fee_exc:
-        logger.opt(exception=True).error("[CANCEL] cancellation fee computation failed ride_id={}: {}", ride_id, _fee_exc)
+        logger.opt(exception=True).error(
+            "[CANCEL] cancellation fee computation failed ride_id={}: {}", ride_id, _fee_exc
+        )
         charged_admin = charged_driver = Decimal("0")
         total_cancel_fee = Decimal("0")
 
@@ -453,20 +455,11 @@ async def cancel_ride_rider(
         )
 
     if driver_id:
-        # Use the returned row (not just fire-and-forget) so the invariant
-        # is_available ⇒ is_online is respected below — mirrors the same
-        # guard in routes/rides/matching.py's offer-timeout handler.
-        released = await _deps.db_supabase.set_driver_available(driver_id, True)
-        # M-5: SGI insurance period audit — rider-side cancel after the
-        # driver was assigned releases the driver back to period 1. Only
-        # record Period 1 if the release actually made the driver
-        # available (#4597 Finding 3): if the driver had already gone
-        # offline before this rider-initiated cancel landed,
-        # set_driver_available clamps is_available→False, and writing
-        # Period 1 here would falsely reopen an online/commercial-
-        # insurance window for a driver who is actually Period 0.
-        if isinstance(released, dict) and released.get("is_available"):
-            await _deps.record_period_transition(driver_id, 1)
+        # M-5: SGI insurance-period audit. A rider-side cancel after the driver
+        # was assigned releases them and closes the Period 2 that assignment
+        # opened, with whatever they actually are now. See the helper for why
+        # this is neither a blanket Period 1 (#4597 Finding 3) nor silence.
+        await _deps.release_driver_and_close_period(driver_id, reason="rider_cancelled", ride_id=ride_id)
 
         # Notify driver
         driver = await _deps.db_supabase.get_driver_by_id(driver_id)

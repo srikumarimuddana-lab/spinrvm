@@ -15,6 +15,7 @@ try:
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.metrics import observe as _dispatch_observe
     from ...utils.metrics import time_ms as _time_ms
+    from ...utils.scheduled_ride_config import scheduled_search_deadline
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
     from repositories._base import _redact_pg_error  # type: ignore
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - dual-import pattern
     )
     from utils.metrics import observe as _dispatch_observe  # type: ignore
     from utils.metrics import time_ms as _time_ms  # type: ignore
+    from utils.scheduled_ride_config import scheduled_search_deadline
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
         resolve_dispatch_area_scope,
@@ -138,15 +140,17 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
     """Re-attempt dispatch after a delay. Stops if the ride left searching or the
     per-ride attempt cap is reached (the stuck-ride sweeper then owns resolution)."""
     await asyncio.sleep(delay)
-    if attempt > _MAX_DISPATCH_ATTEMPTS:
-        logger.warning(
-            f"[DISPATCH] ride {ride_id} hit {_MAX_DISPATCH_ATTEMPTS} dispatch attempts — "
-            f"stopping retries; stuck-ride sweeper will resolve it"
-        )
+    if attempt > 240:  # bounded even if every DB read fails
         return
     try:
         ride = await _deps.db_supabase.get_ride(ride_id)
         if not ride or ride.get("status") != RideStatus.SEARCHING:
+            return
+        deadline = scheduled_search_deadline(ride)
+        if deadline:
+            if datetime.now(timezone.utc) >= deadline:
+                return
+        elif attempt > _MAX_DISPATCH_ATTEMPTS:
             return
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
@@ -1417,6 +1421,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     # additive metadata for the driver-app offer panel; no dispatch/
                     # matching behavior change.
                     "is_scheduled": bool(ride.get("is_scheduled")),
+                    "scheduled_time": ride.get("scheduled_time"),
                     "countdown_seconds": offer_timeout,
                     "offer_expires_at": _offer_expires_at,
                     "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
@@ -1445,6 +1450,32 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             "rider_profile_image",
                             "rider_name",
                         }
+                        # #1231 finding 15 (remaining half), ships dark behind
+                        # minimal_fcm_offer_payload_enabled (app_settings,
+                        # default False — see migration 424): precise GPS pins
+                        # and rider_rating are far more sensitive than the
+                        # human-readable pickup/dropoff label already visible
+                        # in the OS notification body/alert below, and unlike
+                        # that label have no legitimate reason to transit
+                        # Google/Apple push infra in full precision. When
+                        # enabled, the driver-app's background handler
+                        # refetches these via the authenticated
+                        # GET /drivers/rides/{ride_id}/offer endpoint
+                        # (routes/drivers/ride_reads.get_ride_offer) instead —
+                        # the WS message (dispatch_payload) above is
+                        # unaffected either way. Default False leaves this
+                        # byte-for-byte identical to today.
+                        _minimal_offer_payload = bool(app_settings.get("minimal_fcm_offer_payload_enabled", False))
+                        if _minimal_offer_payload:
+                            _FCM_EXCLUDE = _FCM_EXCLUDE | {
+                                "pickup_lat",
+                                "pickup_lng",
+                                "pickup_nav_lat",
+                                "pickup_nav_lng",
+                                "dropoff_lat",
+                                "dropoff_lng",
+                                "rider_rating",
+                            }
                         fcm_data = {
                             k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                             for k, v in dispatch_payload.items()
@@ -1452,6 +1483,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         }
                         fcm_data["deeplink"] = "/driver/"
                         fcm_data["booking_id"] = str(ride_id)
+                        if _minimal_offer_payload:
+                            # Marker so the client can tell which payload shape it
+                            # got (rather than inferring it from field absence,
+                            # which a future field addition could make ambiguous).
+                            fcm_data["offer_minimal"] = "true"
 
                         pickup_label = ride.get("pickup_address") or "Nearby pickup"
                         dropoff_label = ride.get("dropoff_address") or "destination"
@@ -1620,19 +1656,11 @@ async def _offer_timeout_handler(
             # Period 0: driver is fully offline (personal insurance only).
             await _deps.record_period_transition(driver_id, 0)
         else:
-            # Normal timeout — release driver back to the available pool.
-            # Use set_driver_available() so the is_available ⇒ is_online
-            # invariant is enforced (clamps to False if driver went offline
-            # between the offer being sent and the timeout firing).
-            released = await _deps.db_supabase.set_driver_available(driver_id, available=True)
-            # Only record Period 1 (online, no ride) if the release actually
-            # made the driver available. If they went offline between offer
-            # dispatch and this timeout, set_driver_available clamps
-            # is_available→False; their go-offline already logged Period 0, so
-            # opening a Period 1 audit row here would falsely reopen an
-            # online/commercial-insurance window for an offline driver.
-            if isinstance(released, dict) and released.get("is_available"):
-                await _deps.record_period_transition(driver_id, 1)
+            # Normal timeout — release the driver back to the available pool
+            # and close the Period 2 their claim opened, with whatever they
+            # actually are now. See the helper for why this is neither a
+            # blanket Period 1 nor silence.
+            await _deps.release_driver_and_close_period(driver_id, reason="offer_timeout", ride_id=ride_id)
 
         # Notify rider via WebSocket.
         if rider_id:
@@ -1838,14 +1866,10 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
         await reset_miss_streak(driver_id)
         await _deps.record_period_transition(driver_id, 0)
     else:
-        # Only open Period 1 (online, no ride) if the release actually made the
-        # driver available. If they went offline between offer dispatch and this
-        # timeout, set_driver_available clamps is_available→False; recording
-        # Period 1 here would falsely reopen a commercial-insurance window for an
-        # offline driver. Mirrors the single-offer guard at _offer_timeout_handler.
-        released = await _deps.db_supabase.set_driver_available(driver_id, True)
-        if isinstance(released, dict) and released.get("is_available"):
-            await _deps.record_period_transition(driver_id, 1)
+        # Release and close the Period 2 this driver's claim opened, with
+        # whatever they actually are now. See the helper for why this is
+        # neither a blanket Period 1 nor silence.
+        await _deps.release_driver_and_close_period(driver_id, reason="offer_timeout", ride_id=ride_id)
 
     try:
         await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)
@@ -1943,21 +1967,13 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     await asyncio.sleep(timeout_seconds)
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
+        deadline = scheduled_search_deadline(current_ride or {}, timeout_seconds)
+        if deadline and current_ride.get("status") == RideStatus.SEARCHING:
+            remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                current_ride = await _deps.db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
-            # WS-8 (finding 11): release the booking-time pre-auth hold
-            # so the rider's card isn't blocked for 7 days after timeout.
-            _booking_pi = current_ride.get("payment_intent_id")
-            _auth = (current_ride.get("auth_status") or "").lower()
-            if _booking_pi and _auth in ("authorized", "fare_only"):
-                try:
-                    _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
-                    if _released:
-                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id={} pi={}", r_id, _booking_pi)
-                except Exception as _rel_exc:
-                    logger.opt(exception=True).error(
-                        "[AUTO-CANCEL] pre-auth release failed ride_id={}: {}", r_id, _rel_exc
-                    )
-
             now = datetime.now(timezone.utc)
             base_update = {
                 "status": RideStatus.CANCELLED,
@@ -1965,27 +1981,118 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "cancellation_reason": "No nearby drivers found. Please try again.",
                 "updated_at": now,
             }
-            if _booking_pi and _auth in ("authorized", "fare_only"):
-                base_update["auth_status"] = "released"
-            # Migration 38 adds cancelled_by / cancellation_type so the
-            # admin panel can filter "No Driver Found" separately. Fall
-            # back to base_update on PGRST204 ("column does not exist")
-            # so the rider-facing cancel still succeeds before the
-            # migration lands in prod.
+            # Claim the cancel with a compare-and-swap on status='searching'
+            # FIRST — before the hold release, before any Stripe call. The
+            # read above is only a hint: accept_ride's own CAS (routes/drivers/
+            # ride_flow.py) can land between it and this write, and this
+            # timer must then be a no-op. Zero rows back == not ours to cancel.
+            #
+            # The previous shape only did this for scheduled rides. The common
+            # path checked the in-memory status, awaited cancel_authorization
+            # (a live Stripe round-trip — a race window one network call
+            # wide), then wrote CANCELLED via update_ride, which filters on id
+            # only: a ride accepted at t≈300s was overwritten to cancelled with
+            # its hold already released — driver en route to a "cancelled"
+            # ride whose fare could never be captured, Period 2 never closed.
+            #
+            # Migration 38 adds cancelled_by / cancellation_type so the admin
+            # panel can filter "No Driver Found" separately. Fall back to
+            # base_update on PGRST204 ("column does not exist") so the
+            # rider-facing cancel still succeeds before the migration lands.
+            claim_filter = {"id": r_id, "status": RideStatus.SEARCHING}
+            # retry_policy="write": a single attempt, no retry — matching
+            # utils/stuck_ride_sweeper.py's own claim (`run_sync(_claim,
+            # retry_policy="write")`), which already uses this for exactly
+            # the same reason. Without it, update_one's default "read" policy
+            # (3 attempts) means a committed-but-ack-lost attempt 1 gets
+            # silently retried on attempts 2/3, which legitimately re-match
+            # zero rows on a ride THIS call just cancelled — the dominant
+            # source of the "falsy but actually ours" ambiguity handled
+            # below. Single-attempt semantics close that source; see the
+            # comment below for the narrower residual that's left.
             try:
-                await _deps.db_supabase.update_ride(
-                    r_id,
-                    {
-                        **base_update,
-                        "cancelled_by": "system",
-                        "cancellation_type": "no_drivers_found",
-                    },
+                claimed = await _deps.db_supabase.update_one(
+                    "rides",
+                    claim_filter,
+                    {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                    retry_policy="write",
                 )
             except Exception as _col_exc:
                 logger.opt(exception=True).error(
                     f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
                 )
-                await _deps.db_supabase.update_ride(r_id, base_update)
+                claimed = await _deps.db_supabase.update_one("rides", claim_filter, base_update, retry_policy="write")
+            if not claimed:
+                # A falsy result is still not conclusively "someone else won":
+                # a single-attempt write can commit server-side and have its
+                # ack lost to a transient fault (ConnectionTerminated,
+                # RemoteProtocolError/"Server disconnected", httpx timeouts,
+                # the H2 stream race) with no retry to mask it as a fresh
+                # zero-row query — the caller genuinely doesn't know. Returning
+                # here on that case would skip the hold release, the
+                # cancellation metric, the rider ride_cancelled WS event, the
+                # push and the guest SMS, leaving the rider's app on
+                # "searching" for a cancelled ride and undercounting the
+                # cancellation-rate KPI.
+                #
+                # Same shape as accept_ride's re-read (routes/drivers/
+                # ride_flow.py): before concluding we lost, look at the row.
+                #
+                # CAUTION (found by the 2026-09-21 swarm-watch drift audit,
+                # issue #5600): matching these attribution values does NOT
+                # prove the write was ours. utils/stuck_ride_sweeper.py cancels
+                # the same stuck-searching rides on the same ~5-minute
+                # threshold with the BYTE-IDENTICAL payload by design (see
+                # this function's own docstring — the sweeper is documented
+                # as this timer's "restart-safe equivalent"), so a genuine
+                # sweeper win looks exactly like our own ack-loss here. This
+                # is accepted as-is rather than papered over with a fragile
+                # discriminator: release_open_hold's own DB write is
+                # separately CAS-filtered on auth_status and Stripe carries
+                # its own idempotency key, so a duplicate call from this
+                # branch is safe; a false-positive "ours" here means the WS
+                # event / push / guest SMS / cancellation-rate metric can
+                # rarely double-fire, which is a UX/metrics nuisance, not a
+                # money- or state-safety bug. Closing that fully would need a
+                # cross-writer idempotency claim shared with the sweeper —
+                # tracked as a follow-up if the duplicate-notification metric
+                # shows this actually happening in production, rather than
+                # guessed at now.
+                _fresh = await _deps.db_supabase.get_ride(r_id)
+                _ours = (
+                    _fresh
+                    and _fresh.get("status") == RideStatus.CANCELLED
+                    and _fresh.get("cancelled_by") == "system"
+                    and _fresh.get("cancellation_type") == "no_drivers_found"
+                )
+                if not _ours:
+                    logger.info(
+                        "[AUTO-CANCEL] ride {} not claimed (left 'searching' first, or the write was skipped) — no-op",
+                        r_id,
+                    )
+                    return
+                logger.warning(
+                    "[AUTO-CANCEL] ride {} claim returned no row but the row matches our cancel attribution — "
+                    "treating a lost ack as a win and running the side effects (see caution above: this "
+                    "attribution is shared with utils/stuck_ride_sweeper.py, not provably exclusive to this call)",
+                    r_id,
+                )
+            # WS-8 (finding 11): release the booking-time pre-auth hold so the
+            # rider's card isn't blocked for 7 days after timeout — only now
+            # that the cancel is ours. release_open_hold cancels the
+            # PaymentIntent and marks auth_status='released' ONLY on success;
+            # a failed release leaves the row open so utils/orphaned_hold_
+            # reconciler picks it up. (The old inline path wrote 'released'
+            # regardless of the Stripe outcome, hiding a still-live hold from
+            # every reconciler.) Best-effort by construction — never raises.
+            try:
+                from ...utils.card_hold_release import release_open_hold
+            except ImportError:
+                from utils.card_hold_release import release_open_hold
+            await release_open_hold(
+                current_ride,
+                source="scheduled_timeout" if current_ride.get("is_scheduled") else "search_timeout",
+            )
             # 2026-08-18 fleet audit: ride-state-transition metric — one of
             # the most common real cancellation reasons ("no drivers found"),
             # so leaving it uncounted would materially undercount the

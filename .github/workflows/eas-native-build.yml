@@ -77,14 +77,15 @@ jobs:
       # root-cause writeup and the caveat on what "verified under Node 22"
       # actually covers (the app's own install, not eas-cli's, on a real
       # runner). Same fix, applied here since this workflow hits the
-      # identical expo-github-action + eas-version: latest combination.
+      # identical expo-github-action + eas-cli dependency-tree combination.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
 
       - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
-          eas-version: latest
+          # eas-version pinned deliberately (was `latest`) -- bump only via a reviewed change, not silently.
+          eas-version: 24.7.0
           token: ${{ secrets.EXPO_TOKEN }}
 
       - run: yarn install --frozen-lockfile

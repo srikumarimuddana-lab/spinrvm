@@ -469,7 +469,7 @@ function DriverArrivedScreenContent() {
           </View>
 
           {/* Cancellation policy timer */}
-          <View style={{ marginBottom: 8 }}>
+          <View style={{ marginBottom: SPACING.sm }}>
             <FreeCancelTimer
               driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
               rideStatus={currentRide?.status}

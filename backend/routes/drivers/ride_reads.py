@@ -12,6 +12,7 @@ from ._deps import (  # noqa: F401
     HTTPException,
     Optional,
     Query,
+    Request,
     RideStatus,
     datetime,
     db_supabase,
@@ -20,6 +21,7 @@ from ._deps import (  # noqa: F401
     get_service_area_polygon,
     logger,
     parse_iso_utc,
+    ride_read_limit,
     timedelta,
     timezone,
 )
@@ -53,7 +55,8 @@ _RIDER_PUBLIC_FIELDS = ("id", "first_name", "last_name", "name", "rating", "prof
 
 
 @router.get("/rides/active")
-async def get_active_ride(current_user: dict = Depends(get_current_user)):
+@ride_read_limit
+async def get_active_ride(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get the driver's current active ride."""
     diag_logger.info(f"[ACTIVE] called by user_id={current_user.get('id')}")
     driver = (lambda _r: _r[0] if _r else None)(
@@ -182,9 +185,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         # apart — otherwise a transient DB blip mid-trip is indistinguishable
         # from "this ride has no bonus" and the earnings headline drops by the
         # bonus and pops back on the next poll.
-        incentives, total_bonus = incentive_display_payload(
-            await match_ride_incentives(db_supabase, ride)
-        )
+        incentives, total_bonus = incentive_display_payload(await match_ride_incentives(db_supabase, ride))
     except Exception as e:
         logger.error(f"get_active_ride: incentive lookup failed: {e}", exc_info=True)
 
@@ -237,8 +238,219 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     }
 
 
+@router.get("/rides/{ride_id}/offer")
+@ride_read_limit
+async def get_ride_offer(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
+    """Authenticated fetch-by-ride_id for a live ride offer (#1231 finding 15,
+    remaining half).
+
+    Lets the driver-app's background/killed-app FCM handler
+    (driver-app/services/backgroundMessaging.ts) hydrate the offer detail
+    itself instead of the detail riding along in the FCM `data` payload, once
+    `minimal_fcm_offer_payload_enabled` (app_settings) drops precise
+    pickup/dropoff coordinates and rider_rating from that payload in
+    routes/rides/matching.py's `_FCM_EXCLUDE`. The WebSocket
+    ``dispatch_payload`` the foreground app already uses is untouched by
+    either change.
+
+    Authorization mirrors decline_ride's WS-18 ownership guard (read-only
+    here — a SELECT, never decline_ride's UPDATE): only a driver who
+    currently holds a live offer (a pending ``ride_offers`` row from batch
+    dispatch, or a live admin direct-assignment with no ``ride_offers`` row)
+    for THIS ride may fetch it. An unauthorized or nonexistent combination
+    gets 404 either way — never 403 — so a wrong-driver call can't be told
+    apart from a not-found one and can't confirm another driver's offer
+    exists. An offer that existed for this driver but is no longer pending
+    (declined, expired, claimed) gets 410, so the client can show "offer no
+    longer available" instead of hanging.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    # Batch dispatch never sets rides.driver_id until acceptance (see
+    # get_active_ride above) — only an admin direct-assignment does, while
+    # still awaiting this driver's accept/decline.
+    is_direct_assigned = ride.get("driver_id") == driver["id"] and ride.get("status") == RideStatus.DRIVER_ASSIGNED
+
+    offer_row: Optional[Dict[str, Any]] = None
+    if not is_direct_assigned:
+        try:
+            _res = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_offers")
+                    .select("status, expires_at")
+                    .eq("ride_id", ride_id)
+                    .eq("driver_id", driver["id"])
+                    .limit(1)
+                    .execute()
+                )
+            )
+            offer_row = _res.data[0] if getattr(_res, "data", None) else None
+        except Exception as e:
+            logger.error(
+                f"get_ride_offer: ride_offers lookup failed ride_id={ride_id} driver_id={driver['id']}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="Could not verify offer status") from None
+
+    is_pending_offer = bool(offer_row and offer_row.get("status") == "pending")
+    if not (is_direct_assigned or is_pending_offer):
+        # offer_row not None means a ride_offers row exists for this driver but
+        # has already moved past 'pending' (declined/expired/accepted) — Gone,
+        # not Not Found, so the client can tell "was live, now isn't" apart
+        # from "never had one".
+        if offer_row is not None:
+            raise HTTPException(status_code=410, detail="Offer no longer available")
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    # Re-fetch `ride` fresh here rather than reusing the snapshot from the
+    # very first read above (spinr-dispatch-reviewer finding, PR #5382): a
+    # losing driver's own `ride_offers` row can still read "pending" for a
+    # real, multi-round-trip window after the winner's accept_ride has
+    # already flipped `rides.status` to driver_accepted — accept_ride only
+    # flips OTHER drivers' `ride_offers` rows to 'preempted' several awaits
+    # later (re-read ride, cache invalidation, insurance-period write,
+    # acceptance-rate update, then the ride_offers updates themselves).
+    # Using the pre-`ride_offers`-check snapshot for the status gate below
+    # would let a request that lands in that exact window return 200 with
+    # full offer detail (precise GPS + rider_rating) for a ride the calling
+    # driver has already lost — leaking exactly the PII this endpoint exists
+    # to protect, in the highest-contention case (a batch-dispatched offer
+    # multiple drivers are racing). Re-fetching immediately before the
+    # authorization decision shrinks that window to this one round trip.
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if is_direct_assigned:
+        # Re-verify the direct assignment itself against the fresh read, not
+        # just its status: an admin could have reassigned the ride to a
+        # different driver (or moved it past driver_assigned) in the gap
+        # since the first read, and a status-only check wouldn't catch a
+        # reassignment that leaves the ride in the same driver_assigned state.
+        if not (ride.get("driver_id") == driver["id"] and ride.get("status") == RideStatus.DRIVER_ASSIGNED):
+            raise HTTPException(status_code=410, detail="Offer no longer available")
+    else:
+        # Batch-dispatch path: defense in depth alongside the ride_offers
+        # status check above — mirrors decline_ride's own ride.status gate
+        # (WS-18), now checked against the fresh read.
+        if ride.get("status") not in (RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED):
+            raise HTTPException(status_code=410, detail="Offer no longer available")
+
+    try:
+        from ...utils.pii import first_name_only
+    except ImportError:
+        from utils.pii import first_name_only  # type: ignore
+
+    try:
+        rider = await db_supabase.get_user_by_id(ride["rider_id"])
+    except Exception as e:
+        logger.error(f"get_ride_offer: failed to load rider {ride.get('rider_id')}: {e}", exc_info=True)
+        rider = None
+
+    incentives, total_bonus = None, None
+    try:
+        incentives, total_bonus = incentive_display_payload(await match_ride_incentives(db_supabase, ride))
+    except Exception as e:
+        logger.error(f"get_ride_offer: incentive lookup failed: {e}", exc_info=True)
+
+    quest_hint = None
+    try:
+        _qr = await db_supabase.run_sync(
+            db_supabase.supabase.table("quest_progress")
+            .select("current_value, status, quest:quests(title, target_value, reward_amount)")
+            .eq("driver_id", current_user["id"])
+            .eq("status", "active")
+            .limit(1)
+            .execute
+        )
+        if _qr.data:
+            _qp = _qr.data[0]
+            _q = _qp.get("quest") or {}
+            _tv = float(_q.get("target_value") or 1)
+            _cv = float(_qp.get("current_value") or 0)
+            quest_hint = {
+                "title": _q.get("title", ""),
+                "current_value": _cv,
+                "target_value": _tv,
+                "progress_pct": round(min(_cv / _tv, 1.0) * 100, 1) if _tv else 0,
+                "reward_amount": float(_q.get("reward_amount") or 0),
+            }
+    except Exception as e:
+        logger.warning(f"get_ride_offer: quest hint lookup non-fatal: {e}")
+
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        offer_timeout = int((await get_app_settings()).get("ride_offer_timeout_seconds", 15))
+    except Exception:
+        offer_timeout = 15
+
+    # Same-shape expiry as matching.py's dispatch_payload / migration 224:
+    # prefer the persisted ride_offers.expires_at (batch dispatch); fall back
+    # to driver_notified_at + timeout for the admin direct-assign path, which
+    # has no ride_offers row.
+    offer_expires_at = offer_row.get("expires_at") if offer_row else None
+    if not offer_expires_at and ride.get("driver_notified_at"):
+        try:
+            _notified_dt = parse_iso_utc(ride["driver_notified_at"])
+            if _notified_dt:
+                offer_expires_at = (_notified_dt + timedelta(seconds=offer_timeout)).isoformat()
+        except Exception:
+            offer_expires_at = None
+
+    _surge_mult = float(ride.get("surge_multiplier") or 1.0)
+
+    # Deliberately excludes offer_card_url, service_area_polygon and
+    # planned_route_polyline: the first isn't removed from the FCM `data`
+    # payload by minimal_fcm_offer_payload_enabled (only precise coordinates
+    # and rider_rating are), so the client keeps reading it from `data`
+    # unchanged; the latter two were never in the FCM payload in the first
+    # place (existing `_FCM_EXCLUDE` entries, size-driven) and aren't needed
+    # to render the offer panel before acceptance.
+    return {
+        "ride_id": ride["id"],
+        "booking_id": ride["id"],
+        "pickup_address": ride.get("pickup_address"),
+        "dropoff_address": ride.get("dropoff_address"),
+        "pickup_lat": ride.get("pickup_lat"),
+        "pickup_lng": ride.get("pickup_lng"),
+        "pickup_nav_lat": ride.get("pickup_nav_lat"),
+        "pickup_nav_lng": ride.get("pickup_nav_lng"),
+        "dropoff_lat": ride.get("dropoff_lat"),
+        "dropoff_lng": ride.get("dropoff_lng"),
+        "fare": ride.get("driver_earnings"),
+        "distance_km": ride.get("distance_km"),
+        "duration_minutes": ride.get("duration_minutes"),
+        "rider_name": first_name_only(rider) or None,
+        "rider_rating": (rider or {}).get("rating"),
+        "requires_wav": bool(ride.get("requires_wav")),
+        "quiet_mode": bool(ride.get("quiet_mode")),
+        "is_scheduled": bool(ride.get("is_scheduled")),
+        "scheduled_time": ride.get("scheduled_time"),
+        "countdown_seconds": offer_timeout,
+        "offer_expires_at": offer_expires_at,
+        "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
+        "incentives": incentives,
+        "total_bonus": total_bonus if total_bonus else None,
+        "quest_hint": quest_hint,
+        "payment_method": ride.get("payment_method"),
+    }
+
+
 @router.get("/rides/history")
+@ride_read_limit
 async def get_ride_history(
+    request: Request = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: Optional[str] = Query(None),

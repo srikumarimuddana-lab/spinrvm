@@ -258,6 +258,7 @@ interface RideState {
   currentDriver: Driver | null;
   driverEtaSeconds: number | null; // road-network ETA from last WS location_update
   _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
+  _lastDriverFix: { rideId: string | null; driverId: string; timestamp: number } | null;
   // Monotonic ride-event ordering (V3, issue #11). Highest ride_status_changed
   // version applied, plus the ride it belongs to. rides.version is per-ride
   // (bumped by the migration-225 trigger), so a new ride resets the baseline.
@@ -361,7 +362,8 @@ interface RideState {
   applyPromo: (promo: Promo | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
-  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null,
+    metadata?: { rideId?: string; driverId?: string; capturedAt?: string }) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
   _clearedRideId: string | null;
@@ -385,6 +387,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   currentDriver: null,
   driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
+  _lastDriverFix: null,
   // Monotonic ride-event ordering baseline (V3). -1 so version 0 (a ride's
   // first bump) is strictly greater and applies.
   _lastEventRideId: null,
@@ -829,6 +832,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   fetchRide: async (rideId) => {
+    const driverFixAtStart = get()._lastDriverFix;
     try {
       // Only set isLoading on first fetch (when no ride data yet)
       if (!get().currentRide) {
@@ -855,8 +859,10 @@ export const useRideStore = create<RideState>((set, get) => ({
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB
       // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
       const { _lastWsDriverPositionAt, currentDriver } = get();
-      if (driver && currentDriver && Date.now() - _lastWsDriverPositionAt < 10_000) {
-        driver = { ...driver, lat: currentDriver.lat, lng: currentDriver.lng };
+      if (driver && currentDriver && driver.id === currentDriver.id &&
+          (get()._lastDriverFix !== driverFixAtStart || Date.now() - _lastWsDriverPositionAt < 10_000)) {
+        driver = { ...driver, lat: currentDriver.lat, lng: currentDriver.lng,
+          heading: currentDriver.heading, speed: currentDriver.speed };
       }
       set({ currentRide: ride, currentDriver: driver, isLoading: false });
       _persistRide(ride, driver);
@@ -1204,9 +1210,18 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   // ── WebSocket-driven updates ────────────────────────────────────
 
-  updateDriverLocation: (lat, lng, speed, heading, etaSeconds) => {
-    const driver = get().currentDriver;
+  updateDriverLocation: (lat, lng, speed, heading, etaSeconds, metadata) => {
+    const { currentDriver: driver, currentRide, _lastDriverFix } = get();
     if (!driver) return;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 ||
+        (lat === 0 && lng === 0) ||
+        (metadata?.rideId && metadata.rideId !== currentRide?.id) ||
+        (metadata?.driverId && metadata.driverId !== driver.id)) return;
+    const captured = metadata?.capturedAt ? Date.parse(metadata.capturedAt) : Date.now();
+    if (!Number.isFinite(captured) || Date.now() - captured > 60_000 || captured > Date.now() + 5000) return;
+    const rideId = currentRide?.id ?? null;
+    if (_lastDriverFix?.rideId === rideId && _lastDriverFix.driverId === driver.id &&
+        (captured < _lastDriverFix.timestamp || (metadata?.capturedAt && captured === _lastDriverFix.timestamp))) return;
     // Only update the coordinate fields — leave everything else (name,
     // rating, vehicle info) untouched.
     const updated = {
@@ -1222,6 +1237,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     set({
       currentDriver: updated,
       _lastWsDriverPositionAt: Date.now(),
+      _lastDriverFix: { rideId, driverId: driver.id, timestamp: captured },
       ...(etaSeconds !== null && etaSeconds !== undefined ? { driverEtaSeconds: etaSeconds } : {}),
     });
     _persistRide(get().currentRide, updated);

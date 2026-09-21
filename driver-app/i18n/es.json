@@ -197,6 +197,11 @@
     "markReadErrorBody": "Comprueba tu conexión e inténtalo de nuevo.",
     "loadFailed": "No se pudieron cargar las notificaciones",
     "loadFailedBody": "Comprueba tu conexión e inténtalo de nuevo.",
+    "deleteTitle": "Eliminar notificación",
+    "deleteBody": "¿Eliminar esta notificación? Esta acción no se puede deshacer.",
+    "clearAllTitle": "Borrar todas las notificaciones",
+    "clearAllBody": "Esto elimina todas las notificaciones de tu bandeja de entrada. Esta acción no se puede deshacer.",
+    "clearAll": "Borrar todo",
     "retry": "Reintentar"
   },
   "profile": {

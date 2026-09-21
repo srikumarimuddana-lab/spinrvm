@@ -64,3 +64,10 @@ describe('routePushNotificationTap', () => {
     expect(push).toHaveBeenCalledWith('/driver/notifications');
   });
 });
+
+
+it('opens the active ride for a scheduled driver reminder', () => {
+  const push = jest.fn();
+  routePushNotificationTap({push}, {type:'scheduled_driver_reminder', ride_id:'r1'});
+  expect(push).toHaveBeenCalledWith('/driver/');
+});

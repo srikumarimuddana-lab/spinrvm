@@ -247,7 +247,7 @@ export default function RideDetailsScreen() {
           <View style={{ width: 44 }} />
         </View>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ color: colors.textDim, fontSize: 16 }}>Ride not found</Text>
+          <Text style={{ color: colors.textDim, fontSize: FONT.bodyLg }}>Ride not found</Text>
         </View>
       </SafeAreaView>
     );
@@ -440,7 +440,7 @@ export default function RideDetailsScreen() {
                     </Text>
                   </View>
                 ) : line.type === 'modifier' ? (
-                  <View key={i} style={[styles.fareBreakdownRow, { gap: 4 }]}>
+                  <View key={i} style={[styles.fareBreakdownRow, { gap: SPACING.xs }]}>
                     <Ionicons name="flash" size={12} color={colors.warning} />
                     <Text style={[styles.fareBreakdownLabel, { color: colors.warning }]}>{line.label}</Text>
                   </View>

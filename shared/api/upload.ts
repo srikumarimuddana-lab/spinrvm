@@ -1,5 +1,5 @@
 import SpinrConfig from '../config/spinr.config';
-import { getAuthHeader } from './client';
+import { getAuthHeader, appCheckHeader } from './client';
 
 const EXT_TO_MIME: Record<string, string> = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -115,7 +115,16 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
         postMultipart(
             `${SpinrConfig.backendUrl}/api/v1/upload`,
             buildFormData(),
-            token ? { Authorization: `Bearer ${token}` } : {},
+            {
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                // postMultipart uses XMLHttpRequest, not the wrapped `client`
+                // object's get/post/put/patch/delete — those all attach this
+                // header automatically (see client.ts), but a hand-rolled
+                // request has to opt in explicitly or it silently 401s once
+                // App Check enforcement is on. See client.ts's own note on
+                // report-safety.tsx for the earlier instance of this bug.
+                ...(await appCheckHeader()),
+            },
         );
 
     try {

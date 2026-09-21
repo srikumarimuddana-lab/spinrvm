@@ -1,0 +1,138 @@
+import * as SecureStore from 'expo-secure-store';
+import { installSessionLock, setSessionKeychainOptions } from '../../../shared/auth/sessionLock';
+import { createBackgroundTokenProvider } from '../../utils/backgroundAuth';
+import { getAppCheckToken } from '@shared/services/firebase';
+let renewBackgroundAuthToken: () => Promise<string | null>;
+
+const mockStorage: Record<string, string> = {};
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(async (key: string) => mockStorage[key] ?? null),
+  setItemAsync: jest.fn(async (key: string, value: string) => { mockStorage[key] = value; }),
+  deleteItemAsync: jest.fn(async (key: string) => { delete mockStorage[key]; }),
+}));
+jest.mock('@shared/config/spinr.config', () => ({ __esModule: true, default: { backendUrl: 'https://example.test' } }));
+jest.mock('@shared/services/firebase', () => ({
+  initFirebaseServices: jest.fn(async () => {}), getAppCheckToken: jest.fn(async () => 'app-check'),
+}));
+jest.mock('../../utils/crashlytics', () => ({ recordNonFatal: jest.fn() }));
+jest.mock('expo-crypto', () => ({
+  CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+  digestStringAsync: async (_algorithm: string, value: string) => require('node:crypto').createHash('sha256').update(value).digest('hex'),
+}));
+
+beforeEach(() => {
+  renewBackgroundAuthToken = createBackgroundTokenProvider();
+  jest.clearAllMocks();
+  for (const key of Object.keys(mockStorage)) delete mockStorage[key];
+  let tail: Promise<unknown> = Promise.resolve();
+  installSessionLock(work => { const result = tail.then(work, work); tail = result.catch(() => {}); return result; });
+  setSessionKeychainOptions({ keychainAccessible: 42 });
+  Object.assign(mockStorage, { refresh_token: 'refresh-old', fg_access_token: 'expired-access', token_expires_at: '1' });
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: 'access-new', refresh_token: 'refresh-new', expires_in: 900 }) })) as any;
+});
+
+it('renews expired credentials, persists the rotated pair, and supplies App Check', async () => {
+  expect(await renewBackgroundAuthToken()).toBe('access-new');
+  expect(mockStorage.refresh_token).toBe('refresh-new');
+  expect(mockStorage.fg_access_token).toBe('access-new');
+  expect(Number(mockStorage.token_expires_at)).toBeGreaterThan(Date.now() + 800_000);
+  expect(fetch).toHaveBeenCalledWith('https://example.test/api/v1/auth/refresh', expect.objectContaining({
+    body: JSON.stringify({ refresh_token: 'refresh-old' }),
+    headers: expect.objectContaining({ 'X-Firebase-AppCheck': 'app-check' }),
+  }));
+  expect(SecureStore.setItemAsync).toHaveBeenCalledWith('refresh_token', 'refresh-new', { keychainAccessible: 42 });
+});
+
+it('concurrent callers reuse the winning rotation', async () => {
+  expect(await Promise.all([renewBackgroundAuthToken(), renewBackgroundAuthToken()])).toEqual(['access-new', 'access-new']);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it.each(['logout', 'replacement'])('discards a delayed response after session %s', async action => {
+  (fetch as jest.Mock).mockImplementationOnce(async () => {
+    if (action === 'logout') mockStorage.spinr_session_ended = '1';
+    else mockStorage.refresh_token = 'different-login';
+    return { ok: true, json: async () => ({ token: 'obsolete', refresh_token: 'obsolete-refresh', expires_in: 900 }) };
+  });
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(mockStorage.refresh_token).toBe(action === 'logout' ? 'refresh-old' : 'different-login');
+  expect(mockStorage.fg_access_token).toBe('expired-access');
+});
+
+it('defers all network work when native exclusion is unavailable', async () => {
+  installSessionLock(async () => { throw new Error('database is locked'); });
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('does not renew or upload after logout', async () => {
+  mockStorage.spinr_session_ended = '1';
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('fails closed when the session marker cannot be read', async () => {
+  (SecureStore.getItemAsync as jest.Mock).mockRejectedValueOnce(new Error('Keychain locked'));
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each([401, 503])('keeps credentials on refresh rejection %s', async status => {
+  (fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status });
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(mockStorage.refresh_token).toBe('refresh-old');
+  expect(mockStorage.spinr_session_ended).toBeUndefined();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('rejects malformed success responses without corrupting credentials', async () => {
+  (fetch as jest.Mock).mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'access-new' }) });
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(mockStorage.refresh_token).toBe('refresh-old');
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('never returns a token whose rotated credential failed to persist', async () => {
+  (SecureStore.setItemAsync as jest.Mock).mockRejectedValueOnce(new Error('Keychain write failed'));
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('aborts a stalled request and retains the recording session credentials', async () => {
+  jest.useFakeTimers();
+  (fetch as jest.Mock).mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  }));
+  try {
+    const result = renewBackgroundAuthToken();
+    await jest.advanceTimersByTimeAsync(10_100);
+    expect(await result).toBeNull();
+    expect(mockStorage.refresh_token).toBe('refresh-old');
+  } finally { jest.useRealTimers(); }
+});
+
+it('releases the lock if App Check hangs and never sends a late refresh', async () => {
+  jest.useFakeTimers();
+  let finish!: (token: string) => void;
+  (getAppCheckToken as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  try {
+    const result = renewBackgroundAuthToken();
+    await jest.advanceTimersByTimeAsync(10_100);
+    expect(await result).toBeNull();
+    finish('late-app-check');
+    await jest.advanceTimersByTimeAsync(100);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { jest.useRealTimers(); }
+});
+
+it('does not replay a rejected credential after the headless runtime restarts', async () => {
+  (fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 });
+  expect(await renewBackgroundAuthToken()).toBeNull();
+  const restarted = createBackgroundTokenProvider();
+  expect(await restarted()).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  mockStorage.refresh_token = 'foreground-recovered';
+  expect(await restarted()).toBe('access-new');
+});

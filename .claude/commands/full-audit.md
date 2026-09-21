@@ -20,7 +20,7 @@ Note: not every quality dimension of the app is agent-shaped. Load/chaos testing
 
 If the diff is empty, say so and stop.
 
-## 2 · Dispatch all 21 reviewer agents, in parallel, unconditionally
+## 2 · Dispatch all 22 reviewer agents, in parallel, unconditionally
 
 Launch every agent below in a **single batch of parallel `Agent` tool calls** (all in one response — not sequential). Each agent gets the same scope and works independently; none of them talk to each other, and a quiet one is a real finding ("nothing wrong here"), not a skipped step.
 
@@ -56,6 +56,7 @@ Launch every agent below in a **single batch of parallel `Agent` tool calls** (a
 | `spinr-design-consistency-reviewer` | Brand/color/theme-parity consistency and UX-completeness (loading/empty/error states) — not a WCAG check, a product-polish check |
 | `spinr-corporate-reporting-reviewer` | Cross-tenant data scoping in corporate reports/exports, tax-line-item export correctness |
 | `spinr-edge-case-reviewer` | Network-retry safety, app-lifecycle state reconciliation, client/server version skew, multi-device races, clock-trust — the failure modes that live *between* domains |
+| `spinr-notification-ux-reviewer` | Push/SMS/email/in-app hint copy — PII in the payload, clarity/actionable-next-step, tone, dedup/quiet-hours on push-sending loops |
 
 That's 21 agents. Dispatch **all of them**, every run — do not pre-filter by path the way `/review` does. An agent finding nothing is itself useful signal ("audited, clean"); an agent that was never dispatched tells you nothing. The only legitimate skip: `spinr-migration-reviewer` and `spinr-ai-guardrail-reviewer` may report "not applicable — no matching files in scope" themselves rather than being excluded from dispatch, so the consolidated report shows they were checked.
 

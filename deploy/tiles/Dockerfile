@@ -44,28 +44,96 @@
 ARG PLANETILER_TAG=latest
 ARG TILESERVER_TAG=latest
 
+# ── Stage 0: fetch the extract(s), merging when more than one is requested ────
+# Mirrors deploy/osrm's fetch stage deliberately: planetiler accepts exactly one
+# OSM input file ("Currently only one OSM input file is supported",
+# Planetiler.java), so covering a second province is a merge, not a second
+# --area. A plain Debian stage rather than the planetiler image because the
+# merge needs osmium-tool, which planetiler's image does not ship.
+FROM debian:bookworm-slim AS osm
+# Saskatchewan extract from Geofabrik (~40 MB). Override for a different region.
+ARG REGION_URL=https://download.geofabrik.de/north-america/canada/saskatchewan-latest.osm.pbf
+# Space-separated additional .osm.pbf URLs merged into REGION_URL.
+#
+# Alberta is the DEFAULT, not a deployment-time variable, and that is deliberate:
+# Railway does NOT pass service variables to `docker build` as build args. Setting
+# EXTRA_REGION_URLS on the service and rebuilding produced a green build whose log
+# read `for url in <saskatchewan only> ;` — the ARG kept its default and the extra
+# province was silently dropped. A tileset missing a province looks identical to a
+# working one unless you go and look at that province, so the coverage this repo
+# intends lives here in git, where it is reviewable, rather than in a dashboard
+# field that does not reach the build.
+#
+# Narrow it back to one province by editing this line (or `--build-arg` locally),
+# not by changing anything on Railway.
+ARG EXTRA_REGION_URLS="https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl osmium-tool \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /osm
+# `osmium merge` requires inputs sorted by (type, id) — Geofabrik extracts are —
+# and writes each object once, so the strip of overlap Geofabrik includes either
+# side of a provincial boundary does not produce duplicate ways.
+RUN set -eux; \
+    count=0; parts=""; \
+    for url in ${REGION_URL} ${EXTRA_REGION_URLS}; do \
+        count=$((count + 1)); \
+        curl -fSL --retry 3 --retry-delay 2 -o "/osm/part-${count}.osm.pbf" "$url"; \
+        parts="${parts} /osm/part-${count}.osm.pbf"; \
+    done; \
+    if [ "$count" -eq 0 ]; then echo "no REGION_URL given" >&2; exit 1; fi; \
+    if [ "$count" -eq 1 ]; then \
+        mv /osm/part-1.osm.pbf /osm/region.osm.pbf; \
+    else \
+        osmium merge ${parts} -o /osm/region.osm.pbf; \
+        rm -f ${parts}; \
+    fi; \
+    ls -lh /osm/region.osm.pbf
+
 # ── Stage 1: generate OpenMapTiles-schema vector tiles ────────────────────────
-# Planetiler downloads the OSM extract itself (--download also fetches the
-# Natural Earth basemap and water polygons the schema needs) and writes an
-# .mbtiles. A province-sized area is minutes, not hours.
+# --download still fetches the Natural Earth basemap, water polygons and lake
+# centerlines the schema needs; the OSM extract itself comes from stage 0 and is
+# skipped because --osm_path already exists. A province-sized area is minutes,
+# not hours.
 FROM ghcr.io/onthegomap/planetiler:${PLANETILER_TAG} AS tiles
 
-# Geofabrik area name. Planetiler resolves this against its own Geofabrik index,
-# so "saskatchewan" is enough — no URL needed. Add Alberta with
-#   --build-arg AREA=alberta
-# or build a combined region; see README §2.
-ARG AREA=saskatchewan
 # Planetiler sizes its heap from the container limit, but a build box with lots
 # of RAM and a small Docker limit gets this wrong. Pin it explicitly.
-ARG JAVA_OPTS="-Xmx4g"
+#
+# Sized from a measured build, not a guess: the Saskatchewan-only build peaked at
+# 1.8G of a 4.2G heap on a 112 MB extract. A merged SK+AB extract is several times
+# that, which would not fit in the old -Xmx4g. If a build dies with no clear error
+# this is the first thing to raise — that is what OOM looks like here.
+ARG JAVA_OPTS="-Xmx8g"
 ENV JAVA_TOOL_OPTIONS="${JAVA_OPTS}"
 WORKDIR /planetiler
-RUN java -jar /planetiler.jar \
+COPY --from=osm /osm/region.osm.pbf /planetiler/region.osm.pbf
+# The image is built by Jib (planetiler-dist/pom.xml), not by a Dockerfile, so
+# it contains no executable jar and no launcher script — only Jib's exploded
+# layout (/app/resources, /app/classes, /app/libs/*.jar) plus an ENTRYPOINT that
+# a build-time RUN cannot invoke. Reconstruct that entrypoint by hand.
+# `/app/libs/*` is a Java classpath wildcard and must stay quoted so the shell
+# does not glob it. Older images shipped a real executable jar; keep that path
+# as a fallback so an older PLANETILER_TAG still builds.
+RUN set -eux; \
+    MAIN=com.onthegomap.planetiler.Main; \
+    if [ -d /app/libs ]; then \
+      set -- java -cp '/app/resources:/app/classes:/app/libs/*' "$MAIN"; \
+    elif [ -f /planetiler.jar ]; then \
+      set -- java -jar /planetiler.jar; \
+    elif [ -f /app/planetiler.jar ]; then \
+      set -- java -jar /app/planetiler.jar; \
+    else \
+      echo "no planetiler distribution found — check PLANETILER_TAG. /app contains:" >&2; \
+      ls -la /app / >&2 || true; \
+      exit 1; \
+    fi; \
+    "$@" \
       --download \
-      --area="${AREA}" \
+      --osm_path=/planetiler/region.osm.pbf \
       --output=/planetiler/tiles.mbtiles \
-      --force \
- && ls -lh /planetiler/tiles.mbtiles
+      --force; \
+    ls -lh /planetiler/tiles.mbtiles
 
 # ── Stage 2: fetch the style + glyphs ─────────────────────────────────────────
 # Kept separate from the runtime image so curl/jq/unzip never ship to production.
@@ -234,4 +302,12 @@ EXPOSE 8080
 # breaks behind a proxy that rewrites Host — the style loads and every tile
 # 404s, which looks exactly like a dead basemap. Set PUBLIC_URL on Railway to
 # https://<your-domain>/ (trailing slash required).
-CMD ["sh", "-c", "exec /usr/src/app/run.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}"]
+#
+# There is no run.sh in this image — the ENTRYPOINT is docker-entrypoint.sh, and
+# re-entering it here is deliberate: it starts Xvfb only when its first argument
+# is NOT an executable, and the raster /styles/<id>/{z}/{x}/{y}.png endpoint is
+# headless GL and dies without that display. Point this at node directly and the
+# container boots fine, serves vector tiles fine, and every raster tile fails.
+# The sh -c wrapper is what expands ${PORT}/${PUBLIC_URL}; the exec replaces the
+# shell so signals reach node.
+CMD ["sh", "-c", "exec /usr/src/app/docker-entrypoint.sh --config /data/config.json --port ${PORT:-8080} ${PUBLIC_URL:+--public_url \"$PUBLIC_URL\"}"]

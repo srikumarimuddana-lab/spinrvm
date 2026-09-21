@@ -3,6 +3,8 @@
 import os
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 try:
     from backend.utils.route_segments import segment_route
 except ImportError:
@@ -119,6 +121,55 @@ def test_session_boundary_is_an_explicit_segment_boundary():
     )
 
     assert [segment.boundary_reason for segment in segmented.observed_segments] == [None, "session_boundary"]
+
+
+def test_retains_interleaved_native_sources_in_capture_order_when_enabled():
+    points = [
+        {**_point(31, sequence=7), "source": "foreground"},
+        {**_point(29, sequence=8), "source": "background"},
+        {**_point(37, sequence=13), "source": "foreground"},
+        {**_point(33, sequence=14), "source": "background"},
+    ]
+    result = segment_route(points[::-1], _lifecycle(), None, allow_interleaved_sources=True)
+
+    assert [point["sequence_number"] for point in _flatten(result)] == [8, 7, 14, 13]
+    assert result.quality.rejected_point_count == 0
+    assert len(result.observed_segments) == 1
+    # The rollout is dark by default; identity and raw timestamps are immutable.
+    baseline = segment_route(points, _lifecycle(), None)
+    assert [point["sequence_number"] for point in _flatten(baseline)] == [7, 13]
+    assert points[1]["captured_at"] == _point(29)["captured_at"]
+
+
+@pytest.mark.parametrize(
+    ("source", "seconds"),
+    [("foreground", 29), ("completion", 29), (None, 29), ("background", 20)],
+)
+def test_interleaving_does_not_accept_same_source_unknown_or_old_regressions(source, seconds):
+    result = segment_route(
+        [{**_point(31, sequence=7), "source": "foreground"}, {**_point(seconds, sequence=8), "source": source}],
+        _lifecycle(),
+        None,
+        allow_interleaved_sources=True,
+    )
+    assert [(item.reason, item.sequence_number) for item in result.rejected_points] == [("clock_regression", 8)]
+
+
+def test_interleaving_keeps_session_and_per_source_high_water_marks():
+    result = segment_route(
+        [
+            {**_point(31, sequence=7), "source": "foreground"},
+            {**_point(29, sequence=8), "source": "background"},
+            {**_point(28, sequence=9), "source": "background"},
+            {**_point(20, sequence=10), "source": "background"},
+            {**_point(30, sequence=11), "source": "foreground"},
+        ],
+        _lifecycle(),
+        None,
+        allow_interleaved_sources=True,
+    )
+    assert [point["sequence_number"] for point in _flatten(result)] == [8, 7]
+    assert [item.sequence_number for item in result.rejected_points] == [9, 10, 11]
 
 
 def test_coverage_and_completion_tail_use_accuracy_tolerance():

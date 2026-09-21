@@ -107,21 +107,47 @@ def get_real_client_ip(request: Request) -> str:
     return get_ipaddr(request)
 
 
-def _extract_unverified_user_id(request: Request) -> str | None:
-    """Best-effort user id from the bearer token, signature NOT verified.
+# Every algorithm a Spinr-minted bearer token can be signed with. TWO signing
+# paths feed this, and they are different symbols that merely agree today:
+#   - rider/driver tokens: `dependencies.JWT_ALGORITHM` (a hardcoded "HS256";
+#     not imported here because `dependencies` imports this module's limiters
+#     — a cycle).
+#   - admin tokens (incl. MFA-challenge and break-glass): `settings.ALGORITHM`,
+#     an overridable Settings field that defaults to "HS256".
+# Listing both means an admin-token algorithm rotation cannot silently drop
+# every admin back to IP keying (which would quietly undo the per-admin limits
+# on the SIN-reveal and tax-id-import endpoints below). Never widen this to the
+# token's own `alg` header — that is the alg-confusion attack this guards.
+_JWT_ALGORITHMS = tuple({"HS256", settings.ALGORITHM})
 
-    Mirrors `core/middleware.py::_extract_user_id` (used there for log
-    correlation only) — safe for rate-limit *keying* because it never grants
-    authorization: the same request still has to pass the real,
-    signature-verified `get_current_user` dependency before any handler code
-    runs, so a forged/garbage token can only ever land in a throwaway bucket
-    for a request that then 401s, not impersonate another user's bucket.
+
+def _extract_verified_user_id(request: Request) -> str | None:
+    """User id from a bearer token whose SIGNATURE verifies; ``None`` otherwise.
+
+    This used to decode with ``verify_signature=False`` on the argument that a
+    forged token "can only land in a throwaway bucket for a request that then
+    401s". That was wrong in one direction: the bucket is shared. Anyone could
+    mint ``{"alg": "none", "user_id": "<victim>"}`` and burn a named driver's
+    per-user quota — 20 requests against ``ride_action_limit`` and the victim
+    is 429'd on accept/arrive/start for the rest of the window, from an
+    unauthenticated client (2026-09-20 review, C6). Verifying the HMAC costs
+    microseconds and makes the bucket forgery-proof.
+
+    Expiry and audience are deliberately NOT checked here: an expired token is
+    still the real user's (it 401s downstream regardless), and keying it to
+    their bucket keeps the 15-minute access-token rotation from resetting
+    quotas. Only the signature decides whose bucket this is.
     """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
     try:
-        payload = jwt.decode(auth[len("Bearer ") :], options={"verify_signature": False})
+        payload = jwt.decode(
+            auth[len("Bearer ") :],
+            settings.JWT_SECRET,
+            algorithms=list(_JWT_ALGORITHMS),
+            options={"verify_exp": False, "verify_aud": False},
+        )
     except Exception:
         return None
     uid = payload.get("user_id") or payload.get("sub")
@@ -180,10 +206,9 @@ def get_user_or_ip_key(request: Request) -> str:
     *per user*. It is also strictly harder to evade than IP keying, which an
     abuser defeats for free by rotating through a proxy pool.
 
-    Safety of the unverified decode: see `_extract_unverified_user_id`. On
-    these routes `Depends(get_current_user)` resolves BEFORE the limiter-wrapped
-    handler body, so a forged token 401s regardless — the worst a bad token can
-    do is land in a throwaway bucket for a request that then fails auth.
+    Only a token whose signature verifies selects a user bucket (see
+    `_extract_verified_user_id`); a forged or garbage token is keyed by IP like
+    an anonymous request, so it cannot consume another user's quota.
 
     Anonymous requests (no bearer token) keep IP keying, which is the only
     identity available for them.
@@ -194,7 +219,7 @@ def get_user_or_ip_key(request: Request) -> str:
     """
     if os.environ.get("RATE_LIMIT_USER_KEYING", "on").strip().lower() in ("off", "0", "false", "no"):
         return f"ip:{get_real_client_ip(request)}"
-    user_id = _extract_unverified_user_id(request)
+    user_id = _extract_verified_user_id(request)
     if user_id:
         return f"user:{user_id}"
     return f"ip:{get_real_client_ip(request)}"
@@ -208,7 +233,7 @@ def get_ai_chat_key(request: Request) -> str:
     for a single account. Falls back to IP only when no bearer token is
     present (the request will 401 downstream regardless).
     """
-    user_id = _extract_unverified_user_id(request)
+    user_id = _extract_verified_user_id(request)
     if user_id:
         return f"user:{user_id}"
     return f"ip:{get_real_client_ip(request)}"
@@ -475,6 +500,14 @@ driver_dormancy_commit_limit = default_limiter.limit("10/hour")
 legacy_id_crosswalk_backfill_preview_limit = default_limiter.limit("30/hour")
 legacy_id_crosswalk_backfill_commit_limit = default_limiter.limit("10/hour")
 
+# Legacy duration-estimated marker backfill (2026-09-14, ACTION_ITEMS.md A41
+# residual gap) -- same small-fixed-dataset, generous-headroom reasoning as
+# the tools above (~186 legacy rides per the 2026-08-19 audit, not
+# thousands); additive-only (legacy_import_metadata), never touches
+# duration_minutes or any money/dispatch field.
+duration_estimated_backfill_preview_limit = default_limiter.limit("30/hour")
+duration_estimated_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and
@@ -570,7 +603,7 @@ ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_
 # guards POST /rides/{id}/emergency (routes/rides/safety.py:38), so under IP
 # keying an SOS could be refused because unrelated strangers behind the same
 # carrier NAT had spent the bucket on ordinary ride actions. Note the SOS route
-# uses get_current_user_allow_expired; _extract_unverified_user_id ignores
+# uses get_current_user_allow_expired; _extract_verified_user_id ignores
 # expiry too, so an expired-but-valid token still keys to its real user.
 ride_action_limit = default_limiter.limit("20/minute", key_func=get_user_or_ip_key)
 
@@ -741,7 +774,8 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
             "limit": limit_amount,
-            "documentation_url": "https://spinr.app/docs/rate-limits",
+            # Link to the published runbook; spinr.ca has no /docs/rate-limits page.
+            "documentation_url": "https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/rate-limits.md",
         },
         headers=headers,
     )

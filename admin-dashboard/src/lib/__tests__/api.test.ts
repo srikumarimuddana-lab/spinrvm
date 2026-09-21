@@ -65,11 +65,31 @@ import {
   listCompanyMembers,
   inviteCompanyMember,
   listCompanyAllowanceRequests,
+  exportDrivers,
 } from '../api';
 
 describe('api.ts contract tests', () => {
   beforeEach(() => {
     mockFetch.mockReset();
+  });
+
+  it('exports the selected driver filters including false values, without list pagination', async () => {
+    mockFetch.mockReturnValueOnce(okResponse({ drivers: [], count: 0 }));
+    await exportDrivers({
+      status: 'active', service_area_id: 'saskatoon', vehicle_type_id: 'sedan',
+      search: 'Alex & Smith', onboarding_complete: true, legacy_import: false,
+      pre_launch: false, dormant: true, dormancy_tier: 'long_dormant',
+      photo_status: 'pending_review', legacy_review: false, sort_by: 'name', sort_dir: 'asc',
+      limit: 51, offset: 100,
+    } as Parameters<typeof exportDrivers>[0]);
+    const url = new URL(mockFetch.mock.calls[0][0], 'http://localhost');
+    expect(url.pathname).toBe('/api/admin/export/drivers');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      status: 'active', service_area_id: 'saskatoon', vehicle_type_id: 'sedan',
+      search: 'Alex & Smith', onboarding_complete: 'true', legacy_import: 'false',
+      pre_launch: 'false', dormant: 'true', dormancy_tier: 'long_dormant',
+      photo_status: 'pending_review', legacy_review: 'false', sort_by: 'name', sort_dir: 'asc',
+    });
   });
 
   it('loginAdminSession — POST /api/admin/auth/login with credentials', async () => {

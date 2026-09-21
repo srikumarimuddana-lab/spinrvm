@@ -150,7 +150,14 @@ const mockSetActiveRideRouteCoords = jest.fn();
 const mockSetLastEtaMin = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({
-  useRideStore: Object.assign((...a: any[]) => mockRideState, { getState: () => mockRideState }),
+  // useRideLocationFallback reads via the selector form (useRideStore(s =>
+  // s.fetchRide)) — the mock must apply the selector instead of always
+  // returning the whole state object, or `fetchRide` ends up bound to
+  // mockRideState itself (TypeError: fetchRide is not a function).
+  useRideStore: Object.assign(
+    (selector?: (s: any) => any) => (selector ? selector(mockRideState) : mockRideState),
+    { getState: () => mockRideState },
+  ),
 }));
 
 import RideInProgressScreen from '../app/ride-in-progress';
@@ -173,7 +180,7 @@ const CURRENT_DRIVER = {
   license_plate: 'ABC 123', photo_url: null, lat: 50.46, lng: -104.58,
 };
 
-let mockTrackBaseUrl: string | null = 'https://spinr-track.app';
+let mockTrackBaseUrl: string | null = 'https://track.spinr.ca';
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
 async function renderScreen() {
@@ -218,7 +225,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers();
   mockParams = { rideId: 'ride-1' };
-  mockTrackBaseUrl = 'https://spinr-track.app';
+  mockTrackBaseUrl = 'https://track.spinr.ca';
   mockDirectionsOnReady = null;
   mockDims = { width: 400, height: 800 };
   mockUseTheme.mockReturnValue({ colors: COLORS, isDark: false });
@@ -331,7 +338,7 @@ describe('RideInProgressScreen', () => {
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
     await act(async () => { await copyBtn.props.onPress(); await flush(); });
-    expect(mockSetStringAsync).toHaveBeenCalledWith('https://spinr-track.app/tok123');
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://track.spinr.ca/tok123');
     expect(mockShowToast).toHaveBeenCalledWith('Copied!', 'Live tracking link copied to clipboard.', 'success');
   });
 
@@ -625,7 +632,7 @@ describe('RideInProgressScreen', () => {
     const shareBtn = findButtonByText(r, 'Share Trip');
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('https://spinr-track.app/demo'),
+      message: expect.stringContaining('https://track.spinr.ca/demo'),
     }));
   });
 
@@ -639,7 +646,7 @@ describe('RideInProgressScreen', () => {
     const shareBtn = findButtonByText(r, 'Share Trip');
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('https://spinr-track.app/ride-1'),
+      message: expect.stringContaining('https://track.spinr.ca/ride-1'),
     }));
   });
 
@@ -657,7 +664,7 @@ describe('RideInProgressScreen', () => {
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
     await act(async () => { await copyBtn.props.onPress(); await flush(); });
-    expect(mockSetStringAsync).toHaveBeenCalledWith('https://spinr-track.app/demo');
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://track.spinr.ca/demo');
   });
 
   it('copies the ride-ID fallback tracking link when the /share response omits share_token', async () => {
@@ -671,7 +678,7 @@ describe('RideInProgressScreen', () => {
     await act(async () => { await shareBtn.props.onPress(); await flush(); });
     const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
     await act(async () => { await copyBtn.props.onPress(); await flush(); });
-    expect(mockSetStringAsync).toHaveBeenCalledWith('https://spinr-track.app/ride-1');
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://track.spinr.ca/ride-1');
   });
 
   it('shows the driver-info fallbacks when name/rating/vehicle/plate are missing', async () => {

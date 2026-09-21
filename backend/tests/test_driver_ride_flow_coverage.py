@@ -525,6 +525,76 @@ class TestAcceptRideSuccessSideEffects:
             result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
+    # ── Insurance-period close-out on the loser release ──
+    #
+    # A batch-offer loser holds an open Period 2 (opened at claim time in
+    # matching.py), so losing the race must CLOSE it with whatever the driver
+    # actually is now. The 0-vs-1-vs-nothing decision itself lives in
+    # utils/insurance_periods.release_driver_and_close_period and is tested
+    # directly in tests/test_insurance_release_helper.py — this call site only
+    # has to delegate to it, with the right driver, reason and ride.
+
+    async def _accept_with_loser(self):
+        """Run accept_ride with one losing driver, returning the release-helper
+        mock so the caller can assert how it was called."""
+        from backend.routes.drivers.ride_flow import accept_ride
+
+        offered_at = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
+        winner_result = MagicMock(data=[{"offered_at": offered_at}])
+        losers_result = MagicMock(data=[{"driver_id": "loser-1"}])
+        preempt_result = MagicMock(data=[])
+
+        release = AsyncMock(return_value=1)
+        patches = self._base_success_patches(
+            _ride(status="driver_accepted", service_area_id=None),
+            run_sync_side_effect=[winner_result, losers_result, preempt_result],
+        )
+        with _Patches(
+            *patches,
+            patch("backend.routes.drivers._deps.release_driver_and_close_period", release),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id",
+                AsyncMock(return_value={"id": "loser-1", "user_id": "loser-user-1"}),
+            ),
+        ):
+            result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        return release
+
+    async def test_loser_release_goes_through_the_shared_helper(self):
+        """Not `record_period_transition` directly: the inline 1-or-0 this site
+        used to compute is exactly the duplication that let five copies of this
+        pattern drift into two behaviours."""
+        release = await self._accept_with_loser()
+        release.assert_awaited_once()
+        assert release.await_args.args == ("loser-1",)
+        assert release.await_args.kwargs["reason"] == "lost_race"
+        assert release.await_args.kwargs["ride_id"] == _RIDE_ID
+
+    async def test_loser_release_failure_does_not_break_acceptance(self):
+        """The helper is compliance-grade but the whole cleanup block is
+        best-effort — a release failure must not fail the winner's accept."""
+        from backend.routes.drivers.ride_flow import accept_ride
+
+        offered_at = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
+        patches = self._base_success_patches(
+            _ride(status="driver_accepted", service_area_id=None),
+            run_sync_side_effect=[
+                MagicMock(data=[{"offered_at": offered_at}]),
+                MagicMock(data=[{"driver_id": "loser-1"}]),
+                MagicMock(data=[]),
+            ],
+        )
+        with _Patches(
+            *patches,
+            patch(
+                "backend.routes.drivers._deps.release_driver_and_close_period",
+                AsyncMock(side_effect=RuntimeError("period store down")),
+            ),
+        ):
+            result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+
     async def test_batch_offer_cleanup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_flow import accept_ride
 
@@ -700,6 +770,33 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
+    # ── Insurance-period close-out on decline ──
+    # Same rule as the batch-offer loser release in accept_ride, and now the
+    # same implementation: a declining driver holds an open Period 2 from
+    # claim/offer time, so the decline must close it with what they actually
+    # are. The 0-vs-1-vs-nothing decision is tested directly in
+    # tests/test_insurance_release_helper.py; this site must delegate to it.
+
+    async def test_decline_goes_through_the_shared_release_helper(self):
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        release = AsyncMock(return_value=1)
+        ride = _ride(status="driver_assigned")
+        patches = self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row"))
+        with _Patches(
+            *patches,
+            patch("backend.routes.drivers._deps.release_driver_and_close_period", release),
+        ):
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
+        assert result == {"success": True}
+        release.assert_awaited_once()
+        assert release.await_args.args == (_DRIVER_ID,)
+        # The reason label is what keeps this site distinguishable from the
+        # loser release in the metric — they must not collapse to one series.
+        assert release.await_args.kwargs["reason"] == "offer_declined"
+        assert release.await_args.kwargs["ride_id"] == _RIDE_ID
+
     async def test_redis_cooldown_set_failure_is_non_fatal(self):
         from backend.routes.drivers.ride_flow import decline_ride
 
@@ -764,8 +861,18 @@ class TestDeclineRideSuccessBranches:
     async def test_period_1_recorded_when_release_leaves_driver_available(self):
         """Insurance Period 2 opens at claim/offer time (matching.py); decline
         must close it back to Period 1 — but only when the driver is actually
-        still online. Mirrors process_expired_offer's guard."""
+        still online. Mirrors process_expired_offer's guard.
+
+        Goes through the real release_driver_and_close_period (unmocked here,
+        unlike test_decline_goes_through_the_shared_release_helper above) since
+        the 0-vs-1 derivation under test lives inside it. That helper calls its
+        own module-local record_period_transition
+        (utils/insurance_periods.py), not the `_deps` copy `_base_patches`
+        mocks[5] patches — patching only the latter left this assertion
+        checking a mock the real code path never reaches.
+        """
         from backend.routes.drivers.ride_flow import decline_ride
+        from backend.utils import insurance_periods
 
         ride = _ride(status="driver_assigned")
         patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
@@ -773,8 +880,14 @@ class TestDeclineRideSuccessBranches:
             "backend.routes.drivers._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
         )
-        with _Patches(*patches) as mocks:
-            period_transition = mocks[5]
+        # _base_patches' own record_period_transition patch (index 5) never
+        # intercepts this path -- see the docstring above -- so it's dropped
+        # rather than left in as dead setup.
+        del patches[5]
+        with (
+            _Patches(*patches),
+            patch.object(insurance_periods, "record_period_transition", AsyncMock()) as period_transition,
+        ):
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
         period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
@@ -991,6 +1104,186 @@ class TestArriveAtPickupGuards:
         guest_notify.assert_called_once()
 
 
+class TestArriveAtPickupCorroborationSignal:
+    """#1231 finding 12 (soft-rollout signal only): a non-blocking
+    corroboration check spawned after the arrival transition already
+    committed. Uses a spawn() capture (instead of `_spawn_close`, which just
+    discards the coroutine) so these tests can actually await the spawned
+    check and assert on its outcome -- the metric counter and the log line,
+    never `result` or `rides.status`, which the earlier guard tests already
+    cover and which this signal must never touch.
+
+    Patched at `backend.routes.drivers.ride_flow.spawn`, not
+    `..._deps.spawn`: unlike `db_supabase` (a shared module object, so
+    patching an attribute on it is visible everywhere it's imported),
+    `spawn` is a plain function that `ride_flow.py` pulled into its own
+    namespace via `from ._deps import (..., spawn, ...)` -- rebinding
+    `_deps.spawn` afterwards doesn't touch that already-bound copy. (The
+    other tests in this file that patch `_deps.spawn` don't actually
+    intercept it either -- harmless there since they don't assert on spawn
+    behavior and the real spawn() just schedules the already-mocked
+    coroutine it's given, but this class needs the interception to work.)
+    """
+
+    def _spawn_capture(self, sink):
+        def _capture(coro):
+            sink.append(coro)
+
+        return _capture
+
+    def _assert_scoped_corroboration_query(self, filters, kwargs):
+        """Shape assertions for the `driver_location_history` query itself.
+
+        Without this, a fake that branches only on `table` gives zero
+        protection against a future silent regression here (wrong column,
+        dropped driver_id/ride_id scope, an inverted comparison) -- the
+        suite would still show "3 passed" even if the query stopped
+        matching anything real. Also locks in the `$or(captured_at,
+        timestamp)` shape from the column-choice reasoning in
+        `_flag_uncorroborated_arrival_if_needed`'s docstring: `captured_at`
+        alone would silently exclude every legacy/WS-single-ping breadcrumb
+        (NULL fails `>=`), so both branches must be present.
+        """
+        assert filters["driver_id"] == _DRIVER_ID
+        assert filters["ride_id"] == _RIDE_ID
+        or_clause = filters["$or"]
+        assert isinstance(or_clause, list) and len(or_clause) == 2
+        or_cols = {next(iter(leaf)) for leaf in or_clause}
+        assert or_cols == {"captured_at", "timestamp"}, or_cols
+        for leaf in or_clause:
+            ((col, predicate),) = leaf.items()
+            assert set(predicate) == {"$gte"}, (col, predicate)
+            bound = predicate["$gte"]
+            # isoformat string, matching this repo's established convention
+            # for $gte datetime filters (driver_daily_rollup.py, profile.py,
+            # earnings.py) -- not a raw datetime object.
+            assert isinstance(bound, str)
+            bound_dt = datetime.fromisoformat(bound)
+            # ~5 minutes back -- tolerate scheduling jitter, not a
+            # different window entirely.
+            age = datetime.now(timezone.utc) - bound_dt
+            assert timedelta(minutes=4) < age < timedelta(minutes=6), age
+        assert kwargs.get("order") == "timestamp"
+        assert kwargs.get("desc") is True
+        assert kwargs.get("limit") == 200
+
+    async def test_arrival_succeeds_and_no_signal_when_breadcrumb_corroborates(self):
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+        from backend.utils import metrics
+
+        ride = _ride(status="driver_accepted")
+        # Within ARRIVAL_RADIUS_KM (200m) of the pickup pin at (52.1, -106.6).
+        corroborating_point = {"lat": 52.1005, "lng": -106.6005}
+        dlh_calls: list = []
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
+                return [corroborating_point]
+            return []
+
+        before = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            # Arrival itself is unaffected either way -- assert it here,
+            # before running the captured background task below.
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro
+
+        after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        assert after == before
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
+
+    async def test_arrival_still_succeeds_but_signal_fires_with_no_corroborating_breadcrumb(self):
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+        from backend.utils import metrics
+
+        ride = _ride(status="driver_accepted")
+        dlh_calls: list = []
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                dlh_calls.append((filters, kw))
+                return []  # no corroborating breadcrumb at all
+            return []
+
+        before = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            # Proves this is genuinely non-blocking: the transition already
+            # succeeded before the (still-unrun) signal check below fires.
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro
+
+        after = sum(metrics.snapshot()["counters"].get("spinr_dispatch_arrival_uncorroborated_total", {}).values())
+        assert after == before + 1
+        assert len(dlh_calls) == 1
+        filters, kwargs = dlh_calls[0]
+        self._assert_scoped_corroboration_query(filters, kwargs)
+
+    async def test_breadcrumb_read_failure_is_swallowed_not_raised(self):
+        """A DB error on this best-effort read must never surface into the
+        (already detached) background task -- it's telemetry, not the
+        arrival transition, which has already committed."""
+        from backend.routes.drivers.ride_flow import arrive_at_pickup
+
+        ride = _ride(status="driver_accepted")
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                raise RuntimeError("db unavailable")
+            return []
+
+        spawned: list = []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": _RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.ride_flow.spawn", side_effect=self._spawn_capture(spawned)),
+        ):
+            result = await arrive_at_pickup(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+            assert result == {"success": True}
+            for coro in spawned:
+                await coro  # must not raise
+
+
 # ============================================================
 # verify_pickup_otp
 # ============================================================
@@ -1184,16 +1477,39 @@ class TestDriverCancelRideGuards:
         assert exc.value.status_code == 404
 
     async def test_error_when_ride_already_in_progress(self):
+        from fastapi import HTTPException
+
         from backend.routes.drivers.ride_cancel import cancel_ride
-        from backend.utils.error_handling import RideStateError
 
         ride = _ride(status="in_progress")
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
-            with pytest.raises(RideStateError):
+            # #5611: 409 with a phrase-based message, matching the rider-side
+            # guard and the sibling driver-side guards -- not RideStateError's
+            # 422 with a raw status token.
+            with pytest.raises(HTTPException) as exc:
                 await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "in_progress" not in exc.value.detail
+
+    async def test_error_when_ride_already_completed(self):
+        """#5611: the other half of the same guard -- COMPLETED, not just IN_PROGRESS."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_cancel import cancel_ride
+
+        ride = _ride(status="completed")
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "completed" not in exc.value.detail
+        assert "already finished" in exc.value.detail
 
 
 class TestDriverCancelRideBodyReasonParsing:
@@ -1448,7 +1764,6 @@ class TestMarkRiderNoshowGuards:
 
 class TestMarkRiderNoshowSuccess:
     def _base_patches(self, ride, *, area=None, settings=None):
-        arrived_dt = ride["driver_arrived_at"]
         return (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
@@ -1838,9 +2153,7 @@ class TestGetActiveRideEnrichment:
             }
         ]
         fake_supabase = MagicMock()
-        fake_supabase.table.side_effect = lambda name: (
-            _chain(rows) if name == "ride_incentives" else _chain([])
-        )
+        fake_supabase.table.side_effect = lambda name: _chain(rows) if name == "ride_incentives" else _chain([])
 
         with _Patches(
             *self._base_patches(ride),
@@ -1853,9 +2166,7 @@ class TestGetActiveRideEnrichment:
             result = await get_active_ride(current_user={"id": _USER_ID})
 
         assert result["total_bonus"] == 5.0
-        assert result["incentives"] == [
-            {"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}
-        ]
+        assert result["incentives"] == [{"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}]
         # Quest hint stays offer-only — it is a dispatch nudge, not earnings.
         assert result["quest_hint"] is None
 
@@ -2519,3 +2830,283 @@ class TestGetRideHistoryExplicitPeriodNone:
         # sort key -- confirms the SCHEDULED branch (not the default
         # "created_at" fallback) was taken.
         assert "scheduled_time" in captured_orders
+
+
+# ============================================================
+# get_ride_offer (#1231 finding 15, remaining half)
+# ============================================================
+
+
+class TestGetRideOffer:
+    """Authenticated fetch-by-ride_id for a live ride offer -- the driver-app
+    background handler's replacement for reading precise coordinates and
+    rider_rating out of the FCM data payload. Authorization mirrors
+    decline_ride's WS-18 ownership guard (read-only: a SELECT, never
+    decline_ride's UPDATE)."""
+
+    async def test_404_when_driver_not_found(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        with patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[])):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 404
+        assert "Driver not found" in exc.value.detail
+
+    async def test_404_when_ride_not_found(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 404
+
+    async def test_404_when_driver_was_never_offered_this_ride(self):
+        """No ride_offers row for this driver, and not the direct-assigned
+        driver either -- must be indistinguishable from a nonexistent ride
+        (404, never 403), so a wrong-driver call can't confirm another
+        driver's offer exists."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        ride = _ride(status="searching", driver_id=None)
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync", AsyncMock(return_value=_chain([]).execute())
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 404
+        assert "Offer not found" in exc.value.detail
+
+    async def test_410_when_offer_already_declined(self):
+        """A ride_offers row exists for this driver but has moved past
+        'pending' -- Gone, not Not Found, so the client can show "offer no
+        longer available" instead of treating it as never-existed."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        ride = _ride(status="searching", driver_id=None)
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(return_value=MagicMock(data=[{"status": "declined", "expires_at": None}])),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 410
+
+    async def test_503_when_ride_offers_lookup_raises(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        ride = _ride(status="searching", driver_id=None)
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(side_effect=RuntimeError("ride_offers table down")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 503
+
+    async def test_live_batch_offer_returns_full_field_shape(self):
+        """The core happy path: a pending batch-dispatch offer returns the
+        precise-coordinate and rider_rating fields the minimal FCM payload no
+        longer carries, plus incentives/quest_hint, matching dispatch_payload's
+        shape."""
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        ride = _ride(
+            status="searching",
+            driver_id=None,
+            pickup_address="100 Main St",
+            dropoff_address="200 Broadway Ave",
+            dropoff_lat=52.15,
+            dropoff_lng=-106.60,
+            driver_earnings=12.5,
+            distance_km=5.0,
+            duration_minutes=12,
+            surge_multiplier=1.0,
+            requires_wav=False,
+            quiet_mode=False,
+            is_scheduled=False,
+            payment_method="card",
+        )
+        rider = {"id": _RIDER_ID, "first_name": "Jamie", "rating": 4.9}
+        incentive_rows = [
+            {
+                "id": "inc-1",
+                "name": "Area Boost",
+                "bonus_amount": "5.00",
+                "incentive_type": "per_ride",
+                "service_area_id": None,
+                "vehicle_type_id": None,
+            }
+        ]
+        quest_rows = [
+            {
+                "current_value": 3,
+                "status": "active",
+                "quest": {"title": "Weekly Streak", "target_value": 5, "reward_amount": 10},
+            }
+        ]
+
+        fake_supabase = MagicMock()
+
+        def _table_router(name):
+            if name == "ride_offers":
+                return _chain([{"status": "pending", "expires_at": "2026-01-01T00:00:15+00:00"}])
+            if name == "ride_incentives":
+                return _chain(incentive_rows)
+            if name == "quest_progress":
+                return _chain(quest_rows)
+            return _chain([])
+
+        fake_supabase.table.side_effect = _table_router
+
+        with _Patches(
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.drivers.ride_reads.db_supabase.supabase", fake_supabase),
+            patch("backend.routes.drivers.ride_reads.db_supabase.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"ride_offer_timeout_seconds": 15}),
+            ),
+        ):
+            result = await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
+        assert result["ride_id"] == _RIDE_ID
+        # The exact fields the minimal FCM payload no longer carries.
+        assert result["pickup_lat"] == 52.1
+        assert result["pickup_lng"] == -106.6
+        assert result["dropoff_lat"] == 52.15
+        assert result["dropoff_lng"] == -106.60
+        assert result["rider_rating"] == 4.9
+        # PII-scope: first name only, never the surname (PIPEDA, C5) -- same
+        # rule as the WS dispatch_payload and matching.py's first_name_only.
+        assert result["rider_name"] == "Jamie"
+        assert "rider_last_name" not in result
+        assert result["fare"] == 12.5
+        assert result["offer_expires_at"] == "2026-01-01T00:00:15+00:00"
+        assert result["incentives"][0]["name"] == "Area Boost"
+        assert result["quest_hint"]["title"] == "Weekly Streak"
+        # Not part of this endpoint's response contract -- the client keeps
+        # reading offer_card_url from the FCM `data` payload (untouched by
+        # this flag) instead of a re-signed one from here.
+        assert "offer_card_url" not in result
+
+    async def test_live_direct_assignment_with_no_ride_offers_row(self):
+        """Admin direct-assignment: ride.driver_id set + status='driver_assigned'
+        with no ride_offers row at all (see decline_ride's WS-18 comment) --
+        must still be treated as a live offer, not a 404."""
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        ride = _ride(
+            status="driver_assigned",
+            driver_id=_DRIVER_ID,
+            driver_notified_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        with _Patches(
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(side_effect=RuntimeError("quest_progress down")),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"ride_offer_timeout_seconds": 15}),
+            ),
+        ):
+            result = await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
+        # No ride_offers lookup was needed (is_direct_assigned short-circuits
+        # it) -- the only run_sync call is the (failing, non-fatal) quest
+        # lookup, confirmed by the result still coming back successfully.
+        assert result["ride_id"] == _RIDE_ID
+        assert result["quest_hint"] is None
+        assert result["offer_expires_at"] is not None
+
+    async def test_stale_ride_snapshot_does_not_leak_offer_after_preemption(self):
+        """Regression for a spinr-dispatch-reviewer finding on PR #5382: the
+        very first `ride` read (used only to decide is_direct_assigned) must
+        never be reused for the final authorization decision. accept_ride
+        flips rides.status to driver_accepted for the winner well before it
+        flips OTHER drivers' ride_offers rows to 'preempted' (several awaits
+        later) -- a losing driver's request can land with its own
+        ride_offers row still reading 'pending' after the winner's accept
+        has already landed. Using a stale ride snapshot for the status gate
+        would leak full offer detail (precise GPS + rider_rating) in exactly
+        that window; must 410 instead, using a fresh re-read."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        stale_ride = _ride(status="searching", driver_id=None)
+        fresh_ride = _ride(status="driver_accepted", driver_id="other-driver-id")
+        ride_reads = [stale_ride, fresh_ride]
+
+        async def fake_get_ride(_ride_id):
+            return ride_reads.pop(0)
+
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(side_effect=fake_get_ride)),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(return_value=MagicMock(data=[{"status": "pending", "expires_at": None}])),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 410
+        assert not ride_reads, "get_ride_offer must re-fetch `ride` before the authorization decision"
+
+    async def test_stale_ride_snapshot_does_not_leak_direct_assignment_after_reassignment(self):
+        """Same TOCTOU class, direct-assignment branch: a status-only recheck
+        wouldn't catch a reassignment to a DIFFERENT driver that leaves the
+        ride in the same driver_assigned status -- must re-verify driver_id
+        against a fresh read too, not just status."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_reads import get_ride_offer
+
+        stale_ride = _ride(status="driver_assigned", driver_id=_DRIVER_ID)
+        fresh_ride = _ride(status="driver_assigned", driver_id="other-driver-id")
+        ride_reads = [stale_ride, fresh_ride]
+
+        async def fake_get_ride(_ride_id):
+            return ride_reads.pop(0)
+
+        with (
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.ride_reads.db_supabase.get_ride", AsyncMock(side_effect=fake_get_ride)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_ride_offer(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 410
+        assert not ride_reads, "get_ride_offer must re-fetch `ride` before the authorization decision"

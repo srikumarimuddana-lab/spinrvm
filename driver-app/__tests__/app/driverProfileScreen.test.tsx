@@ -350,20 +350,38 @@ describe('ProfileScreen (driver)', () => {
     expect(mockReplace).toHaveBeenCalledWith('/login');
   });
 
-  it('handleLogoutAll confirms then signs out of every device and routes to /login even on failure', async () => {
+  it('handleLogoutAll confirms then signs out of every device and routes to /login', async () => {
+    const r = await renderScreen();
+    const signOutAllBtn = findByText(r, 'Sign out of all devices')!;
+    act(() => { signOutAllBtn.props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls.find((c) => c[0] === 'Sign out of all devices?');
+    const confirm = alertCall![2].find((b: any) => b.text === 'Sign out everywhere');
+    await act(async () => { await confirm.onPress(); await flush(); });
+    expect(mockLogoutAll).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/login');
+  });
+
+  it('handleLogoutAll shows an error toast and stays on screen if sign-out-all fails', async () => {
     mockLogoutAll.mockRejectedValue(new Error('network'));
     const r = await renderScreen();
     const signOutAllBtn = findByText(r, 'Sign out of all devices')!;
     act(() => { signOutAllBtn.props.onPress(); });
     const alertCall = (Alert.alert as jest.Mock).mock.calls.find((c) => c[0] === 'Sign out of all devices?');
     const confirm = alertCall![2].find((b: any) => b.text === 'Sign out everywhere');
-    // The screen's own onPress has no catch around logoutAll() — only a
-    // finally that navigates to /login regardless of outcome — so the
-    // rejection propagates out of onPress itself; swallow it here just
-    // like the button's real caller (React's event system) would.
-    await act(async () => { await confirm.onPress().catch(() => {}); await flush(); });
+    // d1c106e (2026-09-15) made the screen report a failed sign-out-all
+    // instead of navigating away regardless of outcome — the onPress's own
+    // catch handles the rejection, so it never propagates here.
+    await act(async () => { await confirm.onPress(); await flush(); });
     expect(mockLogoutAll).toHaveBeenCalled();
-    expect(mockReplace).toHaveBeenCalledWith('/login');
+    expect(mockReplace).not.toHaveBeenCalledWith('/login');
+    // 2026-09-21: copy distinguished from handleLogout's failure toast --
+    // this is the lost/stolen-phone recovery flow, so the driver needs to
+    // know other sessions may still be live, not a generic "try again".
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'error',
+      'Sign Out Failed',
+      'Some devices may still be signed in. Please try again or contact support.',
+    );
   });
 
   it('a pending document shows PENDING REVIEW even when an older approved copy exists', async () => {

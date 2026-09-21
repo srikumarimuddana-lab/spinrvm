@@ -10,6 +10,17 @@ freely write. What actually blocks anon/authenticated from forging ledger
 rows is the table-level GRANT REVOKE migration 290 added. These tests
 exercise both layers together, the way a real PostgREST request would hit
 them.
+
+ACTION_ITEMS.md C123 phase 2 / migration 433: `driver_insurance_periods`'
+single SELECT policy originally combined the driver's own legitimate
+self-read access with a broken `users.role IN ('admin', 'super_admin')`
+check (unreachable since migration 256) in one USING clause via OR.
+Migration 433 rewrites the policy to drop only the broken admin disjunct,
+keeping the driver-owned-row access exactly as it was --
+`test_admin_cannot_select_any_insurance_period` below was rewritten from a
+"can select" assertion to pin that denial; every other test in this section
+(driver's own access, rider/other-driver denial, insert/delete denial) is
+unaffected and unchanged.
 """
 
 from __future__ import annotations
@@ -216,7 +227,15 @@ def test_another_driver_cannot_select_insurance_periods(pg_cur):
     assert pg_cur.fetchall() == []
 
 
-def test_admin_can_select_any_insurance_period(pg_cur):
+def test_admin_cannot_select_any_insurance_period(pg_cur):
+    """ACTION_ITEMS.md C123 phase 2 / migration 433: driver_insurance_periods'
+    single SELECT policy is rewritten to drop its `OR <broken admin check>`
+    clause -- an admin JWT is now denied exactly like a rider or another
+    driver, while the driver's own self-read access (tested above/below) is
+    untouched. Unlike migration 430/432's blanket `USING (false)` on other
+    tables, this is a narrowing of one still-mixed policy, not a full
+    replacement -- see migration 433's header comment for why a blanket deny
+    would have been wrong here."""
     driver_user, driver_id = _uuid(), _uuid()
     admin = _uuid()
     as_role(pg_cur, None)
@@ -230,7 +249,7 @@ def test_admin_can_select_any_insurance_period(pg_cur):
     )
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM driver_insurance_periods WHERE id = %s", (period_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [period_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_authenticated_cannot_insert_insurance_period(pg_cur):

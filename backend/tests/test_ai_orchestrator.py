@@ -32,6 +32,7 @@ SETTINGS = {
     "ai_history_max_messages": 12,
     "ai_max_tool_iterations": 3,
     "company_phone": "1-800-SPINR",
+    "company_email": "help@northern.test",
 }
 
 
@@ -231,6 +232,22 @@ class TestHappyPaths:
         assert assistant_call.args[1] == "assistant"
         assert "[PHONE]" in assistant_call.args[2]
         assert "306-555-1234" not in assistant_call.args[2]
+
+    @pytest.mark.anyio
+    async def test_official_support_email_is_not_redacted_in_assistant_reply(self):
+        # The model copies the admin Settings address (system-prompt tail /
+        # get_company_info). That is public contact info; scrubbing it to
+        # '[EMAIL]' is the rider-visible bug this pins. A personal address
+        # in the same reply must still redact.
+        adapter = FakeAdapter([[_text("Email help@northern.test, not jane@x.ca."), _end()]])
+        frames, mocks = await _run(adapter)
+        tokens = "".join(p["text"] for n, p in frames if n == "token")
+        assert "help@northern.test" in tokens
+        assert "jane@x.ca" not in tokens
+        assert "[EMAIL]" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert "help@northern.test" in assistant_call.args[2]
+        assert "jane@x.ca" not in assistant_call.args[2]
 
     @pytest.mark.asyncio
     async def test_assistant_text_has_tool_leakage_filtered_before_persistence(self):

@@ -214,7 +214,10 @@ async def test_wallet_fee_partial_collection_is_logged_not_fatal():
             return_value=(Decimal("3.00"), Decimal("2.00")),
         ),
         patch("backend.routes.rides.cancellation._deps.pay_driver_cancellation_fee", AsyncMock()) as mock_pay_driver,
-        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()),
+        patch(
+            "backend.routes.rides.cancellation._deps.release_driver_and_close_period",
+            AsyncMock(return_value=1),
+        ),
         patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.find_one = AsyncMock(side_effect=[arrived, wallet])
@@ -252,13 +255,15 @@ async def test_fee_computation_failure_still_releases_driver():
             "backend.routes.rides.cancellation._deps.get_app_settings",
             AsyncMock(side_effect=RuntimeError("settings db down")),
         ),
-        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()),
+        patch(
+            "backend.routes.rides.cancellation._deps.release_driver_and_close_period",
+            AsyncMock(return_value=1),
+        ) as release,
         patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.find_one = AsyncMock(return_value=arrived)
         mock_supabase.update_ride = AsyncMock(return_value=None)
         mock_supabase.get_ride = AsyncMock(return_value=cancelled)
-        mock_supabase.set_driver_available = AsyncMock(return_value=None)
         mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
         mock_manager.send_personal_message = AsyncMock()
         mock_manager.broadcast_ride_status = AsyncMock()
@@ -270,17 +275,23 @@ async def test_fee_computation_failure_still_releases_driver():
 
     assert result["success"] is True
     # Fee computation blew up (charged_admin/driver default to 0) but the
-    # driver must still be released and notified.
-    mock_supabase.set_driver_available.assert_awaited_once_with(_DRIVER_ID, True)
+    # driver must still be released and notified. The release and the period
+    # close-out are one call now — see utils/insurance_periods.
+    release.assert_awaited_once_with(_DRIVER_ID, reason="rider_cancelled", ride_id=_RIDE_ID)
 
 
-async def test_rider_cancel_skips_period1_when_driver_already_offline():
-    """#4597 Finding 3 (P2): if the driver had already gone offline before
-    this rider-initiated cancel landed, set_driver_available clamps
-    is_available->False -- writing Period 1 in that case would falsely
-    reopen an online/commercial-insurance window for a driver who is
-    actually Period 0. Mirrors the equivalent guard already in
-    routes/rides/matching.py's offer-timeout handler."""
+async def test_rider_cancel_closes_out_to_period0_when_driver_already_offline():
+    """#4597 Finding 3 (P2): if the driver had already gone offline before this
+    rider-initiated cancel landed, set_driver_available clamps
+    is_available->False -- writing Period 1 would falsely reopen an
+    online/commercial-insurance window for a driver who is actually Period 0.
+
+    Renamed from ..._skips_period1_... because "skip" was only half right. The
+    driver still holds the Period 2 their assignment opened, so writing nothing
+    left a claim of PRIMARY commercial cover standing -- worse than the Period 1
+    being suppressed. Converging this site on
+    utils/insurance_periods.release_driver_and_close_period closes it to
+    Period 0 instead."""
     from backend.routes.rides.cancellation import cancel_ride_rider
 
     searching = _ride(status="searching", driver_id=_DRIVER_ID)
@@ -292,20 +303,28 @@ async def test_rider_cancel_skips_period1_when_driver_already_offline():
         patch("backend.routes.rides.cancellation._deps.db") as mock_db,
         patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
         patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
-        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch(
+            "backend.utils.insurance_periods.db_supabase.set_driver_available",
+            # Driver had already gone offline -- clamped to is_available: False.
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_online": False, "is_available": False}),
+        ),
+        patch("backend.utils.insurance_periods.record_period_transition", AsyncMock()) as period_mock,
         patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.find_one = AsyncMock(return_value=searching)
         _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
-        # Driver had already gone offline -- clamped to is_available: False.
-        mock_supabase.set_driver_available = AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False})
         mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
         mock_supabase.update_one = AsyncMock(return_value=cancelled)
 
         result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
 
     assert result["success"] is True
-    period_mock.assert_not_awaited()
+    # BEHAVIOUR CHANGE: this used to write nothing, leaving the driver's
+    # assignment-time Period 2 open — a claim of PRIMARY commercial cover over
+    # someone on personal auto, and worse than the Period 1 the guard was added
+    # to suppress. Converging this site on the shared helper closes it out to
+    # Period 0 instead. Period 1 is still correctly suppressed.
+    period_mock.assert_awaited_once_with(_DRIVER_ID, 0)
 
 
 async def test_rider_cancel_records_period1_when_driver_still_online():
@@ -323,12 +342,15 @@ async def test_rider_cancel_records_period1_when_driver_still_online():
         patch("backend.routes.rides.cancellation._deps.db") as mock_db,
         patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
         patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
-        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch(
+            "backend.utils.insurance_periods.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_online": True, "is_available": True}),
+        ),
+        patch("backend.utils.insurance_periods.record_period_transition", AsyncMock()) as period_mock,
         patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.find_one = AsyncMock(return_value=searching)
         _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
-        mock_supabase.set_driver_available = AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True})
         mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
         mock_supabase.update_one = AsyncMock(return_value=cancelled)
 

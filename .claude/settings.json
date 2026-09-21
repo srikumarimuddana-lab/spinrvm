@@ -8,6 +8,12 @@
     "commit": "Co-developed with Claude Code (claude-sonnet-5)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
     "pr": "AI-assisted — spinr platform (Claude Code)"
   },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash commands using curl to POST to https://api.fly.io/graphql for the Fly app \"spinr-backend-yyz\" only — GraphQL queries (status/health/secrets-list checks) and the restartApp mutation to restart that app. Does not cover any other Fly app, the Fly Machines API (api.machines.dev), or any secrets-set/createRelease/deploy mutation — those still require explicit confirmation each time."
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(git status)",
@@ -153,6 +159,9 @@
     }
   },
   "enabledPlugins": {
-    "feature-dev@claude-plugins-official@3ea32df": true
+    "feature-dev@claude-plugins-official@3ea32df": true,
+    "pyright-lsp@claude-plugins-official@022b3c2": true,
+    "typescript-lsp@claude-plugins-official@022b3c2": true,
+    "mcp-server-dev@claude-plugins-official@022b3c2": true
   }
 }

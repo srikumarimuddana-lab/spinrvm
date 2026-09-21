@@ -25,6 +25,7 @@ import apiClient, {
   setSuppressRefreshSignOut,
 } from '../../../shared/api/client';
 import { useAuthStore } from '../../../shared/store/authStore';
+import { installSessionLock } from '../../../shared/auth/sessionLock';
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
@@ -98,6 +99,12 @@ const make401 = () => {
 const make401RawResponse = () => ({ status: 401, ok: false });
 
 beforeEach(() => {
+  let tail: Promise<unknown> = Promise.resolve();
+  installSessionLock(work => {
+    const next = tail.then(work, work);
+    tail = next.catch(() => {});
+    return next;
+  });
   Object.keys(mockSecureStoreBacking).forEach((k) => delete mockSecureStoreBacking[k]);
   mockPost.mockReset();
   mockSetSuppress.mockClear();
@@ -115,6 +122,108 @@ beforeEach(() => {
 });
 
 describe('authStore.refreshTokens — rotation-race recovery', () => {
+  it('changes the capture epoch only on sign-in, preserving it through rotation', async () => {
+    await useAuthStore.getState().setTokens('access-a', 'refresh-a', 1);
+    const epoch = mockSecureStoreBacking['spinr_session_generation'];
+    expect(epoch).toEqual(expect.any(String));
+    mockPost.mockResolvedValue({ data: { token: 'renewed-a', refresh_token: 'renewed-refresh-a', expires_in: 900 } });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+    expect(mockSecureStoreBacking['spinr_session_generation']).toBe(epoch);
+    await useAuthStore.getState().setTokens('access-b', 'refresh-b', 900);
+    expect(mockSecureStoreBacking['spinr_session_generation']).not.toBe(epoch);
+  });
+
+  it('adopts a fresh background credential without rotating it again', async () => {
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+    Object.assign(mockSecureStoreBacking, { fg_access_token: 'background-access', refresh_token: 'background-refresh', token_expires_at: String(Date.now() + 900_000) });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+    expect(useAuthStore.getState().token).toBe('background-access');
+    expect(useAuthStore.getState().refreshToken).toBe('background-refresh');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh an explicitly ended session', async () => {
+    Object.assign(mockSecureStoreBacking, { spinr_session_ended: '1', refresh_token: 'old-refresh' });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(false);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockSecureStoreBacking.spinr_session_ended).toBe('1');
+  });
+
+  it('serializes logout after refresh and revokes the winning credential', async () => {
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+    mockSecureStoreBacking.refresh_token = 'old-refresh';
+    let finish!: (value: unknown) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    mockPost.mockImplementation((url: string) => {
+      if (url === '/auth/refresh') { entered(); return new Promise(resolve => { finish = resolve; }); }
+      return Promise.resolve({ data: {} });
+    });
+    const renewal = useAuthStore.getState().refreshTokens();
+    await started;
+    const ending = useAuthStore.getState().logout();
+    finish({ data: { token: 'new-access', refresh_token: 'new-refresh', expires_in: 900 } });
+    await renewal;
+    await ending;
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'new-refresh' });
+    expect(mockSecureStoreBacking.refresh_token).toBeUndefined();
+    expect(mockSecureStoreBacking.spinr_session_ended).toBe('1');
+    expect(useAuthStore.getState().token).toBeNull();
+  });
+
+  it('does not let delayed go-offline cleanup wipe a new login', async () => {
+    useAuthStore.setState({ token: 'old-access', driver: { id: 'driver-1' } as any });
+    let finish!: () => void;
+    (apiClient.put as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const ending = useAuthStore.getState().logout();
+    await useAuthStore.getState().setTokens('new-login', 'new-login-refresh', 900);
+    finish();
+    await ending;
+    expect(useAuthStore.getState().token).toBe('new-login');
+    expect(mockSecureStoreBacking.refresh_token).toBe('new-login-refresh');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('does not let a fast server-revoke cut off the go-offline PUT\'s bounded window', async () => {
+    // Regression test for the bug found by the 2026-09-20 swarm-watch
+    // drift-audit (issue #5591): the bounded window originally raced
+    // goOffline against BOTH the timeout AND sessionWork, so a fast
+    // server-side revoke (the common case) settled the wait before
+    // goOffline had any real window — reintroducing the exact stuck
+    // is_online bug this fix (PR #5530) was meant to close.
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh', driver: { id: 'driver-1' } as any });
+    mockSecureStoreBacking.refresh_token = 'old-refresh';
+    mockPost.mockResolvedValue({ data: {} }); // server-side revoke resolves immediately — the fast path.
+    let finishGoOffline!: () => void;
+    (apiClient.put as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finishGoOffline = resolve; }),
+    );
+
+    let resolved = false;
+    const ending = useAuthStore.getState().logout().then(() => { resolved = true; });
+
+    // Let the fast server-side revoke (sessionWork) fully settle. Under the
+    // bug this test guards against, sessionWork finishing here alone would
+    // already resolve `ending`, even though the go-offline PUT is still
+    // pending below.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'old-refresh' });
+    expect(resolved).toBe(false);
+
+    finishGoOffline();
+    await ending;
+    expect(resolved).toBe(true);
+    expect(apiClient.put).toHaveBeenCalledWith('/drivers/driver-1/status', { is_online: false });
+  });
+
+  it('revokes persisted background credentials even if foreground memory has no access token', async () => {
+    Object.assign(mockSecureStoreBacking, { fg_access_token: 'background-access', refresh_token: 'background-refresh' });
+    mockPost.mockResolvedValueOnce({ data: {} });
+    await useAuthStore.getState().logout();
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'background-refresh' });
+    expect(mockSecureStoreBacking.refresh_token).toBeUndefined();
+  });
   it('retries with the background-rotated token instead of logging out', async () => {
     // Foreground holds a stale in-memory refresh token; the background task has
     // already rotated SecureStore forward to a fresh value.

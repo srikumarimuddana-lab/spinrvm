@@ -62,6 +62,85 @@ def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
 
 
+def _ride_total_with_fallback(ride: Dict[str, Any], *, site: str) -> Decimal:
+    """``grand_total``, falling back to ``total_fare`` — with the ambiguous case counted.
+
+    Three call sites shared the expression
+    ``_round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))``. The
+    ``or`` means "if falsy", not "if missing", and those differ exactly when
+    ``grand_total`` is **0**, which has two incompatible meanings:
+
+      * a genuinely free ride (a 100% promo in an area with no fees and no GST —
+        ``discount`` is capped at the fare by ``routes/promotions.py:305``, so
+        this needs fees and tax to be zero as well), or
+      * a row that predates migration 46, which added the column as
+        ``DECIMAL(10,2) DEFAULT 0`` rather than NULL, so "never computed" also
+        reads as 0.
+
+    Both are falsy, so both fall back to ``total_fare`` — the **pre-tax
+    subtotal**. That is right for the legacy row and an overcharge for the free
+    ride, and at ``settle_corporate``'s call site it is the amount actually
+    charged.
+
+    **This function deliberately does not change the value.** Resolving the
+    ambiguity wrongly costs real money in both directions: charging a free ride
+    is a visible overcharge, while charging $0 for a legacy ride is a silent
+    loss the driver is still paid for (uncollected rides stay payable — see
+    ``docs/change-log/2026-09-21-uncollected-rides-stay-payable.md``). Nobody
+    here can query production to find out which rows exist, so this preserves
+    today's arithmetic exactly and emits a signal instead, letting the real fix
+    be chosen from data rather than guessed. Decided with the repository owner,
+    per CLAUDE.md pre-merge gate 9 ("escalate, don't silently ship").
+
+    The log records the raw value's *type* on purpose: if PostgREST returns this
+    numeric column as a string (``"0.00"`` is truthy), the ambiguity cannot
+    arise at all and the whole question is moot. That is cheaper to learn from
+    one production log line than to prove from here.
+    """
+    raw_grand = ride.get("grand_total")
+    raw_fare = ride.get("total_fare")
+    # Exactly the original expression, unchanged.
+    total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
+    # Present, but falsy, while total_fare disagrees — the only ambiguous shape.
+    if raw_grand is not None and not raw_grand and _d(raw_fare or 0) > 0:
+        # `discount_amount` discriminates the two meanings deterministically,
+        # per row, which is better than waiting for aggregate data:
+        # fare_service.py's grand_total = total_fare + fees + tax - discount
+        # subtracts the discount from grand_total but NOT from total_fare. So a
+        # genuinely free ride has a discount roughly equal to the fare, while a
+        # row that predates migration 46 (which added the column DEFAULT 0) has
+        # no discount at all. Logging it — with fees and tax, the other two
+        # terms — means one occurrence answers the question, instead of a
+        # counter that only says "it happened".
+        raw_discount = ride.get("discount_amount")
+        case = "free_ride" if _d(raw_discount or 0) > 0 else "legacy_row"
+        logger.bind(domain="payments", ride_id=ride.get("id")).warning(
+            "[PAYMENT] ambiguous zero grand_total at {} — falling back to total_fare as before "
+            "(charging {}); case={} grand_total={!r} type={} total_fare={!r} "
+            "discount_amount={!r} tax_amount={!r} area_fees_total={!r}",
+            site,
+            total,
+            case,
+            raw_grand,
+            type(raw_grand).__name__,
+            raw_fare,
+            raw_discount,
+            ride.get("tax_amount"),
+            ride.get("area_fees_total"),
+        )
+        _ride_total_metric_inc(site, case)
+    return total
+
+
+def _ride_total_metric_inc(site: str, case: str) -> None:
+    """Metrics are imported per-function in this module, not at module scope."""
+    try:
+        from ..utils.metrics import inc as _metric_inc
+    except ImportError:  # pragma: no cover - dual import
+        from utils.metrics import inc as _metric_inc  # type: ignore
+    _metric_inc("spinr_payment_zero_grand_total_fallback_total", {"site": site, "case": case})
+
+
 # R44 (ACTION_ITEMS.md N15): a corporate rider previously learned their
 # allowance ran out only from a 4xx at their NEXT booking attempt
 # (routes/rides/booking.py's allowance_low / company_booking_service.py's
@@ -323,7 +402,7 @@ async def record_refund_event(
     meta: Dict[str, Any] = {"source": "charge.refunded", "driver_pay_absorbed_by_platform": True}
     tax_reversed = Decimal("0")
     if ride:
-        total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
+        total = _ride_total_with_fallback(ride, site="refund_tax_reversal")
         tax_total = _round(_d(ride.get("tax_amount") or 0))
         refund_d = _round(_d(refund_cents) / Decimal("100"))
         frac = min(refund_d / total, Decimal("1")) if total > Decimal("0") else Decimal("1")
@@ -936,7 +1015,7 @@ async def settle_wallet(
         logger.info("settle_wallet: ride {} already paid — idempotent no-op, skipping ledger write", ride_id)
         return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(total_charge))
 
-    grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
+    grand_total = _ride_total_with_fallback(ride, site="wallet_transaction_record")
     ride_fare = _round(
         _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)
     )
@@ -1526,7 +1605,11 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
     if not claimed:
         return None  # another replica/settlement won the claim — done
 
-    total = _round(_d(str(ride.get("grand_total") or ride.get("total_fare") or 0)))
+    # The only one of the three that is an amount CHARGED, not a recorded value:
+    # it becomes settle_corporate's total_charge. If the ambiguous-zero case ever
+    # fires here, it is a corporate account being billed the pre-tax subtotal for
+    # a ride that may have been free.
+    total = _ride_total_with_fallback(ride, site="guest_corporate_auto_settle")
     try:
         result = await settle_corporate(ride, ride_id, total_charge=total, tip_amount=Decimal("0"))
     except Exception:
@@ -2238,7 +2321,47 @@ async def settle_card(
                     target_app="rider",
                 )
             except Exception as _push_err:
-                logger.debug(f"Payment failure push to rider failed: {_push_err}")
+                # This is the rider's first and fastest notice that their card
+                # was declined and the ride is now payment_status='failed'. At
+                # debug it was invisible: nobody could tell a rider who was
+                # never told from one who ignored the notice.
+                #
+                # ERROR, not WARNING. A first draft used WARNING on the grounds
+                # that payment_retry "re-tries and re-notifies" — that is wrong,
+                # and worth recording so it is not reasoned back into place.
+                # utils/payment_retry.py only pushes the rider on the FINAL
+                # exhausted retry, and only from its except-branch; its normal
+                # decline path alerts admins, not the rider
+                # (_alert_admins_payment_exhausted). So there is no prompt
+                # compensating notice: if this push is lost, the rider's only
+                # remaining signal is being blocked at their next booking
+                # attempt. That is not "degraded but recovered", so CLAUDE.md's
+                # warning+metric row does not apply.
+                #
+                # ERROR also matches the established precedent for this exact
+                # notification: routes/webhooks.py:1151 logs the same lost
+                # "Payment Failed" push at ERROR.
+                #
+                # send_push_notification records spinr_push_send_total{outcome}
+                # internally, but only once it reaches the send itself — an
+                # exception raised before that (e.g. the token lookup) never
+                # reaches it, which is exactly the case this branch catches.
+                # .bind(): the loguru->Sentry sink promotes tags only out of
+                # record["extra"], so without this the event lands untagged and
+                # cannot be filtered by domain or ride — the same gap caught on
+                # the admin idle-timeout logs in this PR's first commit.
+                logger.bind(domain="payments", ride_id=ride_id).opt(exception=True).error(
+                    "[PAYMENT] rider payment-failure push failed for ride {}: {}",
+                    ride_id,
+                    _push_err,
+                )
+                # Local import: this module imports metrics per-function, not at
+                # module scope (see settle_corporate, :1008).
+                try:
+                    from ..utils.metrics import inc as _metric_inc
+                except ImportError:  # pragma: no cover - dual import
+                    from utils.metrics import inc as _metric_inc  # type: ignore
+                _metric_inc("spinr_payment_rider_notice_failed_total", {"reason": "card_declined"})
         return PaymentResult(
             success=False,
             error_code="card_declined",
@@ -2285,7 +2408,19 @@ async def settle_card(
                 target_app="rider",
             )
         except Exception as _push_err:
-            logger.debug(f"Payment failure push to rider failed: {_push_err}")
+            # Same reasoning as the 'declined' branch above — see the comment
+            # there for why this is ERROR and why spinr_push_send_total does not
+            # already cover this path.
+            logger.bind(domain="payments", ride_id=ride_id).opt(exception=True).error(
+                "[PAYMENT] rider payment-failure push failed for ride {}: {}",
+                ride_id,
+                _push_err,
+            )
+            try:
+                from ..utils.metrics import inc as _metric_inc
+            except ImportError:  # pragma: no cover - dual import
+                from utils.metrics import inc as _metric_inc  # type: ignore
+            _metric_inc("spinr_payment_rider_notice_failed_total", {"reason": "payment_error"})
     return PaymentResult(
         success=False,
         error_code="payment_error",

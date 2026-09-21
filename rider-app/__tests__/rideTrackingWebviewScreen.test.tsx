@@ -3,8 +3,9 @@
  * Security-relevant: sanitizes any caller-supplied trackingUrl against an
  * allowlist before ever loading it (defence against a deep-link phishing
  * injection into the app's own WebView chrome). Pins:
- *  - a trackingUrl param on an allowed host (track.spinr.ca /
- *    spinr-track.app) loads directly, no fetch needed
+ *  - a trackingUrl param on an allowed host (track.spinr.ca) loads
+ *    directly, no fetch needed; the retired spinr-track.app host is not
+ *    allowlisted and is rejected
  *  - a trackingUrl param on ANY other host (or non-https) is rejected
  *    with "Invalid tracking link." and the WebView never renders
  *  - no trackingUrl + a rideId fetches /rides/:id/share and builds the
@@ -102,11 +103,16 @@ describe('RideTrackingWebviewScreen', () => {
     expect(webview.props.source.uri).toBe('https://track.spinr.ca/abc123');
   });
 
-  it('loads a trackingUrl param on the legacy allowed host too', async () => {
+  // Regression pin for the 2026-09-14 allowlist narrowing. spinr-track.app
+  // used to be accepted here as a legacy host; it is unregistered and does not
+  // resolve, so anyone could have bought it and phished inside the app's own
+  // WebView chrome via a spinr-user:// deep link. It must now be rejected like
+  // any other foreign origin.
+  it('rejects the retired legacy host, which is no longer allowlisted', async () => {
     mockParams = { trackingUrl: 'https://spinr-track.app/abc123' };
     const r = await renderScreen();
-    const webview = r.root.findByType(WebView as any);
-    expect(webview.props.source.uri).toBe('https://spinr-track.app/abc123');
+    expect(allText(r)).toContain('Invalid tracking link.');
+    expect(r.root.findAllByType(WebView as any)).toHaveLength(0);
   });
 
   it('rejects a trackingUrl on a disallowed host, never rendering the WebView', async () => {

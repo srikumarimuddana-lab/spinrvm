@@ -21,7 +21,6 @@ import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface ReferralInfo {
     referral_code: string;
-    referral_link: string;
     total_referrals: number;
     qualified_referrals: number;
     pending_referrals: number;

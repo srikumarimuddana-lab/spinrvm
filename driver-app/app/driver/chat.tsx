@@ -185,7 +185,7 @@ export default function ChatScreen() {
                                 name={item.read ? 'checkmark-done' : 'checkmark'}
                                 size={14}
                                 color={item.read ? '#34D399' : 'rgba(255,255,255,0.5)'}
-                                style={{ marginLeft: 4 }}
+                                style={{ marginLeft: SPACING.xs }}
                             />
                         )}
                     </View>
@@ -267,7 +267,7 @@ export default function ChatScreen() {
                         keyExtractor={(item) => item}
                         showsHorizontalScrollIndicator={false}
                         removeClippedSubviews={true}
-                        contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
+                        contentContainerStyle={{ paddingHorizontal: 12, gap: SPACING.sm }}
                     />
                 </View>
             )}

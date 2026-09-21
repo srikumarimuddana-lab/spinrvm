@@ -12,10 +12,15 @@ import { playbackPosition, pushFix } from '@shared/utils/markerPlayback';
 // a constructible AnimatedRegion with .timing().start().
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
+  const commands = {
+    animateMarkerToCoordinate: jest.fn(),
+    setCoordinates: jest.fn(),
+  };
   const Marker = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ animateMarkerToCoordinate: jest.fn() }), []);
+    ReactActual.useImperativeHandle(ref, () => commands, []);
     return ReactActual.createElement('Marker', props, props.children);
   });
+  (Marker as any)._commands = commands;
   (Marker as any).Animated = ReactActual.forwardRef((props: any, ref: any) => {
     ReactActual.useImperativeHandle(ref, () => ({}), []);
     return ReactActual.createElement('MarkerAnimated', props, props.children);
@@ -419,7 +424,7 @@ describe('CarMarker — route-snap continuity hint survives a re-anchored live r
   });
 });
 
-describe('CarMarker — Android rotation interpolates through a turn, not a single snap (2026-09-09, "no smooth animation")', () => {
+describe('CarMarker — Android rotation steps once per tick (not a per-frame React tween)', () => {
   const coord = { latitude: 50.4452, longitude: -104.6189 };
   const originalPlatformOS = Platform.OS;
   const mockPlaybackPosition = playbackPosition as jest.Mock;
@@ -442,40 +447,20 @@ describe('CarMarker — Android rotation interpolates through a turn, not a sing
     mockPlaybackPosition.mockReturnValue(null);
   });
 
-  it('passes through intermediate rotation values instead of jumping straight to the target', () => {
+  it('sets Marker.rotation to the tick target in one step', () => {
     const { UNSAFE_root, unmount } = render(
       <CarMarker coordinate={coord} heading={0} />,
     );
 
     act(() => {
-      jest.advanceTimersByTime(500); // one TICK_MS — selects bearing 90, starts the tween
-    });
-
-    const seenValues = new Set<number>();
-    for (let i = 0; i < 6; i++) {
-      act(() => {
-        jest.advanceTimersByTime(16); // ~1 animation frame
-      });
-      seenValues.add(UNSAFE_root.findByType(Marker).props.rotation);
-    }
-
-    // At least one sampled frame lands strictly between the start (0) and
-    // target (90) heading — proof rotation is interpolated across frames,
-    // not stepped to the target in a single jump the way it was before this
-    // fix (which set androidRotation to the target directly, once, per tick).
-    const midValues = [...seenValues].filter((v) => v > 0 && v < 90);
-    expect(midValues.length).toBeGreaterThan(0);
-
-    // And it settles exactly at the target once the tween completes.
-    act(() => {
-      jest.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(500);
     });
     expect(UNSAFE_root.findByType(Marker).props.rotation).toBe(90);
 
     unmount();
   });
 
-  it('does not throw across repeated ticks, unmount included (RAF loop cleans up)', () => {
+  it('does not throw across repeated ticks, unmount included', () => {
     const { unmount } = render(<CarMarker coordinate={coord} heading={0} />);
     expect(() => {
       act(() => {
@@ -483,6 +468,68 @@ describe('CarMarker — Android rotation interpolates through a turn, not a sing
       });
     }).not.toThrow();
     expect(() => unmount()).not.toThrow();
+  });
+});
+
+describe('CarMarker — Android Fabric position commands (2026-09-15 frozen marker)', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+  const commands = (Marker as any)._commands as {
+    animateMarkerToCoordinate: jest.Mock;
+    setCoordinates: jest.Mock;
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+    commands.animateMarkerToCoordinate.mockReset();
+    commands.setCoordinates.mockReset();
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: { latitude: 50.446, longitude: -104.6189 },
+      bearing: 90,
+      mode: 'interpolating',
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+    mockPlaybackPosition.mockReturnValue(null);
+    commands.animateMarkerToCoordinate.mockReset();
+    commands.setCoordinates.mockReset();
+  });
+
+  it('calls setCoordinates every tick even when animateMarkerToCoordinate exists', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} heading={0} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(commands.animateMarkerToCoordinate).toHaveBeenCalled();
+    expect(commands.setCoordinates).toHaveBeenCalled();
+    const last = commands.setCoordinates.mock.calls.at(-1)?.[0];
+    expect(last.latitude).toBeCloseTo(50.446, 5);
+    expect(last.longitude).toBeCloseTo(-104.6189, 5);
+    expect(UNSAFE_root.findByType(Marker).props.coordinate.latitude).toBeCloseTo(50.446, 5);
+    unmount();
+  });
+
+  it('still updates the coordinate prop when animateMarkerToCoordinate throws', () => {
+    commands.animateMarkerToCoordinate.mockImplementation(() => {
+      throw new Error('Fabric animateToCoordinates missing');
+    });
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} heading={0} />,
+    );
+    expect(() => {
+      act(() => {
+        jest.advanceTimersByTime(500);
+      });
+    }).not.toThrow();
+    expect(commands.setCoordinates).toHaveBeenCalled();
+    expect(UNSAFE_root.findByType(Marker).props.coordinate.latitude).toBeCloseTo(50.446, 5);
+    unmount();
   });
 });
 

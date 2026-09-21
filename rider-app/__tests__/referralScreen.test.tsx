@@ -57,7 +57,6 @@ const flush = async () => {
 
 const BASE_INFO = {
   referral_code: 'RIDER123',
-  referral_link: 'https://spinr.ca/r/RIDER123',
   total_referrals: 2,
   qualified_referrals: 1,
   pending_referrals: 1,

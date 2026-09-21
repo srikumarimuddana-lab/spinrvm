@@ -292,7 +292,14 @@ function ProfileScreenInner() {
   const handleLogout = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
+      { text: 'Sign Out', style: 'destructive', onPress: async () => {
+        try {
+          await logout();
+          router.replace('/login' as any);
+        } catch {
+          showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
+        }
+      } },
     ]);
   };
 
@@ -309,7 +316,22 @@ function ProfileScreenInner() {
           text: 'Sign out everywhere',
           style: 'destructive',
           onPress: async () => {
-            try { await logoutAll(); } finally { router.replace('/login' as any); }
+            try {
+              await logoutAll();
+              router.replace('/login' as any);
+            } catch {
+              // Distinct from handleLogout's toast (2026-09-21 full-audit
+              // finding): this is the lost/stolen-phone recovery flow, and a
+              // driver who lands here on failure needs to know their other
+              // sessions may still be live -- a generic "try again" reads
+              // identically to a routine single-device sign-out hiccup and
+              // could give false reassurance.
+              showToast(
+                'error',
+                'Sign Out Failed',
+                'Some devices may still be signed in. Please try again or contact support.'
+              );
+            }
           },
         },
       ]

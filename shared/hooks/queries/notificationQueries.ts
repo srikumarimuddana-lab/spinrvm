@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api, { isAppCheckTokenReady } from '../../api/client';
+import api, { ensureFreshToken, isAppCheckTokenReady } from '../../api/client';
 import { queryKeys } from '../../api/queryClient';
 
 const APP_CHECK_POLL_MS = 1_000;
@@ -69,6 +69,7 @@ export const useNotifications = (limit = 50) => {
     return useQuery({
         queryKey: [...queryKeys.notifications.list, limit],
         queryFn: async () => {
+            await ensureFreshToken();
             const res = await api.get(`/notifications?limit=${limit}&offset=0`);
             return res.data;
         },
@@ -82,9 +83,19 @@ export const useNotifications = (limit = 50) => {
 /**
  * PUT /notifications/{id}/read — marks one notification as read.
  *
- * Optimistic update: bumps the local cache immediately so the badge
- * count drops without waiting for the server round-trip. On error, the
- * onError rollback restores the previous cache.
+ * True optimistic update: writes the read state straight into the cached
+ * inbox list on tap, before the server round-trip resolves. The previous
+ * version's comment claimed this already, but it only called
+ * `invalidateQueries` (queries a stale, refetches) — since the inbox
+ * screen's `useNotifications(50)` is an active query, that refetch flipped
+ * `isFetching` true→false on every single tap, and the screen binds
+ * `isFetching` straight to its pull-to-refresh spinner, so a refresh
+ * spinner visibly flashed in and back out on every notification tap
+ * (reported live: "screen goes down and comes back up, ~1s jitter").
+ * `onSettled` still reconciles with the server, but with `refetchType:
+ * 'none'` — it marks the cache stale without forcing an immediate visible
+ * refetch; the next natural refetch (screen focus, pull-to-refresh,
+ * staleTime elapse) picks up the true server state.
  */
 export const useMarkNotificationRead = () => {
     const queryClient = useQueryClient();
@@ -93,11 +104,33 @@ export const useMarkNotificationRead = () => {
             const res = await api.put(`/notifications/${notificationId}/read`);
             return res.data;
         },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        onMutate: async (notificationId: string) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    const target = old.notifications.find((n: any) => n.id === notificationId);
+                    if (!target || target.is_read) return old;
+                    return {
+                        ...old,
+                        notifications: old.notifications.map((n: any) =>
+                            n.id === notificationId ? { ...n, is_read: true } : n,
+                        ),
+                        unread_count: Math.max(0, (old.unread_count ?? 0) - 1),
+                    };
+                },
+            );
+            return { previous };
         },
-        onError: () => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        onError: (_err, _notificationId, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
         },
     });
 };
@@ -105,6 +138,9 @@ export const useMarkNotificationRead = () => {
 /**
  * PUT /notifications/read-all — bulk mark every unread notification as read.
  * Called from the inbox header when the user taps "Mark all read".
+ *
+ * Same optimistic-update / non-refetching-settle shape as
+ * useMarkNotificationRead above, for the same jitter reason.
  */
 export const useMarkAllNotificationsRead = () => {
     const queryClient = useQueryClient();
@@ -113,11 +149,119 @@ export const useMarkAllNotificationsRead = () => {
             const res = await api.put('/notifications/read-all');
             return res.data;
         },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    return {
+                        ...old,
+                        notifications: old.notifications.map((n: any) => ({ ...n, is_read: true })),
+                        unread_count: 0,
+                    };
+                },
+            );
+            return { previous };
         },
-        onError: () => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        onError: (_err, _vars, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
+        },
+    });
+};
+
+/**
+ * DELETE /notifications/{id} — remove a single notification.
+ *
+ * Same optimistic-update / non-refetching-settle shape as
+ * useMarkNotificationRead: the row disappears from the cached list
+ * immediately, and unread_count is decremented only if the deleted row was
+ * unread. onError restores the previous cache snapshot(s).
+ */
+export const useDeleteNotification = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (notificationId: string) => {
+            const res = await api.delete(`/notifications/${notificationId}`);
+            return res.data;
+        },
+        onMutate: async (notificationId: string) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    const target = old.notifications.find((n: any) => n.id === notificationId);
+                    if (!target) return old;
+                    return {
+                        ...old,
+                        notifications: old.notifications.filter((n: any) => n.id !== notificationId),
+                        unread_count: target.is_read
+                            ? old.unread_count ?? 0
+                            : Math.max(0, (old.unread_count ?? 0) - 1),
+                    };
+                },
+            );
+            return { previous };
+        },
+        onError: (_err, _notificationId, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
+        },
+    });
+};
+
+/**
+ * DELETE /notifications — clear notifications for the current user.
+ * Pass `readOnly: true` to only clear already-read notifications ("clear
+ * old"); omit/false clears everything ("clear all").
+ *
+ * Same optimistic-update / non-refetching-settle shape as the other
+ * mutations in this file.
+ */
+export const useClearNotifications = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (readOnly: boolean = false) => {
+            const res = await api.delete(`/notifications${readOnly ? '?read_only=true' : ''}`);
+            return res.data;
+        },
+        onMutate: async (readOnly: boolean = false) => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.notifications.list });
+            const previous = queryClient.getQueriesData({ queryKey: queryKeys.notifications.list });
+            queryClient.setQueriesData(
+                { queryKey: queryKeys.notifications.list },
+                (old: any) => {
+                    if (!old?.notifications) return old;
+                    if (readOnly) {
+                        return {
+                            ...old,
+                            notifications: old.notifications.filter((n: any) => !n.is_read),
+                        };
+                    }
+                    return { ...old, notifications: [], unread_count: 0 };
+                },
+            );
+            return { previous };
+        },
+        onError: (_err, _readOnly, context) => {
+            context?.previous?.forEach(([queryKey, data]) => {
+                queryClient.setQueryData(queryKey, data);
+            });
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list, refetchType: 'none' });
         },
     });
 };

@@ -36,3 +36,26 @@ def test_search_matches_user_id_uuid():
     # bug — regex escapes leaked into the LIKE pattern, so any term with a
     # hyphen, space, or period searched for a literal backslash.
     assert any(c.get("id", {}).get("$regex") == "uid-rider-target" for c in or_clauses)
+
+
+def test_post_search_passes_int_offset():
+    """Regression: admin_search_users (POST) called admin_get_users without
+    offset=, so offset defaulted to the raw Query(0) object instead of 0.
+    That caused 'Query' + 'int' TypeError in get_rows' q.range() call.
+    Fixes CRIMSON-SMOKE-7445-WV."""
+    captured_kw = {}
+
+    async def get_rows_side(table, filters=None, **kw):
+        captured_kw.update(kw)
+        return []
+
+    with patch("backend.routes.admin.users.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+        asyncio.run(
+            admin_users.admin_search_users(
+                body=admin_users.UserSearchRequest(search="test", limit=5),
+                admin_user={"id": "admin", "role": "admin"},
+            )
+        )
+
+    assert isinstance(captured_kw.get("offset"), int), f"offset must be int, got {type(captured_kw.get('offset'))}"
+    assert isinstance(captured_kw.get("limit"), int), f"limit must be int, got {type(captured_kw.get('limit'))}"

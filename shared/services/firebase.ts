@@ -1,4 +1,5 @@
 import { Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { formatAppCheckError, reportAppCheckFailure } from '../utils/appCheckDiagnostics';
 
 /**
  * Firebase Services — FCM, Crashlytics, App Check
@@ -68,6 +69,11 @@ let _initServicesPromise: Promise<void> | null = null;
 // getAppCheckToken() (called per-request + per background batch) can reuse it.
 let _appCheckInstance: AppCheckInstance | null = null;
 
+function recordToCrashlytics(error: Error): void {
+  if (!crashlyticsApi) return;
+  crashlyticsApi.recordError(crashlyticsApi.getCrashlytics(), error);
+}
+
 export function initFirebaseServices(): Promise<void> {
   if (_initServicesPromise) return _initServicesPromise;
   _initServicesPromise = _doInitFirebaseServices();
@@ -120,7 +126,10 @@ async function _doInitFirebaseServices(): Promise<void> {
       });
       console.log('[Firebase] App Check initialized');
     } catch (e) {
-      console.log('[Firebase] App Check init error:', e);
+      console.error('[Firebase] App Check init error:', formatAppCheckError(e));
+      // With no instance, getAppCheckToken() returns null before ever calling
+      // getToken(), so this is the only place an init failure can be reported.
+      reportAppCheckFailure('init', e, recordToCrashlytics);
     }
   }
 }
@@ -467,7 +476,8 @@ export async function getAppCheckToken(): Promise<string | null> {
     const result = await appCheckApi.getToken(_appCheckInstance, false);
     return result?.token ?? null;
   } catch (e) {
-    console.log('[Firebase] App Check token fetch error:', e);
+    console.error('[Firebase] App Check token fetch error:', formatAppCheckError(e));
+    reportAppCheckFailure('token', e, recordToCrashlytics);
     return null;
   }
 }

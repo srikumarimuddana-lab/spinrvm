@@ -1,16 +1,17 @@
 /// <reference types="geojson" />
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-    MAP_STYLE_URL,
+    primaryMapStyle,
     addStandardControls,
     fitBoundsToPoints,
     makeCircleMarkerEl,
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
+import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 import {
     buildPathGradient,
     buildStraightRouteGradient,
@@ -59,14 +60,23 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
     const mapRef = useRef<maplibregl.Map | null>(null);
     const driverMarkerRef = useRef<maplibregl.Marker | null>(null);
     const isLoadedRef = useRef(false);
+    // Lazy initializer, computed once — same idiom ride-route-map.tsx and
+    // monitoring-map.tsx already use for this probe. Without it, a browser
+    // whose WebGL context is a non-drawing stub (common with privacy/ad-
+    // blocking extensions) still gets a MapLibre map built here: MapLibre's
+    // own "load" event only reflects style/tile JSON reaching the page, not
+    // the GPU actually painting, so the canvas would sit blank with nothing
+    // on screen explaining why. See src/lib/map/webgl-support.ts.
+    const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
 
     // Initialize map once
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
+        if (!webglOk) return;
 
         const map = new maplibregl.Map({
             container: containerRef.current,
-            style: MAP_STYLE_URL,
+            style: primaryMapStyle(),
             center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
             zoom: 13,
         });
@@ -166,7 +176,7 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
             mapRef.current = null;
             isLoadedRef.current = false;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, webglOk]);
 
     // Update driver position and trail
     useEffect(() => {
@@ -182,6 +192,22 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
             src?.setData(trailGradientFeatureCollection(trail));
         }
     }, [driverLat, driverLng, trail]);
+
+    if (!webglOk) {
+        return (
+            <div
+                role="status"
+                className="flex h-full min-h-[400px] w-full items-center justify-center bg-muted px-6 text-center"
+            >
+                <p className="text-sm text-muted-foreground">
+                    Live map can&apos;t render in this browser — often an ad or
+                    privacy blocker. Try disabling it for this site, or use a
+                    different browser. Ride status, route, and driver/rider
+                    details in the panel are still live.
+                </p>
+            </div>
+        );
+    }
 
     return <div ref={containerRef} className="w-full h-full min-h-[400px]" />;
 }

@@ -263,6 +263,109 @@ class TestFreshChargeFailurePushTargetApp:
 
 
 @pytest.mark.asyncio
+class TestRiderNoticeFailureIsObservable:
+    """A push that *raises* must not vanish (2026-09-20 review, finding E2).
+
+    Both branches above used to swallow the exception at `logger.debug`, which
+    made a rider who was never told indistinguishable from one who ignored the
+    notice -- on the one message that tells them their card failed and their
+    ride is now payment_status='failed'. The settlement result stays unchanged
+    (the push is best-effort), but the failure is now ERROR plus
+    spinr_payment_rider_notice_failed_total{reason}.
+
+    ERROR, not WARNING: an earlier draft used WARNING on the grounds that
+    payment_retry "re-notifies". It does not -- it pushes the rider only at
+    MAX_RETRIES, and only from its except-branch; its normal decline path alerts
+    ADMINS. So nothing promptly compensates for a lost push, and CLAUDE.md's
+    degraded-but-recovered warning+metric row does not apply. See
+    docs/change-log/2026-09-21-rider-payment-failure-notice-observable.md and
+    routes/webhooks.py, which logs the identical lost push at ERROR.
+
+    These also guard a latent NameError: this module imports metrics
+    per-function, not at module scope, so both new call sites need their own
+    local import. Without it the counter line would raise inside an exception
+    handler -- masking the original push error with a NameError and changing
+    what settle_card returns. Only exercising the raising path catches that.
+    """
+
+    def _counter(self, reason: str) -> float:
+        from backend.utils import metrics
+
+        return (
+            metrics.snapshot()["counters"]
+            .get("spinr_payment_rider_notice_failed_total", {})
+            .get((("reason", reason),), 0)
+        )
+
+    async def test_declined_push_failure_is_counted_and_does_not_change_the_result(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        declined = _outcome(status="declined", decline_code="card_declined", error_message="Declined")
+        patches, updates = _common_patches(charge=declined)
+        # Replace the push mock (position fixed by _common_patches) with one that raises.
+        patches[5] = patch(
+            "backend.services.payment_service.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("FCM unreachable")),
+        )
+        before = self._counter("card_declined")
+
+        with ExitStack() as st:
+            [st.enter_context(p) for p in patches]
+            result = await settle_card(_fresh_ride(), RIDE_ID, RIDER_ID, Decimal("25.00"), Decimal("0"))
+
+        # The settlement outcome is unchanged -- the push is best-effort and its
+        # failure must not turn a clean 402 into something else.
+        assert result.success is False
+        assert result.error_code == "card_declined"
+        assert result.status_code == 402
+        assert self._counter("card_declined") == before + 1
+
+    async def test_generic_failure_push_failure_is_counted_and_does_not_change_the_result(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        failed = _outcome(status="failed", error_message="Something went wrong")
+        patches, updates = _common_patches(charge=failed)
+        patches[5] = patch(
+            "backend.services.payment_service.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("FCM unreachable")),
+        )
+        before = self._counter("payment_error")
+
+        with ExitStack() as st:
+            [st.enter_context(p) for p in patches]
+            result = await settle_card(_fresh_ride(), RIDE_ID, RIDER_ID, Decimal("25.00"), Decimal("0"))
+
+        assert result.success is False
+        assert result.error_code == "payment_error"
+        assert self._counter("payment_error") == before + 1
+
+    async def test_ride_is_still_marked_failed_when_the_push_raises(self):
+        """The DB write happens before the push, so a push failure must not roll
+        it back or skip it -- otherwise a rider whose card was declined would
+        keep a ride that still looks payable."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        declined = _outcome(status="declined", decline_code="card_declined", error_message="Declined")
+        patches, updates = _common_patches(charge=declined)
+        patches[5] = patch(
+            "backend.services.payment_service.send_push_notification",
+            AsyncMock(side_effect=RuntimeError("FCM unreachable")),
+        )
+
+        with ExitStack() as st:
+            [st.enter_context(p) for p in patches]
+            await settle_card(_fresh_ride(), RIDE_ID, RIDER_ID, Decimal("25.00"), Decimal("0"))
+
+        assert _last(updates, "payment_status") == "failed"
+
+
+@pytest.mark.asyncio
 class TestChangeCardOverride:
     """The in-app 'Change Card' escape: payment_method_id_override forces a
     fresh charge on the chosen card and never captures the booking-time hold

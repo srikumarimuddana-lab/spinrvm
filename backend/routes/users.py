@@ -1048,7 +1048,6 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     referee_earned = await paid_referee_earnings(user["id"], "rider") or Decimal("0")
     summary = {
         "referral_code": code,
-        "referral_link": f"https://spinr.app/r/{code}",
         "total_referrals": total,
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,
@@ -1171,7 +1170,7 @@ async def apply_rider_referral(req: ApplyRiderReferralRequest, current_user: dic
 
 
 class RiderEmailVerifyConfirmRequest(BaseModel):
-    code: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
+    code: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
 
 
 def _rider_email_verify_lockout_key(user_id: str) -> str:
@@ -1340,7 +1339,7 @@ async def confirm_rider_email_verification(
     if not otp_record or not verify_otp_hash(str(otp_record.get("code_hash", "")), code):
         await _record_otp_failure(lockout_key)
         raise SpinrException(
-            message="ERR_OTP_INVALID",
+            message="That code didn't match. Please try again.",
             error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
@@ -1370,7 +1369,7 @@ async def confirm_rider_email_verification(
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) > expires_at:
         raise SpinrException(
-            message="ERR_OTP_EXPIRED",
+            message="That code has expired. Please request a new one.",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,

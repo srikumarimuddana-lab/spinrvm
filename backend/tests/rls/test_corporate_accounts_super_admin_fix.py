@@ -18,6 +18,28 @@ fixture (right after its 142 extraction, for the same grant-then-narrow
 sequencing reason) so `test_corporate_billing_rls.py` and this file see the
 same, single, correct schema. This file's own duplicate fixture was removed
 rather than left to double-apply migration 416 in the same session.
+
+ACTION_ITEMS.md C107 / migration 430: a 2026-09-13 production data cleanup
+plus migration 256's `chk_users_role_not_admin` CHECK constraint already
+closed the original C107 finding (no `users` row can hold 'admin'/
+'super_admin' anymore) without touching any policy. migration 430 layers
+additional hardening on top: it replaces the "Admin read <table>" policy this
+file's `test_super_admin_can_select_any_corporate_account` /
+`test_admin_can_still_select_any_corporate_account` originally pinned with an
+explicit `USING (false)`, so both are rewritten below to assert denial
+instead of removed -- migration 416's admin/super_admin parity fix is still
+real (both role values reach the same, now-`false`, policy; neither is
+special-cased over the other), it's just that the policy denies everyone now.
+`test_super_admin_cannot_insert_corporate_account` is untouched by 430 (write
+access was already revoked at the grant layer by 416) and is unaffected by
+any of this.
+
+Migration 431 (found 2026-09-20 while rolling out 430 to production): a
+second, out-of-band "Admin full access for corporate accounts" policy that
+no migration file in this repo's history ever created -- see
+`test_stray_admin_policy_removed_by_431` below for the regression test and
+`backend/migrations/431_drop_stray_corporate_accounts_admin_policy.sql` for
+the full root-cause writeup.
 """
 
 from __future__ import annotations
@@ -51,12 +73,10 @@ def _seed_account(cur, account_id: str, name: str = "Test Co") -> None:
     cur.execute("INSERT INTO corporate_accounts (id, name) VALUES (%s, %s)", (account_id, name))
 
 
-def test_super_admin_can_select_any_corporate_account(pg_cur):
-    """Migration 416 regression pin: this is the bug. Before 416,
-    corporate_accounts' policy (migration 17) checked `role = 'admin'` only
-    -- a super_admin-role authenticated JWT was denied entirely, unlike the
-    9 sibling corporate tables migration 142 already fixed to check
-    `role IN ('admin', 'super_admin')`."""
+def test_super_admin_cannot_select_any_corporate_account(pg_cur):
+    """migration 430 (ACTION_ITEMS.md C107): the admin-read policy migration
+    416 fixed for super_admin parity is now USING (false) -- super_admin is
+    denied exactly like admin, not specially permitted."""
     account_id = _uuid()
     super_admin = _uuid()
     as_role(pg_cur, None)
@@ -64,11 +84,12 @@ def test_super_admin_can_select_any_corporate_account(pg_cur):
     _seed_account(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
-def test_admin_can_still_select_any_corporate_account(pg_cur):
-    """No regression on the pre-existing, already-working admin path."""
+def test_admin_cannot_select_any_corporate_account(pg_cur):
+    """Same denial applies to the plain admin role value -- migration 430
+    makes no distinction between the two."""
     account_id = _uuid()
     admin = _uuid()
     as_role(pg_cur, None)
@@ -76,7 +97,7 @@ def test_admin_can_still_select_any_corporate_account(pg_cur):
     _seed_account(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_rider_cannot_select_corporate_accounts(pg_cur):
@@ -124,3 +145,54 @@ def test_service_role_can_insert_corporate_account(pg_cur):
     as_role(pg_cur, "service_role", None)
     pg_cur.execute("INSERT INTO corporate_accounts (id, name) VALUES (%s, 'Service Co')", (account_id,))
     assert pg_cur.rowcount == 1
+
+
+# ── migration 431: out-of-band "Admin full access for corporate accounts" ──
+
+
+def test_stray_admin_policy_removed_by_431(pg_cur):
+    """migration 431 (found 2026-09-20 while rolling out 430): production
+    carried a policy named "Admin full access for corporate accounts" that no
+    migration file in this repo's history ever created (confirmed via `git
+    log --all -S` across every branch) -- pure out-of-band drift, invisible
+    to this harness since it only ever builds schema by replaying migration
+    files. conftest.py's global setup already applies 431, so by the time any
+    test runs the drifted policy is long gone -- there is nothing left here
+    to demonstrate a fix against. This test manufactures the exact drifted
+    state directly (recreating the stray policy verbatim), proves it really
+    was a live access hole (an admin-role JWT gains SELECT through it despite
+    migration 430's own USING (false) policy on this table -- RLS ORs
+    permissive SELECT policies together), then re-applies 431's DROP and
+    proves the hole closes. Ends by restoring the post-431 state the rest of
+    the suite expects, so this test doesn't leak side effects to others."""
+    as_role(pg_cur, None)
+    pg_cur.execute(
+        """
+        CREATE POLICY "Admin full access for corporate accounts"
+            ON corporate_accounts FOR ALL TO authenticated
+            USING (EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text
+                             AND users.role = 'admin'))
+        """
+    )
+    try:
+        account_id = _uuid()
+        admin = _uuid()
+        _seed_user(pg_cur, admin, role="admin")
+        _seed_account(pg_cur, account_id)
+
+        as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+        pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
+        assert [r[0] for r in pg_cur.fetchall()] == [account_id], (
+            "expected the drifted stray policy to actually grant access here -- "
+            "if this fails, the stray-policy scenario isn't reproduced correctly"
+        )
+
+        as_role(pg_cur, None)
+        pg_cur.execute('DROP POLICY IF EXISTS "Admin full access for corporate accounts" ON corporate_accounts')
+
+        as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+        pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
+        assert pg_cur.fetchall() == []
+    finally:
+        as_role(pg_cur, None)
+        pg_cur.execute('DROP POLICY IF EXISTS "Admin full access for corporate accounts" ON corporate_accounts')

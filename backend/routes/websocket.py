@@ -207,7 +207,21 @@ WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 RIDE_STATUS_ECHO_COOLDOWN_S = 2.0
 
 
-async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
+def _safe_ws_close_reason(reason: str | None) -> str:
+    # Close-frame text is peer-controlled. Never persist arbitrary text/PII.
+    if reason in ("app_backgrounded", "heartbeat_timeout", "token_revoked", "heartbeat_send_failed", "handler_error"):
+        return reason
+    return "other" if reason else "unspecified"
+
+
+async def _handle_driver_ws_disconnect(
+    connection_key: str | None,
+    user: dict | None,
+    *,
+    conn_state: dict | None = None,
+    close_code: int | None = None,
+    close_reason: str | None = None,
+) -> None:
     """Narrow post-disconnect hook: surface "socket dropped" to admins.
 
     Intent (``drivers.is_online``) and reachability (Redis presence) are now
@@ -240,6 +254,20 @@ async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | 
     # disconnect is stale — nothing to broadcast.
     if connection_key in manager.active_connections:
         return
+    metadata = {
+        "reason": "ws_disconnect",
+        "source": "websocket",
+        "close_code": close_code,
+        "close_reason": _safe_ws_close_reason(close_reason),
+    }
+    if conn_state:
+        now = asyncio.get_running_loop().time()
+        for timestamp_key, age_key in (("connected_at", "connection_age_ms"), ("last_pong_at", "last_pong_age_ms")):
+            if timestamp_key in conn_state:
+                metadata[age_key] = max(0, int((now - conn_state[timestamp_key]) * 1000))
+        # Separate a local server decision from the peer's claimed reason.
+        if "server_close_reason" in conn_state:
+            metadata["server_close_reason"] = _safe_ws_close_reason(conn_state["server_close_reason"])
     try:
         driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]})
         if not driver_profile_off:
@@ -261,7 +289,7 @@ async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | 
                         "event_type": "connection_lost",
                         "title": "Connection lost",
                         "description": "Driver WebSocket closed — app backgrounded, force-killed, or lost network. Intent stays online; presence sweeper will reconcile if the app doesn't reconnect.",
-                        "metadata": {"reason": "ws_disconnect", "source": "websocket"},
+                        "metadata": metadata,
                         "actor": "system",
                         "created_at": now_iso,
                     },
@@ -388,6 +416,8 @@ async def heartbeat_task(
                     stored_version = await _read_token_version(connection_key, user_id)
                     _revoked = stored_version is not None and stored_version > claim_token_version
                 if _revoked:
+                    if conn_state is not None:
+                        conn_state["server_close_reason"] = "token_revoked"
                     logger.info(f"WS heartbeat: session revoked for {connection_key}; closing")
                     # Revocation is a DELIBERATE server-forced close (Sign out
                     # everywhere / token-version bump / Firebase session
@@ -427,6 +457,8 @@ async def heartbeat_task(
                     }
                 )
             except Exception:
+                if conn_state is not None:
+                    conn_state["server_close_reason"] = "heartbeat_send_failed"
                 logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
                 break
             # Pong-staleness check is opt-in via conn_state; legacy/test
@@ -436,11 +468,12 @@ async def heartbeat_task(
                 continue
             last_pong = conn_state.get("last_pong_at", 0.0)
             if loop.time() - last_pong > stale_threshold:
+                conn_state["server_close_reason"] = "heartbeat_timeout"
                 logger.info(
                     f"[WS] {connection_key} no pong for {loop.time() - last_pong:.1f}s — closing stale connection"
                 )
                 try:
-                    await websocket.close(code=1001)  # 1001 = going away
+                    await websocket.close(code=1001, reason="heartbeat_timeout")
                 except Exception:  # noqa: S110
                     pass
                 break
@@ -463,6 +496,7 @@ async def websocket_endpoint(
     user = None
     connection_key = None
     hb_task = None
+    conn_state: dict = {"connected_at": asyncio.get_running_loop().time()}
     # Track the driver row id when this socket authenticates as a driver so
     # the disconnect / error branches can clear Redis presence regardless of
     # where the drop happened.
@@ -762,7 +796,7 @@ async def websocket_endpoint(
         # B-P1-11: pass user_id + claim_token_version so the heartbeat can
         # re-validate against the DB row each tick and close the socket
         # if /auth/logout-all bumped token_version since connect.
-        conn_state: dict = {"last_pong_at": asyncio.get_event_loop().time()}
+        conn_state["last_pong_at"] = asyncio.get_event_loop().time()
         # -inf, not 0.0: loop time starts near zero on a fresh loop, so a 0.0
         # sentinel would swallow the first echo of a connection's lifetime.
         _last_status_echo_at = float("-inf")
@@ -912,25 +946,6 @@ async def websocket_endpoint(
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    # B3.3: buffer per-ping points and write them as one
-                    # insert (~10 points / 10s) through the shared breadcrumb
-                    # path. That path stores the device capture timestamp
-                    # when supplied (captured_at/device_timestamp/recorded_at/
-                    # timestamp), records received_at separately, and derives
-                    # ride phase from server ride milestones instead of trusting
-                    # the client's current message timing or phase tag. The
-                    # buffer flushes early on ride-context change, and the
-                    # disconnect/completion paths flush the remainder.
-                    # The driver app persists route samples through the v2
-                    # acknowledged outbox. WebSocket messages marked ephemeral
-                    # still update/fan out the live marker, but must not create
-                    # a second breadcrumb trail or inflate billed distance.
-                    # A signed-out session must not add to the durable trail.
-                    # The live-marker fan-out above is ephemeral and harmless;
-                    # this is the write that persists coordinates.
-                    if data.get("durable", True) and not await _ws_session_revoked():
-                        await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
-
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()
                     global _maps_key_cache, _maps_key_fetched_at
@@ -942,6 +957,7 @@ async def websocket_endpoint(
                             logger.opt(exception=True).debug("Maps API key refresh failed; retaining stale key")
                         _maps_key_fetched_at = now_mono
 
+                    live_captured_at = parse_iso_utc(data.get("captured_at"))
                     location_update = {
                         "type": "driver_location_update",
                         "driver_id": driver_id,
@@ -949,6 +965,7 @@ async def websocket_endpoint(
                         "lng": lng,
                         "speed": data.get("speed"),
                         "heading": data.get("heading"),
+                        "captured_at": live_captured_at.isoformat() if live_captured_at else None,
                     }
 
                     # Forward to riders of confirmed rides (driver_accepted →
@@ -964,6 +981,7 @@ async def websocket_endpoint(
 
                         ride_status = ride.get("status", "")
                         rider_msg = location_update.copy()
+                        rider_msg["ride_id"] = ride["id"]
 
                         if ride_status in _ETA_PICKUP_STATUSES:
                             pickup_lat = ride.get("pickup_lat")
@@ -1008,6 +1026,36 @@ async def websocket_endpoint(
                     # throttled per driver (#3) so 1 Hz pings don't fan out
                     # N drivers x A admins every second.
                     await manager.broadcast_driver_location_to_admins(driver_id, location_update)
+
+                    # B3.3: buffer per-ping points and write them as one
+                    # insert (~10 points / 10s) through the shared breadcrumb
+                    # path. That path stores the device capture timestamp
+                    # when supplied (captured_at/device_timestamp/recorded_at/
+                    # timestamp), records received_at separately, and derives
+                    # ride phase from server ride milestones instead of trusting
+                    # the client's current message timing or phase tag. The
+                    # buffer flushes early on ride-context change, and the
+                    # disconnect/completion paths flush the remainder.
+                    # The driver app persists route samples through the v2
+                    # acknowledged outbox. WebSocket messages marked ephemeral
+                    # still update/fan out the live marker, but must not create
+                    # a second breadcrumb trail or inflate billed distance.
+                    # A signed-out session must not add to the durable trail.
+                    #
+                    # Deliberately placed AFTER the rider/admin fan-out above,
+                    # not before: this occasionally flushes to Postgres
+                    # (~every 10 points/10s) and that write was previously
+                    # sequenced before the fan-out loop, so roughly 1-in-10
+                    # ticks paid a synchronous DB round-trip inside the
+                    # <100ms WS fan-out SLA path for no reason -- nothing
+                    # below here reads a value buffer_ride_breadcrumb sets.
+                    # Still a plain `await`, not fire-and-forget: a flush
+                    # failure must still propagate to this same request's
+                    # error handling, per this module's own documented loss
+                    # semantics (breadcrumb_buffer.py's module docstring) --
+                    # only the ORDER moved, not how the call is awaited.
+                    if data.get("durable", True) and not await _ws_session_revoked():
+                        await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
 
             elif data.get("type") in ("location_batch", "driver_location_batch"):
                 # Batch upload of buffered GPS points (offline recovery).
@@ -1142,6 +1190,7 @@ async def websocket_endpoint(
                                 },
                                 limit=10,
                             )
+                            _batch_captured_at = parse_iso_utc(last_pt.get("captured_at"))
                             _batch_loc_update = {
                                 "type": "driver_location_update",
                                 "driver_id": driver_id,
@@ -1149,11 +1198,13 @@ async def websocket_endpoint(
                                 "lng": _lng,
                                 "speed": last_pt.get("speed"),
                                 "heading": last_pt.get("heading"),
+                                "captured_at": _batch_captured_at.isoformat() if _batch_captured_at else None,
                             }
                             for _batch_ride in _batch_active_rides:
                                 if _batch_ride.get("status") not in _RIDER_LOCATION_STATUSES:
                                     continue
                                 _batch_rider_msg = _batch_loc_update.copy()
+                                _batch_rider_msg["ride_id"] = _batch_ride["id"]
                                 _batch_ride_status = _batch_ride.get("status", "")
                                 if _batch_ride_status in _ETA_PICKUP_STATUSES:
                                     _p_lat = _batch_ride.get("pickup_lat")
@@ -1435,7 +1486,7 @@ async def websocket_endpoint(
         # actual removal cannot slip through.
         logger.info(
             f"[GO-ONLINE] WS branch=WebSocketDisconnect connection_key={connection_key} "
-            f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
+            f"code={getattr(_wsd, 'code', None)} reason={_safe_ws_close_reason(getattr(_wsd, 'reason', None))} "
             f"current_driver_id={current_driver_id}"
         )
         if connection_key and manager.active_connections.get(connection_key) is websocket:
@@ -1456,8 +1507,15 @@ async def websocket_endpoint(
             # is_online after the grace window. Explicit Go Offline still clears
             # immediately (routes/drivers.py), and dispatch re-checks presence at
             # offer time, so a dead socket cannot silently absorb a ride.
-            await _handle_driver_ws_disconnect(connection_key, user)
+            await _handle_driver_ws_disconnect(
+                connection_key,
+                user,
+                conn_state=conn_state,
+                close_code=_wsd.code,
+                close_reason=getattr(_wsd, "reason", None),
+            )
     except Exception as e:
+        conn_state.setdefault("server_close_reason", "handler_error")
         logger.exception(
             f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
             f"current_driver_id={current_driver_id} err={e}"
@@ -1467,7 +1525,7 @@ async def websocket_endpoint(
             # Same as the clean-disconnect branch above: let presence lapse via its
             # 30s TTL rather than force-clearing on an involuntary drop, so a
             # network blip doesn't hide the driver from riders.
-            await _handle_driver_ws_disconnect(connection_key, user)
+            await _handle_driver_ws_disconnect(connection_key, user, conn_state=conn_state)
         try:
             await websocket.close()
         except Exception:  # noqa: S110

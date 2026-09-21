@@ -164,6 +164,68 @@ describe('shared/api/client — token refresh mid-trip (P1-11 / E11)', () => {
     expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the session on a pre-init 401 when a refresh token IS on disk', async () => {
+    // The SPR-T9NYPB guard (2026-09-11): with no refresh callback registered,
+    // authStore.initialize() has not run, so nothing in this process has TRIED
+    // the stored refresh token — and that token is the whole session. Wiping it
+    // here sends the next foreground open straight to OTP without the backend
+    // ever seeing a refresh attempt. Defer the decision to initialize().
+    // This file pins Platform.OS to 'web' at module scope, where the guard is
+    // intentionally inert (the token lives in an HttpOnly cookie the client
+    // cannot read). Flip to native for this test — otherwise it would pass via
+    // the web short-circuit and prove nothing about the guard.
+    const RN = jest.requireMock('react-native') as { Platform: { OS: string } };
+    const SecureStore = jest.requireMock('expo-secure-store') as {
+      getItemAsync: jest.Mock;
+    };
+    const originalOS = RN.Platform.OS;
+    RN.Platform.OS = 'ios';
+    try {
+      SecureStore.getItemAsync.mockResolvedValueOnce('a-stored-refresh-token');
+      setRefreshCallback(null as any);
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/notifications')).rejects.toThrow();
+
+      expect(SecureStore.getItemAsync).toHaveBeenCalled();
+      expect(mockLogout).not.toHaveBeenCalled();
+    } finally {
+      RN.Platform.OS = originalOS;
+    }
+  });
+
+  it('keeps the session on a pre-init 401 when the keychain read THROWS', async () => {
+    // Regression for F2 (2026-09-13 test ride). expo-secure-store throws —
+    // rather than returning null — for any OSStatus except errSecItemNotFound,
+    // notably while the device keychain is locked, which is exactly the state a
+    // backgrounded app hits. Reading that throw as "no token on disk" routed
+    // this branch to logout() and wiped a live session, reproducing the very
+    // bug the guard above exists to prevent.
+    //
+    // Unreadable is not absent: the correct response is to defer, exactly as
+    // when the token is present. If there genuinely is no token, there is no
+    // session to lose and initialize() reaches the same logged-out state one
+    // beat later.
+    const RN = jest.requireMock('react-native') as { Platform: { OS: string } };
+    const SecureStore = jest.requireMock('expo-secure-store') as {
+      getItemAsync: jest.Mock;
+    };
+    const originalOS = RN.Platform.OS;
+    RN.Platform.OS = 'ios';
+    try {
+      SecureStore.getItemAsync.mockRejectedValueOnce(new Error('keychain locked'));
+      setRefreshCallback(null as any);
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/notifications')).rejects.toThrow();
+
+      expect(SecureStore.getItemAsync).toHaveBeenCalled();
+      expect(mockLogout).not.toHaveBeenCalled();
+    } finally {
+      RN.Platform.OS = originalOS;
+    }
+  });
+
   it('does not trigger a refresh loop when /auth/refresh itself returns 401', async () => {
     const refreshCallback = jest.fn().mockResolvedValue(false);
     setRefreshCallback(refreshCallback);

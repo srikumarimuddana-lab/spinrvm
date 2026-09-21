@@ -17,6 +17,7 @@ interface DriverTopBarProps {
   user?: unknown;
   isOnline: boolean;
   connectionState?: ConnectionState;
+  onRetryConnection?: () => void;
   surgeMultiplier?: number;
   wsLatency?: number | null;
   earnings?: EarningsSummary | null;
@@ -26,6 +27,7 @@ interface DriverTopBarProps {
 export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   isOnline,
   connectionState,
+  onRetryConnection,
   surgeMultiplier,
   earnings,
   unreadNotifCount = 0,
@@ -75,6 +77,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
     : bannerLevel === 'reconnecting'
       ? t('dashboard.reconnecting')
       : t('dashboard.connectionLost');
+  const bannerIsAction = Boolean(onRetryConnection) && (bannerLevel === 'disconnected' || bannerLevel === 'reconnecting');
 
   const todayEarnings = earnings?.total_earnings ?? '0.00';
   const todayTrips = earnings?.total_rides ?? 0;
@@ -124,6 +127,34 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
         </TouchableOpacity>
       </View>
       {showBanner && (
+        bannerIsAction ? (
+          <TouchableOpacity
+            onPress={onRetryConnection}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`${bannerText}. ${t('common.retry')}`}
+            accessibilityHint={t('common.retry')}
+            accessibilityLiveRegion="polite"
+          >
+            <Animated.View
+              style={[
+                styles.connectionBanner,
+                bannerIsRed ? styles.bannerDisconnected : styles.bannerReconnecting,
+                { height: bannerHeight, overflow: 'hidden' as const },
+              ]}
+            >
+              <Ionicons
+                name={bannerLevel === 'no_internet' ? 'cloud-offline-outline' : 'wifi-outline'}
+                size={13}
+                color={bannerIsRed ? '#991B1B' : '#92400E'}
+              />
+              <Text allowFontScaling={false} style={[styles.bannerText, bannerIsRed ? styles.bannerTextDisconnected : styles.bannerTextReconnecting]}>
+                {bannerText}
+              </Text>
+            </Animated.View>
+          </TouchableOpacity>
+        ) : (
         <Animated.View
           style={[
             styles.connectionBanner,
@@ -143,6 +174,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
             {bannerText}
           </Text>
         </Animated.View>
+        )
       )}
     </View>
   );

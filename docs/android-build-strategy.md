@@ -208,6 +208,114 @@ and pick a coherent end-state — which is what this doc captures.
 
 ---
 
+## R8 minification (Android release builds)
+
+**Added 2026-09-14.** Until then R8 had **never** been enabled for either app: no
+`enableProguardInReleaseBuilds` existed anywhere in the repo, so every Android release
+build shipped unminified. Google Play Console's **App optimization** panel reported it —
+Optimization `-`, Shrinking `-`, R8 configuration `-`, rating **Low**. (The ~2% obfuscation
+it also reported is vendor AARs that ship pre-obfuscated, not our build.)
+
+### How it's wired
+
+```
+eas.json  build.<profile>.env.SPINR_ANDROID_MINIFY = "1"
+   ↓ (EAS exports the profile's env before evaluating app config)
+app.config.ts  const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1'
+   ↓
+expo-build-properties → android.enableMinifyInReleaseBuilds
+   ↓
+android/gradle.properties  android.enableMinifyInReleaseBuilds=true
+   ↓
+app/build.gradle  release { minifyEnabled true }
+```
+
+| Profile | rider-app | driver-app |
+|---|---|---|
+| `development` | off (debug build — minification doesn't apply) | off |
+| `test` | **off** (`developmentClient: true` selects debug) | **off** (debug) |
+| `preview` | **on** | **on** |
+| `android-auto` | — | **on** (highest-risk R8 surface; needs the head-unit check). `distribution: store`, so this produces a minified AAB — but it submits to Play's **internal** track, not production. |
+| `production` | **on** (2026-09-15) | **on** (2026-09-15) |
+
+Production explicitly sets `SPINR_ANDROID_MINIFY=1` as of 2026-09-15. Development and
+test stay `0`. Profile env values override ambient/EAS environment values during normal
+EAS builds. Use `preview` for release APK validation; do not convert the Metro-based
+test profile.
+
+Production was off until a human validated an internal store AAB, then flipped in
+`eas.json`. A store upload still has no staging gate in front of it: the next
+production-profile AAB is minified, so install that new internal-testing build
+before promoting. Rollback is a new unminified native binary (`0` + rebuild), not
+an OTA. Checklist and residual Sentry mapping gap:
+`docs/change-log/2026-09-14-android-r8-minification-staged.md` and
+`docs/change-log/2026-09-15-android-r8-production-on.md`.
+
+### The gate fails safe — so verify it actually engaged
+
+If `SPINR_ANDROID_MINIFY` doesn't reach the prebuild step, `ANDROID_MINIFY` is `false` and
+the build succeeds **unminified**. Nothing breaks; you just silently get the old output.
+eas-cli has a history of intermittently not forwarding profile `env` to prebuild
+(expo/eas-cli#2812), so **a green build is not evidence that R8 ran.** Confirm it by
+finding a successful `:app:minifyReleaseWithR8` task in the release build log and
+retaining `app/build/outputs/mapping/release/mapping.txt`. The generated property
+`android.enableMinifyInReleaseBuilds=true` verifies configuration forwarding only.
+The old config alias is normalized by Expo; the old Gradle property is not emitted.
+
+Rollback requires setting the profile flag to `0`, rebuilding and reinstalling or
+distributing a replacement binary. Deleting the flag can expose an inherited `1`;
+an OTA update cannot reverse native minification in an installed APK.
+
+### What is deliberately NOT enabled
+
+**Resource shrinking** (`enableShrinkResourcesInReleaseBuilds`). Play's three percentages
+are R8 *code* metrics, so it earns nothing on that panel, and `shrinkResources` drops
+resources reachable only by name — which is exactly how driver-app's Notifee ride-offer
+channel reaches `res/raw/ride_offer.mp3` (`plugins/withRideOfferSound`). A silently
+silenced ride offer is a dispatch regression, not an app-size win. Don't turn it on
+casually; if you do, verify the ride-offer sound on a device first.
+
+### Keep / dontwarn rules
+
+Two, both added with a real failure (or a documented vendor requirement) to point at:
+
+- `driver-app`: `-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }`,
+  required by `@iternio/react-native-auto-play` >= 0.5.3 because Nitro resolves hybrid
+  objects by class name.
+- `rider-app`: `-dontwarn com.stripe.android.pushProvisioning.**`. Stripe Issuing tap-to-
+  add is optional and not on our classpath; `@stripe/stripe-react-native` still references
+  those classes. The first minified rider production build (EAS `04071f79`, 2026-09-15)
+  failed `:app:minifyReleaseWithR8` on `PushProvisioningActivity$f` and
+  `PushProvisioningActivityStarter*`.
+
+Everything else relies on the consumer ProGuard rules that AARs ship (React Native core,
+Expo modules, Firebase, Play Services, Stripe, OkHttp, Notifee), which R8 applies
+automatically. **Add rules with a failure to point at**, not pre-emptively.
+`extraProguardRules` takes a single string, so additional rules go into the same string
+separated by `\n`.
+
+### Known gap with R8 on production
+
+`@sentry/react-native`'s Expo plugin uploads JS sourcemaps, **not** the ProGuard mapping
+file — that needs the separate `sentry-android-gradle-plugin`. So once R8 is on, Java and
+Kotlin frames in Sentry are obfuscated. Firebase Crashlytics is unaffected (its Gradle
+plugin uploads mappings automatically) and JS stack traces are untouched, since R8 doesn't
+process the JS bundle. Production minify is on as of 2026-09-15; Java/Kotlin Sentry frames
+will be obfuscated until `sentry-android-gradle-plugin` is wired. Crashlytics and JS Sentry
+are unaffected.
+
+### Why not AGP 9 (what Play Console actually recommends)
+
+Play's panel recommends AGP 9.0 as well as R8. These are separate changes.
+[Android's AGP 9.0 compatibility table](https://developer.android.com/build/releases/agp-9-0-0-release-notes#compatibility)
+specifies Gradle **9.1.0**, not 9.5+. This repository pins Gradle **8.13** via
+`withGradleWrapper.js`, so an AGP 9 migration also needs a wrapper change and
+validation of the Expo/RN/native-module build scripts, Kotlin and plugin APIs.
+This R8 PR does not upgrade that toolchain. A Gradle 9.5-specific Expo issue alone
+does not establish that every AGP 9 configuration is unsupported.
+
+---
+
 ## Runtime: Android 16 hidden-API enforcement (LogRocket splash hang)
 
 This doc is mostly about BUILD breaks. This entry is a RUNTIME break — the build

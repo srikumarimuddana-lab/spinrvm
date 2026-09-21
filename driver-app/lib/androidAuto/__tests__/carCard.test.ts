@@ -333,3 +333,12 @@ describe('buildTripCard', () => {
     expect(buildTripCard('trip_in_progress', activeRide({ surge_multiplier: 1.75 })).surgeLabel).toBe('1.75×');
   });
 });
+
+
+it('retains scheduled pickup in restored offers and active trips', () => {
+  const active = activeRide({is_scheduled:true, scheduled_time:'2026-09-15T14:00:00Z'});
+  const restored = buildTripCard('ride_offered', active);
+  expect(restored.scheduledPickupLabel).toBeTruthy();
+  expect(buildOfferAlertText(restored).subtitle).toContain('Pickup');
+  expect(buildTripCard('navigating_to_pickup', active).hint).toMatch(/^Pickup /);
+});

@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { messageForSentinel } from '../errors/sentinelMessages';
 import SpinrConfig from '../config/spinr.config';
 import { addBreadcrumb } from '../services/errorReporting';
 import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
@@ -179,16 +180,34 @@ export function setRefreshCallback(fn: RefreshFn): void {
  * 'refresh_token'. On web the token lives in an HttpOnly cookie the client
  * cannot read (authStore's storage helper is a no-op there), so this reports
  * false and the pre-init branch never applies — web keeps the clear-and-logout
- * behaviour it always had. Any read failure also counts as "none", which
- * keeps the caller on the conservative (clear) path.
+ * behaviour it always had.
+ *
+ * A read FAILURE is deliberately reported as "may exist", not as "none". This
+ * used to return false on a throw, described as "the conservative (clear)
+ * path" — but per the caller's own comment below, clearing is the DESTRUCTIVE
+ * path: it deletes the refresh token that is the whole session. The two
+ * descriptions contradicted each other, and the throwing case took the
+ * destructive branch.
+ *
+ * expo-secure-store throws (rather than returning null) for any OSStatus
+ * except errSecItemNotFound — notably while the keychain is locked, which is
+ * exactly the state a backgrounded app hits. So the old behaviour reproduced
+ * the very bug the caller's guard was added to fix (SPR-T9NYPB, 2026-09-11,
+ * and again as F2 on 2026-09-13).
+ *
+ * Reporting "may exist" is safe in both directions: if a token really is on
+ * disk the session is preserved and initialize() decides; if there is no token
+ * at all, there is no session to lose and initialize() lands on the same
+ * logged-out state one beat later.
  */
-async function hasStoredRefreshToken(): Promise<boolean> {
+async function mayHaveStoredRefreshToken(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
   try {
     const SecureStore = require('expo-secure-store');
     return !!(await SecureStore.getItemAsync('refresh_token'));
   } catch {
-    return false;
+    // Unreadable !== absent. Defer the decision rather than wipe the session.
+    return true;
   }
 }
 
@@ -262,7 +281,7 @@ export function setAppCheckTokenProvider(fn: () => Promise<string | null>): void
   _appCheckTokenProvider = fn;
 }
 
-async function appCheckHeader(): Promise<Record<string, string>> {
+export async function appCheckHeader(): Promise<Record<string, string>> {
   if (!_appCheckTokenProvider) return {};
   try {
     const token = await _appCheckTokenProvider();
@@ -532,6 +551,15 @@ export { clampToastMessage, TOAST_MESSAGE_MAX };
 // already filtered below by name, alongside its JSON-parse message shapes.
 const ENGINE_ERROR_NAMES = new Set(['TypeError', 'ReferenceError', 'RangeError']);
 
+// Backend SpinrException `message` for some auth errors is a machine
+// sentinel (ERR_OTP_INVALID, ERROR_OTP_INVALID, ERR_OTP_EXPIRED) meant
+// for client i18n via `message_key`, not a sentence to show the user.
+const MACHINE_ERROR_SENTINEL = /^(?:ERR|ERROR)_[A-Z0-9_]+$/;
+
+function isMachineErrorSentinel(message: string): boolean {
+  return MACHINE_ERROR_SENTINEL.test(message.trim());
+}
+
 // Message shapes the engines produce, for errors that reach us with `name`
 // stripped — anything crossing a serialization boundary (a rethrow as a plain
 // object, a worker/bridge hop) keeps `message` but loses `name`. Covers
@@ -606,7 +634,9 @@ export function getApiErrorMessage(
   // doubles and cross-realm instances match too.
   if (anyErr?.name === 'RateLimitError') {
     const raw = anyErr.message;
-    if (raw && raw !== 'Request failed') return clampToastMessage(raw);
+    if (raw && raw !== 'Request failed' && !isMachineErrorSentinel(raw)) {
+      return clampToastMessage(raw);
+    }
     const retryAfter = anyErr.retryAfterSeconds;
     if (typeof retryAfter === 'number' && retryAfter > 0) {
       return `Too many requests — please try again in ${retryAfter}s.`;
@@ -616,9 +646,15 @@ export function getApiErrorMessage(
   const data = anyErr?.response?.data;
   if (data) {
     const { message } = extractError(data, anyErr?.response?.status);
+    // A bare ERR_* sentinel is not copy, but for the ones we have a sentence
+    // for it beats the caller's generic fallback — see sentinelMessages.ts.
+    const mapped = messageForSentinel(message);
+    if (mapped) return clampToastMessage(mapped);
     // extractError returns the default 'Request failed' when the body had no
     // recognizable detail — treat that as "no useful message" and fall back.
-    if (message && message !== 'Request failed') return clampToastMessage(message);
+    if (message && message !== 'Request failed' && !isMachineErrorSentinel(message)) {
+      return clampToastMessage(message);
+    }
   }
   // No usable response body. Some callers (e.g. authStore.createProfile) extract
   // the backend detail themselves and re-throw `new Error(detail)`, so a
@@ -628,6 +664,8 @@ export function getApiErrorMessage(
   // on Hermes, "Unexpected token …" on V8/web) — technical noise, not a
   // message for the user.
   const raw = anyErr?.message;
+  const mappedRaw = messageForSentinel(raw);
+  if (mappedRaw) return clampToastMessage(mappedRaw);
   if (
     raw &&
     // An engine crash carries no reason a user can act on, and leaking it
@@ -637,6 +675,7 @@ export function getApiErrorMessage(
     !isEngineError(anyErr) &&
     anyErr?.name !== 'SyntaxError' &&
     raw !== 'Request failed' && // extractError's no-detail sentinel
+    !isMachineErrorSentinel(raw) &&
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw) &&
@@ -936,6 +975,9 @@ const handleApiError = async (
   retryFn?: () => Promise<unknown>,
   isRetryAttempt = false,
 ): Promise<never> => {
+  // Session termination owns its cleanup. Recovering authentication here can
+  // recursively refresh while logout holds the native session lock.
+  if (url === '/auth/logout') return Promise.reject(response);
   // Set when this 401 went through the silent-refresh path below. Once
   // refreshTokens() has run, IT owns the logout decision (it logs out on a
   // definitive 401 and deliberately keeps the session on transient
@@ -1169,7 +1211,7 @@ const handleApiError = async (
     // refresh token is on disk and no one has tried it, reject and leave the
     // decision to initialize(), which refreshes on its first run and only
     // logs out on a definitive 401 of its own.
-    if (!_refreshCallback && (await hasStoredRefreshToken())) {
+    if (!_refreshCallback && (await mayHaveStoredRefreshToken())) {
       console.log('[API] 401 before auth init — refresh token untouched, deferring to initialize()');
       addBreadcrumb(`api 401 pre-init on ${method} ${breadcrumbPath(url)} — session kept for initialize()`);
     } else {

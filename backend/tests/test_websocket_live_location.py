@@ -98,6 +98,25 @@ def test_handshake_rejects_a_tombstoned_session() -> None:
     assert "await is_session_revoked(ws_session_id)" in handshake
 
 
+# ── 3. Breadcrumb flush must not delay the rider/admin fan-out ─────────────
+
+
+def test_single_ping_breadcrumb_buffer_runs_after_fanout() -> None:
+    """The per-ping breadcrumb buffer occasionally flushes to Postgres
+    (~every 10 points/10s). That write must not sit ahead of the
+    rider/admin location fan-out in the <100ms WS fan-out SLA path, since
+    nothing in the fan-out reads a value ``buffer_ride_breadcrumb`` sets.
+
+    Guards a regression where the buffer call was sequenced before the fan-out
+    loop, so roughly 1-in-10 ticks paid a synchronous DB round-trip before any
+    rider/admin ever saw the location update.
+    """
+    fanout_at = SOURCE.find("await manager.broadcast_driver_location_to_admins(")
+    breadcrumb_at = SOURCE.find("await buffer_ride_breadcrumb(")
+    assert fanout_at != -1 and breadcrumb_at != -1
+    assert fanout_at < breadcrumb_at, "buffer_ride_breadcrumb must run after the admin fan-out, not before it"
+
+
 @pytest.mark.anyio
 async def test_revocation_recheck_caches_positives_and_throttles_negatives(monkeypatch):
     """Behavioural test of the caching contract, reimplemented against the same

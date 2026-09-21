@@ -454,8 +454,7 @@ describe('CarMarker — a jump-triggered reset does not re-open the raw-heading 
   // Unlike driver-app's copy, the shared component has no onBearingChange
   // callback — bearing is only observable through the rendered Marker's own
   // `rotation` prop, so this test reads that instead (Android path: a plain
-  // `setAndroidRotation`, immediately reflected — no per-frame tween to step
-  // through, unlike driver-app's own animateAndroidRotationTo).
+  // once-per-tick `setAndroidRotation`).
   const mockPlaybackPosition = playbackPosition as jest.Mock;
   const originalPlatformOS = Platform.OS;
   const mountCoord = { latitude: 50.4452, longitude: -104.6189 };

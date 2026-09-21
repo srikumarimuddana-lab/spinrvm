@@ -41,6 +41,7 @@ export {
     resolveComplaint,
     reportLostItem,
     resolveLostItem,
+    getUnpaidRides,
     sendRideInvoice,
     sendPayableRideInvoice,
     getFlags,
@@ -53,7 +54,7 @@ export {
     getComplaints,
     deleteComplaint,
 } from "./api/rides";
-export type { RideListOpts, RideFinancialsPeriod } from "./api/rides";
+export type { RideListOpts, RideFinancialsPeriod, UnpaidRide } from "./api/rides";
 export {
     getDrivers,
     adminSearchDrivers,
@@ -289,6 +290,8 @@ export {
     adminCommitDriverRepair,
     adminPreviewIdCrosswalkBackfill,
     adminCommitIdCrosswalkBackfill,
+    adminPreviewDurationEstimatedBackfill,
+    adminCommitDurationEstimatedBackfill,
     adminDiscoverStripeDriverAccounts,
     adminValidateStripeImport,
     adminCommitStripeImport,
@@ -356,6 +359,10 @@ export type {
     CrosswalkBackfillReport,
     CrosswalkBackfillCommitResult,
     CrosswalkBackfillOptions,
+    DurationEstimatedBackfillCounts,
+    DurationEstimatedBackfillReport,
+    DurationEstimatedBackfillCommitResult,
+    DurationEstimatedBackfillOptions,
     StripeDiscoveryMatch,
     StripeDiscoveryReport,
     StripeImportKind,
@@ -522,6 +529,8 @@ export {
     getDriverOfferTrends,
     getMarketplaceFunnel,
     getSupplyUtilization,
+    getDispatchLatency,
+    getRetentionCohorts,
     getEfficiencyMetrics,
     getFinancialMetrics,
     getDemandForecast,

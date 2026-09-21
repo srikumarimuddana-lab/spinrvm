@@ -197,6 +197,11 @@
     "markReadErrorBody": "Please check your connection and try again.",
     "loadFailed": "Couldn't load notifications",
     "loadFailedBody": "Check your connection and try again.",
+    "deleteTitle": "Delete Notification",
+    "deleteBody": "Remove this notification? This can't be undone.",
+    "clearAllTitle": "Clear All Notifications",
+    "clearAllBody": "This removes every notification in your inbox. This can't be undone.",
+    "clearAll": "Clear All",
     "retry": "Retry"
   },
   "emergencyContacts": {

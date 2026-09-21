@@ -68,6 +68,7 @@ jobs:
   bandit:
     name: G1 · Bandit (Python SAST)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     if: |
@@ -105,6 +106,7 @@ jobs:
   eslint-security:
     name: G2 · ESLint security plugin
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     # Gates the whole 3-leg matrix together (any of rider/driver/admin
@@ -242,9 +244,14 @@ jobs:
   semgrep:
     name: G3 · Semgrep (Spinr rules + public)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: false
     container:
-      image: semgrep/semgrep:latest
+      # Pinned to the current release (was `:latest`, the one unpinned
+      # dependency in this repo's otherwise-consistent SHA/version-pinning
+      # discipline -- a silent upstream image update could change scan
+      # behavior with no visible repo diff, for a blocking, nightly-run gate).
+      image: semgrep/semgrep:1.177.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -383,6 +390,24 @@ jobs:
           print("SR-03 money gate: 0 findings.")
           PY
 
+      # Additive, non-blocking: makes the raw Spinr-rules findings available
+      # to the downstream security-report.yml summary job (Phase 2 of the
+      # 2026-09-19 security automation roadmap). Never fails this job even
+      # if spinr-rules.json wasn't produced (e.g. the scan step above hit
+      # its own error branch and exited first).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        # continue-on-error, same rationale as the codeql-action/upload-sarif
+        # step right below (C94): a transient artifact-service failure here
+        # must never flip this job from a real pass to a reported failure —
+        # this is a best-effort feed for the downstream report generator,
+        # not a gate.
+        continue-on-error: true
+        with:
+          name: spinr-rules-report
+          path: spinr-rules.json
+          if-no-files-found: ignore
+
       - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
         # C94: fails on every run with "Code scanning is not enabled for this
@@ -403,6 +428,7 @@ jobs:
   pip-audit:
     name: G4a · pip-audit (Python deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     if: |
@@ -428,6 +454,7 @@ jobs:
   yarn-audit:
     name: G4b · yarn audit (JS deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
     continue-on-error: false
     needs: [detect-changes]
@@ -494,6 +521,7 @@ jobs:
   npm-audit-admin:
     name: G4c · npm audit (admin-dashboard, HIGH blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     if: |
@@ -528,10 +556,24 @@ jobs:
           npm audit --audit-level=high --json > /tmp/npm-audit-admin.json || true
           python3 "${GITHUB_WORKSPACE}/scripts/security/check_npm_audit_allowlist.py" /tmp/npm-audit-admin.json
 
+      # Additive, non-blocking: same rationale as the semgrep upload above —
+      # feeds the downstream security-report.yml summary job.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        # continue-on-error: best-effort feed for the downstream report
+        # generator, not a gate — same rationale as the semgrep job's upload
+        # step above.
+        continue-on-error: true
+        with:
+          name: npm-audit-admin-report
+          path: /tmp/npm-audit-admin.json
+          if-no-files-found: ignore
+
   # G5 — Secret scanning (git history)
   gitleaks:
     name: G5a · Gitleaks (git history)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # NOT blocking yet — and the reason is important, so do not "clean this up".
     #
     # This was briefly flipped to false on the strength of a full-history scan
@@ -578,6 +620,7 @@ jobs:
   bundle-secrets:
     name: G5b · Gitleaks (admin bundle)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     # This scans the compiled admin-dashboard bundle specifically -- there
@@ -635,6 +678,7 @@ jobs:
   container-scan:
     name: G6 · Trivy container scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: false
     needs: [detect-changes]
     # Builds the backend Docker image specifically -- nothing to build or
@@ -710,6 +754,7 @@ jobs:
   license-check:
     name: G7 · pip-licenses (Python deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     if: |
@@ -759,6 +804,7 @@ jobs:
   license-check-js:
     name: G7b · license-checker (JS deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: false
     needs: [detect-changes]
     if: |
@@ -810,6 +856,7 @@ jobs:
     needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks, bundle-secrets, container-scan, license-check, license-check-js]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Summarize
         run: |
@@ -835,8 +882,25 @@ jobs:
       # its result is masked to 'success' here and cannot trip this check;
       # path-filtered `skipped` results also still pass. Only a genuine
       # `failure`/`cancelled` from a blocking gate now fails this job.
+      #
+      # CR #5572: the `cancelled` half above is correct for a gate cancelled
+      # mid-scan, but it could not tell that apart from THE WHOLE RUN being
+      # superseded. This workflow sets `concurrency: cancel-in-progress: true`
+      # on `github.ref`, so any force-push cancels the in-flight gate jobs;
+      # this job (`if: always()`) then survived, saw a `needs` list full of
+      # `cancelled`, and went red on an abandoned sha for a run where no gate
+      # had found anything. Observed on run 35523325854: 1 failed job out of
+      # 21, and that one job was this aggregator.
+      #
+      # `!cancelled()` is true only when the workflow itself was not
+      # cancelled, so it distinguishes the two. Note the clause placement: a
+      # real `failure` still fails this job UNCONDITIONALLY. Only the
+      # `cancelled` branch is gated. That ordering is deliberate -- if
+      # `cancelled()` ever behaves differently than expected here, the worst
+      # case is a superseded run going red again, NOT a blocking gate's
+      # failure being swallowed. C74's hole stays closed either way.
       - name: Fail if any blocking security gate failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || (!cancelled() && contains(needs.*.result, 'cancelled')) }}
         run: |
           echo "::error::one or more blocking security gates failed — see the summary above"
           exit 1

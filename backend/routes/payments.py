@@ -624,7 +624,10 @@ async def confirm_payment(
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
         if ride["rider_id"] != current_user["id"]:
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(
+                status_code=403,
+                detail="This ride belongs to a different account, so you can't pay for it.",
+            )
 
         # C-3: Idempotency check — if a prior webhook already settled this payment,
         # return early with a clear signal rather than re-entering the Stripe flow.
@@ -658,7 +661,10 @@ async def confirm_payment(
     if ride_id:
         claimed = await db_supabase.claim_ride_payment_processing(ride_id)
         if not claimed:
-            raise HTTPException(status_code=409, detail="payment_already_processing")
+            raise HTTPException(
+                status_code=409,
+                detail="This payment is already being processed. Give it a moment before trying again.",
+            )
 
     # Mock-payment shortcut (non-production only; production rejected above).
     if is_mock:
@@ -737,10 +743,19 @@ async def confirm_payment(
                         },
                     )
 
+            # Map Stripe's terminal success status onto the canonical "paid"
+            # every other settlement path writes. Writing the raw
+            # `intent.status` put "succeeded" into rides.payment_status, a
+            # value no other reader knows: utils/payment_collection's
+            # collected set, routes/webhooks.py's already-settled guard and
+            # routes/admin/rides.py's terminal-state check were all spelled
+            # with "paid". (The collected set still carries "succeeded" so any
+            # row written before this fix still reads as collected.)
+            _mapped_status = "paid" if intent.status == "succeeded" else intent.status
             await db_supabase.update_ride(
                 ride_id,
                 {
-                    "payment_status": intent.status,
+                    "payment_status": _mapped_status,
                     "payment_intent_id": payment_intent_id,
                 },
             )
@@ -981,10 +996,16 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
     try:
         data = await request.json()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+        raise HTTPException(
+            status_code=400,
+            detail="We couldn't read that request. Please try again.",
+        ) from exc
 
     if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+        raise HTTPException(
+            status_code=400,
+            detail="We couldn't read that request. Please try again.",
+        )
 
     forbidden = _RAW_CARD_FIELDS.intersection(data.keys())
     if forbidden:
@@ -995,10 +1016,14 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         )
         raise HTTPException(
             status_code=400,
+            # The client contract (tokenize with Stripe.js /
+            # @stripe/stripe-react-native, then send only payment_method_id)
+            # is documented on the endpoint and logged above. The person
+            # reading this is a cardholder, not the integrator.
             detail=(
-                "Raw card data is not accepted. Tokenize card details "
-                "client-side using Stripe.js / @stripe/stripe-react-native "
-                "and submit only {'payment_method_id': 'pm_...'}."
+                "For your security, card details have to be entered in the "
+                "secure card form. Please add your card again from the "
+                "payment screen."
             ),
         )
 
@@ -1016,7 +1041,11 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
-            detail="Invalid request payload.",
+            # This is a request body-shape failure (missing/malformed
+            # payment_method_id), not a bad physical card — the card was
+            # already tokenized fine by Stripe.js before this request.
+            # Don't blame the card or send the rider back to re-enter it.
+            detail="We couldn't process that request. Please try again.",
         ) from exc
 
     payment_method_id = body.payment_method_id

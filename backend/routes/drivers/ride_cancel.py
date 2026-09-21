@@ -25,6 +25,7 @@ from ._deps import (  # noqa: F401
     timezone,
     uuid,
 )
+from ._shared import _RIDE_STATE_PHRASE
 
 router = APIRouter()
 
@@ -77,7 +78,23 @@ async def cancel_ride(
         raise HTTPException(status_code=403, detail="Not your assigned ride")
 
     if ride.get("status") in (RideStatus.IN_PROGRESS, RideStatus.COMPLETED):
-        raise RideStateError(f"Cannot cancel a ride in state '{ride.get('status')}'")
+        # Same phrase-based, 409 shape as _require_ride_in_state's guard
+        # (used by the other driver-side ride actions) and the rider-side
+        # equivalent (_require_ride_in_state_rider) — the raw status token
+        # is never interpolated into a driver-facing message. Built inline
+        # against the already-fetched `ride` rather than calling
+        # _require_ride_in_state itself, which would re-fetch from the DB
+        # for information this function already has (see #5611).
+        _current_status = ride.get("status", "unknown")
+        _phrase = _RIDE_STATE_PHRASE.get(_current_status)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This ride is {_phrase}, so that action isn't available right now. Refresh to see its latest status."
+                if _phrase
+                else "That action isn't available for this ride right now. Refresh to see its latest status."
+            ),
+        )
 
     now = datetime.now(timezone.utc)
     base_update = {
@@ -486,6 +503,11 @@ async def mark_rider_noshow(
     else:
         noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
 
+    try:
+        from ...utils.scheduled_ride_config import pickup_wait_start
+    except ImportError:
+        from utils.scheduled_ride_config import pickup_wait_start
+    arrived_dt = pickup_wait_start(ride, arrived_dt)
     waited = (datetime.now(timezone.utc) - arrived_dt).total_seconds()
     if waited < noshow_wait_seconds:
         remaining = int(noshow_wait_seconds - waited)

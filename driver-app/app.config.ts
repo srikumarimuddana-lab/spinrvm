@@ -4,6 +4,12 @@ const APP_NAME = 'Spinr Driver';
 const BUNDLE_ID = 'com.spinr.driver'; // driver-only ID — rider app uses com.spinr.user (no clash)
 const SCHEME = 'spinr-driver';
 
+// R8 is opt-in for Android release builds via SPINR_ANDROID_MINIFY=1.
+// preview, android-auto, and production are on; test/development are debug (off).
+// Sentry Java/Kotlin mapping upload is still not wired — JS frames are fine.
+// Android Auto uses Play's internal track. See docs/android-build-strategy.md.
+const ANDROID_MINIFY = process.env.SPINR_ANDROID_MINIFY === '1';
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
@@ -52,9 +58,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // obsolete `react-native-google-maps` pod, which react-native-maps 1.x no
         // longer ships → `pod install` fails. Google Maps stays Android-only
         // (see android.config.googleMaps.apiKey below).
-        associatedDomains: [
-            'applinks:spinr.app',
-        ],
+        // No associatedDomains / App Links. Universal Links were declared for
+        // spinr.app until 2026-09-14, but the feature has
+        // never worked on any domain: no .well-known/apple-app-site-association
+        // or assetlinks.json is served anywhere, neither app has inbound URL
+        // handling, and no route file matches the prefixes that were declared.
+        // spinr.app does not resolve and is not registered to Spinr, so the
+        // declaration was inert. Removed rather than repointed at spinr.ca:
+        // pointing applinks at a host that resolves but serves no association
+        // file makes things worse, because Apple's CDN negatively caches that
+        // failure for ~24h even after it is fixed. The custom spinr-user://
+        // scheme below is unaffected and still routes via expo-router.
+        // See docs/audit/2026-09-14-spinr-app-phantom-domain-audit.md.
         // Purpose strings — Apple rejects uploads with ITMS-90683 if any
         // dependency calls a permission-gated API without a matching string.
         // Driver app needs camera + photo library for onboarding document
@@ -183,6 +198,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     },
     android: {
+        // Fabric markerRotation/flat require the patched native maps binary.
+        // Keep iOS on the existing top-level runtime; OTA cannot repair old APKs.
+        runtimeVersion: '2.8.0',
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
@@ -202,17 +220,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
             }
         },
-        intentFilters: [
-            {
-                action: 'VIEW',
-                autoVerify: true,
-                data: [
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/driver' },
-                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/join' },
-                ],
-                category: ['BROWSABLE', 'DEFAULT'],
-            },
-        ],
+        // No intentFilters / Android App Links — see the note on the iOS side
+        // above. autoVerify:true was declared for spinr.app, which does not
+        // resolve, so verification could never succeed; and with no matching
+        // route files a verified link would have opened the app into nothing.
     },
     web: {
         bundler: 'metro',
@@ -271,15 +282,30 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
+                // Code shrinking + obfuscation + optimization (R8). Without it
+                // Play Console's App optimization panel reports Optimization,
+                // Shrinking and R8 configuration as "-" and rates the app Low;
+                // the ~2% obfuscation it does report is vendor AARs that ship
+                // pre-obfuscated, not anything this build did.
+                //
+                // Resource shrinking is deliberately NOT enabled alongside it.
+                // Play's three percentages are R8 *code* metrics, so it earns
+                // nothing on that panel, and shrinkResources drops resources
+                // reachable only by name — which is exactly how the Notifee
+                // ride-offer channel reaches res/raw/ride_offer.mp3 (see
+                // plugins/withRideOfferSound). A silently silenced ride offer
+                // is a dispatch regression, not an app-size win.
+                enableMinifyInReleaseBuilds: ANDROID_MINIFY,
+                enableShrinkResourcesInReleaseBuilds: false,
                 // Required by @iternio/react-native-auto-play >= 0.5.3 whenever
                 // minification is on: Nitro resolves its hybrid objects by class
                 // name, so R8/ProGuard renaming breaks Android Auto in release
                 // builds only — the only builds a real head unit will load.
-                // Minification is currently OFF (Expo default; no
-                // enableProguardInReleaseBuilds/enableMinifyInReleaseBuilds
-                // anywhere in this config), making this rule a no-op today — it
-                // exists so flipping minification on later can't silently kill
-                // the car app.
+                // LIVE since 2026-09-14 on any profile that sets
+                // SPINR_ANDROID_MINIFY=1 (preview/android-auto/production). It was an
+                // inert no-op before that, when minification was off everywhere;
+                // it has never been exercised by a real build, so the head-unit
+                // check on the first minified build is what actually proves it.
                 extraProguardRules: '-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }',
             },
             ios: {
@@ -391,6 +417,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Apple-granted entitlement plus scene-delegate wiring not present here.
         // See docs/carplay-android-auto.md.
         '@logrocket/react-native',
+        // Do not add 'posthog-react-native/expo': that plugin always applies
+        // posthog.gradle / posthog-xcode.sh, which exec posthog-cli during
+        // release bundling. EAS has no usable CLI (versionCode 26–28 failed
+        // on createBundleReleaseJsAndAssets_PostHogUpload). Autolinking still
+        // ships the JS SDK + native replay module from package.json.
         // Meta (Facebook) app events. Same posture as the rider app: Advanced
         // Matching is sent SERVER-side via the Conversions API, so no IDFA is
         // collected, no advertiser tracking happens on-device, and

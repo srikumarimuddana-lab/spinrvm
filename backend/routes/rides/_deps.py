@@ -51,7 +51,7 @@ try:
         rank_by_eta_with_acceptance,
     )
     from ...services.fare_service import build_fare_breakdown_lines, calculate_fare
-    from ...settings_loader import get_app_settings
+    from ...settings_loader import get_app_settings, get_last_known_app_settings
     from ...sms_service import send_sms
     from ...socket_manager import manager
     from ...utils.address_verification import verify_address_matches_coordinate
@@ -105,7 +105,7 @@ except ImportError:
         rank_by_eta_with_acceptance,
     )
     from services.fare_service import build_fare_breakdown_lines, calculate_fare
-    from settings_loader import get_app_settings
+    from settings_loader import get_app_settings, get_last_known_app_settings
     from sms_service import send_sms
     from socket_manager import manager
     from utils.address_verification import verify_address_matches_coordinate
@@ -141,7 +141,7 @@ from ..fares import _fares_for_location_impl, get_fares_for_location
 try:
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.earnings_snapshot import build_earnings_snapshot
-    from ...utils.insurance_periods import record_period_transition
+    from ...utils.insurance_periods import record_period_transition, release_driver_and_close_period
     from ...utils.live_activity import (
         EVENT_END,
         EVENT_UPDATE,
@@ -154,7 +154,10 @@ try:
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
-    from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.insurance_periods import (  # type: ignore[assignment]
+        record_period_transition,
+        release_driver_and_close_period,
+    )
     from utils.live_activity import (  # type: ignore
         EVENT_END,
         EVENT_UPDATE,

@@ -15,6 +15,11 @@ try:
     from ...core.config import settings
     from ...dependencies import JWT_AUD_ADMIN, get_admin_user
     from ...utils.audit_logger import log_admin_action
+    from ...utils.env_admin_tokens import (
+        ENV_ADMIN_USER_ID,
+        bump_env_admin_token_version,
+        get_env_admin_token_version,
+    )
     from ...utils.password import hash_password, verify_password
     from ...utils.rate_limiter import default_limiter as limiter
     from ...utils.rate_limiter import get_real_client_ip
@@ -36,6 +41,11 @@ except ImportError:
     from core.config import settings
     from dependencies import JWT_AUD_ADMIN, get_admin_user
     from utils.audit_logger import log_admin_action
+    from utils.env_admin_tokens import (
+        ENV_ADMIN_USER_ID,
+        bump_env_admin_token_version,
+        get_env_admin_token_version,
+    )
     from utils.password import hash_password, verify_password
     from utils.rate_limiter import default_limiter as limiter
     from utils.rate_limiter import get_real_client_ip
@@ -332,15 +342,48 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         and body.email == settings.ADMIN_EMAIL
         and verify_password(body.password, settings.admin_password_hash)[0]
     ):
-        # admin-001 has no DB row, so token_version stays at 0. We still
-        # emit the claim + an exp so a captured super-admin token dies
-        # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.
+        # admin-001 has no admin_staff row, so its token_version lives on the
+        # settings row instead (migration 434). Stamping the CURRENT value in
+        # is what makes /admin/auth/logout-all able to kill this account's
+        # sessions: the bump leaves every already-minted token stale.
+        #
+        # Fail closed if we cannot read it. Minting with a guessed 0 would
+        # hand back a token that outlives a revocation the operator has
+        # already performed — the exact hole this closes — so a 503 the
+        # operator can retry is the safer failure.
+        try:
+            _env_admin_version = await get_env_admin_token_version()
+        except Exception as _ver_err:
+            # False positive: the rule matches on the word "token" in
+            # "token_version" and assumes a credential is being logged. What is
+            # actually logged is a fixed message plus `_ver_err`, the exception
+            # from a failed `settings` row read — no secret, no token, no claim
+            # value. This holds only while utils/env_admin_tokens.py keeps its
+            # narrow `columns=` select; see the tripwire in its docstring.
+            # Suppressed by rule id rather than a bare `# nosemgrep` so this
+            # line stays covered by every other rule.
+            #
+            # The directive MUST be the last comment line before the call:
+            # semgrep honours `# nosemgrep` only on the match's own line or the
+            # one immediately above it. An earlier draft put it at the top of
+            # this comment block, 13 lines away, where it suppressed nothing.
+            # Matches the two suppressions in this repo that demonstrably work
+            # (services/fare_service.py:365, utils/email_receipt.py:333).
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+            logger.error(
+                "admin login: env-admin token_version unreadable — refusing to mint: %s",
+                _ver_err,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503, detail="Sign-in is temporarily unavailable. Please try again."
+            ) from _ver_err
         token, access_expires_at = _mint_admin_access_token(
             user_id="admin-001",
             email=body.email,
             role="super_admin",
             modules=ALL_MODULES,
-            token_version=0,
+            token_version=_env_admin_version,
         )
         refresh_raw, _, refresh_expires_at = await issue_refresh_token(
             "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
@@ -466,7 +509,12 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     # admin-001 has no DB row. Staff rows must still be active.
-    if user_id == "admin-001":
+    # Uses the constant, not the literal: this branch decides which token_version
+    # store is authoritative, so it must stay in lockstep with the matching
+    # branches in _verify_admin_payload and admin_logout_all. (Other "admin-001"
+    # literals remain in this file at the mint below and in two staff-only
+    # guards; they are not part of that trio.)
+    if user_id == ENV_ADMIN_USER_ID:
         email = settings.ADMIN_EMAIL
         role = "super_admin"
         # NOTE: this literal already drifts from ALL_MODULES (it omits "audit"
@@ -494,7 +542,28 @@ async def admin_refresh(request: Request, body: RefreshRequest):
             "documents",
             "staff",
         ]
-        token_version = 0
+        # Must be the CURRENT stored version, not a hardcoded 0 (migration 434).
+        # Minting 0 here would be fine only while the counter has never been
+        # bumped: after the first /logout-all every refresh would hand back a
+        # token that _verify_admin_payload immediately rejects as
+        # ERR_SESSION_REVOKED, silently downgrading the super admin from
+        # "refreshes for 30 days" to "must re-login every hour". Fail closed on
+        # a read error for the same reason as the login path.
+        try:
+            token_version = await get_env_admin_token_version()
+        except Exception as _ver_err:
+            # Same false positive as the login path above — see that comment for
+            # why this is safe, and why the directive has to be the line
+            # immediately above the call rather than the top of the block.
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+            logger.error(
+                "admin refresh: env-admin token_version unreadable — refusing to mint: %s",
+                _ver_err,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503, detail="Sign-in is temporarily unavailable. Please try again."
+            ) from _ver_err
     else:
         staff = await db.find_one("admin_staff", {"id": user_id})
         if not staff or not staff.get("is_active", True):
@@ -585,10 +654,15 @@ async def admin_logout(
 async def admin_logout_all(request: Request, authorization: Optional[str] = Header(None)):
     """Force-invalidate every admin session for the caller.
 
-    Only valid for staff (admin-001 uses env-var creds and has no
-    persisted token_version; rotate ADMIN_PASSWORD to kill the super-
-    admin globally). Bumps admin_staff.token_version and revokes every
-    active refresh token for that staff row.
+    Bumps the caller's token_version and revokes every active refresh token
+    for them. For staff that version lives on the ``admin_staff`` row; for the
+    env-credential super admin (``admin-001``), which has no such row, it lives
+    on the ``settings`` singleton (migration 434). Either way every access token
+    minted before the bump is rejected on its next request.
+
+    Until migration 434 this endpoint returned 400 for ``admin-001`` and told
+    the operator to rotate ``ADMIN_PASSWORD`` — a redeploy — which made the
+    highest-privilege account the only one that could not be force-logged-out.
     """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -618,18 +692,25 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
-    if not user_id or user_id == "admin-001":
-        raise HTTPException(
-            status_code=400,
-            detail="Super admin cannot force-logout here. Rotate ADMIN_PASSWORD in the environment to kill all super-admin sessions.",
-        )
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid token")
 
-    staff = await db.find_one("admin_staff", {"id": user_id})
-    if not staff:
-        raise HTTPException(status_code=404, detail="Staff member not found")
+    if user_id == ENV_ADMIN_USER_ID:
+        # Previously a 400 telling the operator to rotate ADMIN_PASSWORD and
+        # redeploy — which made the env super admin the one account that could
+        # not be force-logged-out at all. It now carries a token_version on the
+        # settings row (migration 434), so this bump invalidates every
+        # outstanding admin-001 access token on its next request, exactly as the
+        # staff branch below does. Both fall through to the same WS kick and
+        # response so the two paths cannot drift.
+        new_version = await bump_env_admin_token_version()
+    else:
+        staff = await db.find_one("admin_staff", {"id": user_id})
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff member not found")
 
-    new_version = int(staff.get("token_version") or 0) + 1
-    await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
+        new_version = int(staff.get("token_version") or 0) + 1
+        await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
     revoked = await revoke_all_for_user(user_id)
 
     # B-P1-11: kick any live admin WebSocket sockets (live monitoring
@@ -1394,7 +1475,7 @@ async def admin_unlock(
     - 200 {"unlocked": true} on success.
     """
     if actor.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="role_required:super_admin")
+        raise HTTPException(status_code=403, detail="This action requires super admin access.")
 
     target_email = (body.email or "").strip().lower()
     if not target_email:

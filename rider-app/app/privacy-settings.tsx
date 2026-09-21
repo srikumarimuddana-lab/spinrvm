@@ -246,7 +246,7 @@ function SettingRow({ icon, iconColor, iconBg, title, subtitle, toggle, value, o
         <Ionicons name={icon as any} size={20} color={iconColor} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[{ fontSize: 15, fontWeight: '600', color: colors.text }, danger && { color: colors.error }]}>{title}</Text>
+        <Text style={[{ fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text }, danger && { color: colors.error }]}>{title}</Text>
         <Text style={{ fontSize: 12, color: colors.textDim, marginTop: 1 }}>{subtitle}</Text>
       </View>
       {toggle && onToggle ? (

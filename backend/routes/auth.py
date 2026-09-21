@@ -25,6 +25,7 @@ try:
         get_token_session_id,
         verify_reactivation_token,
     )
+    from ..models.ride_status import RideStatus
     from ..schemas import (
         AuthResponse,
         OTPRecord,
@@ -37,6 +38,7 @@ try:
     from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.background import spawn as _spawn
     from ..utils.crypto import hash_otp, verify_otp_hash
+    from ..utils.driver_presence import clear_presence
     from ..utils.email_provider import send_transactional_email
     from ..utils.error_handling import (
         ErrorCode,
@@ -45,6 +47,7 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from ..utils.insurance_periods import record_period_transition
     from ..utils.metrics import inc as _metric_inc
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import (
@@ -79,6 +82,7 @@ except ImportError:
         get_token_session_id,
         verify_reactivation_token,
     )
+    from models.ride_status import RideStatus
     from schemas import (
         AuthResponse,
         OTPRecord,
@@ -91,6 +95,7 @@ except ImportError:
     from utils.audit_logger import log_user_action as _audit_log_user
     from utils.background import spawn as _spawn  # type: ignore
     from utils.crypto import hash_otp, verify_otp_hash
+    from utils.driver_presence import clear_presence
     from utils.email_provider import send_transactional_email
     from utils.error_handling import (
         ErrorCode,
@@ -99,6 +104,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from utils.insurance_periods import record_period_transition
     from utils.metrics import inc as _metric_inc
     from utils.rate_limiter import default_limiter as limiter
     from utils.redis_client import (
@@ -631,8 +637,20 @@ async def _issue_company_email_session(
             raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
         user = dict(existing_user)
         try:
-            await db_supabase.update_one("users", {"id": user["id"]}, {"current_session_id": session_id})
-            user["current_session_id"] = session_id
+            # Completing this OTP IS proof the person controls the inbox, so
+            # stamp email_verified alongside the session. Without it the flag
+            # stayed false forever for company-email accounts — the only other
+            # writer is the rider-app verify flow (routes/users.py), which has
+            # no UI for this population — and /corporate/join-domain's
+            # email_verified gate then 403'd exactly the employees it exists
+            # for (2026-09-20 review, C5).
+            _verify_patch = {
+                "current_session_id": session_id,
+                "email_verified": True,
+                "email_verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
+            user.update(_verify_patch)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -654,6 +672,10 @@ async def _issue_company_email_session(
             "profile_complete": False,
             "current_session_id": session_id,
             "token_version": 0,
+            # The emailed OTP just proved inbox control — see the existing-user
+            # branch above for why this must be set here too (C5).
+            "email_verified": True,
+            "email_verified_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
             created = await db_supabase.create_user(user)
@@ -852,7 +874,7 @@ async def verify_company_email_otp(
     if not otp_record or not verify_otp_hash(str(otp_record.get("code_hash", "")), code):
         await _record_otp_failure(lockout_key)
         raise SpinrException(
-            message="ERR_OTP_INVALID",
+            message="That code didn't match. Please try again.",
             error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
@@ -882,7 +904,7 @@ async def verify_company_email_otp(
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) > expires_at:
         raise SpinrException(
-            message="ERR_OTP_EXPIRED",
+            message="That code has expired. Please request a new one.",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,
@@ -946,7 +968,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
         raise SpinrException(
-            message="ERR_OTP_INVALID",
+            message="That code didn't match. Please try again.",
             error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
@@ -995,7 +1017,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 exc_info=True,
             )
         raise SpinrException(
-            message="ERR_OTP_EXPIRED",
+            message="That code has expired. Please request a new one.",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,
@@ -1282,7 +1304,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # leak here exposes Supabase row IDs, Firebase JWT errors, and
         # internal stack frames to anyone with internet access. The
         # framework sanitiser (utils/error_handling.py) already replaces
-        # 5xx detail with "Internal server error", but the manual
+        # 5xx detail with the generic sentence, but the manual
         # str(e) made the leak's intent explicit; clean it up so the
         # next contributor doesn't copy the pattern. logger.exception
         # captures the full traceback server-side automatically.
@@ -2001,6 +2023,70 @@ def _revoke_firebase_refresh_tokens(user_id: str) -> None:
         logger.info(f"logout-all: firebase refresh-token revoke skipped for {user_id}: {type(e).__name__}")
 
 
+_LOGOUT_ALL_OBLIGATED_RIDE_STATUSES = (
+    RideStatus.DRIVER_ASSIGNED,
+    RideStatus.DRIVER_ACCEPTED,
+    RideStatus.DRIVER_ARRIVED,
+    RideStatus.IN_PROGRESS,
+)
+
+
+async def _offline_driver_for_logout_all(user_id: str) -> None:
+    """Best-effort: take this user's driver row offline inside logout-all.
+
+    The client used to PUT /drivers/{id}/status AFTER /auth/logout-all had
+    already bumped token_version, so that second call 401'd and queued
+    behind a doomed refresh — hanging sign-out so the login redirect never
+    ran. Folding the flip into this request removes the extra round trip.
+
+    Never raises: the token_version bump is the contract and must not roll
+    back because presence cleanup failed. Skips the flip when the driver is
+    on an obligated ride (Period 2/3) — same rule as the status endpoint's
+    409 — so insurance stays on the ride even though sessions die.
+    """
+    try:
+        drivers = await db.get_rows(
+            "drivers",
+            {"user_id": user_id, "deleted_at": None},
+            limit=1,
+        )
+        if not isinstance(drivers, list) or not drivers:
+            return
+        driver = drivers[0]
+        driver_id = driver.get("id") if isinstance(driver, dict) else None
+        if not driver_id or not driver.get("is_online"):
+            return
+        obligated = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver_id,
+                "status": {"$in": list(_LOGOUT_ALL_OBLIGATED_RIDE_STATUSES)},
+            },
+            limit=1,
+        )
+        if obligated:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.update_one(
+            "drivers",
+            {"id": driver_id},
+            {
+                "is_online": False,
+                "is_available": False,
+                "updated_at": now_iso,
+                "last_status_changed_at": now_iso,
+                "went_offline_at": now_iso,
+            },
+        )
+        await record_period_transition(driver_id, 0)
+        await clear_presence(driver_id)
+    except Exception:
+        logger.error(
+            f"logout-all: driver go-offline failed for {user_id}",
+            exc_info=True,
+        )
+
+
 @api_router.post("/logout-all")
 @limiter.limit("5/minute")
 async def logout_all(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
@@ -2011,6 +2097,9 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
     every call), and revokes every non-revoked refresh token for the
     user. This is what "sign out of all devices" / "my account was
     compromised" buttons should call.
+
+    Also takes an idle driver row offline in the same request so the
+    client does not need a second (now-unauthenticated) go-offline PUT.
     """
     user_id = current_user["id"]
     new_version = int(current_user.get("token_version") or 0) + 1
@@ -2035,6 +2124,12 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
         ) from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # Fold the driver go-offline into this request so the client does not
+    # PUT /drivers/{id}/status with a just-revoked token. Best-effort —
+    # never fail the token kill. No-op for riders / already-offline drivers
+    # / obligated rides (Period 2/3).
+    await _offline_driver_for_logout_all(user_id)
 
     # Revoking Firebase refresh tokens additionally stops the device from
     # minting fresh ID tokens, forcing a real re-sign-in. Best-effort only —

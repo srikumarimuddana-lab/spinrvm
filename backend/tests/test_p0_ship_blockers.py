@@ -182,10 +182,11 @@ class TestNoDriversAvailableTimeout:
 
         searching = _ride(status="searching")
 
-        update_calls = []
+        claim_calls = []
 
-        async def _capture_update(ride_id, patch):
-            update_calls.append((ride_id, patch))
+        async def _capture_claim(table, filters, patch, retry_policy="read"):
+            claim_calls.append((table, filters, patch, retry_policy))
+            return {**searching, **patch}
 
         ws_calls = []
 
@@ -202,16 +203,26 @@ class TestNoDriversAvailableTimeout:
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),  # fast-forward
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
-            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(side_effect=_capture_claim)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()) as update_ride,
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock(side_effect=_capture_push)),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
-        assert update_calls, "update_ride was not called on timeout"
-        _, update_patch = update_calls[0]
+        assert claim_calls, "the cancel claim (update_one) was not issued on timeout"
+        table, claim_filter, update_patch, retry_policy = claim_calls[0]
+        assert table == "rides"
+        # Compare-and-swap: only a ride STILL searching may be cancelled by
+        # the timer (C2 — an id-only update_ride overwrote accepted rides).
+        assert claim_filter == {"id": RIDE_ID, "status": "searching"}
         assert update_patch["status"] == "cancelled"
         assert "cancellation_reason" in update_patch
+        update_ride.assert_not_called()
+        # #5600: single-attempt CAS, matching utils/stuck_ride_sweeper.py's
+        # own claim — no retry to mask a committed-but-ack-lost attempt as a
+        # fresh zero-row query.
+        assert retry_policy == "write", "search-timeout claim must not use the retrying default policy"
 
         assert any(f"rider_{RIDER_ID}" in str(c) and m.get("type") == "ride_cancelled" for c, m in ws_calls), (
             "Rider channel was not notified on search timeout"
@@ -232,76 +243,144 @@ class TestNoDriversAvailableTimeout:
         matched = _ride(status="driver_accepted", driver_id=DRIVER_ID)
 
         update_mock = AsyncMock()
+        claim_mock = AsyncMock()
         ws_mock = AsyncMock()
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=matched)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", claim_mock),
             patch("backend.routes.rides._deps.db_supabase.update_ride", update_mock),
             patch("backend.routes.rides._deps.manager.send_personal_message", ws_mock),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
+        claim_mock.assert_not_called()
         update_mock.assert_not_called()
         ws_mock.assert_not_called()
 
-    async def test_timeout_releases_preauth_hold_before_cancelling(self):
-        """A booking-time pre-auth (7-day card hold) must be released so the
-        rider's card isn't blocked after an auto-cancel (WS-8, finding 11)."""
+    async def test_timeout_is_a_noop_when_accept_wins_the_claim_race(self):
+        """C2 (2026-09-20 review): the status read is only a hint. If a driver
+        accepts between that read and the timer's write, the compare-and-swap
+        returns no row and the timer must stop — no hold release (the trip
+        still has to be captured), no ride_cancelled WS/push to the rider.
+        Before the fix the common path wrote CANCELLED via update_ride (id
+        filter only) *after* awaiting a live Stripe call, so an accepted ride
+        was overwritten with its hold already released."""
         from backend.routes import rides as rides_mod
+        from backend.utils import card_hold_release
+
+        searching = _ride(status="searching", payment_intent_id="pi_123", auth_status="authorized")
+        ws_mock = AsyncMock()
+        push_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            # accept_ride's own CAS landed first: zero rows back.
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=None)) as claim,
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()) as update_ride,
+            patch("backend.routes.rides._deps.manager.send_personal_message", ws_mock),
+            patch("backend.routes.rides._deps.send_push_notification", push_mock),
+            patch.object(card_hold_release, "cancel_authorization", AsyncMock(return_value=True)) as stripe_cancel,
+        ):
+            await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
+
+        claim.assert_awaited_once()
+        assert claim.await_args.args[1] == {"id": RIDE_ID, "status": "searching"}
+        stripe_cancel.assert_not_awaited()
+        update_ride.assert_not_called()
+        ws_mock.assert_not_called()
+        push_mock.assert_not_called()
+
+    async def test_timeout_releases_preauth_hold_after_claiming_cancel(self):
+        """A booking-time pre-auth (7-day card hold) must be released so the
+        rider's card isn't blocked after an auto-cancel (WS-8, finding 11) —
+        but only AFTER the cancel is claimed (C2): the Stripe call must never
+        run for a ride another writer already moved out of 'searching'."""
+        from backend.routes import rides as rides_mod
+        from backend.utils import card_hold_release
 
         searching = _ride(
             status="searching",
             payment_intent_id="pi_123",
             auth_status="authorized",
         )
+        order = []
+        writes = []
+
+        async def _capture_write(table, filters, patch, retry_policy="read"):
+            # Both the timer's claim and card_hold_release's auth_status
+            # write land here (one shared db_supabase module object).
+            writes.append((filters, patch))
+            order.append("claim" if filters.get("status") == "searching" else "auth_status")
+            return {**searching, **patch}
+
+        async def _stripe_cancel(*, ride_id, payment_intent_id):
+            order.append("stripe")
+            return True
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(side_effect=_capture_write)),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
-            patch(
-                "backend.routes.rides._deps.cancel_authorization",
-                AsyncMock(return_value=True),
+            patch.object(
+                card_hold_release, "cancel_authorization", AsyncMock(side_effect=_stripe_cancel)
             ) as mock_cancel_auth,
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
         mock_cancel_auth.assert_awaited_once_with(ride_id=RIDE_ID, payment_intent_id="pi_123")
+        assert order == ["claim", "stripe", "auth_status"], order
+        # The claim itself never pre-marks the hold released; that is
+        # card_hold_release's job, and only on a successful Stripe cancel.
+        claim_filter, claim_patch = writes[0]
+        assert "auth_status" not in claim_patch
+        mark_filter, mark_patch = writes[1]
+        assert mark_filter["id"] == RIDE_ID and "authorized" in mark_filter["auth_status"]["$in"]
+        assert mark_patch["auth_status"] == "released"
 
     async def test_timeout_preauth_release_failure_still_cancels_ride(self):
         """A Stripe error releasing the hold must not block the ride cancel --
         the rider must not be stuck 'searching' forever over a payment-side
-        cleanup failure."""
+        cleanup failure. The hold is left OPEN (not marked released) so the
+        orphaned-hold reconciler can still find it."""
         from backend.routes import rides as rides_mod
+        from backend.utils import card_hold_release
 
         searching = _ride(
             status="searching",
             payment_intent_id="pi_123",
             auth_status="authorized",
         )
-        update_calls = []
+        writes = []
 
-        async def _capture_update(ride_id, patch):
-            update_calls.append((ride_id, patch))
+        async def _capture_write(table, filters, patch, retry_policy="read"):
+            writes.append((filters, patch))
+            return {**searching, **patch}
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
-            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(side_effect=_capture_write)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
-            patch(
-                "backend.routes.rides._deps.cancel_authorization",
+            patch.object(
+                card_hold_release,
+                "cancel_authorization",
                 AsyncMock(side_effect=RuntimeError("stripe down")),
             ),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
-        assert update_calls, "ride must still be cancelled even if pre-auth release fails"
+        assert writes, "ride must still be cancelled even if pre-auth release fails"
+        assert writes[0][1]["status"] == "cancelled"
+        assert all("auth_status" not in patch for _, patch in writes), "a failed release must not be marked released"
 
     async def test_timeout_attribution_write_failure_falls_back_to_minimal_update(self):
         """If the DB rejects cancelled_by/cancellation_type (pre-migration-38
@@ -312,24 +391,29 @@ class TestNoDriversAvailableTimeout:
         searching = _ride(status="searching")
         update_calls = []
 
-        async def _capture_update(ride_id, patch):
+        async def _capture_update(table, filters, patch, retry_policy="read"):
             # First call (with attribution columns) fails; the retry (base
             # fields only) succeeds.
             if "cancelled_by" in patch:
                 raise RuntimeError("PGRST204: column cancelled_by does not exist")
-            update_calls.append((ride_id, patch))
+            update_calls.append((filters, patch))
+            return {**searching, **patch}
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
-            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(side_effect=_capture_update)),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
         assert update_calls, "the minimal-fields retry must still succeed"
-        assert "cancelled_by" not in update_calls[0][1]
+        retry_filter, retry_patch = update_calls[0]
+        assert "cancelled_by" not in retry_patch
+        # The retry keeps the compare-and-swap — a schema fallback must not
+        # reopen the accepted-ride overwrite (C2).
+        assert retry_filter == {"id": RIDE_ID, "status": "searching"}
 
     async def test_timeout_notifies_guest_by_sms_for_guest_booking(self):
         """A corporate guest booking has no app to receive the WS/push
@@ -342,6 +426,7 @@ class TestNoDriversAvailableTimeout:
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=dict(searching))),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),

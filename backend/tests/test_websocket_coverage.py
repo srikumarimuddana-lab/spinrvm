@@ -219,7 +219,16 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
             ws.send_json({"type": "auth", "token": "tok"})
             ws.receive_json()
 
-            ws.send_json({"type": "driver_location", "lat": 50.4452, "lng": -104.6189, "speed": 12, "heading": 90})
+            ws.send_json(
+                {
+                    "type": "driver_location",
+                    "lat": 50.4452,
+                    "lng": -104.6189,
+                    "speed": 12,
+                    "heading": 90,
+                    "captured_at": "2026-09-15T19:00:00+00:00",
+                }
+            )
             # No direct ack for driver_location — give the loop a beat then
             # send a pong to confirm the socket is still alive and the
             # handler didn't raise.
@@ -238,6 +247,8 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
     send_personal.assert_awaited()
     sent_msg, sent_target = send_personal.await_args.args[0], send_personal.await_args.args[1]
     assert sent_msg["type"] == "driver_location_update"
+    assert sent_msg["ride_id"] == active_ride["id"]
+    assert sent_msg["captured_at"] == "2026-09-15T19:00:00+00:00"
     assert sent_target == f"rider_{active_ride['rider_id']}"
     assert sent_msg.get("eta_seconds") == 42
     broadcast_admin_loc.assert_awaited_once()
@@ -599,6 +610,40 @@ def test_clean_disconnect_flushes_breadcrumbs_and_forgets_throttle(app_with_ws):
     forget_throttle.assert_called_once_with(_DRIVER_PROFILE["id"])
 
 
+@pytest.mark.parametrize(
+    "reason, expected_reason", [("app_backgrounded", "app_backgrounded"), ("private text", "other")]
+)
+def test_disconnect_audit_records_only_safe_close_reason_and_connection_ages(app_with_ws, reason, expected_reason):
+    insert = AsyncMock()
+    patches = _start(
+        *_driver_auth_patches(
+            [
+                patch("backend.routes.websocket.db.find_one", new=AsyncMock(return_value=_DRIVER_PROFILE)),
+                patch("backend.routes.websocket.db_supabase.insert_one", new=insert),
+                patch("backend.routes.websocket.flush_driver_breadcrumbs", new=AsyncMock()),
+            ]
+        )
+    )
+    try:
+        with TestClient(app_with_ws).websocket_connect(f"/ws/driver/{_DRIVER_USER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "tok"})
+            ws.receive_json()
+            ws.close(code=1001, reason=reason)
+    finally:
+        _stop(patches)
+    records = [call.args[1] for call in insert.await_args_list if call.args[0] == "driver_activity_log"]
+    assert len(records) == 1
+    metadata = records[0]["metadata"]
+    assert metadata["close_code"] == 1001
+    assert metadata["close_reason"] == expected_reason
+    assert metadata["reason"] == "ws_disconnect"
+    assert metadata["connection_age_ms"] >= 0
+    assert metadata["last_pong_age_ms"] >= 0
+    assert "server_close_reason" not in metadata
+    if expected_reason == "other":
+        assert reason not in str(metadata)
+
+
 def test_unexpected_exception_in_loop_closes_socket_and_runs_cleanup(app_with_ws):
     """A non-WebSocketDisconnect exception inside the receive loop must still
     run the same connection_key-owned cleanup and close the socket (not raise
@@ -628,6 +673,7 @@ def test_unexpected_exception_in_loop_closes_socket_and_runs_cleanup(app_with_ws
         _stop(patches)
 
     disconnect_hook.assert_awaited()
+    assert disconnect_hook.await_args.kwargs["conn_state"]["server_close_reason"] == "handler_error"
 
 
 # ── 6. _handle_driver_ws_disconnect edges ────────────────────────────────────
@@ -691,10 +737,19 @@ async def test_handle_driver_ws_disconnect_online_driver_logs_and_broadcasts():
         patch("backend.routes.websocket.manager.broadcast_to_admins", new=broadcast),
         patch("backend.routes.websocket.db_supabase.insert_one", new=insert_one),
     ):
-        await _handle_driver_ws_disconnect("driver_online", {"id": "u1"})
+        await _handle_driver_ws_disconnect(
+            "driver_online",
+            {"id": "u1"},
+            conn_state={"server_close_reason": "heartbeat_timeout"},
+            close_code=1006,
+        )
     broadcast.assert_awaited_once()
     assert broadcast.await_args.args[0]["type"] == "driver_connection_lost"
     insert_one.assert_awaited_once()
+    metadata = insert_one.await_args.args[1]["metadata"]
+    assert metadata["server_close_reason"] == "heartbeat_timeout"
+    assert metadata["close_reason"] == "unspecified"
+    assert metadata["close_code"] == 1006
 
 
 @pytest.mark.anyio
@@ -734,10 +789,12 @@ async def test_heartbeat_send_failure_breaks_loop():
 
     ws = MagicMock()
     ws.send_json = AsyncMock(side_effect=RuntimeError("socket dead"))
+    conn_state = {}
 
     with patch("backend.routes.websocket.asyncio.sleep", new=AsyncMock(return_value=None)):
-        await heartbeat_task(ws, "driver_hb_1")
+        await heartbeat_task(ws, "driver_hb_1", conn_state)
     ws.send_json.assert_awaited_once()
+    assert conn_state["server_close_reason"] == "heartbeat_send_failed"
 
 
 @pytest.mark.anyio
@@ -753,6 +810,8 @@ async def test_heartbeat_closes_on_stale_pong(monkeypatch):
         await heartbeat_task(ws, "driver_hb_2", conn_state)
     ws.close.assert_awaited_once()
     assert ws.close.await_args.kwargs.get("code") == 1001
+    assert ws.close.await_args.kwargs.get("reason") == "heartbeat_timeout"
+    assert conn_state["server_close_reason"] == "heartbeat_timeout"
 
 
 @pytest.mark.anyio
@@ -763,6 +822,7 @@ async def test_heartbeat_revokes_on_bumped_token_version():
     ws.send_json = AsyncMock(return_value=None)
     ws.close = AsyncMock(return_value=None)
     key = "driver_hb_revoke"
+    conn_state = {}
 
     with (
         patch("backend.routes.websocket.asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -772,10 +832,11 @@ async def test_heartbeat_revokes_on_bumped_token_version():
         ),
         patch("backend.routes.websocket.clear_presence", new=AsyncMock(return_value=None)) as clear_pres,
     ):
-        await heartbeat_task(ws, key, None, user_id="u1", driver_id="d1", claim_token_version=1)
+        await heartbeat_task(ws, key, conn_state, user_id="u1", driver_id="d1", claim_token_version=1)
 
     ws.close.assert_awaited_once()
     assert ws.close.await_args.kwargs.get("code") == 1008
+    assert conn_state["server_close_reason"] == "token_revoked"
     # Presence clear is gated on this socket owning the connection_key; it
     # is not registered in manager.active_connections here, so must skip.
     clear_pres.assert_not_awaited()

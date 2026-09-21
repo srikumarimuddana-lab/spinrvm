@@ -61,6 +61,7 @@ having been correct.
 """
 
 import logging
+from typing import Iterable, Optional
 
 try:
     from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
@@ -104,8 +105,9 @@ class StreamingOutputFilter:
     ``feed`` returns the text now safe to emit (``""`` while the holdback fills
     or between coalesced releases). ``flush`` returns the remainder. The
     concatenation of everything returned equals
-    ``filter_tool_leakage(scrub_pii(whole_text, policy))`` — asserted directly
-    by the differential tests, which is the only property worth having here.
+    ``filter_tool_leakage(scrub_pii(whole_text, policy, preserve=preserve))`` —
+    asserted directly by the differential tests, which is the only property
+    worth having here.
 
     Never raises on content: a filter failure must not break a chat turn, the
     same contract ``scrub_pii_deep`` holds.
@@ -117,10 +119,12 @@ class StreamingOutputFilter:
         policy: ScrubPolicy = ScrubPolicy.AI_CHAT,
         holdback: int = _HOLDBACK_CHARS,
         min_release: int = _MIN_RELEASE_CHARS,
+        preserve: Optional[Iterable[str]] = None,
     ):
         self._policy = policy
         self._holdback = max(0, holdback)
         self._min_release = max(0, min_release)
+        self._preserve = tuple(v for v in (preserve or ()) if isinstance(v, str) and v.strip())
         self._raw = ""
         self._emitted = ""
         self._unreleased = 0
@@ -151,7 +155,7 @@ class StreamingOutputFilter:
 
     def _release(self, *, final: bool) -> str:
         try:
-            full = filter_tool_leakage(scrub_pii(self._raw, policy=self._policy))
+            full = filter_tool_leakage(scrub_pii(self._raw, policy=self._policy, preserve=self._preserve))
         except Exception:  # noqa: BLE001 - a filter failure must not break the turn
             logger.error(
                 "streaming output filter failed; withholding text until flush",

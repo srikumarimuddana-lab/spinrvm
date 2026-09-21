@@ -21,10 +21,8 @@ describe('one-time online-flag hydration from the authoritative profile', () => 
     expect(effect).toContain('if (serverOnline === undefined || serverOnline === null) return;');
   });
 
-  it('re-arms background tracking only when hydrating to online', () => {
-    expect(effect).toContain('if (serverOnline) {');
-    expect(effect).toContain('startBackgroundLocation().catch(() => {});');
-  });
+  // Native startup/resume behavior is exercised by the mounted-hook lifecycle
+  // suite; it must run even when hydration finds the online flag unchanged.
 
   it('never fights an in-flight toggle (leaves marking un-hydrated so a later run syncs)', () => {
     // The toggling guard must come BEFORE we mark hydrated, so a toggle in

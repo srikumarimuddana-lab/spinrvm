@@ -294,3 +294,178 @@ async def test_unconfigured_osrm_fills_gaps_with_straight_lines_without_network(
     # Anchors still resolve from the raw pickup/completion coordinates.
     assert result["endpoint_start_verified"] is True
     assert result["endpoint_end_verified"] is True
+
+
+def _tight_gap_evidence():
+    """Two due-north observed segments split by a ~389 m / 20 s hole.
+
+    Short enough to clear both plausibility caps (MAX_INFERRED_CONNECTOR_KM,
+    MAX_INFERRED_GAP_SECONDS) so the gap genuinely reaches the routed tier —
+    which is the only place the detour in ride 0c24901f could be produced.
+    """
+    completion = {"lat": 50.4565, "lng": -104.6210, "accuracy": 8}
+    segmented = segment_route(
+        [
+            _point(0, 0, 50.4510, -104.6210),
+            _point(10, 1, 50.4520, -104.6210),
+            # 389 m from the previous fix: splits on displacement, not time, so
+            # the gap keeps a short real elapsed interval on both sides.
+            _point(30, 2, 50.4555, -104.6210),
+            _point(40, 3, 50.4565, -104.6210),
+        ],
+        _lifecycle(),
+        completion,
+    )
+    matched = {
+        "segments": [
+            {
+                "segment_index": 0,
+                "matched_segments": [
+                    {
+                        "provider": "osrm_match",
+                        "distance_km": 0.111,
+                        "polyline": [[50.4510, -104.6210], [50.4520, -104.6210]],
+                    }
+                ],
+            },
+            {
+                "segment_index": 1,
+                "matched_segments": [
+                    {
+                        "provider": "osrm_match",
+                        "distance_km": 0.111,
+                        "polyline": [[50.4555, -104.6210], [50.4565, -104.6210]],
+                    }
+                ],
+            },
+        ],
+        "failures": [],
+    }
+    return segmented, matched, completion
+
+
+def _patch_providers(monkeypatch, gap_route):
+    monkeypatch.setattr(
+        reconstruction,
+        "get_app_settings",
+        AsyncMock(return_value={"osrm_url": "http://osrm:5000"}),
+    )
+    # Anchors resolve to the raw pickup/completion coordinates, which coincide
+    # with the observed ends — so no start/tail connector is attempted and the
+    # internal gap is the only routed call.
+    monkeypatch.setattr(reconstruction, "snap_endpoint_via_osrm", AsyncMock(return_value=None))
+    monkeypatch.setattr(reconstruction, "compute_gap_route_via_osrm", gap_route)
+
+
+@pytest.mark.asyncio
+async def test_refuses_routed_connector_nobody_could_have_driven(monkeypatch):
+    """A 2.33 km road answer across a 389 m / 20 s hole implies ~419 km/h.
+
+    Regression for ride 0c24901f: the router bridged a short hole spanning a
+    divided road by driving to the next legal turnaround and back, adding ~2 km
+    of phantom distance to a finalized trip (8.96 km published against a 6.99 km
+    booking — 1.28x, just under resolve_measured_distance_km's 1.3x ceiling, so
+    nothing downstream caught it).
+    """
+    segmented, matched, completion = _tight_gap_evidence()
+    gap_route = AsyncMock(return_value=(2.33, [[50.4520, -104.6210], [50.4530, -104.6180], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion
+    )
+
+    assert result["failed_gaps"] == ["internal_gap_implausible_detour"]
+    # Refused outright — not swapped for a straight line, which would still read
+    # as real evidence on the audit map even though its km is excluded.
+    assert result["routed_connector_distance_km"] == 0.0
+    assert result["straight_connector_distance_km"] == 0.0
+    assert result["inferred_gap_count"] == 0
+    assert result["distance_km"] == result["observed_distance_km"]
+    assert all(section["geometry_kind"] == "observed" for section in result["segments"])
+
+
+@pytest.mark.asyncio
+async def test_keeps_routed_connector_the_driver_could_have_driven(monkeypatch):
+    """Control for the refusal above: 0.42 km over the same 20 s is ~76 km/h."""
+    segmented, matched, completion = _tight_gap_evidence()
+    gap_route = AsyncMock(return_value=(0.42, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion
+    )
+
+    assert result["failed_gaps"] == []
+    assert result["routed_connector_distance_km"] == 0.42
+    assert result["inferred_gap_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("routed_km", "refused"),
+    [
+        (round(reconstruction.MAX_CONNECTOR_IMPLIED_SPEED_KPH * 20 / 3600, 3), False),
+        (round((reconstruction.MAX_CONNECTOR_IMPLIED_SPEED_KPH + 1) * 20 / 3600, 3), True),
+    ],
+)
+async def test_implied_speed_cap_boundary(monkeypatch, routed_km, refused):
+    """At the cap is kept; one km/h over it is refused."""
+    segmented, matched, completion = _tight_gap_evidence()
+    gap_route = AsyncMock(return_value=(routed_km, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion
+    )
+
+    assert bool(result["failed_gaps"]) is refused
+
+
+@pytest.mark.asyncio
+async def test_gap_router_is_given_observed_headings_and_the_strict_slack(monkeypatch):
+    """The gap is routed along the roads actually travelled, not the fastest path.
+
+    Without a heading on each side, a router is free to answer a gap spanning a
+    divided road with a drive to the next turnaround and back. Both fixture
+    segments run due north, so both bearings must come back as 0 degrees.
+    """
+    segmented, matched, completion = _tight_gap_evidence()
+    gap_route = AsyncMock(return_value=(0.42, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    await reconstruction.reconstruct_completed_route(segmented, matched, {"lat": 50.4510, "lng": -104.6210}, completion)
+
+    assert gap_route.await_count == 1
+    kwargs = gap_route.await_args.kwargs
+    assert kwargs["start_bearing"] == pytest.approx(0.0, abs=0.5)
+    assert kwargs["end_bearing"] == pytest.approx(0.0, abs=0.5)
+    # A finalized route asks for the strict slack, not route_distance's
+    # live-trail default, because this distance is audited and billed.
+    assert kwargs["max_extra_km"] == reconstruction.GAP_MAX_EXTRA_KM == 0.5
+
+
+@pytest.mark.asyncio
+async def test_missing_start_and_tail_connectors_are_not_speed_gated(monkeypatch):
+    """Anchor connectors carry no device clock, so the speed gate cannot apply.
+
+    Only an internal gap has a real captured_at on both sides. A start/tail
+    connector is bounded by the distance cap alone — gating it on a speed
+    derived from a timestamp it does not have would refuse valid geometry.
+    """
+    segmented, matched, completion = _tight_gap_evidence()
+    gap_route = AsyncMock(return_value=(0.42, [[50.4520, -104.6210], [50.4555, -104.6210]]))
+    monkeypatch.setattr(reconstruction, "get_app_settings", AsyncMock(return_value={"osrm_url": "http://osrm:5000"}))
+    # Anchors far from the observed ends force real start/tail connectors.
+    monkeypatch.setattr(reconstruction, "snap_endpoint_via_osrm", AsyncMock(return_value=None))
+    monkeypatch.setattr(reconstruction, "compute_gap_route_via_osrm", gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.4400, "lng": -104.6210}, {"lat": 50.4700, "lng": -104.6210}
+    )
+
+    reasons = [section["gap_reason"] for section in result["segments"] if section["geometry_kind"] == "inferred"]
+    assert "missing_start" in reasons and "missing_tail" in reasons
+    # The start anchor has no preceding geometry, so no heading is asserted for it.
+    assert gap_route.await_args_list[0].kwargs["start_bearing"] is None
+    assert gap_route.await_args_list[0].kwargs["end_bearing"] is not None

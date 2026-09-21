@@ -53,6 +53,21 @@ def distance_m(left: list[float], right: list[float]) -> float:
     return radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def bearing_deg(start: list[float], end: list[float]) -> Optional[float]:
+    """Initial great-circle bearing start -> end, in degrees clockwise from north.
+
+    None when the two coordinates are effectively the same point, where no
+    direction of travel can be asserted.
+    """
+    if distance_m(start, end) < 1.0:
+        return None
+    lat1, lat2 = math.radians(start[0]), math.radians(end[0])
+    delta_lng = math.radians(end[1] - start[1])
+    x = math.sin(delta_lng) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(delta_lng)
+    return math.degrees(math.atan2(x, y)) % 360.0
+
+
 def _polyline_distance_km(coordinates: list[list[float]]) -> float:
     return round(
         sum(distance_m(left, right) for left, right in zip(coordinates, coordinates[1:], strict=False)) / 1000.0,

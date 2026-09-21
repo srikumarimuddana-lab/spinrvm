@@ -7,12 +7,19 @@
   Tier 3/4 – Haversine   (straight-line geometry, haversine distance — pure
              math, cannot fail)
 
+Routed tiers are pinned to the direction of travel observed either side of the
+gap, so the answer follows the carriageway actually driven rather than the
+fastest legal path — without that hint a short gap spanning a divided road can
+be "bridged" by a drive to the next turnaround and back.
+
 A gap is left unbridged — recorded in ``failed_gaps`` instead of guessed at —
 when it is not plausible: farther than ``MAX_INFERRED_CONNECTOR_KM``
 regardless of reason, or (for an internal gap between two observed segments,
 where real device timestamps bound both sides) longer than
-``MAX_INFERRED_GAP_SECONDS``. This is deliberate: a straight line across an
-implausible distance, or a routed guess across an outage too long to trust,
+``MAX_INFERRED_GAP_SECONDS``, or a routed answer that could not have been
+driven in the gap's own elapsed time (``MAX_CONNECTOR_IMPLIED_SPEED_KPH``).
+This is deliberate: a straight line across an implausible distance, a routed
+guess across an outage too long to trust, or a detour nobody could have driven
 is worse for the insurance/regulatory audit trail than an honest gap.
 
 Endpoint anchors use an adaptive tolerance (30 m ideal → 200 m relaxed → raw
@@ -34,8 +41,8 @@ except ImportError:
 
 try:
     from .route_distance import compute_gap_route_via_google, compute_gap_route_via_osrm, snap_endpoint_via_osrm
-    from .route_reconstruction_projection import coordinate, distance_m, project_observed_sections
-    from .route_segments import SegmentedRoute
+    from .route_reconstruction_projection import bearing_deg, coordinate, distance_m, project_observed_sections
+    from .route_segments import MAX_PLAUSIBLE_SPEED_KPH, SegmentedRoute
 except ImportError:
     from utils.route_distance import (  # type: ignore
         compute_gap_route_via_google,
@@ -43,11 +50,12 @@ except ImportError:
         snap_endpoint_via_osrm,
     )
     from utils.route_reconstruction_projection import (  # type: ignore
+        bearing_deg,
         coordinate,
         distance_m,
         project_observed_sections,
     )
-    from utils.route_segments import SegmentedRoute  # type: ignore
+    from utils.route_segments import MAX_PLAUSIBLE_SPEED_KPH, SegmentedRoute  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +78,17 @@ MAX_INFERRED_CONNECTOR_KM = 10.0
 # on both sides; missing_start/missing_tail anchors have none, so the time
 # gate does not apply to them (the distance cap above still does).
 MAX_INFERRED_GAP_SECONDS = 300
+# Slack above the crow-flies gap distance allowed of a routed connector here.
+# route_distance's own default (2.0 km) is sized for the live trail, where an
+# over-long connector is transient cosmetics; on a finalized route it becomes
+# billed/audited distance, so a completed route asks for the strict value.
+GAP_MAX_EXTRA_KM = 0.5
+# Physics gate on a routed connector: whatever road path is substituted for the
+# missing GPS must be drivable in the time the gap actually took. A router
+# answering a short gap with a drive to the next legal turnaround and back
+# (opposite carriageways of a divided road) fails this by a wide margin. Shares
+# route_segments' plausibility bar so both layers call the same speed impossible.
+MAX_CONNECTOR_IMPLIED_SPEED_KPH = MAX_PLAUSIBLE_SPEED_KPH
 
 
 def _straight_line_segment(
@@ -88,6 +107,31 @@ def _straight_line_segment(
         "distance_km": round(gap_distance_m / 1000.0, 3),
         "coordinates": [start, end],
     }
+
+
+def _exit_bearing(section: Optional[dict]) -> Optional[float]:
+    """Direction of travel at the END of an observed section — the heading with
+    which the driver entered the gap that follows it."""
+    coordinates = (section or {}).get("coordinates") or []
+    if len(coordinates) < 2:
+        return None
+    return bearing_deg(coordinates[-2], coordinates[-1])
+
+
+def _entry_bearing(section: Optional[dict]) -> Optional[float]:
+    """Direction of travel at the START of an observed section — the heading with
+    which the driver left the gap that precedes it."""
+    coordinates = (section or {}).get("coordinates") or []
+    if len(coordinates) < 2:
+        return None
+    return bearing_deg(coordinates[0], coordinates[1])
+
+
+def _implied_speed_kph(distance_km: float, elapsed_seconds: Optional[float]) -> Optional[float]:
+    """Speed a connector implies, or None when the gap carries no usable clock."""
+    if elapsed_seconds is None or elapsed_seconds <= 0:
+        return None
+    return distance_km / (elapsed_seconds / 3600.0)
 
 
 _INTERNAL_PROJECTION_FIELDS = ("segment_start_captured_at", "segment_end_captured_at")
@@ -135,9 +179,10 @@ async def reconstruct_completed_route(
 ) -> dict:
     """Insert bounded route sections between ordered observed evidence.
 
-    Uses a 4-tier gap fill strategy that guarantees reconstruction always
-    succeeds when GPS breadcrumbs exist.  ``failed_gaps`` in the returned
-    dict is always empty.
+    Uses a 4-tier gap fill strategy so reconstruction succeeds whenever GPS
+    breadcrumbs exist. ``failed_gaps`` names each gap that was refused instead
+    of bridged (see the module docstring for the three refusal reasons); an
+    empty list means every gap was closed with evidence-backed geometry.
     """
     observed_sections = project_observed_sections(segmented, matched_route)
     app_settings = await get_app_settings() or {}
@@ -172,11 +217,23 @@ async def reconstruct_completed_route(
     connector_attempts = 0
 
     async def append_connector(
-        start: list[float], end: list[float], reason: str, elapsed_seconds: Optional[float] = None
+        start: list[float],
+        end: list[float],
+        reason: str,
+        elapsed_seconds: Optional[float] = None,
+        *,
+        start_bearing: Optional[float] = None,
+        end_bearing: Optional[float] = None,
     ) -> None:
         """4-tier gap fill: OSRM → Google → Haversine — unless the gap itself
         is not believable, in which case it is left unbridged (see the
-        distance/time caps below) rather than guessed at."""
+        distance/time caps below) rather than guessed at.
+
+        ``start_bearing``/``end_bearing`` are the headings observed either side
+        of the gap; they keep the routed answer on the carriageway actually
+        driven. A routed answer that still could not have been driven in the
+        gap's own elapsed time is refused outright rather than substituted.
+        """
         nonlocal connector_attempts, routed_connector_km, straight_connector_km
         gap_distance = distance_m(start, end)
         if gap_distance <= CONTINUITY_TOLERANCE_M:
@@ -218,19 +275,43 @@ async def reconstruct_completed_route(
 
         routed = None
 
-        # Tier 1: OSRM road-following route
+        # Tier 1: OSRM road-following route, pinned to the observed headings so
+        # the gap is mapped along the roads actually travelled.
         if osrm_url:
-            routed = await compute_gap_route_via_osrm(start, end, osrm_url)
+            routed = await compute_gap_route_via_osrm(
+                start,
+                end,
+                osrm_url,
+                start_bearing=start_bearing,
+                end_bearing=end_bearing,
+                max_extra_km=GAP_MAX_EXTRA_KM,
+            )
 
         provider = "osrm_inferred"
 
         # Tier 2: Google Directions fallback
         if not routed and google_api_key:
-            routed = await compute_gap_route_via_google(start, end, google_api_key)
+            routed = await compute_gap_route_via_google(start, end, google_api_key, max_extra_km=GAP_MAX_EXTRA_KM)
             provider = "google_inferred"
 
         if routed:
             distance_km, coordinates = routed
+            # Physics refusal: a road path that could not have been driven in
+            # the gap's own elapsed time is not what happened, so it is left
+            # unbridged rather than swapped for a straight line that would
+            # read as real evidence on the audit map.
+            implied_kph = _implied_speed_kph(float(distance_km), elapsed_seconds)
+            if implied_kph is not None and implied_kph > MAX_CONNECTOR_IMPLIED_SPEED_KPH:
+                logger.info(
+                    "gap fill refused for %s: routed %.3f km over %.0fs implies %.0f km/h (cap %d)",
+                    reason,
+                    float(distance_km),
+                    elapsed_seconds,
+                    implied_kph,
+                    MAX_CONNECTOR_IMPLIED_SPEED_KPH,
+                )
+                failed_gaps.append(f"{reason}_implausible_detour")
+                return
             output.append(
                 {
                     "id": f"inferred-{reason}-{connector_attempts}",
@@ -255,7 +336,12 @@ async def reconstruct_completed_route(
 
     if observed_sections:
         if start_anchor is not None:
-            await append_connector(start_anchor, observed_sections[0]["coordinates"][0], "missing_start")
+            await append_connector(
+                start_anchor,
+                observed_sections[0]["coordinates"][0],
+                "missing_start",
+                end_bearing=_entry_bearing(observed_sections[0]),
+            )
         # else: no pickup coordinate at all — skip start connector.
 
         for index, section in enumerate(observed_sections):
@@ -273,12 +359,22 @@ async def reconstruct_completed_route(
                     if gap_start is not None and gap_end is not None:
                         elapsed_seconds = (gap_end - gap_start).total_seconds()
                 await append_connector(
-                    previous["coordinates"][-1], section["coordinates"][0], "internal_gap", elapsed_seconds
+                    previous["coordinates"][-1],
+                    section["coordinates"][0],
+                    "internal_gap",
+                    elapsed_seconds,
+                    start_bearing=_exit_bearing(previous),
+                    end_bearing=_entry_bearing(section),
                 )
             output.append(_strip_internal_projection_fields(section))
 
         if end_anchor is not None:
-            await append_connector(observed_sections[-1]["coordinates"][-1], end_anchor, "missing_tail")
+            await append_connector(
+                observed_sections[-1]["coordinates"][-1],
+                end_anchor,
+                "missing_tail",
+                start_bearing=_exit_bearing(observed_sections[-1]),
+            )
         # else: no completion coordinate at all — skip tail connector.
     else:
         if start_anchor is not None and end_anchor is not None:

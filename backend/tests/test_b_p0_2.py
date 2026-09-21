@@ -138,7 +138,7 @@ async def test_cancel_ride_raises_on_in_progress():
     """cancel_ride must reject when ride status is 'in_progress'."""
     from unittest.mock import AsyncMock, patch
 
-    from backend.utils.error_handling import RideStateError
+    from fastapi import HTTPException
 
     ride = {"id": "r1", "status": "in_progress", "driver_id": "d1", "rider_id": "rider-1"}
     driver = {"id": "d1", "user_id": "u1"}
@@ -147,12 +147,16 @@ async def test_cancel_ride_raises_on_in_progress():
         patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
     ):
-        with pytest.raises(RideStateError):
+        # #5611: the guard now matches the rider-side/sibling-guard shape --
+        # 409, not RideStateError's 422, and no raw status token in the message.
+        with pytest.raises(HTTPException) as exc:
             await _drivers_module.cancel_ride(
                 ride_id="r1",
                 reason="test",
                 current_user={"id": "u1"},
             )
+        assert exc.value.status_code == 409
+        assert "in_progress" not in exc.value.detail
 
 
 @_skip_no_deps
@@ -192,7 +196,9 @@ async def test_complete_ride_does_not_overwrite_payment_status():
             AsyncMock(side_effect=lambda t, *a, **kw: [driver] if t == "drivers" else ([ride] if t == "rides" else [])),
         ),
         patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=capture_update_one)),
-        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value={**ride, "status": "completed"})),
+        patch(
+            "backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value={**ride, "status": "completed"})
+        ),
         patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
         patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),

@@ -400,6 +400,10 @@ async def test_refresh_super_admin_branch():
             AsyncMock(return_value=("new-raw", "hash", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
         patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
+        # admin_refresh's admin-001 branch reads the env-admin revocation
+        # counter (migration 434) before minting — not part of this test's
+        # own DB mocking before that read was added.
+        patch.object(admin_auth, "get_env_admin_token_version", AsyncMock(return_value=0)),
     ):
         result = await admin_auth.admin_refresh(_make_request(), admin_auth.RefreshRequest(refresh_token="rt"))
     assert result["token"]

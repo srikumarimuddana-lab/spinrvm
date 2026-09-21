@@ -34,9 +34,10 @@ def _admin_payload() -> dict:
 @pytest.mark.anyio
 async def test_fails_open_when_redis_unavailable(monkeypatch):
     """redis_get raising (Upstash down) must NOT reject a valid admin token."""
-    monkeypatch.setattr(
-        dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable"))
-    )
+    monkeypatch.setattr(dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable")))
+    # admin-001's token_version check (migration 434) runs after the JTI
+    # check this test targets — not part of the Redis-outage scenario itself.
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
     user = await _verify_admin_payload(_admin_payload())
     assert user is not None
     assert user["id"] == "admin-001"
@@ -57,6 +58,9 @@ async def test_blocks_when_redis_reports_revoked(monkeypatch):
 async def test_allows_when_redis_reports_not_revoked(monkeypatch):
     """Healthy Redis, JTI absent from denylist → token passes."""
     monkeypatch.setattr(dependencies, "redis_get", AsyncMock(return_value=None))
+    # admin-001's token_version check (migration 434) runs after the JTI
+    # check this test targets — not part of the denylist scenario itself.
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
     user = await _verify_admin_payload(_admin_payload())
     assert user is not None
     assert user["id"] == "admin-001"

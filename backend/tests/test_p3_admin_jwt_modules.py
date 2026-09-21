@@ -21,6 +21,7 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
@@ -119,7 +120,7 @@ class TestMintAdminAccessToken:
             "settings",
             "corporate_accounts",
             "documents",
-                    "staff",
+            "staff",
         ]
         token = _mint(role="super_admin", modules=all_modules)
         payload = _decode(token)
@@ -134,9 +135,12 @@ class TestGetCurrentUserAdminJWT:
 
     @pytest.mark.anyio
     async def test_admin_jwt_returns_modules_without_db_lookup(self):
-        """admin-001 (env-seeded super admin) has no DB row — claims are trusted directly."""
+        """admin-001 (env-seeded super admin) has no admin_staff row — claims
+        are trusted directly, modulo the env-admin token_version check
+        (migration 434, utils/env_admin_tokens.py) mocked below."""
         from fastapi.security import HTTPAuthorizationCredentials
 
+        import dependencies
         from dependencies import get_current_user
 
         modules = ["dashboard", "promotions"]
@@ -144,7 +148,8 @@ class TestGetCurrentUserAdminJWT:
         token = _mint(role="admin", modules=modules, user_id="admin-001")
 
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        user = await get_current_user(creds)
+        with patch.object(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0)):
+            user = await get_current_user(creds)
 
         assert user["id"] == "admin-001"
         assert user["role"] == "admin"
@@ -154,13 +159,15 @@ class TestGetCurrentUserAdminJWT:
     async def test_operations_role_passes_through(self):
         from fastapi.security import HTTPAuthorizationCredentials
 
+        import dependencies
         from dependencies import get_current_user
 
         # Use admin-001 to bypass the admin_staff DB lookup — this test
         # verifies JWT claim parsing for operations role, not DB validation.
         token = _mint(role="operations", modules=["rides", "drivers"], user_id="admin-001")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        user = await get_current_user(creds)
+        with patch.object(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0)):
+            user = await get_current_user(creds)
 
         assert user["role"] == "operations"
         assert "rides" in user["modules"]

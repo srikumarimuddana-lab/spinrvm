@@ -229,6 +229,46 @@ change itself and would not reduce the (already negligible) blast radius.
 - [ ] Manual repro in staging — not performed.
 - [ ] Feature flag — not added (justified in §8).
 
+## 9b. Reviewer findings (spinr-notification-ux-reviewer, spinr-regulatory-compliance-checker)
+
+Both reviewers ran against the committed diff. **No blockers from either.** Regulatory returned
+SAFE TO MERGE (its one warning — that the "before your first ride" phrasing had never been logged
+as classification-checked — is closed in §9 above). Notification-UX returned FIX WARNINGS, with the
+items below.
+
+**1. Push notification still says nothing about training — known, accepted, NOT closed by this
+change.** Push is the primary channel. `_ACTION_COPY["approve"]` and `_STATUS_COPY["active"]` still
+read *"You can now go online and start earning!"* — the same straight-to-Go-Online pattern the
+original report complained about, one layer down. Push and email are sent independently
+(`notify_driver_status_change`), so a driver who acts on the push banner without opening the email
+still gets no training mention.
+
+This is pre-existing, deliberate architecture, not a regression: the copy map's own comment at
+`driver_status_notifications.py:129-130` states the email's next-step field exists precisely
+because "a notification tray has no room for it." Changing the push body would therefore be a
+reversal of an existing design decision, not a bug fix, so it is **deliberately left alone and
+raised to the requester as a product decision** rather than shipped silently (CLAUDE.md pre-merge
+gate 9). Consequence to be explicit about: this change closes the reported complaint **for drivers
+who open the email**, which is real progress but not full closure.
+
+**2. "Approve" firing a second, unfixed "Account Verified!" email — investigated and ruled out.**
+The reviewer could not rule this out and flagged it for confirmation. Checked: the `approve` action
+sets `is_verified = True` inside the *same* `updates` dict as `status = "active"`
+(`routes/admin/drivers.py:2123-2126`) and then sends exactly one notice,
+`action_message("approve")` (line 2228). It never calls `verification_message(...)` — that belongs
+to the separate `/verify` toggle endpoint (line 1997), a distinct admin action. **The two are not
+bundled; no unfixed second email follows an approval.**
+
+**3. Preview-script copy is a manually-synced duplicate with nothing enforcing the sync.** It was
+updated in this change, but the next person to touch this copy has no test to catch drift the way
+the real sender now does. Noted, not fixed — the preview script is a dev/QA tool by design and
+adding a sync test to it is outside this change's scope.
+
+**4. Placeholder-chain edge case (pre-existing, one link longer).** `{support}` → `{app_name}` →
+`{training}` are replaced in sequence, so an admin-configured `app_name` literally containing
+`"{training}"` would be corrupted by the later replace. True before this diff for the first two;
+this adds a third. Left consistent with the established pattern — see §4.
+
 ## 10. What was NOT verified
 
 Stated explicitly rather than left to silence:
@@ -246,6 +286,8 @@ Stated explicitly rather than left to silence:
   opened in a mail client. No check of how the link renders in Gmail/Outlook specifically.
 - **No staging run.** The end-to-end path (admin approves → email actually arrives with a working
   link) has not been exercised against a real environment.
+- **The push-notification channel still has no training mention** — see §9b item 1. This change
+  closes the complaint only for drivers who open the email.
 - **The underlying product gap is untouched and remains open**: the driver app still has no
   training entry point, `go_online` still does not check training completion, and the LMS
   integration is still admin-read-only. This change makes the driver *aware* of training at the

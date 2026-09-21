@@ -111,6 +111,25 @@ their own tests, which would put this change well past CLAUDE.md's ≤3-files-pe
 the flag is not merely off but currently **unreachable** (§10). They are the next subtask, not a
 someone-else problem.
 
+### Interaction with `go_offline_live_offer_guard_enabled` (added after this was first written)
+
+Merging `main` brought in PR #5585 (`cd47f50`), which adds a **second**, separate flag —
+`go_offline_live_offer_guard_enabled`, also default off — making `PUT /drivers/status` return 409
+when a driver with a fresh pending `ride_offers` row tries to flip online → offline. That narrows
+the window this change guards, but does **not** remove the need for it:
+
+- The 409 only fires on a genuine online → offline **flip**, only for a **fresh** pending offer,
+  and only when that second flag is on.
+- Several paths reach `is_online = False` without passing through that handler at all:
+  `process_expired_offer`'s miss-streak auto-offline writes `is_online`/`is_available` directly
+  (`routes/rides/matching.py`, then `record_period_transition(driver_id, 0)`), plus admin
+  force-offline, `routes/drivers/profile.py:306` and `routes/drivers/subscriptions.py:1811`.
+
+So a loser or decliner can still be genuinely offline when the release runs, and the clamp still
+reports it. The two changes are complementary: #5585 stops the driver *creating* the state,
+this one records the state correctly when it arises anyway. In the common auto-offline case the
+driver is already Period 0, so the write this change adds returns `noop` and costs one round trip.
+
 **Volume.** One extra RPC per *offline* loser. Losers who went offline mid-offer are rare, and
 `record_insurance_period_transition` returns `noop` (counted as
 `spinr_insurance_period_noop_total`) when the period is already open, so the common already-

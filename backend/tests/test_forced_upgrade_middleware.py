@@ -36,10 +36,28 @@ _original_settings = getattr(_core_config_mod, "settings", None)
 
 @pytest.fixture(scope="module", autouse=True)
 def _restore_core_config_settings():
+    # `_client_with_min_version` below permanently rebinds
+    # `settings_loader.get_app_settings` to an AsyncMock returning a 2-key dict.
+    # That used to leak for the REST OF THE SESSION: this file restored only
+    # `core.config.settings`, so every later test that called the real
+    # get_app_settings() silently got the stub instead. It went unnoticed
+    # because nothing after it called the real one -- until
+    # test_settings_loader_last_known.py did, and failed with KeyError on a
+    # field that genuinely exists (schemas.AppSettings.new_ride_requests_enabled),
+    # which is the tell that the function under test was not the real one.
+    #
+    # Restoring it here fixes the leak at its source rather than making each
+    # later test defend against this file.
+    import settings_loader
+
+    _original_get_app_settings = settings_loader.get_app_settings
     _core_config_mod.settings = MagicMock(ENV="development")
-    yield
-    if _original_settings is not None:
-        _core_config_mod.settings = _original_settings
+    try:
+        yield
+    finally:
+        settings_loader.get_app_settings = _original_get_app_settings
+        if _original_settings is not None:
+            _core_config_mod.settings = _original_settings
 
 
 def _make_app() -> FastAPI:

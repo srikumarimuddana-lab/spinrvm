@@ -76,7 +76,16 @@ class TestOfferTimeoutHandler:
 
             # Driver released via set_driver_available (below the miss-streak
             # auto-offline threshold), not a raw db.update_one("drivers", ...).
-            mock_set_available.assert_awaited_once_with("driver_1", available=True)
+            #
+            # Positional, not available=True: since PR #5602 this release goes
+            # through utils.insurance_periods.release_driver_and_close_period,
+            # which calls set_driver_available(driver_id, True) positionally —
+            # matching how nearly every other call site in the codebase spells
+            # it (routes/admin/rides.py, routes/drivers/ride_cancel.py,
+            # matching.py's own batch-release paths). The patch still intercepts
+            # because _deps.db_supabase and insurance_periods.db_supabase are
+            # the same module object; only the spelling of the call changed.
+            mock_set_available.assert_awaited_once_with("driver_1", True)
 
             # Ride reset to searching via a conditional db.update_one("rides", ...)
             # scoped to the exact state just observed (race guard, WS-1 subtask 4).
@@ -507,7 +516,13 @@ async def test_process_expired_offer_is_idempotent():
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value=None),
         ),
-        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
+        # Patched on utils.insurance_periods, NOT on _deps. Since PR #5602 this
+        # release runs through release_driver_and_close_period, which calls its
+        # own module-global record_period_transition — so a _deps patch no
+        # longer intercepts it and the REAL one ran, spending a second run_sync
+        # out of claim_results. The first process_expired_offer then consumed
+        # both entries and the second died on StopAsyncIteration.
+        patch("backend.utils.insurance_periods.record_period_transition", new_callable=AsyncMock) as mock_period,
         patch("backend.routes.rides._deps.manager") as mock_mgr,
         patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
         patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss,

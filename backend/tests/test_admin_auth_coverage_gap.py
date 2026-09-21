@@ -400,6 +400,10 @@ async def test_refresh_super_admin_branch():
             AsyncMock(return_value=("new-raw", "hash", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
         patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
+        # C8 (PR #5602): minting an admin-001 token now stamps the DB-backed
+        # revocation counter into it, and that read fails CLOSED on error by
+        # design — so without this stub the handler 503s before minting.
+        patch.object(admin_auth, "get_env_admin_token_version", AsyncMock(return_value=0)),
     ):
         result = await admin_auth.admin_refresh(_make_request(), admin_auth.RefreshRequest(refresh_token="rt"))
     assert result["token"]

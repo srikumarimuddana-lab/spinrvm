@@ -28,18 +28,39 @@ from backend import settings_loader
 
 pytestmark = pytest.mark.anyio
 
+# Captured at import (collection) time, before any test body can rebind it, so
+# this is the genuine function even if a later-running module leaks a mock.
+_REAL_GET_APP_SETTINGS = settings_loader.get_app_settings
+
 
 @pytest.fixture(autouse=True)
 def _isolate_cache():
-    """`_settings_cache` is a module global shared with every other test in the
-    session. Save and restore it so these tests neither read someone else's
-    state nor leak their own."""
-    original = settings_loader._settings_cache
+    """Isolate the two module globals these tests depend on.
+
+    `_settings_cache` is shared with every other test in the session, so it is
+    saved and cleared here — these tests must neither read someone else's state
+    nor leak their own.
+
+    `get_app_settings` is restored for a specific reason: these are the first
+    tests in the suite to call the REAL one, and
+    `test_forced_upgrade_middleware.py` used to rebind it to an AsyncMock and
+    never put it back (fixed at source in that file). That leak made these two
+    tests fail in the full suite while passing in isolation — the worst shape of
+    test failure. Re-binding the original here means this file cannot be broken
+    again by the next module that forgets to clean up.
+    """
+    original_cache = settings_loader._settings_cache
+    # Deliberately NOT `settings_loader.get_app_settings` read here: by the time
+    # this fixture runs, a leaked mock would already BE the attribute, so saving
+    # it would save the mock. _REAL_GET_APP_SETTINGS is captured at module
+    # import (collection time, before any test body has run), so it is the
+    # genuine function.
+    settings_loader.get_app_settings = _REAL_GET_APP_SETTINGS
     settings_loader._settings_cache = None
     try:
         yield
     finally:
-        settings_loader._settings_cache = original
+        settings_loader._settings_cache = original_cache
 
 
 class TestNeverLoaded:

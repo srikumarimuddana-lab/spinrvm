@@ -24,6 +24,19 @@ from dependencies import JWT_AUD_ADMIN, _verify_admin_payload
 from routes.admin.auth import _mint_admin_access_token
 
 
+@pytest.fixture(autouse=True)
+def _env_admin_token_version(monkeypatch):
+    """Stub the DB-backed `admin-001` revocation counter (C8, PR #5602).
+
+    These tests use `admin-001` to skip the staff-table lookup; that path now
+    reads `env_admin_token_version` from the `settings` row and fails CLOSED on
+    a read error by design, which 503s before the audience check under test.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
+
+
 def _legacy_admin_payload() -> dict:
     """Admin-shaped payload WITHOUT an aud claim — the retired legacy form."""
     return {

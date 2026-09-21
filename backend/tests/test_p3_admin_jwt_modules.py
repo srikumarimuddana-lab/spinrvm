@@ -119,7 +119,7 @@ class TestMintAdminAccessToken:
             "settings",
             "corporate_accounts",
             "documents",
-                    "staff",
+            "staff",
         ]
         token = _mint(role="super_admin", modules=all_modules)
         payload = _decode(token)
@@ -131,6 +131,21 @@ class TestMintAdminAccessToken:
 
 class TestGetCurrentUserAdminJWT:
     """Admin tokens bypass the DB lookup and return claims directly."""
+
+    @pytest.fixture(autouse=True)
+    def _env_admin_token_version(self, monkeypatch):
+        """Stub the DB-backed `admin-001` revocation counter (C8, PR #5602).
+
+        These tests use `admin-001` precisely because it skips the admin_staff
+        lookup. That path now also reads `env_admin_token_version` from the
+        `settings` row, and fails CLOSED on a read error by design — so with no
+        DB it 503s before the claim parsing these tests are about.
+        """
+        from unittest.mock import AsyncMock
+
+        import dependencies
+
+        monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
 
     @pytest.mark.anyio
     async def test_admin_jwt_returns_modules_without_db_lookup(self):

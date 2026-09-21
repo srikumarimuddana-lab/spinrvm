@@ -434,24 +434,59 @@ class TestAdminLogoutAll:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_refuses_admin_001_super_admin(self):
-        """admin-001 is the env-var super admin — no DB row exists, so
-        bumping token_version is meaningless. Runbook tells operators
-        to rotate ADMIN_PASSWORD; the handler must redirect them
-        there explicitly rather than silently no-op."""
+    async def test_revokes_admin_001_super_admin(self):
+        """admin-001 IS revocable now — it must not be special-cased away.
+
+        This test previously asserted the opposite: a 400 telling the operator
+        to rotate ADMIN_PASSWORD and redeploy, on the reasoning that with no
+        admin_staff row there was no token_version to bump. That made the env
+        super admin the one account no in-app control could force-log-out, and
+        during a Redis outage the JTI denylist (which fails open by design)
+        could not kill it either. C8 in PR #5602 gave it a DB-backed
+        token_version on the settings row, so this path now bumps it exactly as
+        the staff branch does and every outstanding token dies on its next
+        request. The old assertion is kept in the git history, not here.
+        """
         from backend.routes.admin.auth import admin_logout_all
 
         token = _admin_jwt("admin-001")
         inner = _resolve_inner(admin_logout_all)
         request = MagicMock()
 
-        with pytest.raises(HTTPException) as exc:
-            await inner(request, authorization=f"Bearer {token}")
+        bump = AsyncMock(return_value=7)
+        with (
+            patch("backend.routes.admin.auth.bump_env_admin_token_version", bump),
+            patch("backend.routes.admin.auth.revoke_all_for_user", AsyncMock(return_value=3)),
+        ):
+            result = await inner(request, authorization=f"Bearer {token}")
 
-        assert exc.value.status_code == 400
-        # Must explicitly mention the rotation path so the operator
-        # doesn't have to grep the runbook for the recovery step.
-        assert "ADMIN_PASSWORD" in exc.value.detail
+        # The counter is bumped -- that is what actually revokes the tokens.
+        bump.assert_awaited_once()
+        assert result["success"] is True
+        assert result["revoked_refresh_tokens"] == 3
+
+    @pytest.mark.asyncio
+    async def test_admin_001_logout_all_surfaces_a_failed_bump(self):
+        """If the counter cannot be written, logout-all must NOT report success.
+
+        The worst outcome this path can produce is answering 200 for a
+        revocation that never reached the database: the operator believes a
+        leaked super-admin token is dead while it stays live until expiry.
+        bump_env_admin_token_version raises rather than returning quietly when
+        the write matches no row, and that must propagate.
+        """
+        from backend.routes.admin.auth import admin_logout_all
+
+        token = _admin_jwt("admin-001")
+        inner = _resolve_inner(admin_logout_all)
+        request = MagicMock()
+
+        with patch(
+            "backend.routes.admin.auth.bump_env_admin_token_version",
+            AsyncMock(side_effect=RuntimeError("counter not written")),
+        ):
+            with pytest.raises(RuntimeError):
+                await inner(request, authorization=f"Bearer {token}")
 
     @pytest.mark.asyncio
     async def test_404_when_staff_not_found(self):

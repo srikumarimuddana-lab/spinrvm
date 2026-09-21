@@ -31,12 +31,25 @@ def _admin_payload() -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _env_admin_token_version(monkeypatch):
+    """Stub the DB-backed revocation counter for `admin-001`.
+
+    C8 (PR #5602) gave the env-credential super admin a `token_version` read
+    from the `settings` row, on exactly the `admin-001` path this file uses to
+    skip the staff lookup. That read fails CLOSED on error **by design** — a
+    missing value must not read as "version 0", which would un-revoke every
+    token an operator had just killed. With no DB here it raises, so every test
+    in this file 503'd before reaching the Redis denylist branch they exist to
+    exercise. Stubbing it keeps each test on its own subject.
+    """
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
+
+
 @pytest.mark.anyio
 async def test_fails_open_when_redis_unavailable(monkeypatch):
     """redis_get raising (Upstash down) must NOT reject a valid admin token."""
-    monkeypatch.setattr(
-        dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable"))
-    )
+    monkeypatch.setattr(dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable")))
     user = await _verify_admin_payload(_admin_payload())
     assert user is not None
     assert user["id"] == "admin-001"

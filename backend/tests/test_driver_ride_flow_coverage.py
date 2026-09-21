@@ -751,11 +751,19 @@ class TestDeclineRideSuccessBranches:
             patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=run_sync_side_effect)),
             patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            # Index 5 targets utils.insurance_periods, NOT _deps: since PR #5602
+            # the decline path calls release_driver_and_close_period
+            # (ride_flow.py:646), which invokes its OWN module-global
+            # record_period_transition. A _deps patch no longer intercepts it, so
+            # the real writer ran and logged "transition write FAILED (swallowed)"
+            # while the mock stayed at zero awaits. _deps' own binding is still
+            # stubbed at the end so the accept/start paths cannot leak either.
+            patch("backend.utils.insurance_periods.record_period_transition", AsyncMock()),
             patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
             patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
             patch("backend.utils.redis_client.redis_set", AsyncMock()),
             patch("backend.routes.drivers._deps.spawn", side_effect=_spawn_close),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
         )
 
     async def test_audit_log_insert_failure_is_non_fatal(self):
@@ -876,10 +884,18 @@ class TestDeclineRideSuccessBranches:
         assert result == {"success": True}
         period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
 
-    async def test_period_1_skipped_when_driver_went_offline_before_decline(self):
-        """A driver who toggled offline between the offer being sent and this
-        decline must NOT get a Period 1 row falsely reopened — they're
-        already Period 0 from their own go-offline call."""
+    async def test_period_0_recorded_when_driver_went_offline_before_decline(self):
+        """A driver who toggled offline between the offer and this decline must
+        be closed to Period 0 — never Period 1, and never left open.
+
+        Renamed from ..._period_1_skipped_...: "skipped" described the old
+        inline code, which could only write Period 1 and therefore had to do
+        nothing at all for an offline driver. Doing nothing leaves the Period 2
+        opened at claim time still OPEN, which claims TNC primary commercial
+        cover for someone who is not in the app — a worse regulatory artefact
+        than the mislabel it was avoiding. PR #5602's helper closes it with the
+        period they actually are.
+        """
         from backend.routes.drivers.ride_flow import decline_ride
 
         ride = _ride(status="driver_assigned")
@@ -892,7 +908,15 @@ class TestDeclineRideSuccessBranches:
             period_transition = mocks[5]
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
-        period_transition.assert_not_awaited()
+        # Period 0, not "nothing". This previously asserted not_awaited, which
+        # was right when the old inline code could only ever write Period 1 and
+        # so had to skip entirely for an offline driver. PR #5602 replaced that
+        # with release_driver_and_close_period, whose whole point is to close
+        # the open Period 2 with the period the driver ACTUALLY is — 1 if still
+        # online, 0 if they went offline. Skipping would leave a dangling open
+        # Period 2 claiming primary commercial cover for a driver who is not
+        # even in the app, which is worse than the mislabel it replaced.
+        period_transition.assert_awaited_once_with(_DRIVER_ID, 0)
 
 
 class TestDeclineAdminAssignedRideRecovery:

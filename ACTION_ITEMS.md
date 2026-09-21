@@ -28615,6 +28615,23 @@ as evidence that the thing it configures exists.
   re-asserting `_settings_cache is None` immediately before each
   cache-dependent call within the test body itself, not just in the
   fixture).
+- **Corroborating evidence (2026-09-21, later same day):** hit identically
+  on two more, fully unrelated PRs' `backend-test` runs — #5641 (a
+  `.github/workflows/`/`ACTION_ITEMS.md`-only diff, zero backend Python
+  files) and #5651 (a one-assertion test-only fix in a different file,
+  `test_webhooks_main.py`). Both failed with the exact same 2 tests, same
+  error signatures, on the first attempt, no exceptions. Since neither PR
+  touches `settings_loader.py`, this file, or anything plausibly
+  upstream of the leak, and since this repo's `pytest.ini` does not
+  enable a randomizing plugin (collection order is otherwise stable run
+  to run), this reads as **deterministic given the current test-file set**,
+  not an intermittent race that sometimes clears on retry — a re-run of
+  either PR's `backend-test` job would be expected to fail identically
+  again, for as long as the leaking test and this file's relative
+  collection order stay unchanged. That raises the value of the
+  bisection approach above (it will reproduce reliably, not
+  intermittently) and lowers the value of "just retry" as a workaround —
+  worth knowing before spending a rerun on this specific failure.
 - **Files:** `backend/tests/test_settings_loader_last_known.py`,
   `backend/settings_loader.py` (`_settings_cache` global),
   `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`

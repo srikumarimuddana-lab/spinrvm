@@ -163,3 +163,18 @@ def test_admin_auth_does_not_construct_a_sync_slowapi_limiter() -> None:
     assert "from slowapi import Limiter" not in source
     assert "limiter = Limiter(" not in source
     assert "get_remote_address(" not in source
+
+
+def test_rider_auth_resolves_real_client_ip_not_socket_peer() -> None:
+    """routes/auth.py must resolve the client IP the way admin auth already does.
+
+    ``get_remote_address`` returns the socket peer. Behind Fly + Cloudflare that
+    is the edge proxy (172.16.x.x), not the user. The value lands in
+    ``refresh_tokens.ip`` and is replayed into the reuse-detection audit row as
+    ``replayed_ip``, so a token-theft alert would name our own proxy instead of
+    the attacker. The admin twin was fixed earlier (see the test above) but the
+    rider/driver twin was missed; this pins both so they cannot drift again.
+    """
+    source = (Path(__file__).parents[1] / "routes" / "auth.py").read_text(encoding="utf-8")
+    assert "get_remote_address(" not in source
+    assert "get_real_client_ip(request)" in source

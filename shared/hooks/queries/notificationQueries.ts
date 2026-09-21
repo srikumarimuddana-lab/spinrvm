@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api, { isAppCheckTokenReady } from '../../api/client';
+import api, { ensureFreshToken, isAppCheckTokenReady } from '../../api/client';
 import { queryKeys } from '../../api/queryClient';
 
 const APP_CHECK_POLL_MS = 1_000;
@@ -69,6 +69,7 @@ export const useNotifications = (limit = 50) => {
     return useQuery({
         queryKey: [...queryKeys.notifications.list, limit],
         queryFn: async () => {
+            await ensureFreshToken();
             const res = await api.get(`/notifications?limit=${limit}&offset=0`);
             return res.data;
         },

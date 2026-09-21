@@ -177,15 +177,19 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # dependency. Pinned by test_appcheck_public_tracking_exempt.py, which
     # resolves these paths through the real router rather than assuming.
     "/api/v1/rides/track/",
-    # Provider webhooks (routes/webhooks.py): Stripe, SES-via-SNS and Twilio
-    # call from their own servers and can never attach an X-Firebase-AppCheck
-    # header — App Check attests OUR apps, not third parties. Each handler
-    # authenticates the provider itself: Stripe construct_event() with the
-    # webhook secret, SNS RSA signature verification, Twilio RequestValidator
-    # (only while app_settings.twilio_auth_token is set — it skips the check
-    # when blank). Without this, re-enabled enforcement 401'd every Stripe
-    # delivery — none were received from 2026-09-17 03:15 UTC onward.
-    "/api/v1/webhooks/",
+    # Provider webhooks (routes/webhooks.py) call from their own servers and
+    # can never attach an X-Firebase-AppCheck header — App Check attests OUR
+    # apps, not third parties. Each exempt handler authenticates the provider
+    # itself: Stripe construct_event() with the webhook secret (fail-closed),
+    # Twilio RequestValidator (only while settings.twilio_auth_token is set —
+    # it skips the check when blank). Without this, re-enabled enforcement
+    # 401'd every Stripe delivery — none arrived from 2026-09-17 03:15 UTC on.
+    # /api/v1/webhooks/ses is deliberately NOT exempt yet: its SNS topic
+    # allowlist fails open while settings.aws_ses_sns_topic_arn is blank (as it
+    # is in production), so any SNS topic could post forged bounces. Exempt it
+    # only once that ARN is configured.
+    "/api/v1/webhooks/stripe",
+    "/api/v1/webhooks/twilio-inbound",
 )
 
 

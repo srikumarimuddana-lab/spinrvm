@@ -8,10 +8,12 @@ try:
     from ...services.fare_service import driver_earnings_with_tip
     from ...services.outbox_receipts import maybe_send_auto_receipt
     from ...utils.redis_client import redis_expire, redis_incrby
+    from ...utils.tip_policy import enforce_min_tip
 except ImportError:
     from services.fare_service import driver_earnings_with_tip  # type: ignore
     from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from utils.redis_client import redis_expire, redis_incrby  # type: ignore
+    from utils.tip_policy import enforce_min_tip  # type: ignore
 
 from . import _deps
 from ._deps import (  # noqa: F401
@@ -132,6 +134,7 @@ async def add_tip(
     tip_amount = _round(_d(req.amount))
     if tip_amount <= 0:
         raise HTTPException(status_code=400, detail="Tip amount must be greater than zero")
+    await enforce_min_tip(tip_amount)
 
     ride = await _deps.db_supabase.get_ride(ride_id)
     if not ride:
@@ -516,6 +519,10 @@ async def process_payment(
         raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
     if tip_amount > 500:
         raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
+    # Same spot, after the already-paid short-circuits: a sub-minimum tip is
+    # rejected, not dropped, so the rider fixes it on the tip screen
+    # (utils/tip_policy.py) — and a replay on a paid ride still says already_paid.
+    await enforce_min_tip(tip_amount)
 
     # Atomic claim. 'pending' is the normal first payment; 'failed' lets a retry
     # after a decline re-drive; for WALLET we also re-claim 'processing' so a

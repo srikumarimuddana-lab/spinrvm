@@ -109,15 +109,26 @@ def _make_app() -> FastAPI:
     return app
 
 
-def _client_with_min_version(min_driver_app_version: str) -> TestClient:
+def _client_with_min_version(min_driver_app_version: str, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Build a TestClient whose settings_loader.get_app_settings mock
-    reports the given min_driver_app_version."""
+    reports the given min_driver_app_version.
+
+    Uses monkeypatch (undone at the end of the requesting test) rather than a
+    bare module-attribute assignment: a bare `settings_loader.get_app_settings
+    = AsyncMock(...)` here used to permanently replace the real function on
+    the shared settings_loader module for the rest of the pytest process --
+    every later test that called the real get_app_settings() (e.g.
+    tests/test_settings_loader_last_known.py) got this file's tiny
+    min_driver_app_version-only stub instead, which never touches
+    _settings_cache and lacks every other settings key. Found 2026-09-21
+    bisecting a full-suite-only failure in that file down to this leak.
+    """
     import settings_loader
 
     async def _fake_get_app_settings():
         return {"min_driver_app_version": min_driver_app_version, "min_rider_app_version": ""}
 
-    settings_loader.get_app_settings = AsyncMock(side_effect=_fake_get_app_settings)
+    monkeypatch.setattr(settings_loader, "get_app_settings", AsyncMock(side_effect=_fake_get_app_settings))
     app = _make_app()
     return TestClient(app, raise_server_exceptions=True)
 
@@ -131,8 +142,8 @@ class TestRideCarveoutBypassesGate:
     is below the configured minimum — this is the fix under test."""
 
     @pytest.fixture(autouse=True)
-    def client(self):
-        self._client = _client_with_min_version("2.0.0")
+    def client(self, monkeypatch):
+        self._client = _client_with_min_version("2.0.0", monkeypatch)
         yield
 
     @pytest.mark.parametrize(
@@ -158,8 +169,8 @@ class TestNonCarveoutRidePathsStillBlocked:
     only the four completion-critical suffixes are exempt."""
 
     @pytest.fixture(autouse=True)
-    def client(self):
-        self._client = _client_with_min_version("2.0.0")
+    def client(self, monkeypatch):
+        self._client = _client_with_min_version("2.0.0", monkeypatch)
         yield
 
     @pytest.mark.parametrize(
@@ -179,8 +190,8 @@ class TestNonCarveoutRidePathsStillBlocked:
 
 class TestGeneralGateStillEnforced:
     @pytest.fixture(autouse=True)
-    def client(self):
-        self._client = _client_with_min_version("2.0.0")
+    def client(self, monkeypatch):
+        self._client = _client_with_min_version("2.0.0", monkeypatch)
         yield
 
     def test_unrelated_driver_endpoint_blocked_for_old_client(self):
@@ -201,8 +212,8 @@ class TestExistingExemptionsUnaffected:
     this additive change."""
 
     @pytest.fixture(autouse=True)
-    def client(self):
-        self._client = _client_with_min_version("2.0.0")
+    def client(self, monkeypatch):
+        self._client = _client_with_min_version("2.0.0", monkeypatch)
         yield
 
     def test_settings_still_exempt(self):
@@ -222,7 +233,7 @@ class TestNoMinimumConfiguredStillPassesThrough:
     """Current production reality: no min_driver_app_version is set, so the
     whole gate (carve-out included) stays inert."""
 
-    def test_empty_minimum_passes_through(self):
-        client = _client_with_min_version("")
+    def test_empty_minimum_passes_through(self, monkeypatch):
+        client = _client_with_min_version("", monkeypatch)
         res = client.post("/api/v1/drivers/rides/ride-1/complete", headers=OLD_DRIVER_HEADERS)
         assert res.status_code == 200

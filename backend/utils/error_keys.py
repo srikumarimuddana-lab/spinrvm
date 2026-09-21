@@ -17,6 +17,10 @@ class ErrorKeys:
     AUTH_OTP_EXPIRED: Final[str] = "errors.auth.otp_expired"
     AUTH_OTP_LOCKED: Final[str] = "errors.auth.otp_locked"
     AUTH_CONSENT_REQUIRED: Final[str] = "errors.auth.consent_required"
+    # Correct code, already consumed, but session setup failed afterwards.
+    # Clients must prompt for a FRESH code -- same hazard consent_required
+    # already handles (see rider-app/app/otp.tsx's comment on that branch).
+    AUTH_SESSION_SETUP_FAILED: Final[str] = "errors.auth.session_setup_failed"
     AUTH_INVALID_CREDENTIALS: Final[str] = "errors.auth.invalid_credentials"
     AUTH_TOKEN_EXPIRED: Final[str] = "errors.auth.token_expired"
 

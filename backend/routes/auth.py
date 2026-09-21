@@ -1126,7 +1126,34 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 if existing_user.get("is_guest"):
                     existing_user["is_guest"] = False
             except Exception as e:
+                # Without a persisted current_session_id, single-device login
+                # can't enforce ERR_SESSION_EXPIRED on the prior device, and the
+                # token we're about to mint would reference a session_id that
+                # isn't recorded server-side — so logout could never tombstone
+                # it (should_tombstone compares against users.current_session_id)
+                # and the access token would stay honoured for its full TTL.
+                # firebase_auth_login already 503s here; this one used to log
+                # and continue, handing back a half-valid session.
+                #
+                # AUTH_SESSION_SETUP_FAILED, not a generic DB 503, and this is
+                # load-bearing: by this point the OTP has ALREADY been consumed
+                # (deleted ~line 1032, before this block), so the code the user
+                # just entered can never match again. A client that resends it
+                # gets ERR_OTP_INVALID from the `if not otp_record` branch and
+                # burns one of OTP_MAX_FAILURES (5/hour → 24h lockout) — telling
+                # a user who typed the RIGHT code that it was wrong, then
+                # locking them out. `shared/api/client.ts` auto-retries any 503
+                # with the same body, so a generic 503 triggers exactly that
+                # automatically. This distinct code lets both apps prompt for a
+                # FRESH code instead, the same way they already handle
+                # consent_required — which is spent-OTP-after-success too.
                 logger.error(f"Could not update session_id for existing user: {e}", exc_info=True)
+                raise SpinrException(
+                    message="We couldn't finish signing you in. Please request a new code.",
+                    error_code=ErrorCode.AUTH_SESSION_SETUP_FAILED,
+                    status_code=503,
+                    message_key=ErrorKeys.AUTH_SESSION_SETUP_FAILED,
+                ) from e
             # Mirror session_id in Redis so revocation propagates instantly across
             # all replicas without waiting for a Postgres read on every request.
             await redis_set(
@@ -1376,7 +1403,22 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
         await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
         user["current_session_id"] = session_id
     except Exception as e:
+        # Same defect verify_otp and firebase_auth_login guard against: without
+        # a persisted current_session_id, should_tombstone() can never match the
+        # minted token, so logout silently fails to revoke it. This handler used
+        # to log and fall through to redis_set + create_jwt_token below.
+        #
+        # A plain 503 is safe here, unlike in verify_otp: reactivation is
+        # authenticated by a single-purpose reactivation token, not by a
+        # just-consumed OTP, so retrying costs the user nothing and burns no
+        # OTP-failure attempt.
         logger.error(f"reactivate: could not set session_id for user {user_id}: {e}", exc_info=True)
+        raise SpinrException(
+            message="Could not update session, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
     await redis_set(f"session:{user_id}", session_id, ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     token_version = int(user.get("token_version") or 0)
     await _alert_if_new_device(user, user_agent)
@@ -1806,7 +1848,19 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         replaces=row.get("id"),
     )
 
-    session_id = user.get("current_session_id") or row.get("user_agent") or ""
+    # NOT `or row.get("user_agent")`: refresh_tokens has no session-id column
+    # (migration 25), so that fallback put a client-supplied User-Agent string
+    # into the JWT's session_id. should_tombstone() then compared a UA against
+    # users.current_session_id, never matched, and logout silently failed to
+    # tombstone the session — the access token stayed honoured for its full TTL.
+    # Every user on the same client build also shared one "session id".
+    # A missing current_session_id now yields session_id=None (line below), which
+    # should_tombstone() treats as "nothing to key on" — the same no-tombstone
+    # outcome, but honest and without the cross-user collision. Minting one here
+    # instead was considered and rejected: refresh is not a session-establishing
+    # operation, and two devices refreshing concurrently would fight over
+    # current_session_id and start kicking each other off.
+    session_id = user.get("current_session_id") or ""
     token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(

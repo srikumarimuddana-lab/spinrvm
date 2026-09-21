@@ -77,6 +77,13 @@ class ErrorCode(Enum):
     AUTH_ACCOUNT_DISABLED = 1006
     AUTH_OTP_EXPIRED = 1007
     AUTH_OTP_INVALID = 1008
+    # The code was CORRECT and has already been consumed, but we could not
+    # finish establishing the session (e.g. the users.current_session_id write
+    # failed). Distinct from AUTH_OTP_INVALID on purpose: the spent code can
+    # never succeed on a retry, so the client must request a FRESH code rather
+    # than resend this one -- resending burns an OTP-failure attempt and walks
+    # the user toward a 24h lockout for a code they entered correctly.
+    AUTH_SESSION_SETUP_FAILED = 1009
 
     # Validation errors (2000-2999)
     VALIDATION_ERROR = 2001

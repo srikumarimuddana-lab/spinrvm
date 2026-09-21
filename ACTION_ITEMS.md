@@ -21983,6 +21983,104 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-21): 3 more tables (46 covered), plus a fresh
+  full-audit correction to the running total — still not closed.** Checked
+  for concurrent work first (`git fetch origin main` — 14 commits behind,
+  fast-forwarded — + an open-PR search for anything touching
+  `backend/tests/rls/` or `ACTION_ITEMS.md`; none found). Before picking a
+  slice, re-audited the *actual* covered-vs-remaining split directly off
+  disk rather than trusting this entry's own last-published fraction, which
+  had drifted: `test_notifications_and_docs_admin_rls.py` (added under
+  ACTION_ITEMS.md C123 phase 1 / migration 432, not tracked by any C49
+  status bullet) already covered `cloud_messages`/`push_tokens`/
+  `document_requirements`, and `test_disputes_rls.py` (added under C107 /
+  migration 430) already covered `disputes` — 4 tables this entry's own
+  "still not closed" lists below kept naming as remaining. Corrected
+  method: sweep every `*.py` in `backend/tests/rls/` for tables actually
+  exercised in a SQL statement (46), sweep every `CREATE POLICY ... ON
+  <table>` across `backend/migrations/*.sql` **and `backend/supabase_rls.sql`**
+  multiline-aware (the prior round's own sweep undercounted by 10 — it
+  swept only `backend/migrations/`, missing `supabase_rls.sql`'s
+  `users`/`drivers`/`rides`/`otp_records`/`settings`/`support_tickets`/
+  `faqs`/`vehicle_types`/`fare_configs`/`service_areas`, even though this
+  harness's own `conftest.py` applies that file and stubs those last 5 —
+  the true total was always 71, never "~70"), plus migration 27's dynamic
+  loop (9 tables, not 6 — 5 `corporate_*` + the non-`corporate_*`
+  `ride_payment_sources`; the other 3 of the loop's 9 get their own later
+  static policies and were already counted by the static sweep). 71 total,
+  46 covered before this round's own 3 landed, 25 truly remaining — see
+  this round's own remaining-table table below, superseding every earlier
+  round's list.
+  Picked the "financial ledger extension" theme from the corrected
+  remaining list — `financial_event_entries` (286), `reconciliation_discrepancies`
+  (59), `subscription_payments` (151) — the highest-stakes group left per
+  CLAUDE.md's money-path coverage tier, and deliberately not
+  `agent_action_log` (429, also newly surfaced as remaining), which PR
+  #5604 was actively modifying at the time.
+  New file `backend/tests/rls/test_financial_ledger_extension_rls.py`, 31
+  tests. Full `tests/rls` suite: **424 passed, 0 failed** (393 pre-existing +
+  31 new), against the same
+  real local Postgres 16 `rlstest` cluster prior rounds stood up in this
+  environment (re-provisioned this session after a container restart —
+  `pg_ctlcluster 16 rlstest start`).
+  - **Harness bug found and fixed along the way (not a finding about
+    production, a bug in the test harness itself):** `conftest.py`'s
+    existing `financial_events` fixture block applied migrations 58 → 70 →
+    290, skipping 289 (the flag-gated DELETE fix that lets the 7-year DSAR
+    purge legally delete a `financial_events` row). Every RLS test written
+    against `financial_events` so far only ever exercised SELECT/INSERT/
+    UPDATE, never a real DELETE, so this gap was invisible until this
+    round's `financial_event_entries` CASCADE test needed one. Fixed by
+    adding 289 to the fixture in filename-sort order; all 424 tests still
+    pass with it applied.
+  - **Blast radius:** grepped every `.py`/`.ts`/`.tsx` file repo-wide for
+    all three table names. Every real consumer goes through `db_supabase`
+    (service-role client, dual-import pattern) —
+    `services/ledger_service.py`, `services/payment_service.py`,
+    `utils/ledger_projection.py`, `utils/reconciliation.py` for
+    `financial_event_entries`/`reconciliation_discrepancies`;
+    `utils/subscription_invoice.py`, `routes/admin/subscriptions.py`,
+    `routes/drivers/subscriptions.py`, `routes/webhooks.py` for
+    `subscription_payments`. Two comment-only mentions
+    (`schemas.py`, `core/lifespan.py`) reference the double-entry
+    projection feature, not a real access path. No admin-dashboard/
+    rider-app/driver-app/shared file references any of the three.
+  - **Review used:** `spinr-security-auditor` via the Agent tool, against
+    the actual diff — independently re-derived every asserted policy/GRANT/
+    trigger from the real migration SQL, ran the suite itself, and verified
+    both findings below by reading migrations 430/432/433 directly.
+  - **Two real, previously-undiscovered findings, not fixed here:**
+    1. `financial_event_entries_select` (286) and `reconciliation_discrepancies`'
+       `recon_admin_only` (59) both gate on `(SELECT role FROM users WHERE
+       id = auth.uid()::text) = 'admin'` — the exact pattern migrations
+       430/432/433 (C107/C123) found permanently unreachable in production
+       (migration 256's `chk_users_role_not_admin` CHECK means `users.role`
+       can never equal `'admin'`) and systematically replaced elsewhere. A
+       repo-wide grep confirms neither table appears in any of the three
+       fixes — this pair was missed by all of them. Filed as **C129** (new).
+    2. `subscription_payments` claims "Append-only ledger" in its own
+       `COMMENT ON TABLE` but has zero DB-level enforcement of that claim —
+       no trigger of any kind, unlike its sibling `financial_event_entries`
+       (real UPDATE-blocking trigger, migration 286 itself). Since
+       `service_role` bypasses RLS and there is no trigger, a direct
+       `service_role` UPDATE/DELETE is completely unenforced at the DB
+       layer, resting entirely on application discipline (confirmed no
+       production code path issues one). Same gap class as C118
+       (`ride_distance_integrity_events`/`ride_distance_recomputes`), a new
+       instance — cross-referenced from C129 rather than filed separately,
+       since both surfaced in the same round with the same disposition.
+  - **Corrected remaining-table list (71 total, 46 covered, 25 remaining),
+    supersedes every earlier round's list in this entry:**
+    | Theme | Tables |
+    |---|---|
+    | AI / agent tooling | `ai_conversations`, `ai_messages`, `agent_action_log` (429 — mid-fix in PR #5604 as of this round) |
+    | Notifications | `push_retry_queue` |
+    | Corporate | `corporate_section_spend`, `corporate_sections`, `corporate_subscription_plans`, `corporate_subscriptions` |
+    | Driver ops | `driver_bonuses`, `driver_onboarding_reminder_log` |
+    | Reference/static data | `faqs`, `fare_configs`, `provinces`, `service_areas`, `service_area_tax_history`, `vehicle_types` |
+    | Ride tracking/integrity | `ride_live_activities`, `ride_messages`, `ride_offers` |
+    | Singletons | `meta_capi_deliveries`, `support_tickets`, `surge_pricing` |
+  Change log: `docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`.
 - [ ] **Status (2026-09-14, later still same day): 3 more tables, still not
   closed.** Checked for concurrent work first (`git fetch origin main` +
   an open-PR search for anything touching `backend/tests/rls/` or
@@ -28167,6 +28265,62 @@ as evidence that the thing it configures exists.
 - **Files:** `deploy/tiles/Dockerfile` (`REGION_URL`/`EXTRA_REGION_URLS`),
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
+
+### C129. `financial_event_entries` and `reconciliation_discrepancies` share the unreachable `users.role = 'admin'` RLS pattern C107/C123 fixed elsewhere — missed by all three sweeps; `subscription_payments`' "Append-only ledger" claim has zero DB-level enforcement
+
+- [ ] **Status:** OPEN — found 2026-09-21 while writing this session's C49
+  round (`docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`),
+  confirmed by `spinr-security-auditor` against the actual migration SQL.
+- **Issue/gap (finding 1):** `financial_event_entries_select`
+  (migration 286) and `reconciliation_discrepancies`' `recon_admin_only`
+  (migration 59) both gate access on
+  `(SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'`. This is
+  the exact pattern migration 256's `chk_users_role_not_admin` CHECK
+  constraint made permanently unreachable in production (`users.role` can
+  never actually be `'admin'`/`'super_admin'`/etc. — real admin identity
+  lives in `admin_staff`), and which migrations 430 (C107, 10 tables +
+  `disputes`), 432/433 (C123 phases 1–2, `cloud_messages`/`push_tokens`/
+  `document_requirements`/`safety_incidents`/`driver_insurance_periods`
+  family) systematically replaced with an explicit `USING (false)` deny. A
+  repo-wide grep (`grep -l financial_event_entries\\|reconciliation_discrepancies
+  backend/migrations/430_*.sql backend/migrations/432_*.sql
+  backend/migrations/433_*.sql`) confirms neither table appears in any of
+  the three — this pair postdates 142's original sweep (286/59 predate or
+  sit outside that sweep's table list) and was never revisited by the
+  later unreachable-admin-role campaign either.
+- **Why this matters:** not a live security hole (fail-closed, not
+  fail-open — the effect is "policy that was supposed to allow admin
+  access now allows nobody via PostgREST," and the backend's exclusive use
+  of `service_role` means production traffic never took this path anyway,
+  per ACTION_ITEMS.md C108). It's a correctness/consistency gap in the
+  same class C107/C123 exist to close, on two tables their sweeps missed.
+- **Issue/gap (finding 2, same round, different table):**
+  `subscription_payments` (migration 151) claims "Append-only ledger of
+  realized Spinr Pass payments" in its own `COMMENT ON TABLE`, but no
+  migration ever adds an UPDATE/DELETE-blocking trigger — unlike its
+  sibling `financial_event_entries`, which got a real trigger in the same
+  migration that created it. A repo-wide grep of every migration touching
+  `subscription_payments` (151/186/188) confirms none adds one. Since
+  `service_role` bypasses RLS and there's no trigger, a direct
+  `service_role` UPDATE/DELETE is completely unenforced at the DB layer —
+  the append-only guarantee rests entirely on application discipline (no
+  production code path issues one today; confirmed by grepping
+  `routes/`/`services/`/`utils/` for `subscription_payments` writes — only
+  `INSERT`s exist). Same gap class as C118
+  (`ride_distance_integrity_events`/`ride_distance_recomputes`), a new
+  instance.
+- **Action:** for finding 1, extend the C107/C123 unreachable-admin-role
+  fix pattern to these two tables (a small, focused migration replacing
+  each policy with an explicit `USING (false)` deny, matching 430's exact
+  shape). For finding 2, add an UPDATE/DELETE-blocking trigger to
+  `subscription_payments` matching `financial_event_entries`' pattern, or
+  explicitly decide (and document) that its lifecycle doesn't warrant one.
+  Both are schema changes with their own review scope — out of scope for
+  the test-coverage-only PR that found them.
+- **Files:** `backend/migrations/286_financial_event_entries.sql`,
+  `backend/migrations/59_reconciliation_discrepancies.sql`,
+  `backend/migrations/151_subscription_payments_ledger.sql` (reference
+  only, nothing changed by this entry).
 
 ## Recently completed (do not redo)
 

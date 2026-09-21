@@ -923,11 +923,14 @@ class TestStripeWebhookEventLogLevel:
             "charge.succeeded",
         ):
             result, mock_logger, mark = self._run(evt)
-            assert result.get("unhandled") is True, evt
+            assert result.get("ignored") is True, evt
             mock_logger.warning.assert_not_called()
             assert mock_logger.debug.called, evt
-            # Unknown/ignored events stay replayable: processed_at left NULL.
-            mark.assert_not_called()
+            # CRIMSON-SMOKE-7445-HC: known-harmless lifecycle events in
+            # _STRIPE_IGNORED_EVENTS ARE stamped processed (unlike a truly
+            # unhandled event, which leaves processed_at NULL below) so the
+            # daily reconciler sweep doesn't re-flag them as stuck.
+            mark.assert_called_once_with("evt_test_1")
 
     def test_truly_unknown_event_still_warns(self):
         result, mock_logger, _ = self._run("some.brand.new.event")

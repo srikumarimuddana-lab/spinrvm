@@ -28608,6 +28608,40 @@ as evidence that the thing it configures exists.
   this branch had modified it), `backend/settings_loader.py`
   (`_settings_cache` global, unrelated to the actual bug).
 
+### C131. `test_webhooks_main.py::test_ignored_lifecycle_event_logs_debug_not_warning` asserted the pre-CRIMSON-SMOKE-7445-HC return shape — always fails, unrelated to test ordering
+
+- [x] **Status:** FIXED 2026-09-21 (branch `fix/webhook-ignored-event-test-assertion`).
+  Found while babysitting PR #5648 (C130): `backend-test`'s full-suite run
+  showed this test failing on three separate commits in a row, distinct
+  from the C130 tests also failing on that PR — confirmed unrelated to
+  C130 and to that PR's diff (which never touches `routes/webhooks.py` or
+  this test file), and confirmed NOT a test-isolation/ordering bug: fails
+  100% deterministically in isolation too
+  (`pytest tests/test_webhooks_main.py::TestStripeWebhookEventLogLevel`),
+  unlike C130's full-suite-only failures.
+- **Issue/gap:** the test asserted `result.get("unhandled") is True` and
+  `mark.assert_not_called()` for `payment_intent.created`,
+  `payment_intent.amount_capturable_updated`, and `charge.succeeded` —
+  but current `routes/webhooks.py` code returns
+  `{"received": True, "ignored": True, "event_id": ...}` for these (they're
+  in `_STRIPE_IGNORED_EVENTS`, a genuinely different branch from the
+  catch-all `unhandled` one) and DOES call
+  `mark_stripe_event_processed(event_id)` for them — an intentional fix
+  from incident CRIMSON-SMOKE-7445-HC (leaving `processed_at` NULL for
+  these was masking real stuck events behind 500+ historical entries; see
+  the code comment at the `_STRIPE_IGNORED_EVENTS` branch in
+  `routes/webhooks.py`). The test was never updated to match, so it's been
+  failing unconditionally since that fix landed — this session just
+  happened to be the first to notice, via an unrelated PR's full-suite CI
+  run.
+- **Fix:** updated the test to assert `result.get("ignored") is True` and
+  `mark.assert_called_once_with("evt_test_1")`, matching current,
+  intentional behavior. The sibling `test_truly_unknown_event_still_warns`
+  (a genuinely unrecognized event type, not in `_STRIPE_IGNORED_EVENTS`)
+  was already correct and untouched — it still expects `unhandled: True`
+  with `processed_at` left NULL, which is still accurate for that path.
+- **Files:** `backend/tests/test_webhooks_main.py`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -163,6 +163,14 @@ def test_admin_auth_does_not_construct_a_sync_slowapi_limiter() -> None:
     assert "from slowapi import Limiter" not in source
     assert "limiter = Limiter(" not in source
     assert "get_remote_address(" not in source
+    # Positive + count assertions mirrored from the rider twin below: the three
+    # negatives above all pass on a file that resolves no client IP at all, or
+    # that reaches for the socket peer directly (/code-review, PR #5654).
+    assert source.count("get_real_client_ip(request)") == 5, (
+        "expected exactly 5 client-IP resolutions in routes/admin/auth.py; update "
+        "this count deliberately when adding or removing a session-issuing path"
+    )
+    assert "request.client.host" not in source
 
 
 def test_rider_auth_resolves_real_client_ip_not_socket_peer() -> None:
@@ -170,11 +178,28 @@ def test_rider_auth_resolves_real_client_ip_not_socket_peer() -> None:
 
     ``get_remote_address`` returns the socket peer. Behind Fly + Cloudflare that
     is the edge proxy (172.16.x.x), not the user. The value lands in
-    ``refresh_tokens.ip`` and is replayed into the reuse-detection audit row as
-    ``replayed_ip``, so a token-theft alert would name our own proxy instead of
-    the attacker. The admin twin was fixed earlier (see the test above) but the
-    rider/driver twin was missed; this pins both so they cannot drift again.
+    ``refresh_tokens.ip``, is copied into the reuse-detection audit row as
+    ``replayed_ip``, and is rendered in admin-dashboard's audit-log UI and CSV
+    export -- so before the fix every one of those showed our own proxy.
+
+    NOTE: ``replayed_ip`` is the IP stored when the replayed token was *issued*,
+    NOT the IP of the request that replayed it -- ``lookup_refresh_token(raw)``
+    never sees the replaying request. An earlier version of this docstring said
+    a theft alert would "name the attacker"; that was wrong (/code-review, PR
+    #5654). It names the victim's issuance IP.
+
+    The admin twin was fixed earlier (see the test above) but the rider/driver
+    twin was missed; these two tests pin both so they cannot drift again.
     """
     source = (Path(__file__).parents[1] / "routes" / "auth.py").read_text(encoding="utf-8")
     assert "get_remote_address(" not in source
-    assert "get_real_client_ip(request)" in source
+    # Count, not mere presence: a bare `in` check passes with ONE surviving call
+    # site, so converting 4 of the 5 back would stay green despite this test's
+    # own claim to pin them. Flagged by /code-review on PR #5654.
+    assert source.count("get_real_client_ip(request)") == 5, (
+        "expected exactly 5 client-IP resolutions in routes/auth.py; update this "
+        "count deliberately when adding or removing a session-issuing path"
+    )
+    # The likeliest regression is reaching for the socket peer directly, which
+    # neither assertion above would catch.
+    assert "request.client.host" not in source

@@ -77,6 +77,7 @@ try:
         ride_rating_limit,
         ride_read_limit,
         ride_request_limit,
+        share_track_limit,
     )
     from ...utils.surge_engine import SURGE_CAP
     from ...validators import validate_ride_location
@@ -131,6 +132,7 @@ except ImportError:
         ride_rating_limit,
         ride_read_limit,
         ride_request_limit,
+        share_track_limit,
     )
     from utils.surge_engine import SURGE_CAP
     from validators import validate_ride_location

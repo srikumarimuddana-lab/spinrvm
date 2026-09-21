@@ -13573,6 +13573,49 @@ record of what was assumed vs. what was actually true</summary>
 - [ ] **Status:** open (~5 min in Sentry UI, no code)
 - **Action:** alert on message `REFRESH TOKEN REUSE DETECTED` → email/PagerDuty.
   The loguru→Sentry bridge already delivers it; it just needs a rule.
+- **Update (2026-09-21):** C129's new weekly `/sentry-triage` report will
+  carry this item forward as a one-line "still open" note in every weekly
+  run until it's closed — see C129. This does not close C2 itself; it's
+  still the same 5-minute Sentry-UI task, just no longer silently
+  forgettable between audits.
+
+### C129. Automated Sentry error triage — discovery, root-cause, fix PR, weekly report
+- [ ] **Status:** shipped 2026-09-21 (new `/sentry-triage` command +
+  `spinr-sentry-triage-investigator` agent + `scripts/observability/
+  generate_sentry_weekly_report.py`), not yet run on a live schedule.
+- **What it does:** discovers new/regressed/climbing unresolved issues in
+  the `spinr-backend` Sentry org (project `crimson-smoke-7445`), confirms
+  root cause against the actual codebase (Seer's suggestion is a starting
+  hypothesis, never taken as verified without independent code review),
+  ships a normal reviewed PR (adversarial `spinr-*-reviewer` pass +
+  Change Impact Log, same gate as any other change — **never auto-merged**,
+  per the existing Seer guardrail in `docs/audit/2026-09-08-agentic-tooling-
+  atlas.md` and `.claude/context/connector-scoping.md`'s Sentry row) for
+  any confidently-confirmed fix, and produces a weekly report under
+  `docs/audit/sentry-triage/`.
+- **Connector scoping closed the same day:** the Sentry MCP connector was
+  previously flagged (connector-scoping.md, 2026-09-08) as unscoped/
+  unverified because OAuth login required a human and no org/project slug
+  was known. The user completed the OAuth login 2026-09-21; `.mcp.json` is
+  now narrowed to `https://mcp.sentry.dev/mcp/spinr-backend/crimson-smoke-7445`
+  (verified live via `find_organizations`/`find_projects` — exactly one
+  org, one project, consistent with `backend/routes/admin/sentry.py`'s
+  TAG MODE).
+- **Explicitly reconciles, does not duplicate:** C2 (above) is the one
+  known open Sentry/alerting gap this new process carries forward in its
+  weekly report rather than re-discovering as a new finding. (C55, a
+  similar-sounding insurance-period alerting item, was checked and is
+  fully CLOSED as of 2026-09-04 — both the Grafana alert rule and the
+  reconciler loop were built; nothing there needs carrying forward.)
+- **Still needed to go live:** a Claude Code Routine (scheduled trigger)
+  firing weekly into a session with the Sentry connector — GitHub Actions
+  cron **cannot** reach an OAuth-connected MCP server, so this can't be a
+  `.github/workflows/*.yml` cron like the security-automation roadmap's
+  other scheduled jobs; it has to be a Routine. Not yet created — first
+  live run will validate the whole loop end-to-end (a dry run against
+  actual Sentry data was not performed as part of shipping this, since
+  doing so risked opening a real fix PR before the human-review posture
+  could be confirmed working as designed).
 
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify

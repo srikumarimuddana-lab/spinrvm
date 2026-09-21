@@ -104,3 +104,18 @@ describe('reconcileSelectedTip', () => {
     expect(reconcileSelectedTip(first[2], second)).toBe(first[2]);
   });
 });
+
+describe('computeTipOptions with a configured minimum tip', () => {
+  it('keeps the $1 floor by default and for a zero minimum', () => {
+    expect(computeTipOptions(3)).toEqual(computeTipOptions(3, 1));
+    expect(computeTipOptions(3, 0)).toEqual(computeTipOptions(3, 1));
+  });
+
+  it('never offers a preset below the minimum', () => {
+    for (const fare of [0, 3, 5, 12, 25]) {
+      const options = computeTipOptions(fare, 2.5);
+      expect(Math.min(...options)).toBeGreaterThanOrEqual(3); // whole dollars, rounded up
+      expect(new Set(options).size).toBe(3);
+    }
+  });
+});

@@ -55,7 +55,7 @@ jobs:
         run: |
           npx next start &
           npx wait-on http://localhost:3000 --timeout 30000
-          npx playwright test --project=setup --project=visual-regression --update-snapshots
+          npx playwright test --project=setup --project=visual-regression --update-snapshots --trace on
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_API_URL: http://localhost:8000
@@ -68,3 +68,17 @@ jobs:
           name: visual-regression-baselines
           path: admin-dashboard/e2e/visual-regression.spec.ts-snapshots/
           retention-days: 14
+
+      # Temporary, for ACTION_ITEMS.md C91/C103: --trace on above and this
+      # upload exist to debug why dashboard-monitoring's fixture driver
+      # marker renders locally but not on CI's own Chromium (the test's own
+      # marker-attached wait passes either way, masking the gap). Revert
+      # both once that's root-caused — full traces are large and this
+      # workflow doesn't need them by default.
+      - name: Upload Playwright traces (temporary, C91/C103 debug)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: visual-regression-traces
+          path: admin-dashboard/test-results/
+          retention-days: 7

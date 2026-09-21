@@ -254,10 +254,6 @@ class ShareTripRequest(BaseModel):
     contact_phone: str
 
 
-class RegisterFcmTokenRequest(BaseModel):
-    token: str
-
-
 # ============ Airport Fee Check (User/App facing) ============
 
 
@@ -1231,13 +1227,6 @@ async def get_shared_trip(token: str):
 # ============ Push Notification Helpers ============
 
 
-@support_router.post("/users/fcm-token")
-async def register_fcm_token(req: RegisterFcmTokenRequest, current_user: dict = Depends(get_current_user)):
-    """Register/update the authenticated user's FCM token for push notifications."""
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"fcm_token": req.token})
-    return {"registered": True}
-
-
 def _is_expo_token(token: str) -> bool:
     """Return True if the token is an Expo push token (not a native FCM token)."""
     return token.startswith("ExponentPushToken[") or token.startswith("ExpoPushToken[")
@@ -1952,6 +1941,19 @@ async def send_push_notification(
         elif target_app == "driver":
             token = user.get("fcm_token_driver") or user.get("fcm_token")
         else:
+            # Account-level only. Every role-specific call site now declares a
+            # target_app (enforced by tests/test_push_target_app_declared.py),
+            # so the handful that still land here are notices that belong to
+            # the account rather than to one of its roles — suspension,
+            # reactivation, a wallet top-up, an admin broadcast.
+            #
+            # For those, users.fcm_token holding the most recently registered
+            # device is the intended behavior, not leftover drift: it delivers
+            # to whichever app the person actually used last. This used to be
+            # the bug, because ~35 rider/driver-specific sites also read it and
+            # so landed in an effectively random app for a dual-role user.
+            # Those are fixed; do not "clean up" this branch on the assumption
+            # it is still the legacy fallback it once was.
             token = user.get("fcm_token")
 
         if not token:

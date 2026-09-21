@@ -356,6 +356,12 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
+    # The generic column is written on every registration, so it tracks the
+    # most recently registered device. That is deliberate: it is what
+    # account-level pushes (target_app unset — suspension, reactivation,
+    # wallet top-up, admin broadcast) resolve to, and delivering those to the
+    # app the person used last is the intended behavior. The per-app columns
+    # below are what keep rider/driver-specific pushes off each other's app.
     user_update: dict = {"fcm_token": token}
     if client_type == "driver":
         user_update["fcm_token_driver"] = token

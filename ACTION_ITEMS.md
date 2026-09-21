@@ -28616,7 +28616,7 @@ as evidence that the thing it configures exists.
 - **Files:** the 8 files listed above, `backend/scripts/run_migrations.py`
   (`NEVER_APPLY` skip-list, for the 4 correctly-excluded ones).
 
-### C126. `backend-test`'s 20-minute CI timeout was raised to 30 as a stopgap (CR #5541) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
+### C126. `backend-test`'s 20-minute CI timeout was raised to 35 as a stopgap (CR #5541, then CR #5579) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
 
 - [ ] **Status:** OPEN — found 2026-09-20 while driving PR #5536/#5537 to
   green: the job's three real steps (mocked-DB pytest suite with coverage,
@@ -28628,6 +28628,14 @@ as evidence that the thing it configures exists.
   `docs/audit/2026-09-05-engineering-director-review-round3.md:782`
   predicted this exact failure mode two weeks earlier ("No pytest-xdist on
   a 20-minute job; the suite will hit the timeout").
+  **Correction (2026-09-21, found while fixing C127):** this entry's own
+  "30" was itself stale — a second, independent near-miss (CR #5579, PR
+  #5571, 16s slack on `main` itself then a real kill) landed days later and
+  raised it again, 30→35. Current value verified directly against
+  `.github/workflows/ci.yml:123` at time of writing, not copied from this
+  paragraph. Re-verify against the file, not this number, before relying on
+  it again — this is now the second time this entry's own number went
+  stale under it.
 - **Why this matters:** 30 minutes is evidence-based headroom, not a
   permanent fix — if the suite's runtime keeps growing run over run, the
   new ceiling gets eaten the same way the old one did, and without this
@@ -28647,30 +28655,40 @@ as evidence that the thing it configures exists.
 
 ### C127. `deploy-fly-signed-image.yml`'s hardcoded 30-minute image-wait budget no longer has margin against the worst-case `backend-test` → `docker-image-scan` chain
 
-- [ ] **Status:** OPEN — found 2026-09-20 by the `spinr-cicd-infra-reviewer`
-  review of CR #5541 (see C126). This experimental, `workflow_dispatch`-only
-  workflow (not wired to `push`, not on the production deploy path — see
-  C121) polls for a GHCR-signed image with a 30-attempt × 60s = 30-minute
-  budget, sized against a comment estimate of "backend-test ~13-14 min,
-  then build+push+sign." The real worst-case chain it depends on is
-  `backend-test` (now `timeout-minutes: 30`, C126) →
-  `docker-image-scan` (`timeout-minutes: 10`, `needs: [backend-test]`) = 40
-  minutes worst case, i.e. the poll can now time out 10 minutes before a
-  slow-but-successful `backend-test` run even finishes. This coupling was
-  already unverified before C126's change (the workflow's own comments
-  note the wait has never been exercised end-to-end against a real run);
-  C126 makes the gap wider, not new.
-- **Why this matters:** low severity today because the workflow is
-  manual/opt-in only, but whoever eventually promotes
-  `deploy-fly-signed-image.yml` off manual-dispatch-only needs to revisit
-  this budget first, or a legitimate slow-but-passing deploy will be
-  reported as a poll timeout.
-- **Action:** before promoting this workflow to any automatic trigger,
-  raise its image-wait budget to match the current worst-case chain (40+
-  min) or make it read the actual upstream job timeouts instead of a
-  hardcoded estimate.
-- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
-  poll, ~line 129).
+- [x] **Status:** CLOSED (2026-09-21). Raised the poll loop from
+  30 attempts × 60s (30 min) to 50 attempts × 60s (50 min), and the job's
+  `timeout-minutes` from 45 to 70, both re-derived from the **current**
+  chain — not this item's original "40+ min" estimate, which had already
+  gone stale (see C126's own 2026-09-21 correction: `backend-test` moved
+  30→35 under CR #5579 after this item was filed). Verified directly
+  against `.github/workflows/ci.yml` at fix time: `backend-test`
+  `timeout-minutes: 35` (line 123) → `docker-image-scan`
+  `timeout-minutes: 10` (line 1099, `needs: [backend-test]`) = 45 min
+  worst case. 50 min poll budget gives 5 min margin over that; 70 min job
+  budget gives the poll's 50 min plus ~20 min for
+  setup/login/deploy/scale/readiness(3m)/verify(2m). Did not implement the
+  item's dynamic-read alternative ("make it read the actual upstream job
+  timeouts instead of a hardcoded estimate") — this workflow is still
+  manual/`workflow_dispatch`-only, not promoted to an automatic trigger,
+  which is the condition the item itself names for requiring that; a
+  hardcoded, comment-documented number stays the simpler fix per
+  CLAUDE.md's "Simplicity first," with the comment telling a future editor
+  exactly which two `ci.yml` values to re-check if they move again.
+- **Blast radius:** isolated to this one workflow file. It is
+  `workflow_dispatch`-only (no `push`/`pull_request` trigger), not wired
+  into `deploy-fly.yml`'s automatic production path (see C121), so no
+  other workflow or scheduled job reads these two values.
+- **Verification performed:** `python3 -c "import yaml; yaml.safe_load(...)"`
+  parses cleanly; no linter for this file exists in the repo (checked for
+  `actionlint`/`yamllint`, neither installed) — YAML-syntax validity only,
+  not a real dispatch run (this workflow needs `FLY_API_TOKEN`, live GHCR
+  state, and a live Fly app not available from this session). **What was
+  NOT verified:** an actual end-to-end dispatch of this workflow against a
+  slow `backend-test` run — the same limitation the workflow's own
+  comments already flag ("the wait has never been exercised end-to-end
+  against a real run"), unchanged by this fix.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (poll loop
+  ~line 139, job `timeout-minutes` ~line 70).
 
 ### C128. Self-hosted tile server has no OSM data for Riyadh — a real, product-confirmed international service area — so its admin map will render roadless even after the basemap-URL fix
 
@@ -28818,6 +28836,23 @@ as evidence that the thing it configures exists.
   re-asserting `_settings_cache is None` immediately before each
   cache-dependent call within the test body itself, not just in the
   fixture).
+- **Corroborating evidence (2026-09-21, later same day):** hit identically
+  on two more, fully unrelated PRs' `backend-test` runs — #5641 (a
+  `.github/workflows/`/`ACTION_ITEMS.md`-only diff, zero backend Python
+  files) and #5651 (a one-assertion test-only fix in a different file,
+  `test_webhooks_main.py`). Both failed with the exact same 2 tests, same
+  error signatures, on the first attempt, no exceptions. Since neither PR
+  touches `settings_loader.py`, this file, or anything plausibly
+  upstream of the leak, and since this repo's `pytest.ini` does not
+  enable a randomizing plugin (collection order is otherwise stable run
+  to run), this reads as **deterministic given the current test-file set**,
+  not an intermittent race that sometimes clears on retry — a re-run of
+  either PR's `backend-test` job would be expected to fail identically
+  again, for as long as the leaking test and this file's relative
+  collection order stay unchanged. That raises the value of the
+  bisection approach above (it will reproduce reliably, not
+  intermittently) and lowers the value of "just retry" as a workaround —
+  worth knowing before spending a rerun on this specific failure.
 - **Files:** `backend/tests/test_settings_loader_last_known.py`,
   `backend/settings_loader.py` (`_settings_cache` global),
   `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`

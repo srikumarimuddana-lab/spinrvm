@@ -27751,7 +27751,31 @@ how much they de-risk a public launch._
 - **PR:** #5388.
 
 ### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
-- [ ] **Status:** OPEN, informational — no real PII leaks today.
+- [x] **Status:** CLOSED (2026-09-21). This entry's own premise had already gone stale before
+  this session started: a separate, unrelated fix (PR #5508, 2026-09-19,
+  `spinr-notification-ux-reviewer` finding — see
+  `docs/change-log/2026-09-19-debug-ride-offer-fcm-pii-exclusion.md`) had already added a
+  `_DEBUG_FCM_EXCLUDE` set (`rider_name`, `pickup_lat`, `pickup_lng`, `dropoff_lat`,
+  `dropoff_lng`) to this exact endpoint, so the "no `rider_name` exclusion at all" half of this
+  item's title was no longer true by the time it was picked up — this item's status line was
+  simply never updated to reflect that. Verified the exclusion is genuinely in place (not just
+  claimed) via the pre-existing regression test
+  `TestDebugRideOffer::test_fcm_payload_excludes_rider_name_and_precise_location`, still green.
+  What *was* still wrong: the 2026-09-19 fix's own rewritten comment was itself inaccurate in a
+  subtler way — it claimed `routes/rides/matching.py`'s live path "enforces... no rider name or
+  precise lat/lng" unconditionally via its own `_FCM_EXCLUDE`, when in fact only `rider_name` is
+  unconditional there; precise coordinates (and `rider_rating`) are excluded only when the
+  `minimal_fcm_offer_payload_enabled` app_settings flag is on (migration 424, default `FALSE`
+  today), and `admin/rides.py`'s `admin_create_ride` path excludes only `rider_name` with no
+  coordinate filtering at all. Rewrote both comments in `notifications.py` to state this
+  accurately instead of a blanket parity claim. No executable code changed — comment-only fix.
+  Blast-radius grep confirmed exactly three `new_ride_assignment` FCM-payload builders exist
+  repo-wide (`matching.py`, `admin/rides.py`, `notifications.py`); `notifications.py` is the
+  "third site" this item's own filing referenced, and no fourth site exists. Not listed in
+  `docs/known-forks.md`. `pytest backend/tests/test_p3_push_notifications.py` (48 passed);
+  `ruff check`/`ruff format --check` clean; `/code-review` (medium) found nothing. See
+  `docs/change-log/2026-09-21-c113-notifications-debug-fcm-parity.md`.
+- **(historical) Status:** OPEN, informational — no real PII leaks today.
   Found during C112's adversarial `/code-review` pass (blast-radius grep for other
   `new_ride_assignment` FCM payload builders turned up a third site beyond `matching.py` and
   `admin/rides.py`).
@@ -27771,8 +27795,8 @@ how much they de-risk a public launch._
   current exclusion set (or lack thereof), and (2) add the same `rider_name` exclusion as a
   defensive measure even though the value is currently hardcoded, so a future edit can't
   reintroduce the leak silently.
-- **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
-  (`admin_debug_ride_offer`, `_stringify_fcm`).
+- **Files:** `backend/routes/notifications.py` (`admin_debug_ride_offer`, `_stringify_fcm`,
+  `_DEBUG_FCM_EXCLUDE`).
 
 ### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
 - [x] **Status:** CLOSED (2026-09-20). All three endpoints (`get_active_ride`,

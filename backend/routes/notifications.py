@@ -128,12 +128,30 @@ async def admin_send_test_push(body: TestPushRequest, admin: dict = Depends(get_
     }
 
 
-# Same invariant routes/rides/matching.py's live offer path enforces via its
-# own _FCM_EXCLUDE: no rider name or precise lat/lng may ride in an FCM data
-# payload (cleartext in the device tray, transits Google/Apple push infra).
-# Kept as a local, debug-endpoint-scoped set rather than importing
-# matching.py's — that set is a local variable inside a live dispatch code
-# path, not a shared constant, and this fix should not touch that file.
+# Defensive PII exclusion for a diagnostic/debug endpoint. Corrected 2026-09-21
+# (ACTION_ITEMS.md C113) — the previous version of this comment claimed
+# parity with routes/rides/matching.py's live offer path that doesn't
+# actually exist. As of today, the two real dispatch paths differ from each
+# other and from this endpoint:
+#   - matching.py's batch-dispatch path unconditionally excludes rider_name
+#     (plus service_area_polygon/planned_route_polyline/rider_profile_image,
+#     none of which this payload carries) via its own _FCM_EXCLUDE, but only
+#     drops precise pickup/dropoff coordinates and rider_rating when the
+#     minimal_fcm_offer_payload_enabled app_settings flag is on (migration
+#     424; default False today, so live traffic currently still sends raw
+#     lat/lng in the FCM data payload).
+#   - admin/rides.py's admin_create_ride (direct-assignment) path excludes
+#     only rider_name via its own _ADMIN_FCM_EXCLUDE, with no coordinate
+#     filtering at all, flagged or otherwise.
+# This debug endpoint is deliberately stricter than both: it always drops
+# rider_name AND coordinates, since a diagnostic tool has no legitimate
+# reason to carry either in cleartext through Google/Apple push infra.
+# Kept as its own local, debug-endpoint-scoped set rather than importing
+# either sibling's set: both _FCM_EXCLUDE and _ADMIN_FCM_EXCLUDE are local
+# variables inside their own request-handler bodies, not shared module-level
+# constants, so there is nothing importable to reuse without refactoring a
+# live dispatch/admin path for a debug-only fix — same reasoning
+# admin/rides.py's own _ADMIN_FCM_EXCLUDE (C112) already applied.
 _DEBUG_FCM_EXCLUDE = {
     "rider_name",
     "pickup_lat",
@@ -230,12 +248,13 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
     now = datetime.now(timezone.utc)
     offer_expires_at = (now + timedelta(seconds=body.countdown_seconds)).isoformat()
 
-    # Minimal but realistic dispatch payload — same shape/keys the live offer
-    # uses in routes/rides/matching.py. rider_name and precise lat/lng below
-    # are stripped before the FCM send by _DEBUG_FCM_EXCLUDE, mirroring that
-    # file's own _FCM_EXCLUDE (see 2026-09-19 spinr-notification-ux-reviewer
-    # finding — this endpoint previously sent them raw despite this comment
-    # already claiming they were excluded).
+    # Minimal but realistic dispatch payload — same key shape the live offer
+    # paths use in routes/rides/matching.py / admin/rides.py's
+    # admin_create_ride. rider_name and precise lat/lng below are stripped
+    # before the FCM send by _DEBUG_FCM_EXCLUDE above — see that set's
+    # comment for the current, actual exclusion behaviour of each live path
+    # (they differ from each other, and neither drops coordinates
+    # unconditionally the way this debug endpoint now does).
     offer_payload = {
         "type": "new_ride_assignment",
         "ride_id": ride_id,

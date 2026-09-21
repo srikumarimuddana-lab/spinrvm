@@ -36,6 +36,38 @@ from ._deps import (  # noqa: F401
     timedelta,
     timezone,
 )
+
+try:
+    from ...utils.ride_state_copy import driver_phrase
+except ImportError:  # pragma: no cover - direct-module execution path
+    from utils.ride_state_copy import driver_phrase  # type: ignore
+
+
+async def _stale_guard_conflict(ride_id: str, driver_id: str, lead: str) -> HTTPException:
+    """409 for an atomic state guard whose filtered update matched no rows.
+
+    These handlers load the ride at the top and then guard the transition with
+    an `update_one` filtered on the expected status — so when the guard fails,
+    the row read earlier is exactly the thing that turned out to be stale.
+    Describing the state we *expected* produced messages that were plainly
+    false for the states the guard actually catches: a duplicate tap on a
+    running trip was told to go mark itself arrived, and a ride still sitting
+    in `driver_assigned` was told it had "already moved on". Re-read the
+    current status and phrase from that instead. One extra read, failure path
+    only.
+    """
+    current = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver_id}, limit=1)
+    )
+    phrase = driver_phrase((current or {}).get("status"))
+    detail = (
+        f"{lead} — it's {phrase}. Refresh to see its latest status."
+        if phrase
+        else f"{lead}. Refresh to see its latest status."
+    )
+    return HTTPException(status_code=409, detail=detail)
+
+
 from ._shared import (  # noqa: F401
     _PICKUP_OTP_MAX_FAILURES,
     RideOTPRequest,
@@ -595,10 +627,13 @@ async def decline_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("status") not in ("searching", "driver_assigned"):
+        _decline_phrase = driver_phrase(ride.get("status"))
         raise HTTPException(
             status_code=409,
             detail=(
-                "This ride can no longer be declined — it has already moved on to another driver or been cancelled."
+                f"This ride can no longer be declined — it's {_decline_phrase}."
+                if _decline_phrase
+                else "This ride can no longer be declined."
             ),
         )
 
@@ -929,12 +964,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This ride has already moved on, so we couldn't mark you as arrived. Refresh to see its current status."
-            ),
-        )
+        raise await _stale_guard_conflict(ride_id, driver["id"], "We couldn't mark you as arrived")
 
     # 2026-08-18 fleet audit: no ride-state-transition metric existed for any
     # transition after offer-acceptance, leaving the match-rate/cancellation-
@@ -1071,13 +1101,7 @@ async def verify_pickup_otp(
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "We couldn't start this trip. Make sure you've marked yourself as "
-                "arrived, then refresh to see the ride's current status."
-            ),
-        )
+        raise await _stale_guard_conflict(ride_id, driver["id"], "We couldn't start this trip")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)
@@ -1145,13 +1169,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "We couldn't start this trip. Make sure you've marked yourself as "
-                "arrived, then refresh to see the ride's current status."
-            ),
-        )
+        raise await _stale_guard_conflict(ride_id, driver["id"], "We couldn't start this trip")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)

@@ -32,6 +32,11 @@ from ._deps import (  # noqa: F401
     timezone,
     uuid,
 )
+
+try:
+    from ...utils.ride_state_copy import driver_phrase
+except ImportError:  # pragma: no cover - direct-module execution path
+    from utils.ride_state_copy import driver_phrase  # type: ignore
 from ._shared import (  # noqa: F401
     _d,
 )
@@ -115,7 +120,7 @@ async def rider_start_ride(
     if ride.get("status") != RideStatus.DRIVER_ARRIVED:
         raise HTTPException(
             status_code=400,
-            detail=("This trip can't be started yet. Make sure you've arrived at the pickup first."),
+            detail="This trip can't be started yet. Make sure you've arrived at the pickup first.",
         )
 
     # Atomic transition guards against duplicate taps / a concurrent driver-side
@@ -130,11 +135,13 @@ async def rider_start_ride(
         },
     )
     if guard is None:
+        _guard_phrase = driver_phrase((ride or {}).get("status"))
         raise HTTPException(
             status_code=409,
             detail=(
-                "We couldn't start this trip. Make sure you've marked yourself as "
-                "arrived, then refresh to see the ride's current status."
+                f"We couldn't start this trip — it's {_guard_phrase}. Refresh to see its latest status."
+                if _guard_phrase
+                else "We couldn't start this trip. Refresh to see its latest status."
             ),
         )
 

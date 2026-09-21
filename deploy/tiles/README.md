@@ -158,14 +158,21 @@ needs a public domain — `*.railway.internal` will not work.
 ## 4. Wire the admin dashboard
 
 Set on the Vercel project (both are optional and independent — set one, both, or
-neither, and anything unset keeps today's third-party default). `maps.spinr.ca`
-below is illustrative; the service's live host is whatever domain is attached to
-it on Railway — currently `tilesserver-production-14c2.up.railway.app`:
+neither, and anything unset keeps today's third-party default). The service's
+live host is **`tiles-spinr.spinr.ca`** (attached 2026-09-21); its Railway
+service domain, `tilesserver-production-14c2.up.railway.app`, still works and is
+what `PUBLIC_URL` pointed at before the custom domain existed:
 
 ```
-NEXT_PUBLIC_MAP_STYLE_URL=https://<tile-host>/styles/basemap/style.json
-NEXT_PUBLIC_RASTER_TILE_URL=https://<tile-host>/styles/basemap/{z}/{x}/{y}.png
+NEXT_PUBLIC_MAP_STYLE_URL=https://tiles-spinr.spinr.ca/styles/basemap/style.json
+NEXT_PUBLIC_RASTER_TILE_URL=https://tiles-spinr.spinr.ca/styles/basemap/{z}/{x}/{y}.png
 ```
+
+> **Do not confuse this with `map-spinr.spinr.ca`.** That one is the **OSRM**
+> service (`deploy/osrm`) — routing and billable map-matching, reached by the
+> backend via `OSRM_URL`. One name draws pictures, the other computes distance,
+> and they are one character apart. A Railway custom domain attaches to exactly
+> one service, so these two names can never be shared or swapped casually.
 
 - `NEXT_PUBLIC_MAP_STYLE_URL` becomes the **only hop** of `basemapChain()`.
   Since 2026-09-14 nothing sits behind it: if this service goes down the admin

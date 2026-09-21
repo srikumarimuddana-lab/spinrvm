@@ -5,7 +5,7 @@
 # rather than just "the map is blank".
 #
 # Usage:
-#   TILES_URL=https://maps.spinr.ca            deploy/tiles/smoke-test.sh
+#   TILES_URL=https://tiles-spinr.spinr.ca            deploy/tiles/smoke-test.sh
 #   TILES_URL=http://localhost:8080            deploy/tiles/smoke-test.sh
 #
 # Optional:

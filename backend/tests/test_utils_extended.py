@@ -978,7 +978,10 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("Short1!")
         assert exc.value.status_code == 422
-        assert "too_short" in exc.value.detail
+        # CR #5587: password_policy.py has no error_code/message_key -- assert
+        # on the length rule's own number, not prior technical wording
+        # ("too_short") the copy no longer contains.
+        assert "20 characters" in exc.value.detail
 
     def test_missing_uppercase_raises_422(self):
         from fastapi import HTTPException
@@ -988,7 +991,10 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("nouppercase1!nouppercase1!")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        # CR #5587: same complexity message for all three missing-class
+        # cases -- assert on the rule text itself, not a "complexity"
+        # summary word the copy never actually used.
+        assert "uppercase letter, one number, and one symbol" in exc.value.detail
 
     def test_missing_digit_raises_422(self):
         from fastapi import HTTPException
@@ -998,7 +1004,7 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("NoDigitsHere!NoDigitsHere!")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        assert "uppercase letter, one number, and one symbol" in exc.value.detail
 
     def test_missing_symbol_raises_422(self):
         from fastapi import HTTPException
@@ -1008,7 +1014,7 @@ class TestPasswordPolicy:
         with pytest.raises(HTTPException) as exc:
             validate_admin_password("NoSymbolsHere1NoSymbols1")
         assert exc.value.status_code == 422
-        assert "complexity" in exc.value.detail
+        assert "uppercase letter, one number, and one symbol" in exc.value.detail
 
     def test_common_password_raises_422(self):
         from unittest.mock import patch
@@ -1024,7 +1030,9 @@ class TestPasswordPolicy:
             with pytest.raises(HTTPException) as exc:
                 validate_admin_password(test_pw)
         assert exc.value.status_code == 422
-        assert "too_common" in exc.value.detail
+        # CR #5587: "too easy to guess" is the current blacklist-rejection
+        # copy; "too_common" was the old technical wording.
+        assert "too easy to guess" in exc.value.detail
 
 
 # ===========================================================================

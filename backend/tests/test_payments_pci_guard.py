@@ -49,7 +49,10 @@ class TestAddCardRejectsRawCardData:
             await add_card(_mock_request(body), current_user={"id": "user_1"})
 
         assert exc_info.value.status_code == 400
-        assert "tokenize" in exc_info.value.detail.lower()
+        # CR #5587: routes/payments.py raises a plain HTTPException with no
+        # error_code here -- assert on the current customer-facing copy
+        # ("secure card form"), not the old technical "tokenize" wording.
+        assert "secure card form" in exc_info.value.detail.lower()
 
     async def test_rejects_multiple_raw_fields(self):
         from backend.routes.payments import add_card
@@ -109,7 +112,9 @@ class TestAddCardRequiresPaymentMethodId:
             )
 
         assert exc_info.value.status_code == 400
-        assert "object" in exc_info.value.detail.lower()
+        # CR #5587: current copy is "We couldn't read that request." -- the
+        # old assertion pinned "object", which the humanized message dropped.
+        assert "couldn't read that request" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio

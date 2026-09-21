@@ -34,6 +34,7 @@ try:
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..settings_loader import get_app_settings
     from .driver_presence import present_driver_ids
     from .metrics import inc as _metric_inc
     from .redis_client import redis_delete, redis_get, redis_set, redis_set_nx

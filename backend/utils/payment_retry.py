@@ -44,6 +44,7 @@ try:
     from ..models.ride_status import RideStatus
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
+    from ..utils.metrics import inc as _metric_inc
     from .datetime_utils import parse_iso_utc
     from .money import cents_to_dollars, dollars_to_cents
     from .redis_client import redis_set_nx
@@ -55,6 +56,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
+    from utils.metrics import inc as _metric_inc
     from utils.money import cents_to_dollars, dollars_to_cents
     from utils.redis_client import redis_set_nx
     from utils.rider_emails import send_payment_blocked_email
@@ -674,7 +676,32 @@ async def retry_failed_payments():
                             data={"type": "payment_failed", "ride_id": ride_id},
                         )
                     except Exception as push_err:
-                        logger.debug(f"Payment failure push notification failed: {push_err}")
+                        # Identical to the two branches fixed in
+                        # services/payment_service.py::settle_card (review
+                        # finding E2), and the most consequential of the three:
+                        # this is the LAST push the rider ever gets. Retries are
+                        # exhausted, so nothing follows it — if this is lost,
+                        # their only remaining signal is being blocked at their
+                        # next booking attempt. At debug that was invisible.
+                        #
+                        # stdlib logging here, not loguru (see the module's
+                        # `logger = logging.getLogger(__name__)`), so exc_info=
+                        # is correct and .opt() would not exist.
+                        # extra={...}: stdlib's spelling for what .bind() does on
+                        # the loguru sites — tags_from_log_extra lifts these into
+                        # Sentry tags, so the event is filterable by domain/ride
+                        # instead of arriving with only `environment`.
+                        logger.error(
+                            "Payment failure push notification failed for ride %s: %s",
+                            ride_id,
+                            push_err,
+                            exc_info=True,
+                            extra={"domain": "payments", "ride_id": ride_id},
+                        )
+                        _metric_inc(
+                            "spinr_payment_rider_notice_failed_total",
+                            {"reason": "retry_exhausted"},
+                        )
 
 
 async def sweep_guest_corporate_settlements() -> None:

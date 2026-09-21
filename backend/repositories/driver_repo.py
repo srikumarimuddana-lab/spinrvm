@@ -30,6 +30,7 @@ except ImportError:
         _DRIVER_CACHE_TTL_SECONDS,
         _driver_by_user_cache_key,
         _driver_cache_key,
+        _postgrest_or_value,
         _read_cached_row,
         _rows_from_res,
         _single_row_from_res,

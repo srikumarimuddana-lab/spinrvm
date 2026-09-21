@@ -179,7 +179,6 @@ def test_join_domain_no_email_on_account_is_400(test_client, rider_override):
     app.dependency_overrides[get_current_user] = lambda: {
         **_FAKE_USER,
         "email_verified": True,
-        "phone_or_email": "",
         "email": "",
     }
     try:
@@ -199,7 +198,11 @@ def test_join_domain_unauthorized_domain_is_403(test_client, rider_override):
     app.dependency_overrides[get_current_user] = lambda: {
         **_FAKE_USER,
         "email_verified": True,
-        "phone_or_email": "alice@notallowed.com",
+        # C5 (2026-09-20 review): this used to be `phone_or_email`, a key
+        # nothing in the backend ever wrote, so this test was green against a
+        # fallback real traffic never took. `email` is the only address on a
+        # user row.
+        "email": "alice@notallowed.com",
     }
     try:
         with patch("routes.corporate_rider.get_rows", AsyncMock(return_value=[])):
@@ -219,7 +222,8 @@ def test_join_domain_success(test_client, rider_override):
     app.dependency_overrides[get_current_user] = lambda: {
         **_FAKE_USER,
         "email_verified": True,
-        "phone_or_email": "alice@acme.com",
+        # See the note in test_join_domain_unauthorized_domain_is_403 (C5).
+        "email": "alice@acme.com",
     }
     try:
         with (
@@ -244,6 +248,35 @@ def test_join_domain_success(test_client, rider_override):
     assert body["company"]["name"] == "Acme"
     assert body["member"]["id"] == "m1"
     m_join.assert_awaited_once_with(company_id="c1", user_id=_FAKE_USER["id"], email="alice@acme.com")
+
+
+def test_join_domain_ignores_phone_or_email_key(test_client, rider_override):
+    """C5: a stray `phone_or_email` must NOT select the domain.
+
+    Nothing writes that key today, but if anything ever populated it from
+    client-controlled input the `email_verified` flag checked above would
+    describe one address while the domain match used another — a verified
+    user could join a company whose domain they do not actually hold.
+    """
+    from backend.server import app
+    from dependencies import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        **_FAKE_USER,
+        "email_verified": True,
+        "email": "",  # the real, empty address
+        "phone_or_email": "attacker@acme.com",  # must be ignored
+    }
+    try:
+        resp = test_client.post(
+            "/rider/work-profile/join-domain",
+            json={"company_id": "c1", "email": "attacker@acme.com"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    # No usable address on the account → 400, not a domain match on the
+    # attacker-supplied key.
+    assert resp.status_code == 400
 
 
 def test_balance_403_when_not_a_member(test_client, rider_override):

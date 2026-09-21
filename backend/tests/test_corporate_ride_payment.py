@@ -867,10 +867,15 @@ async def test_settle_fails_closed_on_settings_lookup_error():
     exactly like the flag being off. Failing open meant the switch silently
     reopened during precisely the DB degradation it guards against.
 
-    Changed in WS-1 subtask 1; the per-flag rationale — including why
-    new_ride_requests_enabled and the other platform-availability switches
-    stay fail-open — is recorded in
+    Changed in WS-1 subtask 1; the per-flag rationale is recorded in
     docs/adr/011-flag-read-failure-semantics.md.
+
+    Note (2026-09-21): that ADR's original text said new_ride_requests_enabled
+    and the other platform-availability switches "stay fail-open". That is no
+    longer true of new_ride_requests_enabled — it now falls back to the last
+    successfully-read value instead (review finding E2, see the ADR's
+    Amendment). corporate_billing_enabled, which this test covers, still fails
+    closed and is unaffected.
     """
     allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 0}
     deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])

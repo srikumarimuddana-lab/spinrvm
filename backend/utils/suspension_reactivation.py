@@ -13,10 +13,14 @@ to try using the app and discover it worked.
 
 Notification shape mirrors the manual equivalent of this exact same event —
 an admin flipping status back to 'active' via routes/admin/users.py's
-PATCH /admin/users/{id}/status, which already sends
+PUT /admin/users/{id}/status, which sends
 ``send_push_notification(user_id, "Account reactivated", "Your account is
 active again. Welcome back!", data={"type": "account_status", ...})`` with no
-``target_app`` (i.e. the legacy ``fcm_token`` column). This loop reuses that
+``target_app`` (i.e. the legacy ``fcm_token`` column) — true as of
+2026-09-21, when that sibling's hardcoded ``target_app="rider"`` was removed;
+it would otherwise have hidden a driver's own ban notice from the driver app
+once migration 436 made target_app decide the inbox row's audience. This loop
+reuses that
 same title/body for copy consistency (a user should hear the same thing
 whether an admin manually restored them or the timer did) and deliberately
 also defaults to ``target_app=None``: ``users.role`` is reserved for admin

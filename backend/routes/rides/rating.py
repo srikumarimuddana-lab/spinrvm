@@ -140,6 +140,7 @@ async def rate_driver(
                 "rating": str(rating_data.rating),
                 "ride_id": ride_id,
             },
+            target_app="driver",
             _ctx=f"[RATING] driver {driver['user_id']}",
         )
 

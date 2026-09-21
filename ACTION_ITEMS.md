@@ -13573,6 +13573,49 @@ record of what was assumed vs. what was actually true</summary>
 - [ ] **Status:** open (~5 min in Sentry UI, no code)
 - **Action:** alert on message `REFRESH TOKEN REUSE DETECTED` → email/PagerDuty.
   The loguru→Sentry bridge already delivers it; it just needs a rule.
+- **Update (2026-09-21):** C129's new weekly `/sentry-triage` report will
+  carry this item forward as a one-line "still open" note in every weekly
+  run until it's closed — see C129. This does not close C2 itself; it's
+  still the same 5-minute Sentry-UI task, just no longer silently
+  forgettable between audits.
+
+### C129. Automated Sentry error triage — discovery, root-cause, fix PR, weekly report
+- [ ] **Status:** shipped 2026-09-21 (new `/sentry-triage` command +
+  `spinr-sentry-triage-investigator` agent + `scripts/observability/
+  generate_sentry_weekly_report.py`), not yet run on a live schedule.
+- **What it does:** discovers new/regressed/climbing unresolved issues in
+  the `spinr-backend` Sentry org (project `crimson-smoke-7445`), confirms
+  root cause against the actual codebase (Seer's suggestion is a starting
+  hypothesis, never taken as verified without independent code review),
+  ships a normal reviewed PR (adversarial `spinr-*-reviewer` pass +
+  Change Impact Log, same gate as any other change — **never auto-merged**,
+  per the existing Seer guardrail in `docs/audit/2026-09-08-agentic-tooling-
+  atlas.md` and `.claude/context/connector-scoping.md`'s Sentry row) for
+  any confidently-confirmed fix, and produces a weekly report under
+  `docs/audit/sentry-triage/`.
+- **Connector scoping closed the same day:** the Sentry MCP connector was
+  previously flagged (connector-scoping.md, 2026-09-08) as unscoped/
+  unverified because OAuth login required a human and no org/project slug
+  was known. The user completed the OAuth login 2026-09-21; `.mcp.json` is
+  now narrowed to `https://mcp.sentry.dev/mcp/spinr-backend/crimson-smoke-7445`
+  (verified live via `find_organizations`/`find_projects` — exactly one
+  org, one project, consistent with `backend/routes/admin/sentry.py`'s
+  TAG MODE).
+- **Explicitly reconciles, does not duplicate:** C2 (above) is the one
+  known open Sentry/alerting gap this new process carries forward in its
+  weekly report rather than re-discovering as a new finding. (C55, a
+  similar-sounding insurance-period alerting item, was checked and is
+  fully CLOSED as of 2026-09-04 — both the Grafana alert rule and the
+  reconciler loop were built; nothing there needs carrying forward.)
+- **Still needed to go live:** a Claude Code Routine (scheduled trigger)
+  firing weekly into a session with the Sentry connector — GitHub Actions
+  cron **cannot** reach an OAuth-connected MCP server, so this can't be a
+  `.github/workflows/*.yml` cron like the security-automation roadmap's
+  other scheduled jobs; it has to be a Routine. Not yet created — first
+  live run will validate the whole loop end-to-end (a dry run against
+  actual Sentry data was not performed as part of shipping this, since
+  doing so risked opening a real fix PR before the human-review posture
+  could be confirmed working as designed).
 
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify
@@ -19640,6 +19683,60 @@ mechanical follow-up work, prioritizable independently.
   - **Acceptance:** rider-app toast colors match the current theme tokens
     in both light and dark mode. Met.
 
+### GPS-plausibility chain seeded from stale `driver_last_known.updated_at`, falsely rejecting legitimate breadcrumbs (#5357)
+
+- [ ] **Status:** open — filed 2026-09-14 by `spinr-fraud-auditor` during
+  review of PR #5355 (#1231 finding 11's GPS-plausibility-chain fix). Not
+  introduced by that PR — a pre-existing pattern in
+  `persist_trip_location_batch` (v2) that #5355 newly exposed v1 REST
+  traffic to as well (v1 had no plausibility chain to trip before).
+- **What's wrong:** `routes/drivers/status.py`'s go-online/go-offline toggle
+  bumps `drivers.updated_at` on every call, but only writes fresh `lat`/`lng`
+  alongside it when going online *and* the client supplied an immediate
+  non-zero GPS fix. Going offline, or going online without an immediate fix
+  (cold start, permission dialog not yet granted), bumps `updated_at` to
+  "now" while `lat`/`lng` stay stale from an earlier, unrelated write. Both
+  `persist_trip_location_batch` (v2) and `persist_ride_breadcrumbs` (v1)
+  seed their GPS-plausibility chain's "previous point" from this same
+  `drivers` row when the batch has no earlier accepted point — so a
+  stale-`lat`/`lng`-but-fresh-`updated_at` row looks like "this exact
+  position, very recently," understating `elapsed_seconds` and inflating the
+  computed speed for the driver's real next position enough to reject it as
+  `"teleport"`.
+- **Concrete failure scenario:** driver goes offline (stale lat/lng, fresh
+  `updated_at`) → goes back online without an immediate fix (still stale
+  lat/lng, `updated_at` bumped again) → starts a trip and uploads real
+  breadcrumbs from their actual position → the first breadcrumb (and,
+  since a rejected point never advances the chain's baseline, potentially
+  several after it) is falsely rejected right at trip start — exactly when
+  the Period 2/3 insurance audit trail (SGI-reportable) most needs
+  completeness.
+- **Why it happens:** no dedicated location-timestamp column exists on
+  `drivers` (confirmed: no `location_updated_at`/`last_location_at`
+  equivalent). `updated_at` is generic row-modified, not scoped to `lat`/
+  `lng` specifically.
+- **Proposed fix (not yet implemented):** add a location-specific timestamp
+  column (e.g. `drivers.location_updated_at`), written only alongside an
+  actual `lat`/`lng` write, and have both `persist_trip_location_batch` and
+  `persist_ride_breadcrumbs` seed their `driver_last_known` chain from that
+  column instead of the generic `updated_at`. Needs a migration (additive
+  column, backfill optional — a NULL just means "no seed available, chain
+  starts cold," the pre-#5355 v1 behavior anyway) and touches both breadcrumb
+  paths plus every `drivers.lat`/`lng` write site (`routes/drivers/status.py`,
+  `routes/drivers/location.py`, `routes/websocket.py`).
+- **Severity note:** fails closed — drops real breadcrumbs, never lets
+  spoofed data through — so not launch-blocking, but a real correctness gap
+  in a regulatory-audit-adjacent path. Deliberately not fixed inline in
+  #5355: the real fix touches a shared, live-tested surface (driver
+  online/available flags, `drivers` table write paths) beyond that PR's
+  scope, and needs its own Change Impact Log entry per CLAUDE.md's pre-merge
+  gates given the blast radius (a new migration + 3+ call sites).
+- **Files:** `backend/routes/drivers/status.py`, `backend/routes/drivers/
+  location.py`, `backend/routes/websocket.py`, `backend/utils/
+  location_write_gate.py` (or wherever `persist_trip_location_batch`/
+  `persist_ride_breadcrumbs` live), a new `backend/migrations/NN_*.sql`.
+- **Tracking:** srikumarimuddana-lab/spinrvm#5357.
+
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
 _Not launch-gating, but every mature platform at this stage has them. Ordered by
@@ -22166,6 +22263,104 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-21): 3 more tables (46 covered), plus a fresh
+  full-audit correction to the running total — still not closed.** Checked
+  for concurrent work first (`git fetch origin main` — 14 commits behind,
+  fast-forwarded — + an open-PR search for anything touching
+  `backend/tests/rls/` or `ACTION_ITEMS.md`; none found). Before picking a
+  slice, re-audited the *actual* covered-vs-remaining split directly off
+  disk rather than trusting this entry's own last-published fraction, which
+  had drifted: `test_notifications_and_docs_admin_rls.py` (added under
+  ACTION_ITEMS.md C123 phase 1 / migration 432, not tracked by any C49
+  status bullet) already covered `cloud_messages`/`push_tokens`/
+  `document_requirements`, and `test_disputes_rls.py` (added under C107 /
+  migration 430) already covered `disputes` — 4 tables this entry's own
+  "still not closed" lists below kept naming as remaining. Corrected
+  method: sweep every `*.py` in `backend/tests/rls/` for tables actually
+  exercised in a SQL statement (46), sweep every `CREATE POLICY ... ON
+  <table>` across `backend/migrations/*.sql` **and `backend/supabase_rls.sql`**
+  multiline-aware (the prior round's own sweep undercounted by 10 — it
+  swept only `backend/migrations/`, missing `supabase_rls.sql`'s
+  `users`/`drivers`/`rides`/`otp_records`/`settings`/`support_tickets`/
+  `faqs`/`vehicle_types`/`fare_configs`/`service_areas`, even though this
+  harness's own `conftest.py` applies that file and stubs those last 5 —
+  the true total was always 71, never "~70"), plus migration 27's dynamic
+  loop (9 tables, not 6 — 5 `corporate_*` + the non-`corporate_*`
+  `ride_payment_sources`; the other 3 of the loop's 9 get their own later
+  static policies and were already counted by the static sweep). 71 total,
+  46 covered before this round's own 3 landed, 25 truly remaining — see
+  this round's own remaining-table table below, superseding every earlier
+  round's list.
+  Picked the "financial ledger extension" theme from the corrected
+  remaining list — `financial_event_entries` (286), `reconciliation_discrepancies`
+  (59), `subscription_payments` (151) — the highest-stakes group left per
+  CLAUDE.md's money-path coverage tier, and deliberately not
+  `agent_action_log` (429, also newly surfaced as remaining), which PR
+  #5604 was actively modifying at the time.
+  New file `backend/tests/rls/test_financial_ledger_extension_rls.py`, 31
+  tests. Full `tests/rls` suite: **424 passed, 0 failed** (393 pre-existing +
+  31 new), against the same
+  real local Postgres 16 `rlstest` cluster prior rounds stood up in this
+  environment (re-provisioned this session after a container restart —
+  `pg_ctlcluster 16 rlstest start`).
+  - **Harness bug found and fixed along the way (not a finding about
+    production, a bug in the test harness itself):** `conftest.py`'s
+    existing `financial_events` fixture block applied migrations 58 → 70 →
+    290, skipping 289 (the flag-gated DELETE fix that lets the 7-year DSAR
+    purge legally delete a `financial_events` row). Every RLS test written
+    against `financial_events` so far only ever exercised SELECT/INSERT/
+    UPDATE, never a real DELETE, so this gap was invisible until this
+    round's `financial_event_entries` CASCADE test needed one. Fixed by
+    adding 289 to the fixture in filename-sort order; all 424 tests still
+    pass with it applied.
+  - **Blast radius:** grepped every `.py`/`.ts`/`.tsx` file repo-wide for
+    all three table names. Every real consumer goes through `db_supabase`
+    (service-role client, dual-import pattern) —
+    `services/ledger_service.py`, `services/payment_service.py`,
+    `utils/ledger_projection.py`, `utils/reconciliation.py` for
+    `financial_event_entries`/`reconciliation_discrepancies`;
+    `utils/subscription_invoice.py`, `routes/admin/subscriptions.py`,
+    `routes/drivers/subscriptions.py`, `routes/webhooks.py` for
+    `subscription_payments`. Two comment-only mentions
+    (`schemas.py`, `core/lifespan.py`) reference the double-entry
+    projection feature, not a real access path. No admin-dashboard/
+    rider-app/driver-app/shared file references any of the three.
+  - **Review used:** `spinr-security-auditor` via the Agent tool, against
+    the actual diff — independently re-derived every asserted policy/GRANT/
+    trigger from the real migration SQL, ran the suite itself, and verified
+    both findings below by reading migrations 430/432/433 directly.
+  - **Two real, previously-undiscovered findings, not fixed here:**
+    1. `financial_event_entries_select` (286) and `reconciliation_discrepancies`'
+       `recon_admin_only` (59) both gate on `(SELECT role FROM users WHERE
+       id = auth.uid()::text) = 'admin'` — the exact pattern migrations
+       430/432/433 (C107/C123) found permanently unreachable in production
+       (migration 256's `chk_users_role_not_admin` CHECK means `users.role`
+       can never equal `'admin'`) and systematically replaced elsewhere. A
+       repo-wide grep confirms neither table appears in any of the three
+       fixes — this pair was missed by all of them. Filed as **C129** (new).
+    2. `subscription_payments` claims "Append-only ledger" in its own
+       `COMMENT ON TABLE` but has zero DB-level enforcement of that claim —
+       no trigger of any kind, unlike its sibling `financial_event_entries`
+       (real UPDATE-blocking trigger, migration 286 itself). Since
+       `service_role` bypasses RLS and there is no trigger, a direct
+       `service_role` UPDATE/DELETE is completely unenforced at the DB
+       layer, resting entirely on application discipline (confirmed no
+       production code path issues one). Same gap class as C118
+       (`ride_distance_integrity_events`/`ride_distance_recomputes`), a new
+       instance — cross-referenced from C129 rather than filed separately,
+       since both surfaced in the same round with the same disposition.
+  - **Corrected remaining-table list (71 total, 46 covered, 25 remaining),
+    supersedes every earlier round's list in this entry:**
+    | Theme | Tables |
+    |---|---|
+    | AI / agent tooling | `ai_conversations`, `ai_messages`, `agent_action_log` (429 — mid-fix in PR #5604 as of this round) |
+    | Notifications | `push_retry_queue` |
+    | Corporate | `corporate_section_spend`, `corporate_sections`, `corporate_subscription_plans`, `corporate_subscriptions` |
+    | Driver ops | `driver_bonuses`, `driver_onboarding_reminder_log` |
+    | Reference/static data | `faqs`, `fare_configs`, `provinces`, `service_areas`, `service_area_tax_history`, `vehicle_types` |
+    | Ride tracking/integrity | `ride_live_activities`, `ride_messages`, `ride_offers` |
+    | Singletons | `meta_capi_deliveries`, `support_tickets`, `surge_pricing` |
+  Change log: `docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`.
 - [ ] **Status (2026-09-14, later still same day): 3 more tables, still not
   closed.** Checked for concurrent work first (`git fetch origin main` +
   an open-PR search for anything touching `backend/tests/rls/` or
@@ -27556,7 +27751,31 @@ how much they de-risk a public launch._
 - **PR:** #5388.
 
 ### C113. `routes/notifications.py`'s `admin_debug_ride_offer` debug FCM payload has a misleading "parity" comment and no `rider_name` exclusion — latent risk, not a live leak
-- [ ] **Status:** OPEN, informational — no real PII leaks today.
+- [x] **Status:** CLOSED (2026-09-21). This entry's own premise had already gone stale before
+  this session started: a separate, unrelated fix (PR #5508, 2026-09-19,
+  `spinr-notification-ux-reviewer` finding — see
+  `docs/change-log/2026-09-19-debug-ride-offer-fcm-pii-exclusion.md`) had already added a
+  `_DEBUG_FCM_EXCLUDE` set (`rider_name`, `pickup_lat`, `pickup_lng`, `dropoff_lat`,
+  `dropoff_lng`) to this exact endpoint, so the "no `rider_name` exclusion at all" half of this
+  item's title was no longer true by the time it was picked up — this item's status line was
+  simply never updated to reflect that. Verified the exclusion is genuinely in place (not just
+  claimed) via the pre-existing regression test
+  `TestDebugRideOffer::test_fcm_payload_excludes_rider_name_and_precise_location`, still green.
+  What *was* still wrong: the 2026-09-19 fix's own rewritten comment was itself inaccurate in a
+  subtler way — it claimed `routes/rides/matching.py`'s live path "enforces... no rider name or
+  precise lat/lng" unconditionally via its own `_FCM_EXCLUDE`, when in fact only `rider_name` is
+  unconditional there; precise coordinates (and `rider_rating`) are excluded only when the
+  `minimal_fcm_offer_payload_enabled` app_settings flag is on (migration 424, default `FALSE`
+  today), and `admin/rides.py`'s `admin_create_ride` path excludes only `rider_name` with no
+  coordinate filtering at all. Rewrote both comments in `notifications.py` to state this
+  accurately instead of a blanket parity claim. No executable code changed — comment-only fix.
+  Blast-radius grep confirmed exactly three `new_ride_assignment` FCM-payload builders exist
+  repo-wide (`matching.py`, `admin/rides.py`, `notifications.py`); `notifications.py` is the
+  "third site" this item's own filing referenced, and no fourth site exists. Not listed in
+  `docs/known-forks.md`. `pytest backend/tests/test_p3_push_notifications.py` (48 passed);
+  `ruff check`/`ruff format --check` clean; `/code-review` (medium) found nothing. See
+  `docs/change-log/2026-09-21-c113-notifications-debug-fcm-parity.md`.
+- **(historical) Status:** OPEN, informational — no real PII leaks today.
   Found during C112's adversarial `/code-review` pass (blast-radius grep for other
   `new_ride_assignment` FCM payload builders turned up a third site beyond `matching.py` and
   `admin/rides.py`).
@@ -27576,8 +27795,8 @@ how much they de-risk a public launch._
   current exclusion set (or lack thereof), and (2) add the same `rider_name` exclusion as a
   defensive measure even though the value is currently hardcoded, so a future edit can't
   reintroduce the leak silently.
-- **Files (reference only, nothing changed by this entry):** `backend/routes/notifications.py`
-  (`admin_debug_ride_offer`, `_stringify_fcm`).
+- **Files:** `backend/routes/notifications.py` (`admin_debug_ride_offer`, `_stringify_fcm`,
+  `_DEBUG_FCM_EXCLUDE`).
 
 ### C114. `backend/routes/drivers/ride_reads.py`'s entire read-endpoint family has no rate limiting — no decorator, and no global middleware covers it
 - [x] **Status:** CLOSED (2026-09-20). All three endpoints (`get_active_ride`,
@@ -27769,7 +27988,7 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
 
-### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — real gap, not fixed here
+### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — CLOSED (2026-09-21)
 - **Note:** a second, unrelated entry also numbered C118 (Open Change Requests
   registry) was filed concurrently by a parallel session — see it below,
   right after this entry's own "Files" line. Genuine simultaneous
@@ -27833,11 +28052,62 @@ how much they de-risk a public launch._
   the added trigger-maintenance surface (see C112's finding on triggers
   not composing safely across migrations) versus leaving this as a
   documented, accepted risk.
-- **Files (reference only, nothing changed by this entry):**
-  `backend/migrations/246_ride_distance_integrity_events.sql`,
+- **Closed (2026-09-21):** added `backend/migrations/435_ride_distance_integrity_immutability.sql`
+  — one shared `BEFORE UPDATE OR DELETE` trigger function
+  (`block_mutation_on_immutable_table()`, parameterized via
+  `TG_TABLE_NAME`/`TG_OP` rather than a dedicated function per table) wired
+  to both tables, following exactly the recommendation above: unconditional
+  block, no flag-gated carve-out, since neither table has a legitimate
+  DELETE path. The two regression tests that documented the gap
+  (`test_*_service_role_can_mutate_despite_immutable_comment`) were flipped
+  to `test_*_service_role_cannot_mutate_immutable_table` and now assert
+  `psycopg2.errors.CheckViolation` on both UPDATE and DELETE. Full RLS suite
+  (393 tests) verified passing against a real local Postgres 16 instance.
+  Reviewed via `spinr-migration-reviewer` — verdict SAFE TO APPLY, no
+  blockers. **Prepared, not yet applied to staging/production**, matching
+  this repo's established pattern for new migrations pending a separate,
+  explicit apply step.
+- **New hazard surfaced by the migration review (2026-09-21) — read before
+  ever letting a ride reach the 7-year retention ceiling:** both tables'
+  `ride_id` column is `REFERENCES rides(id) ON DELETE RESTRICT` (by design,
+  per 242/246's own comments — a deletion attempt should "fail loudly rather
+  than silently destroying the audit history"). `purge_pii_retention()`'s
+  Step B (`DELETE FROM rides WHERE created_at < now() - 7 years`, current
+  live body in migration 335) has no exception handler around it. If a ride
+  ever ages past 7 years while still referenced by a row in either of these
+  two tables, Step B raises an uncaught `foreign_key_violation`, which rolls
+  back the **entire** `purge_pii_retention()` call for that run — every
+  other step (GPS anonymization, `audit_logs`/`compliance_export_events`
+  purges, DSAR hard-delete, etc.), not just Step B. This is the same general
+  hazard class as C112 above (an unconditional trigger/constraint
+  interacting badly with the multi-step retention function, uncontained by
+  an exception handler) but a **distinct mechanism** — C112 is a
+  trigger-vs-trigger flag conflict on `audit_logs`; this is an FK-RESTRICT
+  constraint on Step B with no `BEGIN/EXCEPTION WHEN OTHERS` wrapper (unlike
+  sibling steps H and M, which do wrap their deletes). Mitigating factor:
+  Spinr is still in live app testing, so no ride is anywhere near 7 years
+  old yet — this is a latent risk, not an active one, and migration 435
+  did not introduce the RESTRICT constraint (242/246 already had it). What
+  435 *does* change: before this migration, an operator hitting this FK
+  collision in a future world where it fires could manually `DELETE` the
+  blocking child row(s) from either table and retry; after 435, that manual
+  remediation itself now raises `check_violation`, so recovery would require
+  dropping the new trigger first (an emergency schema change) rather than a
+  same-session fix. Not fixed here — options for whoever picks this up: (a)
+  wrap Step B in a `BEGIN/EXCEPTION WHEN OTHERS/RAISE` handler matching
+  Steps H/M's shape (contains the blast radius to Step B alone, doesn't
+  resolve the underlying FK collision), (b) add a session-flag carve-out to
+  the two new triggers mirroring `audit_logs`' pattern so Step B can clear
+  a ride's rows immediately before deleting it, or (c) revisit the FK as
+  `ON DELETE SET NULL` (the path already taken for `financial_events.ride_id`
+  in migrations 294/295) if losing the ride linkage on an already
+  7-year-retained audit row is acceptable.
+- **Files:** `backend/migrations/246_ride_distance_integrity_events.sql`,
   `backend/migrations/242_ride_distance_recomputes.sql`,
-  `backend/tests/rls/test_ride_distance_integrity_rls.py` (new regression
-  tests documenting current behavior).
+  `backend/migrations/435_ride_distance_integrity_immutability.sql` (new),
+  `backend/tests/rls/conftest.py` (replays 435),
+  `backend/tests/rls/test_ride_distance_integrity_rls.py` (regression tests
+  updated to assert the fix), `docs/change-log/2026-09-21-ride-distance-audit-table-immutability.md`.
 
 ### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
 - **Note:** a different, unrelated entry above (the ride-distance-integrity
@@ -28346,7 +28616,7 @@ as evidence that the thing it configures exists.
 - **Files:** the 8 files listed above, `backend/scripts/run_migrations.py`
   (`NEVER_APPLY` skip-list, for the 4 correctly-excluded ones).
 
-### C126. `backend-test`'s 20-minute CI timeout was raised to 30 as a stopgap (CR #5541) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
+### C126. `backend-test`'s 20-minute CI timeout was raised to 35 as a stopgap (CR #5541, then CR #5579) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
 
 - [ ] **Status:** OPEN — found 2026-09-20 while driving PR #5536/#5537 to
   green: the job's three real steps (mocked-DB pytest suite with coverage,
@@ -28358,6 +28628,14 @@ as evidence that the thing it configures exists.
   `docs/audit/2026-09-05-engineering-director-review-round3.md:782`
   predicted this exact failure mode two weeks earlier ("No pytest-xdist on
   a 20-minute job; the suite will hit the timeout").
+  **Correction (2026-09-21, found while fixing C127):** this entry's own
+  "30" was itself stale — a second, independent near-miss (CR #5579, PR
+  #5571, 16s slack on `main` itself then a real kill) landed days later and
+  raised it again, 30→35. Current value verified directly against
+  `.github/workflows/ci.yml:123` at time of writing, not copied from this
+  paragraph. Re-verify against the file, not this number, before relying on
+  it again — this is now the second time this entry's own number went
+  stale under it.
 - **Why this matters:** 30 minutes is evidence-based headroom, not a
   permanent fix — if the suite's runtime keeps growing run over run, the
   new ceiling gets eaten the same way the old one did, and without this
@@ -28377,30 +28655,40 @@ as evidence that the thing it configures exists.
 
 ### C127. `deploy-fly-signed-image.yml`'s hardcoded 30-minute image-wait budget no longer has margin against the worst-case `backend-test` → `docker-image-scan` chain
 
-- [ ] **Status:** OPEN — found 2026-09-20 by the `spinr-cicd-infra-reviewer`
-  review of CR #5541 (see C126). This experimental, `workflow_dispatch`-only
-  workflow (not wired to `push`, not on the production deploy path — see
-  C121) polls for a GHCR-signed image with a 30-attempt × 60s = 30-minute
-  budget, sized against a comment estimate of "backend-test ~13-14 min,
-  then build+push+sign." The real worst-case chain it depends on is
-  `backend-test` (now `timeout-minutes: 30`, C126) →
-  `docker-image-scan` (`timeout-minutes: 10`, `needs: [backend-test]`) = 40
-  minutes worst case, i.e. the poll can now time out 10 minutes before a
-  slow-but-successful `backend-test` run even finishes. This coupling was
-  already unverified before C126's change (the workflow's own comments
-  note the wait has never been exercised end-to-end against a real run);
-  C126 makes the gap wider, not new.
-- **Why this matters:** low severity today because the workflow is
-  manual/opt-in only, but whoever eventually promotes
-  `deploy-fly-signed-image.yml` off manual-dispatch-only needs to revisit
-  this budget first, or a legitimate slow-but-passing deploy will be
-  reported as a poll timeout.
-- **Action:** before promoting this workflow to any automatic trigger,
-  raise its image-wait budget to match the current worst-case chain (40+
-  min) or make it read the actual upstream job timeouts instead of a
-  hardcoded estimate.
-- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
-  poll, ~line 129).
+- [x] **Status:** CLOSED (2026-09-21). Raised the poll loop from
+  30 attempts × 60s (30 min) to 50 attempts × 60s (50 min), and the job's
+  `timeout-minutes` from 45 to 70, both re-derived from the **current**
+  chain — not this item's original "40+ min" estimate, which had already
+  gone stale (see C126's own 2026-09-21 correction: `backend-test` moved
+  30→35 under CR #5579 after this item was filed). Verified directly
+  against `.github/workflows/ci.yml` at fix time: `backend-test`
+  `timeout-minutes: 35` (line 123) → `docker-image-scan`
+  `timeout-minutes: 10` (line 1099, `needs: [backend-test]`) = 45 min
+  worst case. 50 min poll budget gives 5 min margin over that; 70 min job
+  budget gives the poll's 50 min plus ~20 min for
+  setup/login/deploy/scale/readiness(3m)/verify(2m). Did not implement the
+  item's dynamic-read alternative ("make it read the actual upstream job
+  timeouts instead of a hardcoded estimate") — this workflow is still
+  manual/`workflow_dispatch`-only, not promoted to an automatic trigger,
+  which is the condition the item itself names for requiring that; a
+  hardcoded, comment-documented number stays the simpler fix per
+  CLAUDE.md's "Simplicity first," with the comment telling a future editor
+  exactly which two `ci.yml` values to re-check if they move again.
+- **Blast radius:** isolated to this one workflow file. It is
+  `workflow_dispatch`-only (no `push`/`pull_request` trigger), not wired
+  into `deploy-fly.yml`'s automatic production path (see C121), so no
+  other workflow or scheduled job reads these two values.
+- **Verification performed:** `python3 -c "import yaml; yaml.safe_load(...)"`
+  parses cleanly; no linter for this file exists in the repo (checked for
+  `actionlint`/`yamllint`, neither installed) — YAML-syntax validity only,
+  not a real dispatch run (this workflow needs `FLY_API_TOKEN`, live GHCR
+  state, and a live Fly app not available from this session). **What was
+  NOT verified:** an actual end-to-end dispatch of this workflow against a
+  slow `backend-test` run — the same limitation the workflow's own
+  comments already flag ("the wait has never been exercised end-to-end
+  against a real run"), unchanged by this fix.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (poll loop
+  ~line 139, job `timeout-minutes` ~line 70).
 
 ### C128. Self-hosted tile server has no OSM data for Riyadh — a real, product-confirmed international service area — so its admin map will render roadless even after the basemap-URL fix
 
@@ -28438,10 +28726,72 @@ as evidence that the thing it configures exists.
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
-### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
+### C129. `financial_event_entries` and `reconciliation_discrepancies` share the unreachable `users.role = 'admin'` RLS pattern C107/C123 fixed elsewhere — missed by all three sweeps; `subscription_payments`' "Append-only ledger" claim has zero DB-level enforcement
 
-- [ ] **Status:** OPEN — found 2026-09-21 while root-causing `backend-test`
-  CI failures for PR #5612/#5634 (the #5614-fallout fix round).
+- [ ] **Status:** OPEN — found 2026-09-21 while writing this session's C49
+  round (`docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`),
+  confirmed by `spinr-security-auditor` against the actual migration SQL.
+- **Issue/gap (finding 1):** `financial_event_entries_select`
+  (migration 286) and `reconciliation_discrepancies`' `recon_admin_only`
+  (migration 59) both gate access on
+  `(SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'`. This is
+  the exact pattern migration 256's `chk_users_role_not_admin` CHECK
+  constraint made permanently unreachable in production (`users.role` can
+  never actually be `'admin'`/`'super_admin'`/etc. — real admin identity
+  lives in `admin_staff`), and which migrations 430 (C107, 10 tables +
+  `disputes`), 432/433 (C123 phases 1–2, `cloud_messages`/`push_tokens`/
+  `document_requirements`/`safety_incidents`/`driver_insurance_periods`
+  family) systematically replaced with an explicit `USING (false)` deny. A
+  repo-wide grep (`grep -l financial_event_entries\\|reconciliation_discrepancies
+  backend/migrations/430_*.sql backend/migrations/432_*.sql
+  backend/migrations/433_*.sql`) confirms neither table appears in any of
+  the three — this pair postdates 142's original sweep (286/59 predate or
+  sit outside that sweep's table list) and was never revisited by the
+  later unreachable-admin-role campaign either.
+- **Why this matters:** not a live security hole (fail-closed, not
+  fail-open — the effect is "policy that was supposed to allow admin
+  access now allows nobody via PostgREST," and the backend's exclusive use
+  of `service_role` means production traffic never took this path anyway,
+  per ACTION_ITEMS.md C108). It's a correctness/consistency gap in the
+  same class C107/C123 exist to close, on two tables their sweeps missed.
+- **Issue/gap (finding 2, same round, different table):**
+  `subscription_payments` (migration 151) claims "Append-only ledger of
+  realized Spinr Pass payments" in its own `COMMENT ON TABLE`, but no
+  migration ever adds an UPDATE/DELETE-blocking trigger — unlike its
+  sibling `financial_event_entries`, which got a real trigger in the same
+  migration that created it. A repo-wide grep of every migration touching
+  `subscription_payments` (151/186/188) confirms none adds one. Since
+  `service_role` bypasses RLS and there's no trigger, a direct
+  `service_role` UPDATE/DELETE is completely unenforced at the DB layer —
+  the append-only guarantee rests entirely on application discipline (no
+  production code path issues one today; confirmed by grepping
+  `routes/`/`services/`/`utils/` for `subscription_payments` writes — only
+  `INSERT`s exist). Same gap class as C118
+  (`ride_distance_integrity_events`/`ride_distance_recomputes`), a new
+  instance.
+- **Action:** for finding 1, extend the C107/C123 unreachable-admin-role
+  fix pattern to these two tables (a small, focused migration replacing
+  each policy with an explicit `USING (false)` deny, matching 430's exact
+  shape). For finding 2, add an UPDATE/DELETE-blocking trigger to
+  `subscription_payments` matching `financial_event_entries`' pattern, or
+  explicitly decide (and document) that its lifecycle doesn't warrant one.
+  Both are schema changes with their own review scope — out of scope for
+  the test-coverage-only PR that found them.
+- **Files:** `backend/migrations/286_financial_event_entries.sql`,
+  `backend/migrations/59_reconciliation_discrepancies.sql`,
+  `backend/migrations/151_subscription_payments_ledger.sql` (reference
+  only, nothing changed by this entry).
+
+### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch — CLOSED (2026-09-21)
+
+- [x] **Status: CLOSED 2026-09-21** — found 2026-09-21 while root-causing
+  `backend-test` CI failures for PR #5612/#5634 (the #5614-fallout fix
+  round), independently confirmed and root-caused the same day by a
+  parallel session working PR #5624/C129 (that item's number is now
+  retired — its other two findings, the env-admin-token-version default
+  mock and the insurance-period-release consolidation test staleness, are
+  the same ones #5634 above already fixed; this is the one finding from
+  that session not otherwise covered here).
 - **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
   (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
   fixture that sets `settings_loader._settings_cache = None` before each
@@ -28465,37 +28815,153 @@ as evidence that the thing it configures exists.
   never touches real Supabase), but it does mean this specific regression
   protection is not reliably exercised in CI's actual execution order —
   only when run in isolation, which is not how `backend-test` runs it.
-- **Root cause (partial):** confirmed NOT caused by module-identity
-  splitting (the fixture, the test body, and `get_app_settings()` itself
-  all resolve `settings_loader` — and by extension its own
-  `_settings_cache` global — through the same `from backend import
-  settings_loader` reference within this one file, ruling out the
-  dual-import bare-vs-qualified module-splitting hazard `conftest.py`'s
-  `_BareModuleAliasFinder` exists for). Likely candidate, not yet
-  confirmed: a leaked background task/coroutine from an earlier test in
-  the suite (the same class of hazard `pytest.ini`'s own
-  `filterwarnings` block documents at length as "A8" — a fire-and-forget
-  `asyncio.create_task`/`spawn()` call whose coroutine is never
-  awaited/closed) that calls the real, unmocked `get_app_settings()` on a
-  later event-loop tick that happens to fall during this test's own
-  `await`, overwriting `_settings_cache` with a real (or differently-shaped
-  mocked) settings dict that lacks `new_ride_requests_enabled`. Not
-  confirmed which specific earlier test leaks it — would need either
-  bisection over ~790 preceding files or instrumenting
-  `_settings_cache`'s setter to capture a stack trace on any write during
-  this test's execution window.
-- **Action:** bisect or instrument to find the actual leaking test, then
-  either fix its own task/coroutine cleanup (per the A8 pattern already
-  fixed elsewhere) or, if a specific offender proves hard to isolate,
-  harden this file's own tests against the general hazard class (e.g. a
-  final `await asyncio.sleep(0)` drain in the fixture teardown, or
-  re-asserting `_settings_cache is None` immediately before each
-  cache-dependent call within the test body itself, not just in the
-  fixture).
-- **Files:** `backend/tests/test_settings_loader_last_known.py`,
-  `backend/settings_loader.py` (`_settings_cache` global),
-  `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
-  filterwarnings documentation).
+- **Root cause (confirmed):** correctly ruled out module-identity
+  splitting up front (see above) — the actual leak was NOT a leaked
+  background task/coroutine as first suspected. `tests/
+  test_forced_upgrade_middleware.py`'s `_client_with_min_version()` helper
+  did a bare `settings_loader.get_app_settings = AsyncMock(...)`
+  module-attribute assignment with no `patch`/`monkeypatch` context
+  manager and no teardown, permanently replacing the real function on the
+  shared `settings_loader` module for the rest of the pytest process.
+  Every later test that called the real `get_app_settings()` — including
+  both `TestFailedReadDoesNotClobber` tests — got that file's tiny
+  `{"min_driver_app_version": ..., "min_rider_app_version": ""}` stub
+  instead, which never writes to `_settings_cache` (explaining
+  `get_last_known_app_settings()` returning `None`) and lacks every other
+  settings key including `new_ride_requests_enabled` (explaining the
+  `KeyError`). Found via binary search over the full 887-file suite
+  (`--no-cov` for a ~5x speedup per iteration), narrowing
+  887 → 443 → 222 → 110 → 55 → 27 → 14 → 7 → 1 file across ~9 rounds.
+- **Fixed:** switched `_client_with_min_version()` to `monkeypatch.setattr`,
+  threaded through all 4 identical `client` fixtures and the one direct
+  call site in `tests/test_forced_upgrade_middleware.py`. No production
+  code touched.
+- **Verified:** full local mocked-suite run, both on the fix branch and,
+  separately, on a clean `origin/main` checkout for comparison — 0 failures
+  on the fix branch (15174 passed) vs. main's baseline failures at the
+  time. `ruff check` clean.
+- **Files:** `backend/tests/test_forced_upgrade_middleware.py`,
+  `backend/tests/test_settings_loader_last_known.py`,
+  `backend/settings_loader.py` (`_settings_cache` global, unaffected —
+  documented here for context, not because it changed).
+- **Related, separately closed:** the same `backend-test` investigation
+  also surfaced `tests/test_webhooks_main.py::TestStripeWebhookEventLogLevel::
+  test_ignored_lifecycle_event_logs_debug_not_warning` failing — briefly
+  drafted here as a would-be C131 under an incorrect "same leaked-mock
+  class as C130, needs bisection" hypothesis. That hypothesis was wrong:
+  the test fails 100% deterministically even run fully alone, because it
+  asserts the pre-CRIMSON-SMOKE-7445-HC return shape against
+  `routes/webhooks.py` code that already shipped the new one — a plain
+  stale assertion, not a test-isolation bug. Already fixed independently
+  on `main` at commit `2c751d205` (#5651), with no `ACTION_ITEMS.md` entry
+  needed — noted here only so a future reader doesn't go looking for a
+  C131 that was reassigned below to an unrelated, still-open finding.
+
+### C131. Cloudflare-only origin lock is assumed by `get_real_client_ip()` but enforced nowhere — a direct-to-Fly request can set its own `CF-Connecting-IP`
+
+- [ ] **Status:** OPEN — found 2026-09-21 by `spinr-security-auditor` while
+  reviewing PR #5654 (rider/driver auth recording the Fly proxy IP instead of
+  the user's). Pre-existing; the PR did not introduce it, but did extend the
+  set of things that depend on it.
+- **Issue/gap:** `backend/utils/rate_limiter.py:87-107`'s `get_real_client_ip()`
+  prefers `CF-Connecting-IP`, then `X-Real-IP`, then falls back to slowapi's
+  `get_ipaddr` (leftmost `X-Forwarded-For`). Its own docstring states the
+  precondition plainly: *"Origin hosts must only accept traffic from Cloudflare
+  for this to be airtight against a direct-to-origin bypass — an infra/network
+  control."* Nothing in the repo shows that control exists. `backend/fly.toml`
+  has no IP allowlist or firewall block, and no ACTION_ITEMS entry tracked it
+  before this one. If a request reaches the Fly app directly (e.g. via its
+  `*.fly.dev` hostname) rather than through `api-spinr.spinr.ca`, all three
+  header sources are attacker-settable.
+- **Why it matters / blast radius:** everything keyed on this function trusts
+  the result — `default_limiter`, the login and OTP rate limits,
+  `get_user_or_ip_key`, and all 5 `routes/admin/auth.py` call sites. PR #5654
+  adds `refresh_tokens.ip` (and therefore `audit_logs.details.replayed_ip`,
+  written at `backend/utils/refresh_tokens.py:416` and `:591`) to that set.
+  **Corrected 2026-09-21 (`/code-review`):** this entry originally said an
+  attacker "replaying a stolen refresh token could set a false
+  `CF-Connecting-IP` and poison the forensic record of the very theft." That
+  mechanism is **not reachable** and must not be used to scope the remedy.
+  `lookup_refresh_token(raw)` (`backend/utils/refresh_tokens.py:231`) takes only
+  the token string; it dispatches `_handle_refresh_token_reuse(row)` /
+  `_record_post_revoke_race(row)` with the stored row alone and writes
+  `replayed_ip: row.get("ip")` — the issuance IP. Headers on the *replay*
+  request are never read, so a spoofed one is discarded.
+
+  The real, still-valid consequence is at **issuance**, not replay: anyone who
+  reaches this origin directly can choose the value written into
+  `refresh_tokens.ip` on their own successful login or refresh — which then
+  surfaces as `replayed_ip` in a 7-year, admin-rendered `audit_logs` row, and as
+  their own rate-limit key. Not an auth bypass — nothing gates on the value
+  (traced: `is_new_device()` fingerprints on `user_agent` only and its docstring
+  excludes `ip` deliberately).
+- **Suggestive evidence the bypass is real, not theoretical:** the `.env`/
+  `.git/config` scanner traffic that surfaced the original PR #5654 bug was
+  reaching the Fly app and appearing in its logs. That is consistent with an
+  unlocked origin, though not proof on its own — Cloudflare may simply be
+  passing the requests through. **Confirm before assuming either way.**
+- **Suggested remedy (infra):** verify whether the Fly origin already restricts
+  ingress to Cloudflare; if not, restrict it (Fly proxy allowlist or an
+  equivalent control) and note it in `docs/adr/007-fly-primary-railway-standby.md`.
+- **A code-side option worth evaluating first (added 2026-09-21, `/code-review`
+  — this entry originally foreclosed all code remedies, which was too broad):**
+  Fly's own proxy sets **`Fly-Client-IP`** on every request it terminates,
+  overwriting any client-supplied value. It appears nowhere in this repo
+  (grepped: zero hits). Inserting it into `get_real_client_ip`'s chain *after*
+  `CF-Connecting-IP` and *before* the client-settable `X-Real-IP` would — if
+  Fly's overwrite semantics hold — stop a direct-to-origin request from
+  producing an attacker-chosen value, without waiting on an infra change that is
+  currently undated and unowned. **Verify against Fly's proxy documentation
+  before adopting**; this is a candidate, not a confirmed fix.
+- **Still do NOT** "fix" this by widening trust generally — e.g. uvicorn
+  `--forwarded-allow-ips='*'` would make the leftmost `X-Forwarded-For`
+  authoritative, which is the spoofable path `get_real_client_ip` was written
+  to avoid (P2-7, C5). That warning stands; it just does not rule out
+  `Fly-Client-IP`, which is proxy-set rather than client-set.
+- **Files:** `backend/utils/rate_limiter.py` (`get_real_client_ip`, lines 87-107),
+  `backend/fly.toml` (no allowlist), `backend/utils/refresh_tokens.py:416,591`
+  (`replayed_ip` consumers), `docs/change-log/2026-09-21-auth-real-client-ip.md`
+  (§4 residual risk).
+
+### C132. Refresh-token reuse detection records nothing about the *replaying* request — `replayed_ip`/`replayed_user_agent` describe the token's issuance, so a theft alert cannot identify the thief
+
+- [ ] **Status:** OPEN — found 2026-09-21 by `/code-review` (max effort) on PR #5654, which
+  had claimed the opposite. See that PR's change log for the retraction.
+- **Issue/gap:** the OAuth2-BCP §4.14.2 reuse-detection path writes an `audit_logs` row whose
+  `details` carry `replayed_ip` and `replayed_user_agent`
+  (`backend/utils/refresh_tokens.py:416` in `_record_post_revoke_race`, `:591` in
+  `_handle_refresh_token_reuse`). Both read `row.get("ip")` / `row.get("user_agent")` — the
+  values stored when **that token was issued**, not attributes of the request replaying it.
+- **Why it can't currently be otherwise:** `lookup_refresh_token(raw: str)`
+  (`backend/utils/refresh_tokens.py:231`) takes only the raw token string — no `Request`, no
+  headers, no socket peer — and dispatches both handlers with the stored row alone.
+  `refresh_access_token` (`backend/routes/auth.py`) *does* resolve `client_ip` at `:1796`, but
+  that is **after** `lookup_refresh_token` returned at `:1745`, and it is never passed in.
+- **Concrete consequence:** victim's session is issued at `198.51.100.4`; an attacker steals the
+  rotated token and replays it from `203.0.113.9`. The cascade fires correctly (token_version
+  bump, sessions revoked, WS kicked) — but the forensic row reads `replayed_ip: 198.51.100.4`,
+  the victim. The attacker's IP and user-agent are captured nowhere, so the 7-year audit record
+  that exists specifically to investigate token theft cannot identify the thief. PR #5654 made
+  these values *real* rather than a constant `172.16.x.x` proxy address, which is an improvement,
+  but it does not and cannot address this.
+- **Suggested remedy (design decision, not a mechanical fix):** thread request context into the
+  reuse path — e.g. `lookup_refresh_token(raw, *, request_ip=None, request_ua=None)` passed
+  through to both handlers, recorded as new `replaying_ip` / `replaying_user_agent` keys
+  **alongside** the existing issuance fields rather than replacing them (both are useful: one
+  says where the session came from, the other who is replaying it). Prefer additive keys per
+  CLAUDE.md gate 2 — `_reuse_already_handled` reads back `details`, and the admin audit-log UI
+  renders every key, so repurposing an existing key would silently change both.
+- **Cost/risk to weigh before doing it:** `lookup_refresh_token` is on the hot path of every
+  `/auth/refresh` call and has several callers; changing its signature touches a
+  security-sensitive path where a mistake fails open. Also note the value would arrive via
+  `get_real_client_ip()`, so it inherits C131's spoofability caveat — an attacker could choose
+  what their own replay records until the origin is Cloudflare-locked. That argues for doing
+  C131 first, or at least recording both the resolved IP and the raw socket peer.
+- **Files:** `backend/utils/refresh_tokens.py` (`lookup_refresh_token:231`,
+  `_record_post_revoke_race:390`, `_handle_refresh_token_reuse:484`),
+  `backend/routes/auth.py` (`refresh_access_token`, `:1745` lookup / `:1796` client_ip),
+  `admin-dashboard/src/app/dashboard/audit-logs/page.tsx` (renders every `details` key),
+  `docs/change-log/2026-09-21-auth-real-client-ip.md` (the retraction).
 
 ## Recently completed (do not redo)
 

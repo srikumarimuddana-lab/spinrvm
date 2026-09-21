@@ -16,7 +16,11 @@ What this enforces:
       until then (Uber/Lyft model, migration 216). Was: anonymize at 30 days.
     - driver_location_history hard-deleted at 90 days
     - ride_messages hard-deleted at 90 days
-    - refresh_tokens hard-deleted at expires_at + 30 days grace
+    - refresh_tokens hard-deleted 30 days after they became invalid, by whichever
+      route came first: revoked_at + 30d (rotation/logout/reuse-cascade) or
+      expires_at + 30d (natural expiry, never revoked). Migration 436 restored
+      the second arm -- between migrations 50 and 117 Step E silently narrowed to
+      revoked-only, so never-revoked tokens were retained indefinitely.
     - stripe_events hard-deleted at 90 days
 
 See docs/runbooks/data-retention.md for the policy + manual-run procedure.

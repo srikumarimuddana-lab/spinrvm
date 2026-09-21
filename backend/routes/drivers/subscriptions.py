@@ -1377,6 +1377,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
                     driver["user_id"],
                     "Spinr Pass Activated! 🎉",
                     f"Your {sub.get('plan_name', 'Spinr Pass')} subscription is now active. Go online and start earning!",
+                    target_app="driver",
                 )
             except Exception as push_err:
                 logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
@@ -1851,7 +1852,8 @@ async def check_expiring_subscriptions():
                                 driver["user_id"],
                                 "Spinr Pass expired",
                                 "Your Spinr Pass has expired and you've been set offline. Renew from your dashboard to keep driving.",
-                                {
+                                target_app="driver",
+                                data={
                                     "type": "subscription_expired",
                                     "driver_id": driver["id"],
                                 },
@@ -1891,7 +1893,8 @@ async def check_expiring_subscriptions():
                                 driver["user_id"],
                                 "Spinr Pass Expiring Soon",
                                 f"Your {plan_name} plan expires in ~{hours_left} hours. Renew now to keep driving!",
-                                {
+                                target_app="driver",
+                                data={
                                     "type": "subscription_expiring",
                                     "hours_left": str(hours_left),
                                 },
@@ -1964,6 +1967,7 @@ async def check_expiring_subscriptions():
                             "Spinr Pass Expiring in 3 Days",
                             f"Your {plan_name} plan expires in ~{days_left} day{'s' if days_left != 1 else ''}. Renew now to keep driving!",
                             {"type": "subscription_expiring_3d", "days_left": str(days_left)},
+                            target_app="driver",
                         )
                         warned_3d_count += 1
                     except Exception as e:

@@ -35,23 +35,22 @@ UI surface at all):
 
 * `ride_distance_integrity_events` / `ride_distance_recomputes`: INSERT
   only. No call site anywhere issues an UPDATE or DELETE against either
-  table -- genuinely dead DB-layer UPDATE/DELETE capability today, same
-  "not a test gap" class as last round's un-exercised positive DELETE
-  policies. BUT: unlike `audit_logs` (migrations 51/56/57) and
+  table today. Unlike `audit_logs` (migrations 51/56/57) and
   `compliance_export_events` (263/285), which each got a dedicated
   anti-tamper trigger specifically because they're regulatory/security
-  audit trails, neither of these two tables has any DB-level trigger
+  audit trails, neither of these two tables had any DB-level trigger
   preventing `service_role` (the only role able to write to them at all)
   from mutating or deleting a row directly, despite each migration's own
   comment asserting "event rows are immutable" / "audit rows are
-  immutable" "on purpose". The guarantee today rests entirely on
-  application-code discipline, not DB enforcement -- confirmed by direct
-  reproduction below (`test_*_service_role_can_mutate_despite_immutable_comment`),
-  which passes today (nothing is broken), it documents a real, previously
-  unflagged gap relative to the enforcement pattern this codebase already
-  uses elsewhere for tables making the same claim. Filed as ACTION_ITEMS.md
-  C118 (new) -- not fixed here; adding a trigger is a production schema
-  change with its own review, out of scope for a test-coverage-only PR.
+  immutable" "on purpose" -- the guarantee used to rest entirely on
+  application-code discipline, not DB enforcement. Filed as
+  ACTION_ITEMS.md C118, and closed by migration 435
+  (`block_mutation_on_immutable_table()`, mirroring the audit_logs
+  pattern with an unconditional block since -- confirmed by the same
+  grep -- neither table has any legitimate DELETE path the way
+  `audit_logs`' 7y retention purge does, so no session-flag carve-out is
+  needed here). `test_*_service_role_cannot_mutate_immutable_table` below
+  proves the fix rather than just the prior gap.
 * `ride_location_gap_events` is different in kind, and its own migration
   comment reflects that -- it never claims immutability, only that "all
   reads and mutations travel through...the service role". It has real,
@@ -276,25 +275,24 @@ def test_integrity_event_rejects_unknown_kind(pg_cur):
         _seed_integrity_event(pg_cur, _uuid(), ride_id, kind="not_a_real_kind")
 
 
-def test_integrity_event_service_role_can_mutate_despite_immutable_comment(pg_cur):
-    """ACTION_ITEMS.md C118: no anti-tamper trigger exists for this table
-    (unlike audit_logs/compliance_export_events), so service_role -- the
-    only role that can touch this table at all -- can UPDATE and DELETE a
-    row directly at the DB layer, contradicting the migration's own
-    "event rows are immutable" comment. No production code path does this
-    today (see module docstring); this test documents today's real DB
-    behavior, it does not fix it."""
+def test_integrity_event_service_role_cannot_mutate_immutable_table(pg_cur):
+    """ACTION_ITEMS.md C118, closed by migration 435: service_role -- the
+    only role that can touch this table at all, and the one RLS itself
+    cannot restrict -- is now blocked at the trigger layer from UPDATE or
+    DELETE, matching the migration's own "event rows are immutable"
+    comment. Previously this mutated successfully (see git history for the
+    prior version of this test, which proved the gap); now both raise."""
     rider, ride_id, event_id = _uuid(), _uuid(), _uuid()
     as_role(pg_cur, "service_role", None)
     _seed_user(pg_cur, rider)
     _seed_ride(pg_cur, ride_id, rider)
     _seed_integrity_event(pg_cur, event_id, ride_id)
-    pg_cur.execute(
-        "UPDATE ride_distance_integrity_events SET kind = 'booked_distance_suspect' WHERE id = %s", (event_id,)
-    )
-    assert pg_cur.rowcount == 1
-    pg_cur.execute("DELETE FROM ride_distance_integrity_events WHERE id = %s", (event_id,))
-    assert pg_cur.rowcount == 1
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        pg_cur.execute(
+            "UPDATE ride_distance_integrity_events SET kind = 'booked_distance_suspect' WHERE id = %s", (event_id,)
+        )
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        pg_cur.execute("DELETE FROM ride_distance_integrity_events WHERE id = %s", (event_id,))
 
 
 # --------------------------------------------------------------------------
@@ -387,20 +385,22 @@ def test_recompute_rejects_negative_distance(pg_cur):
         _seed_recompute(pg_cur, _uuid(), ride_id, new_distance_km="-1.000")
 
 
-def test_recompute_service_role_can_mutate_despite_immutable_comment(pg_cur):
-    """ACTION_ITEMS.md C118 -- same finding as
-    test_integrity_event_service_role_can_mutate_despite_immutable_comment
-    above, second table: no trigger backs the "audit rows are immutable"
-    comment against service_role. Documents current behavior; not a fix."""
+def test_recompute_service_role_cannot_mutate_immutable_table(pg_cur):
+    """ACTION_ITEMS.md C118, closed by migration 435 -- same fix as
+    test_integrity_event_service_role_cannot_mutate_immutable_table above,
+    second table: the trigger now backs the "audit rows are immutable"
+    comment against service_role too."""
     rider, ride_id, recompute_id = _uuid(), _uuid(), _uuid()
     as_role(pg_cur, "service_role", None)
     _seed_user(pg_cur, rider)
     _seed_ride(pg_cur, ride_id, rider)
     _seed_recompute(pg_cur, recompute_id, ride_id)
-    pg_cur.execute("UPDATE ride_distance_recomputes SET new_actual_distance_km = 1.000 WHERE id = %s", (recompute_id,))
-    assert pg_cur.rowcount == 1
-    pg_cur.execute("DELETE FROM ride_distance_recomputes WHERE id = %s", (recompute_id,))
-    assert pg_cur.rowcount == 1
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        pg_cur.execute(
+            "UPDATE ride_distance_recomputes SET new_actual_distance_km = 1.000 WHERE id = %s", (recompute_id,)
+        )
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        pg_cur.execute("DELETE FROM ride_distance_recomputes WHERE id = %s", (recompute_id,))
 
 
 # --------------------------------------------------------------------------

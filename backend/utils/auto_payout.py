@@ -280,7 +280,10 @@ async def _notify_driver(driver: dict, title: str, body: str, data: dict | None 
             from ..features import send_push_notification
         except ImportError:  # pragma: no cover
             from features import send_push_notification  # type: ignore
-        await send_push_notification(user_id, title, body, data or {})
+        # Every caller of this helper passes a drivers row (payout succeeded,
+        # payout blocked, bank details missing) — payouts are a driver-only
+        # surface, so this is safe to pin here rather than per call site.
+        await send_push_notification(user_id, title, body, data or {}, target_app="driver")
     except Exception:
         logger.warning("[AUTO-PAYOUT] push notification failed for driver %s", driver.get("id"))
 

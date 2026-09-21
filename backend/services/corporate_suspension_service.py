@@ -133,6 +133,7 @@ async def _cancel_one_ride(ride: Dict[str, Any]) -> bool:
                 "Ride Cancelled",
                 _CANCELLATION_REASON,
                 {"type": "ride_cancelled", "ride_id": ride_id, "is_auto": "true"},
+                target_app="rider",
             )
         except Exception as exc:
             logger.opt(exception=True).error("[CORP-SUSPEND] push notify failed ride_id={}: {}", ride_id, exc)

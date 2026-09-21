@@ -9,9 +9,9 @@
     },
 
     "sentry": {
-      "$comment": "OAuth-based, hosted by Sentry. Run `claude mcp add --transport http sentry https://mcp.sentry.dev` and complete the browser login to your Sentry org. Read-mostly (issues/traces/breadcrumbs). Scrub PII before pasting any stack trace into chat — raw GPS/phone/email/name are banned from Sentry payloads per CLAUDE.md and must not be re-introduced via chat.",
+      "$comment": "OAuth-based, hosted by Sentry. Run `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp/spinr-backend/crimson-smoke-7445` and complete the browser login to your Sentry org. Scoped to org spinr-backend / project crimson-smoke-7445 (verified live via find_organizations/find_projects on 2026-09-21 — see .claude/context/connector-scoping.md's Sentry row; this repo's Sentry setup is single-project TAG MODE, so this one project covers every surface via its own `surface` tag, not one project per surface). Read-mostly (issues/traces/breadcrumbs) — Seer or any Sentry-suggested fix is never applied/merged without the same human review + Change Impact Log gate as any other change. Scrub PII before pasting any stack trace into chat — raw GPS/phone/email/name are banned from Sentry payloads per CLAUDE.md and must not be re-introduced via chat.",
       "type": "http",
-      "url": "https://mcp.sentry.dev"
+      "url": "https://mcp.sentry.dev/mcp/spinr-backend/crimson-smoke-7445"
     },
 
     "redis": {

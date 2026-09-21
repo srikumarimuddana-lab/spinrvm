@@ -40,7 +40,7 @@ import socket
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _q2(v: Any) -> Decimal:
@@ -341,7 +341,7 @@ async def _run_reconciliation_tick() -> None:
     # re-runs webhook business logic (that would risk double-processing a
     # row where the side effects already happened), it only surfaces the
     # row for manual review. See _reconcile_stuck_stripe_events.
-    stuck_stripe_events = await _reconcile_stuck_stripe_events()
+    stuck_stripe_events = await _reconcile_stuck_stripe_events(settings)
     discrepancies.extend(stuck_stripe_events)
 
     # ── 4. Write summary to audit_logs ──────────────────────────────────
@@ -374,9 +374,12 @@ async def _run_reconciliation_tick() -> None:
         logger.error("stripe_reconcile: audit_logs write failed", exc_info=True)
 
     if discrepancies:
+        other_count = len(discrepancies) - len(stuck_stripe_events)
         logger.error(
-            "stripe_reconcile: COMPLETE with %d discrepancies — see audit_logs for detail",
+            "stripe_reconcile: COMPLETE with %d discrepancies (%d stuck events, %d other) — see audit_logs for detail",
             len(discrepancies),
+            len(stuck_stripe_events),
+            other_count,
         )
     else:
         logger.info(
@@ -499,7 +502,9 @@ async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
     return discrepancies
 
 
-async def _reconcile_stuck_stripe_events() -> List[Dict[str, Any]]:
+async def _reconcile_stuck_stripe_events(
+    settings: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """Detect stripe_events rows left at processed_at=NULL past the grace
     window (ACTION_ITEMS.md C10).
 
@@ -535,11 +540,25 @@ async def _reconcile_stuck_stripe_events() -> List[Dict[str, Any]]:
     """
     discrepancies: List[Dict[str, Any]] = []
     cutoff = datetime.now(timezone.utc) - _STUCK_STRIPE_EVENT_AFTER
+
+    # Only scan events received within the lookback window. Events older
+    # than this are historical noise — either deliberately-ignored event
+    # types whose processed_at was left NULL before the webhook handler
+    # started stamping them (CRIMSON-SMOKE-7445-HC), or long-resolved
+    # handler failures. Adjustable via app_settings.
+    lookback_days = 30
+    if settings:
+        try:
+            lookback_days = int(settings.get("stripe_reconcile_stuck_event_lookback_days", 30))
+        except (ValueError, TypeError):
+            pass
+    lookback_cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
     try:
         rows = (
             await db_supabase.get_rows(
                 "stripe_events",
-                {"processed_at": None},
+                {"processed_at": None, "received_at": {"$gte": lookback_cutoff}},
                 columns="event_id,event_type,received_at,processed_at",
                 limit=500,
             )

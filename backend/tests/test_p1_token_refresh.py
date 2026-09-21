@@ -96,7 +96,7 @@ class TestRefreshAccessToken:
                 AsyncMock(return_value=(new_raw_token, "hashed", refresh_expires)),
             ),
             patch.object(auth_mod, "create_jwt_token", return_value="new-access-token-abc"),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -125,7 +125,7 @@ class TestRefreshAccessToken:
 
         with (
             patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=None)),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -150,7 +150,7 @@ class TestRefreshAccessToken:
                 "lookup_refresh_token",
                 AsyncMock(return_value=_refresh_row(audience="admin")),
             ),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -171,7 +171,7 @@ class TestRefreshAccessToken:
         with (
             patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
             patch.object(auth_mod.db, "find_one", AsyncMock(return_value=None)),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -200,7 +200,7 @@ class TestRefreshAccessToken:
                 AsyncMock(return_value=("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))),
             ),
             patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -235,7 +235,7 @@ class TestRefreshAccessToken:
             patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
             patch.object(auth_mod, "issue_refresh_token", AsyncMock(side_effect=_capture_issue)),
             patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
-            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
         ):
 
             class _Body:

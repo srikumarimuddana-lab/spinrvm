@@ -923,11 +923,12 @@ class TestStripeWebhookEventLogLevel:
             "charge.succeeded",
         ):
             result, mock_logger, mark = self._run(evt)
-            assert result.get("unhandled") is True, evt
+            assert result.get("ignored") is True, evt
             mock_logger.warning.assert_not_called()
             assert mock_logger.debug.called, evt
-            # Unknown/ignored events stay replayable: processed_at left NULL.
-            mark.assert_not_called()
+            # Known-harmless lifecycle events stamp processed_at so the
+            # reconciler doesn't re-flag them as stuck (CRIMSON-SMOKE-7445-HC).
+            mark.assert_called_once()
 
     def test_truly_unknown_event_still_warns(self):
         result, mock_logger, _ = self._run("some.brand.new.event")

@@ -2012,36 +2012,64 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             # base_update on PGRST204 ("column does not exist") so the
             # rider-facing cancel still succeeds before the migration lands.
             claim_filter = {"id": r_id, "status": RideStatus.SEARCHING}
+            # retry_policy="write": a single attempt, no retry — matching
+            # utils/stuck_ride_sweeper.py's own claim (`run_sync(_claim,
+            # retry_policy="write")`), which already uses this for exactly
+            # the same reason. Without it, update_one's default "read" policy
+            # (3 attempts) means a committed-but-ack-lost attempt 1 gets
+            # silently retried on attempts 2/3, which legitimately re-match
+            # zero rows on a ride THIS call just cancelled — the dominant
+            # source of the "falsy but actually ours" ambiguity handled
+            # below. Single-attempt semantics close that source; see the
+            # comment below for the narrower residual that's left.
             try:
                 claimed = await _deps.db_supabase.update_one(
                     "rides",
                     claim_filter,
                     {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                    retry_policy="write",
                 )
             except Exception as _col_exc:
                 logger.opt(exception=True).error(
                     f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
                 )
-                claimed = await _deps.db_supabase.update_one("rides", claim_filter, base_update)
+                claimed = await _deps.db_supabase.update_one("rides", claim_filter, base_update, retry_policy="write")
             if not claimed:
-                # A falsy result is not conclusively "someone else won".
-                # update_one goes through run_sync WITHOUT a retry_policy, so
-                # it inherits the default "read" policy — 3 attempts — on a
-                # non-idempotent write, and the transient classifier covers
-                # exactly the committed-but-ack-lost faults (ConnectionTerminated,
-                # RemoteProtocolError/"Server disconnected", httpx timeouts, the
-                # H2 stream race). When attempt 1 commits and its ack is lost,
-                # the retry re-runs the same CAS, legitimately matches zero rows
-                # and returns a clean None — on a ride THIS call just cancelled.
-                # Returning here would skip the hold release, the cancellation
-                # metric, the rider ride_cancelled WS event, the push and the
-                # guest SMS, leaving the rider's app on "searching" for a
-                # cancelled ride and undercounting the cancellation-rate KPI.
+                # A falsy result is still not conclusively "someone else won":
+                # a single-attempt write can commit server-side and have its
+                # ack lost to a transient fault (ConnectionTerminated,
+                # RemoteProtocolError/"Server disconnected", httpx timeouts,
+                # the H2 stream race) with no retry to mask it as a fresh
+                # zero-row query — the caller genuinely doesn't know. Returning
+                # here on that case would skip the hold release, the
+                # cancellation metric, the rider ride_cancelled WS event, the
+                # push and the guest SMS, leaving the rider's app on
+                # "searching" for a cancelled ride and undercounting the
+                # cancellation-rate KPI.
                 #
                 # Same shape as accept_ride's re-read (routes/drivers/
                 # ride_flow.py): before concluding we lost, look at the row.
-                # Only our own attribution values can have been written by this
-                # timer, so matching them means the write was ours.
+                #
+                # CAUTION (found by the 2026-09-21 swarm-watch drift audit,
+                # issue #5600): matching these attribution values does NOT
+                # prove the write was ours. utils/stuck_ride_sweeper.py cancels
+                # the same stuck-searching rides on the same ~5-minute
+                # threshold with the BYTE-IDENTICAL payload by design (see
+                # this function's own docstring — the sweeper is documented
+                # as this timer's "restart-safe equivalent"), so a genuine
+                # sweeper win looks exactly like our own ack-loss here. This
+                # is accepted as-is rather than papered over with a fragile
+                # discriminator: release_open_hold's own DB write is
+                # separately CAS-filtered on auth_status and Stripe carries
+                # its own idempotency key, so a duplicate call from this
+                # branch is safe; a false-positive "ours" here means the WS
+                # event / push / guest SMS / cancellation-rate metric can
+                # rarely double-fire, which is a UX/metrics nuisance, not a
+                # money- or state-safety bug. Closing that fully would need a
+                # cross-writer idempotency claim shared with the sweeper —
+                # tracked as a follow-up if the duplicate-notification metric
+                # shows this actually happening in production, rather than
+                # guessed at now.
                 _fresh = await _deps.db_supabase.get_ride(r_id)
                 _ours = (
                     _fresh
@@ -2056,8 +2084,9 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     )
                     return
                 logger.warning(
-                    "[AUTO-CANCEL] ride {} claim returned no row but the row is our cancel — "
-                    "treating a lost ack as a win and running the side effects",
+                    "[AUTO-CANCEL] ride {} claim returned no row but the row matches our cancel attribution — "
+                    "treating a lost ack as a win and running the side effects (see caution above: this "
+                    "attribution is shared with utils/stuck_ride_sweeper.py, not provably exclusive to this call)",
                     r_id,
                 )
             # WS-8 (finding 11): release the booking-time pre-auth hold so the

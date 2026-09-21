@@ -1231,7 +1231,13 @@ def _require_write_filters(op: str, table: str, filters: Optional[Dict[str, Any]
         )
 
 
-async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
+async def update_one(
+    table: str,
+    filters: Dict[str, Any],
+    update: Dict[str, Any],
+    upsert: bool = False,
+    retry_policy: RetryPolicy = "read",
+):
     # upsert merges the filters into the payload and matches on the primary
     # key, so an empty filter there is one row's insert-or-update, never a
     # table-wide write.
@@ -1285,7 +1291,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
         return _single_row_from_res(res)
 
-    result = await run_sync(_fn)
+    result = await run_sync(_fn, retry_policy=retry_policy)
 
     if table == "users":
         user_id = None

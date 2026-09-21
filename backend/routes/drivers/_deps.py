@@ -66,7 +66,7 @@ try:
     )
     from ...utils.error_keys import ErrorKeys
     from ...utils.idempotency import idempotent_endpoint
-    from ...utils.insurance_periods import record_period_transition
+    from ...utils.insurance_periods import record_period_transition, release_driver_and_close_period
     from ...utils.live_activity import (
         EVENT_END,
         EVENT_START,
@@ -125,7 +125,10 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
-    from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.insurance_periods import (  # type: ignore[assignment]
+        record_period_transition,
+        release_driver_and_close_period,
+    )
     from utils.live_activity import (  # type: ignore
         EVENT_END,
         EVENT_START,

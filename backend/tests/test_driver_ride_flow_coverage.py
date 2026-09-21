@@ -525,23 +525,18 @@ class TestAcceptRideSuccessSideEffects:
             result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
-    # ── Insurance-period guard on the loser release (2026-09-20 review) ──
+    # ── Insurance-period close-out on the loser release ──
     #
-    # driver_insurance_periods is append-only and regulator-facing (SGI /
-    # TNC commercial cover). Period 1 means "online, available, no ride";
-    # Period 0 means offline, personal auto only. A batch-offer loser holds
-    # an open Period 2 (opened at claim time in matching.py), so losing the
-    # race must close it with whichever of the two they actually are.
-    #
-    # set_driver_available(lid, True) clamps is_available→False for a driver
-    # who has gone offline since the offer went out, so writing Period 1
-    # unconditionally — as this call site did — opened a commercial-insurance
-    # window for a driver who is really Period 0. Writing *nothing* in that
-    # case is not the fix either: it leaves the Period 2 row open.
+    # A batch-offer loser holds an open Period 2 (opened at claim time in
+    # matching.py), so losing the race must CLOSE it with whatever the driver
+    # actually is now. The 0-vs-1-vs-nothing decision itself lives in
+    # utils/insurance_periods.release_driver_and_close_period and is tested
+    # directly in tests/test_insurance_release_helper.py — this call site only
+    # has to delegate to it, with the right driver, reason and ride.
 
-    async def _accept_with_loser(self, *, loser_row):
-        """Run accept_ride with one losing driver, returning the
-        record_period_transition mock so the caller can assert on it."""
+    async def _accept_with_loser(self):
+        """Run accept_ride with one losing driver, returning the release-helper
+        mock so the caller can assert how it was called."""
         from backend.routes.drivers.ride_flow import accept_ride
 
         offered_at = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
@@ -549,19 +544,14 @@ class TestAcceptRideSuccessSideEffects:
         losers_result = MagicMock(data=[{"driver_id": "loser-1"}])
         preempt_result = MagicMock(data=[])
 
-        period = AsyncMock()
+        release = AsyncMock(return_value=1)
         patches = self._base_success_patches(
             _ride(status="driver_accepted", service_area_id=None),
             run_sync_side_effect=[winner_result, losers_result, preempt_result],
         )
         with _Patches(
             *patches,
-            patch("backend.routes.drivers._deps.record_period_transition", period),
-            # The release result decides whether Period 1 may be opened.
-            patch(
-                "backend.routes.drivers._deps.db_supabase.set_driver_available",
-                AsyncMock(return_value=loser_row),
-            ),
+            patch("backend.routes.drivers._deps.release_driver_and_close_period", release),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value={"id": "loser-1", "user_id": "loser-user-1"}),
@@ -569,41 +559,41 @@ class TestAcceptRideSuccessSideEffects:
         ):
             result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
-        return period
+        return release
 
-    async def test_loser_who_is_still_online_gets_period_1(self):
-        period = await self._accept_with_loser(loser_row={"id": "loser-1", "is_available": True})
-        assert any(c.args[:2] == ("loser-1", 1) for c in period.await_args_list), (
-            "a released loser who is genuinely available must reopen Period 1"
-        )
+    async def test_loser_release_goes_through_the_shared_helper(self):
+        """Not `record_period_transition` directly: the inline 1-or-0 this site
+        used to compute is exactly the duplication that let five copies of this
+        pattern drift into two behaviours."""
+        release = await self._accept_with_loser()
+        release.assert_awaited_once()
+        assert release.await_args.args == ("loser-1",)
+        assert release.await_args.kwargs["reason"] == "lost_race"
+        assert release.await_args.kwargs["ride_id"] == _RIDE_ID
 
-    async def test_offline_loser_does_not_get_a_false_period_1(self):
-        """The driver went offline between the offer and losing the race, so
-        set_driver_available clamped is_available→False. No Period 1."""
-        period = await self._accept_with_loser(loser_row={"id": "loser-1", "is_available": False})
-        assert not any(c.args[:2] == ("loser-1", 1) for c in period.await_args_list), (
-            "Period 1 was opened for an offline driver — a commercial-insurance window nothing will close"
-        )
+    async def test_loser_release_failure_does_not_break_acceptance(self):
+        """The helper is compliance-grade but the whole cleanup block is
+        best-effort — a release failure must not fail the winner's accept."""
+        from backend.routes.drivers.ride_flow import accept_ride
 
-    async def test_offline_loser_is_closed_out_to_period_0(self):
-        """Skipping Period 1 is only half the fix: the loser still holds the
-        Period 2 opened at claim time, so an offline loser must be recorded as
-        Period 0 (personal auto) rather than left with an open commercial
-        window."""
-        period = await self._accept_with_loser(loser_row={"id": "loser-1", "is_available": False})
-        assert any(c.args[:2] == ("loser-1", 0) for c in period.await_args_list), (
-            "offline loser was left with their claim-time Period 2 still open"
+        offered_at = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
+        patches = self._base_success_patches(
+            _ride(status="driver_accepted", service_area_id=None),
+            run_sync_side_effect=[
+                MagicMock(data=[{"offered_at": offered_at}]),
+                MagicMock(data=[{"driver_id": "loser-1"}]),
+                MagicMock(data=[]),
+            ],
         )
-
-    async def test_loser_release_returning_none_records_no_period_at_all(self):
-        """set_driver_available returns None when no Supabase client is
-        configured (_write_skipped) or the update matched no row. An unknown
-        release result must not be guessed at in either direction — neither
-        Period 1 nor Period 0 is known to be true."""
-        period = await self._accept_with_loser(loser_row=None)
-        assert not any(c.args[:1] == ("loser-1",) for c in period.await_args_list), (
-            "a regulator-facing period row was written from an unknown release result"
-        )
+        with _Patches(
+            *patches,
+            patch(
+                "backend.routes.drivers._deps.release_driver_and_close_period",
+                AsyncMock(side_effect=RuntimeError("period store down")),
+            ),
+        ):
+            result = await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
 
     async def test_batch_offer_cleanup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_flow import accept_ride
@@ -780,44 +770,32 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
-    # ── Insurance-period close-out on decline (2026-09-20 review) ──
-    # Same three-way rule as the batch-offer loser release in accept_ride: a
-    # declining driver holds an open Period 2 from claim/offer time, so the
-    # decline must close it with what they actually are.
+    # ── Insurance-period close-out on decline ──
+    # Same rule as the batch-offer loser release in accept_ride, and now the
+    # same implementation: a declining driver holds an open Period 2 from
+    # claim/offer time, so the decline must close it with what they actually
+    # are. The 0-vs-1-vs-nothing decision is tested directly in
+    # tests/test_insurance_release_helper.py; this site must delegate to it.
 
-    async def _decline_with_release(self, *, released_row):
+    async def test_decline_goes_through_the_shared_release_helper(self):
         from backend.routes.drivers.ride_flow import decline_ride
 
-        period = AsyncMock()
+        release = AsyncMock(return_value=1)
         ride = _ride(status="driver_assigned")
         patches = self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row"))
         with _Patches(
             *patches,
-            patch("backend.routes.drivers._deps.record_period_transition", period),
-            patch(
-                "backend.routes.drivers._deps.db_supabase.set_driver_available",
-                AsyncMock(return_value=released_row),
-            ),
+            patch("backend.routes.drivers._deps.release_driver_and_close_period", release),
         ):
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
         assert result == {"success": True}
-        return [c.args[:2] for c in period.await_args_list]
-
-    async def test_decline_by_online_driver_records_period_1(self):
-        calls = await self._decline_with_release(released_row={"id": _DRIVER_ID, "is_available": True})
-        assert (_DRIVER_ID, 1) in calls
-
-    async def test_decline_by_offline_driver_records_period_0_not_1(self):
-        """Their go-offline only closes the Period 2 while
-        insurance_period_live_offer_enabled is off; with it on, Period 2 is
-        deliberately held open through the toggle and this is the only close."""
-        calls = await self._decline_with_release(released_row={"id": _DRIVER_ID, "is_available": False})
-        assert (_DRIVER_ID, 0) in calls, "offline decliner left holding an open Period 2"
-        assert (_DRIVER_ID, 1) not in calls
-
-    async def test_decline_with_unknown_release_result_records_nothing(self):
-        calls = await self._decline_with_release(released_row=None)
-        assert calls == []
+        release.assert_awaited_once()
+        assert release.await_args.args == (_DRIVER_ID,)
+        # The reason label is what keeps this site distinguishable from the
+        # loser release in the metric — they must not collapse to one series.
+        assert release.await_args.kwargs["reason"] == "offer_declined"
+        assert release.await_args.kwargs["ride_id"] == _RIDE_ID
 
     async def test_redis_cooldown_set_failure_is_non_fatal(self):
         from backend.routes.drivers.ride_flow import decline_ride

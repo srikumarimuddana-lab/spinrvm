@@ -241,3 +241,116 @@ async def record_period_transition(
             "spinr_insurance_period_write_failed_total",
             {"reason": "exception", "period": str(new_period)},
         )
+
+
+# Reasons a driver gets released from an offer/assignment. Label only — see
+# release_driver_and_close_period's contract.
+RELEASE_REASONS = frozenset(
+    {
+        "lost_race",  # another driver accepted first (batch-offer loser)
+        "offer_declined",  # the driver tapped Decline
+        "offer_timeout",  # the offer expired unanswered
+        "rider_cancelled",  # the rider cancelled after assignment
+    }
+)
+
+
+async def release_driver_and_close_period(
+    driver_id: str,
+    *,
+    reason: str,
+    ride_id: Optional[str] = None,
+) -> Optional[int]:
+    """Release a driver from an offer/assignment and close their open Period 2
+    with the period they ACTUALLY are now.
+
+    This is the single definition of a pattern that was hand-mirrored at five
+    call sites — ``_release_loser`` and ``decline_ride`` in
+    ``routes/drivers/ride_flow.py``, ``routes/rides/cancellation.py``, and both
+    ``_offer_timeout_handler`` and ``process_expired_offer`` in
+    ``routes/rides/matching.py`` — where it had already drifted into two
+    different behaviours. CLAUDE.md's 2026-09-12 audit finding is exactly this
+    shape: a fix proven in one copy that never reached its sibling.
+
+    Why it cannot be "just record Period 1"
+    ---------------------------------------
+    Every one of these drivers holds an **open Period 2**, opened at claim/offer
+    time (``routes/rides/matching.py``, one per claimed driver — the batch model
+    has no separate ``driver_assigned`` write). Losing/declining/timing out ends
+    that obligation, so the row has to be closed with what the driver actually
+    is now:
+
+    * still online  → Period 1 (available, no ride — TNC contingent liability)
+    * gone offline  → Period 0 (personal auto only)
+
+    ``set_driver_available(driver_id, True)`` clamps ``is_available`` to False
+    for a driver who went offline mid-offer (the ``is_available ⇒ is_online``
+    invariant), so its returned row is the authoritative read of which case
+    applies. Recording Period 1 unconditionally — the original behaviour at
+    three of the five sites — asserted commercial cover over a driver on
+    personal auto, in an append-only, regulator-facing table, and nothing would
+    ever close that row. Recording *nothing* is not the fix either: it leaves
+    the Period 2 open, which claims **primary** commercial cover — worse than
+    the mislabel it replaces.
+
+    The 0-vs-1 choice is delegated to :func:`derive_insurance_period` rather
+    than re-derived inline, so the Period 0-3 table has one implementation.
+
+    Args:
+        driver_id: The ``drivers.id`` PK (NOT ``users.id``).
+        reason: One of :data:`RELEASE_REASONS`. **A label, never a behaviour
+            switch** — it reaches the log line and the metric so the five sites
+            stay distinguishable in Grafana, and nothing else. The moment it
+            changes what gets written, the five copies have been rebuilt inside
+            one function.
+        ride_id: The ride being released from, for the log line only. It is
+            deliberately **not** written to the period row: a Period 0/1 row
+            must not name a ride (only Period 2/3 may), so passing it through
+            would produce a malformed audit record.
+
+    Returns:
+        The period recorded (0 or 1), or ``None`` when the driver row could not
+        be read — in which case nothing is written, because a guessed row in an
+        append-only regulatory log is worse than a missing one.
+
+    Keyword-only on purpose, matching :func:`derive_insurance_period`: these are
+    regulatory classifications and a transposed positional argument would
+    silently misstate SGI commercial coverage.
+    """
+    if reason not in RELEASE_REASONS:
+        # Programmer error, same class as derive_insurance_period's period
+        # validation: surface it rather than emitting an unlabelled metric.
+        raise ValueError(f"reason must be one of {sorted(RELEASE_REASONS)}, got {reason!r}")
+
+    released = await db_supabase.set_driver_available(driver_id, True)
+    if not isinstance(released, dict):
+        # No row came back: either no Supabase client (_write_skipped) or the
+        # update matched nothing (stale/deleted driver). "Offline" and "unknown"
+        # are not the same thing, so write neither.
+        logger.error(
+            "insurance_periods: release returned no row, skipping period close driver_id=%s reason=%s ride_id=%s",
+            driver_id,
+            reason,
+            ride_id,
+        )
+        _metric_inc(
+            "spinr_insurance_period_release_skipped_total",
+            {"reason": reason},
+        )
+        return None
+
+    # `is_online` is the driver's own toggle and is what the Period table keys
+    # on. Fall back to the clamped `is_available`, which can only be truthy if
+    # `is_online` was true, for the case where the row comes back without it.
+    _online = released.get("is_online")
+    if _online is None:
+        _online = released.get("is_available")
+
+    period = derive_insurance_period(ride_status=None, is_online=bool(_online), has_live_offer=False)
+    await record_period_transition(driver_id, period)
+
+    _metric_inc(
+        "spinr_insurance_period_release_total",
+        {"reason": reason, "period": str(period)},
+    )
+    return period

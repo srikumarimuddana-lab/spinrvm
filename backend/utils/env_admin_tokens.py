@@ -63,6 +63,21 @@ async def get_env_admin_token_version() -> int:
     local frame of an auth function on every super-admin request — not logged
     today, but one future traceback or Sentry breadcrumb away from being so.
 
+    **TRIPWIRE — do not widen ``columns=`` without reading this.** Two
+    ``# nosemgrep: ...python-logger-credential-disclosure`` suppressions in
+    ``routes/admin/auth.py`` (the login and refresh env-admin branches) are
+    justified *because of the narrow select here*. Those call sites log the
+    exception this function raises, with ``exc_info=True``. Today that is safe:
+    the failed query only ever named these two columns, so no secret value can
+    appear in ``DatabaseError.details["original"]`` or the traceback. Widen this
+    to ``*`` — or drop ``columns=`` entirely — and those suppressions become
+    wrong **silently**: semgrep cannot see a cross-file invariant, so it will
+    stay quiet while real secrets start reaching a log line. If you change this
+    select, re-justify both suppressions in ``routes/admin/auth.py`` or remove
+    them. (Flagged by ``spinr-security-auditor`` during the 2026-09-21 review:
+    the suppression's correctness lived in a different file from the
+    suppression, with the dependency pointing only one way.)
+
     Raises ``DatabaseError`` (503) rather than ever returning a fallback. A
     missing row, a missing column, or a read failure must NOT read as "version
     0": with ``_token_version_mismatch`` being ``claim < stored``, a stored 0

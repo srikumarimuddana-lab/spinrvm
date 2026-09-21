@@ -1,6 +1,6 @@
 # ADR-011: Flag read failure semantics on money paths
 
-- Status: Accepted
+- Status: Accepted — **amended 2026-09-21, see "Amendment" below**
 - Date: 2026-09-03
 - Deciders: Claude Code (WS-1 executing session), per plans/2026-09-03-path-to-a-implementation-plan.md
 - Domain: payments
@@ -123,6 +123,52 @@ test_booking_new_ride_requests_kill_switch.py`'s docstring updated to
 explain the asymmetry is deliberate rather than an oversight. Revisiting
 any of the other six is a separate, per-flag decision, not a mechanical
 follow-up from this one.
+
+## Amendment (2026-09-21) — `new_ride_requests_enabled` is no longer fail-open
+
+**The paragraph immediately above is superseded for one of the six flags.**
+2026-09-20 review finding E2 revisited `new_ride_requests_enabled`, exactly as
+that paragraph invited ("a separate, per-flag decision").
+
+This ADR's reasoning for leaving it fail-open was right as far as it went: the
+flag gates every new booking platform-wide, so a read blip must not take the
+demand side down. What it missed is that fail-open and fail-closed are not the
+only options. The flag's default is `True` ("not killing anything"), so a read
+failure silently **resumed** bookings during exactly the incident an operator
+had paused them for — and "paused" and "DB degrading" are strongly correlated,
+because operators pause bookings precisely when infrastructure is failing.
+
+It now falls back to the **last successfully-read value**, via
+`settings_loader.get_last_known_app_settings()`. Paused + DB degrades → still
+paused. Steady state + transient blip → booking proceeds, preserving this ADR's
+original concern. Cold start with no prior successful read → proceeds, matching
+the old posture. Read failures log at ERROR and increment
+`spinr_rides_settings_read_failed_total{flag,fallback}`.
+
+**So there are now three semantics, not two**, and a fourth must not be invented
+by copy-paste:
+
+| Semantics | Flags |
+|---|---|
+| fail **closed** | `corporate_billing_enabled` (`settle_corporate`) |
+| **last-known-good** | `new_ride_requests_enabled` (booking guard) |
+| fail **open** | `promo_redemption_enabled`, `scheduled_dispatch_enabled`, `surge_engine_enabled`, `corporate_billing_enabled` in `allowance_reset.py` / `corporate_low_balance.py`, and `ledger_atomic_settle_enabled` (path-select, not a kill switch) |
+
+**This ADR's own "Consequences → Negative" section predicted this**, warning the
+per-site comments were the mitigation rather than a lint rule. That mitigation
+proved insufficient: converting the booking site surfaced a **live NULL-handling
+bug** — `.get(flag, True)` only supplies its default when the key is *absent*, so
+a column present but explicitly `NULL` returned `None`, and `bool(None)` is
+`False`, which would have paused every booking platform-wide. **That same bug is
+still present in all five remaining fail-open sites.**
+
+Follow-ups (tracked in `ACTION_ITEMS.md`, not left as prose here): extract a
+shared `read_flag_last_known()`-style helper so the NULL/absent/never-read rule
+is encoded once, and decide whether the per-flag counter names converge on this
+ADR's original single `spinr_payment_settings_read_failed_total{flag}` rather
+than fragmenting one per domain.
+
+See `docs/change-log/2026-09-21-booking-kill-switch-last-known-good.md`.
 
 ### One shared "fail-closed-by-default" helper for all `app_settings` flag reads
 Rejected: would require every existing call site (dozens) to be

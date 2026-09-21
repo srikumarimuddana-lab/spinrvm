@@ -269,9 +269,17 @@ class TestRiderNoticeFailureIsObservable:
     Both branches above used to swallow the exception at `logger.debug`, which
     made a rider who was never told indistinguishable from one who ignored the
     notice -- on the one message that tells them their card failed and their
-    ride is now payment_status='failed'. It stays best-effort (the settlement
-    result is unchanged, and payment_retry re-notifies), but it is now WARNING
-    plus spinr_payment_rider_notice_failed_total{reason}.
+    ride is now payment_status='failed'. The settlement result stays unchanged
+    (the push is best-effort), but the failure is now ERROR plus
+    spinr_payment_rider_notice_failed_total{reason}.
+
+    ERROR, not WARNING: an earlier draft used WARNING on the grounds that
+    payment_retry "re-notifies". It does not -- it pushes the rider only at
+    MAX_RETRIES, and only from its except-branch; its normal decline path alerts
+    ADMINS. So nothing promptly compensates for a lost push, and CLAUDE.md's
+    degraded-but-recovered warning+metric row does not apply. See
+    docs/change-log/2026-09-21-rider-payment-failure-notice-observable.md and
+    routes/webhooks.py, which logs the identical lost push at ERROR.
 
     These also guard a latent NameError: this module imports metrics
     per-function, not at module scope, so both new call sites need their own

@@ -687,11 +687,16 @@ async def retry_failed_payments():
                         # stdlib logging here, not loguru (see the module's
                         # `logger = logging.getLogger(__name__)`), so exc_info=
                         # is correct and .opt() would not exist.
+                        # extra={...}: stdlib's spelling for what .bind() does on
+                        # the loguru sites — tags_from_log_extra lifts these into
+                        # Sentry tags, so the event is filterable by domain/ride
+                        # instead of arriving with only `environment`.
                         logger.error(
                             "Payment failure push notification failed for ride %s: %s",
                             ride_id,
                             push_err,
                             exc_info=True,
+                            extra={"domain": "payments", "ride_id": ride_id},
                         )
                         _metric_inc(
                             "spinr_payment_rider_notice_failed_total",

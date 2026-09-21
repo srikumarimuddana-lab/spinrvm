@@ -30,8 +30,16 @@ The three sites are not equally serious, which matters for what to do about it:
 | Site | What the value is used for | Severity |
 |---|---|---|
 | `_ride_total_with_fallback(..., site="guest_corporate_auto_settle")` (was `:1529`) | passed as `total_charge` to `settle_corporate` | **money actually charged** |
-| `site="refund_tax_reversal"` (was `:326`) | denominator for refund tax-reversal in ledger metadata | recorded value; already guarded for zero |
+| `site="refund_tax_reversal"` (was `:326`) | sets `frac`, which computes `tax_reversed` — the GST/PST booked to the **remittance ledger** on a partial refund | **a tax figure, not a display value** |
 | `site="wallet_transaction_record"` (was `:939`) | written into a `wallet_transactions` row **after** the RPC moved money | recorded value only |
+
+**Correction (post-review).** An earlier draft of this table called the
+`refund_tax_reversal` site a "recorded value; already guarded for zero" and ranked it with the
+wallet-record site. That understated it, and `spinr-money-auditor` caught it: the value sets the
+fraction used to compute the reversed GST/PST that is booked to the remittance ledger, so if the
+ambiguous case fires there the tax reversal is computed against the pre-tax subtotal instead of the
+true grand total — a wrong number in a tax record, not a cosmetic one. Behaviour there is
+pre-existing and unchanged by this diff, but it ranks **second** for the eventual fix, not third.
 
 ## 2. Root cause
 

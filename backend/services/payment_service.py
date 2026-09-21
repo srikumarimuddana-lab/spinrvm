@@ -2330,7 +2330,11 @@ async def settle_card(
                 # internally, but only once it reaches the send itself — an
                 # exception raised before that (e.g. the token lookup) never
                 # reaches it, which is exactly the case this branch catches.
-                logger.opt(exception=True).error(
+                # .bind(): the loguru->Sentry sink promotes tags only out of
+                # record["extra"], so without this the event lands untagged and
+                # cannot be filtered by domain or ride — the same gap caught on
+                # the admin idle-timeout logs in this PR's first commit.
+                logger.bind(domain="payments", ride_id=ride_id).opt(exception=True).error(
                     "[PAYMENT] rider payment-failure push failed for ride {}: {}",
                     ride_id,
                     _push_err,
@@ -2391,7 +2395,7 @@ async def settle_card(
             # Same reasoning as the 'declined' branch above — see the comment
             # there for why this is ERROR and why spinr_push_send_total does not
             # already cover this path.
-            logger.opt(exception=True).error(
+            logger.bind(domain="payments", ride_id=ride_id).opt(exception=True).error(
                 "[PAYMENT] rider payment-failure push failed for ride {}: {}",
                 ride_id,
                 _push_err,

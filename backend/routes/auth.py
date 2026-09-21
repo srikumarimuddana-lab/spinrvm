@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, EmailStr, Field
-from slowapi.util import get_remote_address
 
 try:
     from .. import db_supabase
@@ -50,6 +49,7 @@ try:
     from ..utils.insurance_periods import record_period_transition
     from ..utils.metrics import inc as _metric_inc
     from ..utils.rate_limiter import default_limiter as limiter
+    from ..utils.rate_limiter import get_real_client_ip
     from ..utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -107,6 +107,7 @@ except ImportError:
     from utils.insurance_periods import record_period_transition
     from utils.metrics import inc as _metric_inc
     from utils.rate_limiter import default_limiter as limiter
+    from utils.rate_limiter import get_real_client_ip
     from utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -627,7 +628,7 @@ async def _issue_company_email_session(
 
     session_id = str(uuid.uuid4())
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     if existing_user:
         status = str(existing_user.get("status") or "").lower()
@@ -1078,7 +1079,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             ) from e
 
         user_agent = request.headers.get("user-agent", "")
-        client_ip = get_remote_address(request)
+        client_ip = get_real_client_ip(request)
 
         if existing_user:
             # PIPEDA: a deletion-requested account is in its 30-day grace window.
@@ -1343,7 +1344,7 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
 
     phone = user.get("phone") or ""
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     # Restore the account. Idempotent: a repeat call on an already-active account
     # skips the write and just re-issues a session.
@@ -1472,7 +1473,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     phone: str = payload.get("phone_number") or ""
 
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     try:
         user = await db_supabase.get_user_by_id(uid)
@@ -1792,7 +1793,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     _enforce_account_active(user)
 
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     # Rotate: issue a new refresh token and mark the old row as
     # replaced. If the user later presents the old token it'll be

@@ -476,9 +476,12 @@ async def process_payment(
         if _gps_validation:
             # GPS route-deviation percentage, not money -- see spinr-no-float-in-money's
             # own message; same false-positive class already suppressed in email_receipt.py.
-            _deviation_threshold = float(
-                _app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0)
-            )  # nosemgrep: spinr-no-float-in-money
+            # Read into a local first so the float() call fits on ONE line: semgrep
+            # reports a multi-line match at its START line, so the `# nosemgrep`
+            # trailing the closing paren never suppressed anything and SR-03's
+            # money gate failed on it (the single-line call below was always fine).
+            _threshold_raw = _app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0)
+            _deviation_threshold = float(_threshold_raw)  # nosemgrep: spinr-no-float-in-money
             _deviation_pct = float(_gps_validation.get("deviation_pct") or 0)  # nosemgrep: spinr-no-float-in-money
             if _gps_validation.get("verdict") == "likely_spoofed" and _deviation_pct > _deviation_threshold:
                 # Optimistic guard on the status we just read: if a concurrent

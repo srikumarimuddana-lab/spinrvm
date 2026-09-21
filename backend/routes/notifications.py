@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 try:
@@ -356,6 +356,12 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
+    # The generic column is written on every registration, so it tracks the
+    # most recently registered device. That is deliberate: it is what
+    # account-level pushes (target_app unset — suspension, reactivation,
+    # wallet top-up, admin broadcast) resolve to, and delivering those to the
+    # app the person used last is the intended behavior. The per-app columns
+    # below are what keep rider/driver-specific pushes off each other's app.
     user_update: dict = {"fcm_token": token}
     if client_type == "driver":
         user_update["fcm_token_driver"] = token
@@ -374,15 +380,50 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     return {"success": True}
 
 
+# Values core/middleware.py's ForcedUpgradeMiddleware already recognises on the
+# X-App-Platform header, which both apps send on every request via the shared
+# client's setAppIdentity() (shared/api/client.ts). Reusing that header is what
+# lets the inbox be scoped per app without an app-side change or a new param.
+_APP_SURFACES = ("rider", "driver")
+
+
+def _audience_filter(app_platform: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Inbox scoping for a dual-role user, or None to leave the query unscoped.
+
+    A single phone number resolves to one ``users`` row carrying both
+    is_rider and is_driver (routes/auth.py reuses the row found by
+    get_user_by_phone on OTP verify), so a user_id-only inbox query returns
+    the driver's notifications to the rider app and vice versa. Narrowing to
+    ``audience IN (<this app>, 'both')`` fixes that while keeping
+    account-level notices (audience='both' — suspension, reactivation) in
+    both apps, which is where they belong.
+
+    Returns None for a missing or unrecognised header rather than guessing a
+    surface. That is the backward-compatible path and it matters: an
+    installed build that predates setAppIdentity(), an admin tool, or a
+    support engineer with curl must keep seeing the full inbox instead of
+    silently losing half of it. Same soft-fail-open posture the
+    ForcedUpgradeMiddleware takes on this exact header.
+    """
+    if app_platform not in _APP_SURFACES:
+        return None
+    return {"audience": {"$in": [app_platform, "both"]}}
+
+
 @api_router.get("")
 async def get_notifications(
     limit: int = Query(30, ge=1, le=200),
     offset: int = Query(0, ge=0),
     unread_only: bool = Query(False),
+    x_app_platform: Optional[str] = Header(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get user's notifications (paginated)."""
+    """Get user's notifications (paginated), scoped to the requesting app."""
+    audience = _audience_filter(x_app_platform)
+
     filters: Dict[str, Any] = {"user_id": current_user["id"]}
+    if audience:
+        filters.update(audience)
     if unread_only:
         filters["is_read"] = False
 
@@ -395,12 +436,15 @@ async def get_notifications(
         offset=offset,
     )
 
-    # Count unread
+    # Count unread — must carry the same audience scope as the list above, or
+    # the bell badge counts notifications this app will never show, which is
+    # the dual-role duplicate bug wearing a different hat.
     unread_count = 0
+    unread_filters: Dict[str, Any] = {"user_id": current_user["id"], "is_read": False}
+    if audience:
+        unread_filters.update(audience)
     try:
-        unread_count = await db_supabase.count_documents(
-            "notifications", {"user_id": current_user["id"], "is_read": False}
-        )
+        unread_count = await db_supabase.count_documents("notifications", unread_filters)
     except Exception:  # noqa: S110
         logger.warning(
             "list_notifications: failed to fetch unread_count for user %s",
@@ -423,11 +467,33 @@ async def mark_as_read(notification_id: str, current_user: dict = Depends(get_cu
 
 
 @api_router.put("/read-all")
-async def mark_all_read(current_user: dict = Depends(get_current_user)):
-    """Mark all notifications as read for the current user."""
+async def mark_all_read(
+    x_app_platform: Optional[str] = Header(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Mark this app's notifications as read for the current user.
+
+    Scoped by audience for the same reason the listing is (see
+    _audience_filter): for a dual-role user, "mark all read" tapped in the
+    rider app must not clear the driver app's badge for rider-only or
+    driver-only rows the other app never displayed. Unscoped — unrecognised
+    or absent header — keeps the old whole-inbox behavior.
+
+    LIMIT, worth knowing: this does not fully separate the two badges.
+    ``is_read`` is one column per row, not one per app, so an
+    ``audience='both'`` row (account-level notices — suspension,
+    reactivation, wallet top-up, admin broadcast) is marked read in BOTH
+    apps by whichever one is tapped. That is inherent to a shared row and
+    is not new — before this scoping, every row behaved that way. Splitting
+    it would need per-app read state, i.e. a separate table.
+    """
+    filters: Dict[str, Any] = {"user_id": current_user["id"], "is_read": False}
+    audience = _audience_filter(x_app_platform)
+    if audience:
+        filters.update(audience)
     await db_supabase.update_one(
         "notifications",
-        {"user_id": current_user["id"], "is_read": False},
+        filters,
         {"is_read": True, "read_at": datetime.now(timezone.utc).isoformat()},
     )
     return {"success": True}
@@ -460,17 +526,38 @@ async def delete_notification(notification_id: str, current_user: dict = Depends
 @api_router.delete("")
 async def clear_notifications(
     read_only: bool = Query(False),
+    x_app_platform: Optional[str] = Header(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Clear notifications for the requesting user.
 
-    Default (no ``read_only``) clears every notification for this user.
+    Default (no ``read_only``) clears every notification this app shows.
     ``?read_only=true`` clears only already-read ones, so the app can offer
     both a non-destructive "clear read" and a destructive "clear all" from
     one endpoint. Always scoped to ``user_id == current_user["id"]`` — a
     single filtered DELETE, no loop over rows (no N+1 here).
+
+    Also scoped by audience (see _audience_filter). This one is the reason
+    that matters most: without it, a dual-role driver tapping "Clear all" in
+    the driver app permanently deleted their rider ride receipts and refund
+    notices too — rows they never saw in this app and cannot get back. The
+    scope only ever narrows what a DELETE touches, so it is strictly safer
+    than the unscoped behavior it replaces.
+
+    It does NOT make the two histories fully independent, though, and the
+    docstring should not be read as promising that. An ``audience='both'``
+    row is by construction shown in both apps, so clearing from either one
+    deletes it from both — with no warning that the other app's history
+    just changed. That category is real (account-level notices, wallet
+    top-ups, admin broadcasts) and it is also where every call site that
+    has not declared a target_app lands, so it grows by default rather
+    than shrinking. Genuinely separating them needs per-app rows, not a
+    per-app filter over shared ones.
     """
     filters: Dict[str, Any] = {"user_id": current_user["id"]}
+    audience = _audience_filter(x_app_platform)
+    if audience:
+        filters.update(audience)
     if read_only:
         filters["is_read"] = True
     await db_supabase.delete_many("notifications", filters)

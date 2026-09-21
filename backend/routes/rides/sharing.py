@@ -195,6 +195,13 @@ async def share_trip_with_contact(
                 "share_token": share_token,
                 "ride_id": ride_id,
             },
+            # target_app deliberately unset (audience 'both'). Unlike the tip
+            # and rating pushes that share this forwarder, the recipient here
+            # is not a role at all — it is whoever owns the phone number the
+            # rider typed, found by a bare users lookup on `phone`. They may be
+            # a rider, a driver, both, or neither, and nothing on this path
+            # tells us which app they will open. Narrowing on a guess would
+            # hide the share from the only app they use.
             _ctx=f"[SHARE] contact {contact_user['id']}",
         )
 

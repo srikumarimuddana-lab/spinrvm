@@ -1552,8 +1552,13 @@ async def create_ride(
         # scheduler had an issue). Best-effort/informational, so this mirrors
         # the existing scheduled-ride pushes in utils/scheduled_rides.py
         # (_send_reminder, _notify_schedule_delayed): default priority
-        # ("normal") and no target_app override — none of those set either,
-        # so this keeps rider scheduled-ride copy on one consistent channel.
+        # ("normal").
+        #
+        # This comment used to justify omitting target_app on the grounds
+        # that "none of those set either". That is no longer true — all 7
+        # call sites in utils/scheduled_rides.py declare one (rider or
+        # driver), from ACTION_ITEMS.md N10 batch 1. Matching the siblings
+        # now means declaring rider, not omitting.
         # Backgrounded via spawn() like the rest of this function's
         # post-insert side effects, so a slow push send never holds up the
         # booking response.
@@ -1564,6 +1569,7 @@ async def create_ride(
                 f"Your ride to {ride.dropoff_address} is booked. "
                 "We'll remind you before pickup and let you know once a driver is assigned.",
                 data={"type": "scheduled_ride_confirmed", "ride_id": ride.id},
+                target_app="rider",
             )
         )
     _deps.spawn(

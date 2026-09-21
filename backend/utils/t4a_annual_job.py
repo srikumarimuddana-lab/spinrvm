@@ -137,6 +137,7 @@ async def _run_issuance(year: int) -> None:
                 title="Your T4A slip is ready",
                 body=f"Your {year} T4A tax slip (${earnings:.2f} in earnings) is ready to download in the Spinr driver app.",
                 data={"type": "t4a_ready", "year": str(year)},
+                target_app="driver",
             )
             notified += 1
         except Exception:

@@ -227,6 +227,13 @@ async def _alert_admins_payment_exhausted(ride: dict) -> None:
                     admin["id"],
                     "Payment retries exhausted",
                     f"Ride {ride_id[:8]}… — all {MAX_RETRIES} retries failed. Rider is blocked from booking.",
+                    # target_app deliberately unset (audience 'both'): the
+                    # recipients here are users with role='admin', who have no
+                    # rider/driver app surface to route to. Neither per-app
+                    # token column applies, so this stays on the legacy column
+                    # rather than being forced into an app it does not belong
+                    # to. Same accepted precedent as the admin broadcast paths
+                    # in routes/admin/faqs.py and routes/admin/messaging.py.
                     data={"type": "payment_retries_exhausted", "ride_id": ride_id},
                 )
             except Exception as _push_exc:
@@ -273,6 +280,7 @@ async def notify_driver_payout_failed(user_id: str, payout_id: str) -> None:
             "Payout failed",
             "We couldn't process your payout. Please contact support.",
             data={"type": "payout_failed", "payout_id": payout_id},
+            target_app="driver",
         )
     except Exception as err:
         logger.debug(f"Payout failure push notification failed: {err}")
@@ -519,7 +527,8 @@ async def retry_failed_payments():
                             driver_user_id,
                             "Payment retry in progress",
                             f"Payment retry {attempt} of {MAX_RETRIES} in progress",
-                            {
+                            target_app="driver",
+                            data={
                                 "type": "payment_retry",
                                 "ride_id": ride_id,
                                 "attempt": str(attempt),
@@ -674,6 +683,7 @@ async def retry_failed_payments():
                             "Payment failed",
                             "We couldn't process payment for your ride. Please update your payment method.",
                             data={"type": "payment_failed", "ride_id": ride_id},
+                            target_app="rider",
                         )
                     except Exception as push_err:
                         # Identical to the two branches fixed in

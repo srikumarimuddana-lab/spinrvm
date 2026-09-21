@@ -315,6 +315,7 @@ async def add_tip(
                 "ride_id": str(ride_id),
                 "amount": f"{tip_amount:.2f}",
             },
+            target_app="driver",
             _ctx=f"[TIP] driver {driver_user_id}",
         )
 

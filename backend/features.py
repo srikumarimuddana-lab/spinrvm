@@ -254,10 +254,6 @@ class ShareTripRequest(BaseModel):
     contact_phone: str
 
 
-class RegisterFcmTokenRequest(BaseModel):
-    token: str
-
-
 # ============ Airport Fee Check (User/App facing) ============
 
 
@@ -1231,13 +1227,6 @@ async def get_shared_trip(token: str):
 # ============ Push Notification Helpers ============
 
 
-@support_router.post("/users/fcm-token")
-async def register_fcm_token(req: RegisterFcmTokenRequest, current_user: dict = Depends(get_current_user)):
-    """Register/update the authenticated user's FCM token for push notifications."""
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"fcm_token": req.token})
-    return {"registered": True}
-
-
 def _is_expo_token(token: str) -> bool:
     """Return True if the token is an Expo push token (not a native FCM token)."""
     return token.startswith("ExponentPushToken[") or token.startswith("ExpoPushToken[")
@@ -1701,7 +1690,13 @@ _TRANSIENT_NOTIFICATION_TYPES = frozenset(
 )
 
 
-def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None) -> None:
+def _record_inbox_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None,
+    target_app: str | None = None,
+) -> None:
     """Fire-and-forget: persist this push to the user's in-app notification
     inbox (the ``notifications`` table read by GET /notifications).
 
@@ -1714,6 +1709,21 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
 
     Transient, high-frequency push types (see _TRANSIENT_NOTIFICATION_TYPES)
     are skipped — they're not meant to be durable inbox history.
+
+    ``target_app`` carries the caller's own rider/driver intent — the same
+    value that selects the per-app FCM token column — into the inbox row's
+    ``audience`` (migration 436), so a dual-role user (one ``users`` row with
+    both is_rider and is_driver) stops seeing every driver notification in
+    their rider app and vice versa. Deriving it here rather than at each call
+    site keeps the one-choke-point property this function exists for.
+
+    ``None`` maps to ``'both'``, which is deliberately today's behavior —
+    visible in both apps. That covers genuinely account-level notices
+    (suspension, reactivation: see utils/suspension_reactivation.py, where an
+    unset target_app is a documented decision because the account, not a role,
+    is what changed) as well as call sites that have not yet declared one. A
+    notification is only ever narrowed by an explicit caller intent, never by
+    a guess made here.
     """
     notification_type = (data or {}).get("type") or "general"
     if notification_type in _TRANSIENT_NOTIFICATION_TYPES:
@@ -1729,6 +1739,11 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
                 "type": notification_type,
                 "data": data or {},
                 "is_read": False,
+                # 'both' for an undeclared target_app — see this function's
+                # docstring. Never guessed from `data` or the user's role
+                # flags: a wrong narrowing hides a notification entirely,
+                # which is strictly worse than the duplicate it replaces.
+                "audience": target_app if target_app in ("rider", "driver") else "both",
             }
             if notification_type in {"scheduled_ride_reminder", "scheduled_driver_reminder"} and (data or {}).get(
                 "ride_id"
@@ -1828,8 +1843,12 @@ async def send_push_notification(
     non-blocking) regardless of whether device delivery succeeds — the
     underlying event (ride completed, wallet credited, ...) already happened,
     so the Notifications page must reflect it even without a live device token.
+    That row carries ``target_app`` through as its ``audience`` (migration
+    436) so the inbox is scoped per app for dual-role users exactly the way
+    device delivery already is; an unset ``target_app`` records ``'both'``,
+    i.e. today's visible-in-both-apps behavior.
     """
-    _record_inbox_notification(user_id, title, body, data)
+    _record_inbox_notification(user_id, title, body, data, target_app)
     # Tiers that bypass the opt-out AND fall back to the retry queue.
     # 'account' (driver rejected/suspended/banned) is not latency-critical like
     # the other two — it is here for guaranteed delivery: a driver who can no
@@ -1922,6 +1941,19 @@ async def send_push_notification(
         elif target_app == "driver":
             token = user.get("fcm_token_driver") or user.get("fcm_token")
         else:
+            # Account-level only. Every role-specific call site now declares a
+            # target_app (enforced by tests/test_push_target_app_declared.py),
+            # so the handful that still land here are notices that belong to
+            # the account rather than to one of its roles — suspension,
+            # reactivation, a wallet top-up, an admin broadcast.
+            #
+            # For those, users.fcm_token holding the most recently registered
+            # device is the intended behavior, not leftover drift: it delivers
+            # to whichever app the person actually used last. This used to be
+            # the bug, because ~35 rider/driver-specific sites also read it and
+            # so landed in an effectively random app for a dual-role user.
+            # Those are fixed; do not "clean up" this branch on the assumption
+            # it is still the legacy fallback it once was.
             token = user.get("fcm_token")
 
         if not token:
@@ -2200,6 +2232,7 @@ async def check_scheduled_rides():
                         "Ride Dispatched! 🚗",
                         f"Your scheduled ride to {ride.get('dropoff_address', 'destination')} is being matched with a driver.",
                         {"ride_id": ride["id"], "type": "scheduled_dispatch"},
+                        target_app="rider",
                     )
         except Exception as e:
             logger.error(f"Scheduled ride checker error: {e}")

@@ -27,6 +27,11 @@ from ._deps import (  # noqa: F401
     reserve_budget,
 )
 
+try:
+    from ...utils.ride_state_copy import rider_phrase, unavailable_message
+except ImportError:  # pragma: no cover - direct-module execution path
+    from utils.ride_state_copy import rider_phrase, unavailable_message  # type: ignore
+
 # R8 (docs/audit/ride-experience/ROADMAP.md): Redis cache for the
 # fare-estimate Directions call. Imported directly here rather than added to
 # ``_deps`` since it's specific to this one function's caching, the same way
@@ -425,7 +430,7 @@ async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_stat
     if existing:
         current = existing.get("status", "unknown")
         raise SpinrException(
-            message=f"Ride is in status '{current}'; cannot perform this action from that state (allowed: {list(allowed_states)}).",
+            message=unavailable_message(rider_phrase(current)),
             error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=409,
             details={"current_status": current, "allowed": list(allowed_states)},

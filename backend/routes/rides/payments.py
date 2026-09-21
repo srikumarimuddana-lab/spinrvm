@@ -44,6 +44,26 @@ from ._deps import (  # noqa: F401
     settle_wallet,
     timezone,
 )
+
+try:
+    from ...utils.ride_state_copy import rider_phrase
+except ImportError:  # pragma: no cover - direct-module execution path
+    from utils.ride_state_copy import rider_phrase  # type: ignore
+
+
+def _not_payable_message(status: object) -> str:
+    """Why this ride can't be paid for yet, without naming the ride state.
+
+    Concatenating the shared `unavailable_message` here would overrun the
+    client's 140-char toast clamp, so this builds its own shorter sentence
+    from the same vocabulary.
+    """
+    phrase = rider_phrase(status)
+    if phrase:
+        return f"This ride isn't ready to pay for yet — it's {phrase}."
+    return "This ride isn't ready to pay for yet."
+
+
 from ._shared import (  # noqa: F401
     _build_fare_breakdown,
     _d,
@@ -388,7 +408,7 @@ async def process_payment(
     if _ride_status != RideStatus.COMPLETED:
         raise HTTPException(
             status_code=409,
-            detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
+            detail=_not_payable_message(_ride_status),
         )
 
     def _charged(r: dict) -> str:
@@ -458,7 +478,9 @@ async def process_payment(
     try:
         _app_settings = await get_app_settings() or {}
     except Exception:
-        logger.opt(exception=True).error(f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off")
+        logger.opt(exception=True).error(
+            f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off"
+        )
         _app_settings = {}
     if _app_settings.get("gps_spoof_charge_gate_enabled", False):
         _gps_validation: Optional[dict] = None
@@ -474,7 +496,9 @@ async def process_payment(
         if _gps_validation:
             # GPS route-deviation percentage, not money -- see spinr-no-float-in-money's
             # own message; same false-positive class already suppressed in email_receipt.py.
-            _deviation_threshold = float(_app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0))  # nosemgrep: spinr-no-float-in-money
+            _deviation_threshold = float(
+                _app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0)
+            )  # nosemgrep: spinr-no-float-in-money
             _deviation_pct = float(_gps_validation.get("deviation_pct") or 0)  # nosemgrep: spinr-no-float-in-money
             if _gps_validation.get("verdict") == "likely_spoofed" and _deviation_pct > _deviation_threshold:
                 # Optimistic guard on the status we just read: if a concurrent

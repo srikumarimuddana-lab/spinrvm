@@ -37,6 +37,10 @@
 -- hot request path (write-and-forget signal/audit inserts only) — safe to
 -- run against production traffic in flight.
 
+-- Assumes the target table has a column literally named `id` (true for both
+-- tables wired up below). A future table with a differently-named primary
+-- key would need its own function or a rewrite of this one to reference
+-- OLD.* dynamically — not attempted here since both current uses satisfy it.
 CREATE OR REPLACE FUNCTION public.block_mutation_on_immutable_table()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -50,7 +54,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.block_mutation_on_immutable_table() IS
-    'Generic BEFORE UPDATE/DELETE guard for tables whose own migration comment claims immutability. Fires regardless of role (including service_role, which bypasses RLS) — see migration 435.';
+    'Generic BEFORE UPDATE/DELETE guard for tables whose own migration comment claims immutability. Fires regardless of role (including service_role, which bypasses RLS) — see migration 435. Assumes an `id` column; not usable as-is on a table with a differently-named primary key.';
 
 DROP TRIGGER IF EXISTS ride_distance_integrity_events_no_update ON public.ride_distance_integrity_events;
 CREATE TRIGGER ride_distance_integrity_events_no_update

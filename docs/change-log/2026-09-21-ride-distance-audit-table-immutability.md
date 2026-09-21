@@ -97,6 +97,29 @@ header comment): `DROP TRIGGER` on each of the 4 new triggers, then
 touched by the migration itself (no columns, no backfill), so rollback is a
 pure schema revert with zero data-loss risk.
 
+## 9a. Adversarial review (`spinr-migration-reviewer`, mandatory per CLAUDE.md gate #10)
+
+**Verdict: SAFE TO APPLY, no blockers.** Two warnings surfaced, both addressed:
+
+1. **New hazard, not introduced by this migration but made harder to recover
+   from live**: both tables' `ride_id` is `REFERENCES rides(id) ON DELETE
+   RESTRICT`, and `purge_pii_retention()`'s Step B (`DELETE FROM rides`,
+   current body in migration 335) has no exception handler. A ride aging
+   past the 7-year retention ceiling while still referenced by either table
+   would raise an uncaught FK violation, rolling back the entire retention
+   function call. Not an active risk today (no ride is anywhere near 7
+   years old — Spinr is still in live app testing), and this migration
+   didn't create the RESTRICT constraint — but it does mean the previous
+   manual-recovery path (delete the blocking child rows and retry) now
+   itself raises `check_violation`. Documented in full in `ACTION_ITEMS.md`
+   C118's closure note (cross-referenced against C112, the same general
+   hazard class on `audit_logs`) rather than fixed here — the real fix
+   touches the shared `purge_pii_retention()` function, a different and
+   larger blast radius than this item's scope.
+2. **Minor**: the shared trigger function hardcodes `OLD.id`, only reusable
+   as-is on a future table whose primary key is also named `id`. Fixed —
+   added a code comment noting the assumption.
+
 ## 9. Verification performed
 
 - [x] Automated tests run: full `backend/tests/rls` suite (43 tests in the

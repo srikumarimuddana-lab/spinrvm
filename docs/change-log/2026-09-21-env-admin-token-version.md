@@ -71,7 +71,8 @@ best-effort.
 ## 4. Risk & impact on existing functionality
 
 **Blast radius — every place an `admin-001` access token is created or checked**, grepped
-(`_mint_admin_access_token` has 6 call sites):
+(`_mint_admin_access_token` has **5** call sites — an earlier draft of this table said 6, having
+counted the `def` line; corrected by the security audit below):
 
 | Call site | Reachable as admin-001? | Touched? |
 |---|---|---|
@@ -141,7 +142,8 @@ revocation generation, not a count.
 | `backend/migrations/433_env_admin_token_version.sql` | new: `settings.env_admin_token_version INTEGER NOT NULL DEFAULT 0` | somewhere to put the counter for an account with no `admin_staff` row |
 | `backend/dependencies/__init__.py` | `elif user_id != "admin-001"` → explicit env-admin branch with a fail-closed version check | the bypass itself |
 | `backend/routes/admin/auth.py` | login + refresh stamp the stored version; logout-all bumps it and shares the staff tail; docstring corrected | mint/revoke halves of the same mechanism |
-| `backend/tests/test_env_admin_token_version.py` | new: 12 tests across verify, helpers, logout-all and mint-path parity | pin all of it, including the fail-closed posture |
+| `backend/routes/admin/settings.py` | `_mask_credentials` drops an `_INTERNAL_ONLY_FIELDS` set, holding `env_admin_token_version` | see §4 — the new column would otherwise round-trip to every staff account via `GET /admin/settings` |
+| `backend/tests/test_env_admin_token_version.py` | new: 13 tests across verify, helpers, logout-all, mint-path parity and the settings-GET strip | pin all of it, including the fail-closed posture |
 | `docs/change-log/2026-09-21-env-admin-token-version.md` | this file | |
 
 ## 7. Before / after
@@ -231,6 +233,26 @@ never locked out of the gap.
   and resolved by converging both branches on the existing tail rather than adding a second shape.
 - Migration numbering: `433` is the next free prefix (`ls backend/migrations | sort -V | tail`
   shows `432` as the highest), so `migration-check.yml` CHECK B has no collision to flag.
+- **`spinr-security-auditor` was run against the diff** per CLAUDE.md's pre-commit gate. Verdict:
+  no blockers. It independently confirmed the branch chain is mutually exclusive (no token can
+  skip both checks, no staff token can enter the env-admin branch), that the fail-closed 503 is
+  not reachable by an unauthenticated party (all three call sites already require a correct
+  password, a valid refresh token, or a validly-signed access token), that `/logout-all` derives
+  `user_id` only from the caller's own bearer token so no cross-account revoke exists, and that
+  `PUT /admin/settings` cannot clobber the column (it is absent from `SettingsUpdateRequest`, and
+  `update_one` issues a column-scoped PostgREST PATCH, never a full-row overwrite).
+  Two low-severity findings, both fixed in this change:
+  1. **Real disclosure.** `GET /admin/settings` returns every column of the settings row and
+     `_mask_credentials` only masks *string* credentials, so the new int column would round-trip
+     unmasked to any staff account. Now dropped via `_INTERNAL_ONLY_FIELDS`, with a test for the
+     strip and a second test pinning that credential masking still works (the new `continue` sits
+     above the masking branch, so a mistake there would silently unmask secrets). Both were
+     executed directly through the interpreter, not just reasoned about.
+  2. `admin_refresh`'s branch guard still used the `"admin-001"` literal while the other two
+     branches of the same trio use `ENV_ADMIN_USER_ID`. Swapped. Three further literals remain in
+     the file (the mint below it and two staff-only guards); they are not part of the
+     mint/verify/revoke trio and were left alone rather than churned.
+  It also corrected a factual error in §4 of this log: 5 call sites, not 6.
 
 ## 10. What was NOT verified
 

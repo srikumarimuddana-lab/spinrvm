@@ -149,10 +149,27 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
 )
 
 
+# Columns that live on the settings row but are NOT settings — internal state
+# that happens to share the singleton, and that no admin UI reads. Dropped from
+# the admin-facing GET entirely rather than masked, because masking implies
+# "reveal it via /settings/reveal/{field}" and there is nothing here an operator
+# should read back.
+#
+# env_admin_token_version is the super admin's live revocation generation
+# (migration 433). Disclosing it to every staff account tells them how many
+# times the super admin has been force-logged-out and what version a forged
+# token would need to claim — useless without JWT_SECRET, but there is no
+# reason to hand it out.
+_INTERNAL_ONLY_FIELDS = frozenset({"env_admin_token_version"})
+
+
 def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of the settings dict with credential values masked."""
+    """Return a copy of the settings dict with credential values masked and
+    internal-only columns removed."""
     result = {}
     for k, v in settings.items():
+        if k in _INTERNAL_ONLY_FIELDS:
+            continue
         if k in _CREDENTIAL_FIELDS and isinstance(v, str) and v:
             result[k] = v[:8] + "*****"
         else:

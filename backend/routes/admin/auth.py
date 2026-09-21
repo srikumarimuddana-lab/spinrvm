@@ -493,7 +493,12 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     # admin-001 has no DB row. Staff rows must still be active.
-    if user_id == "admin-001":
+    # Uses the constant, not the literal: this branch decides which token_version
+    # store is authoritative, so it must stay in lockstep with the matching
+    # branches in _verify_admin_payload and admin_logout_all. (Other "admin-001"
+    # literals remain in this file at the mint below and in two staff-only
+    # guards; they are not part of that trio.)
+    if user_id == ENV_ADMIN_USER_ID:
         email = settings.ADMIN_EMAIL
         role = "super_admin"
         # NOTE: this literal already drifts from ALL_MODULES (it omits "audit"

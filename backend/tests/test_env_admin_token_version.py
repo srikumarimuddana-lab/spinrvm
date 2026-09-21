@@ -243,3 +243,37 @@ class TestEveryMintPathStampsTheCurrentVersion:
         assert not re.search(r"token_version\s*=\s*0\s*,", code), (
             "a _mint_admin_access_token call passes token_version=0 literally — see above"
         )
+
+
+class TestTheCounterIsNotDisclosedToStaff:
+    """`GET /admin/settings` returns every column of the settings row, masking
+    only the string-typed credentials in `_CREDENTIAL_FIELDS`. The revocation
+    counter is an int, so without an explicit strip it would round-trip to any
+    authenticated staff account — telling them how many times the super admin
+    has been force-logged-out, and what version a token would have to claim.
+    Useless without JWT_SECRET, but there is no reason to publish it.
+
+    Raised by spinr-security-auditor against this change's diff.
+    """
+
+    def test_settings_response_omits_the_env_admin_counter(self):
+        from routes.admin.settings import _mask_credentials
+
+        masked = _mask_credentials(
+            {
+                "id": "app_settings",
+                "env_admin_token_version": 7,
+                "surge_enabled": True,
+            }
+        )
+        assert "env_admin_token_version" not in masked
+        # The strip must not swallow ordinary settings alongside it.
+        assert masked["surge_enabled"] is True
+
+    def test_credential_masking_still_works(self):
+        """Regression guard on the same helper — the new `continue` sits above
+        the masking branch, so a mistake there would silently unmask secrets."""
+        from routes.admin.settings import _mask_credentials
+
+        masked = _mask_credentials({"stripe_secret_key": "sk_test_abcdefghijklmnop"})
+        assert masked["stripe_secret_key"] == "sk_test_*****"

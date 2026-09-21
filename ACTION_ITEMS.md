@@ -27769,7 +27769,7 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
 
-### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — real gap, not fixed here
+### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — CLOSED (2026-09-21)
 - **Note:** a second, unrelated entry also numbered C118 (Open Change Requests
   registry) was filed concurrently by a parallel session — see it below,
   right after this entry's own "Files" line. Genuine simultaneous
@@ -27833,11 +27833,62 @@ how much they de-risk a public launch._
   the added trigger-maintenance surface (see C112's finding on triggers
   not composing safely across migrations) versus leaving this as a
   documented, accepted risk.
-- **Files (reference only, nothing changed by this entry):**
-  `backend/migrations/246_ride_distance_integrity_events.sql`,
+- **Closed (2026-09-21):** added `backend/migrations/435_ride_distance_integrity_immutability.sql`
+  — one shared `BEFORE UPDATE OR DELETE` trigger function
+  (`block_mutation_on_immutable_table()`, parameterized via
+  `TG_TABLE_NAME`/`TG_OP` rather than a dedicated function per table) wired
+  to both tables, following exactly the recommendation above: unconditional
+  block, no flag-gated carve-out, since neither table has a legitimate
+  DELETE path. The two regression tests that documented the gap
+  (`test_*_service_role_can_mutate_despite_immutable_comment`) were flipped
+  to `test_*_service_role_cannot_mutate_immutable_table` and now assert
+  `psycopg2.errors.CheckViolation` on both UPDATE and DELETE. Full RLS suite
+  (393 tests) verified passing against a real local Postgres 16 instance.
+  Reviewed via `spinr-migration-reviewer` — verdict SAFE TO APPLY, no
+  blockers. **Prepared, not yet applied to staging/production**, matching
+  this repo's established pattern for new migrations pending a separate,
+  explicit apply step.
+- **New hazard surfaced by the migration review (2026-09-21) — read before
+  ever letting a ride reach the 7-year retention ceiling:** both tables'
+  `ride_id` column is `REFERENCES rides(id) ON DELETE RESTRICT` (by design,
+  per 242/246's own comments — a deletion attempt should "fail loudly rather
+  than silently destroying the audit history"). `purge_pii_retention()`'s
+  Step B (`DELETE FROM rides WHERE created_at < now() - 7 years`, current
+  live body in migration 335) has no exception handler around it. If a ride
+  ever ages past 7 years while still referenced by a row in either of these
+  two tables, Step B raises an uncaught `foreign_key_violation`, which rolls
+  back the **entire** `purge_pii_retention()` call for that run — every
+  other step (GPS anonymization, `audit_logs`/`compliance_export_events`
+  purges, DSAR hard-delete, etc.), not just Step B. This is the same general
+  hazard class as C112 above (an unconditional trigger/constraint
+  interacting badly with the multi-step retention function, uncontained by
+  an exception handler) but a **distinct mechanism** — C112 is a
+  trigger-vs-trigger flag conflict on `audit_logs`; this is an FK-RESTRICT
+  constraint on Step B with no `BEGIN/EXCEPTION WHEN OTHERS` wrapper (unlike
+  sibling steps H and M, which do wrap their deletes). Mitigating factor:
+  Spinr is still in live app testing, so no ride is anywhere near 7 years
+  old yet — this is a latent risk, not an active one, and migration 435
+  did not introduce the RESTRICT constraint (242/246 already had it). What
+  435 *does* change: before this migration, an operator hitting this FK
+  collision in a future world where it fires could manually `DELETE` the
+  blocking child row(s) from either table and retry; after 435, that manual
+  remediation itself now raises `check_violation`, so recovery would require
+  dropping the new trigger first (an emergency schema change) rather than a
+  same-session fix. Not fixed here — options for whoever picks this up: (a)
+  wrap Step B in a `BEGIN/EXCEPTION WHEN OTHERS/RAISE` handler matching
+  Steps H/M's shape (contains the blast radius to Step B alone, doesn't
+  resolve the underlying FK collision), (b) add a session-flag carve-out to
+  the two new triggers mirroring `audit_logs`' pattern so Step B can clear
+  a ride's rows immediately before deleting it, or (c) revisit the FK as
+  `ON DELETE SET NULL` (the path already taken for `financial_events.ride_id`
+  in migrations 294/295) if losing the ride linkage on an already
+  7-year-retained audit row is acceptable.
+- **Files:** `backend/migrations/246_ride_distance_integrity_events.sql`,
   `backend/migrations/242_ride_distance_recomputes.sql`,
-  `backend/tests/rls/test_ride_distance_integrity_rls.py` (new regression
-  tests documenting current behavior).
+  `backend/migrations/435_ride_distance_integrity_immutability.sql` (new),
+  `backend/tests/rls/conftest.py` (replays 435),
+  `backend/tests/rls/test_ride_distance_integrity_rls.py` (regression tests
+  updated to assert the fix), `docs/change-log/2026-09-21-ride-distance-audit-table-immutability.md`.
 
 ### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
 - **Note:** a different, unrelated entry above (the ride-distance-integrity

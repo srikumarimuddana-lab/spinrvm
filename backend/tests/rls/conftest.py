@@ -909,6 +909,7 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "370_add_unresolved_at_completion_status_to_gap_events.sql").read_text())
     cur.execute((migrations_dir / "242_ride_distance_recomputes.sql").read_text())
     cur.execute((migrations_dir / "246_ride_distance_integrity_events.sql").read_text())
+    cur.execute((migrations_dir / "435_ride_distance_integrity_immutability.sql").read_text())
 
     cur.execute(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ride_location_gap_events, "

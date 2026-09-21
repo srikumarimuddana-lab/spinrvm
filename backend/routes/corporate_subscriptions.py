@@ -138,15 +138,13 @@ async def assign_company_subscription(
             status_code=403,
             # This router is mounted behind require_module("corporate_accounts")
             # and every endpoint takes Depends(get_admin_user), so the reader is
-            # Spinr staff — not a corporate customer. An earlier pass rewrote
-            # this as "contact Spinr support", which told an operator to contact
-            # their own support desk and dropped the one actionable fact. The
-            # setting has no labelled control in the admin UI yet, so naming the
-            # key is the useful thing to say here.
+            # Spinr staff, not a corporate customer — they can act on this
+            # directly. An earlier pass in this branch rewrote it as "contact
+            # Spinr support", which told an operator to contact their own
+            # support desk and dropped the one actionable fact. Name the flag.
             detail=(
-                "Corporate subscription billing is turned off. A super admin can enable "
-                "the corporate_subscription_billing_enabled setting once it has been "
-                "verified in staging."
+                "Corporate subscription billing is not yet enabled — turn on "
+                "corporate_subscription_billing_enabled in Settings once verified in staging."
             ),
         )
 

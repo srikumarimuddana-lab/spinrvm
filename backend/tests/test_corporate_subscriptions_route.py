@@ -94,7 +94,7 @@ class TestAssignGatedByFlag:
                 json={"plan_id": "plan_pro"},
             )
         assert resp.status_code == 403, resp.text
-        assert "billing is turned off" in resp.json()["detail"]
+        assert "corporate_subscription_billing_enabled" in resp.json()["detail"]
 
     def test_assign_blocked_when_flag_explicitly_false(self, test_client, admin_override):
         with patch(

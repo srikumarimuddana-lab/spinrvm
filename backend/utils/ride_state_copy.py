@@ -47,15 +47,18 @@ _DRIVER_PHRASE: dict[RideStatus, str] = {
 }
 
 # Rider's point of view — same states, the rider's half of the story.
+# Wording reconciled with the parallel fix in commit 06abbd8, which landed a
+# local copy of this table on the rider guard; test_ride_state_machine.py's
+# TestCancelStateGuardRider pins "already in progress" and "already finished".
 _RIDER_PHRASE: dict[RideStatus, str] = {
     RideStatus.SCHEDULED: "scheduled for later",
     RideStatus.SEARCHING: "still looking for a driver",
-    RideStatus.DRIVER_ASSIGNED: "waiting for a driver to accept",
-    RideStatus.DRIVER_ACCEPTED: "on its way to you",
-    RideStatus.DRIVER_ARRIVED: "waiting for you at the pickup",
-    RideStatus.IN_PROGRESS: "already under way",
+    RideStatus.DRIVER_ASSIGNED: "matched with a driver, but not yet accepted",
+    RideStatus.DRIVER_ACCEPTED: "on its way — your driver has accepted",
+    RideStatus.DRIVER_ARRIVED: "waiting for you at pickup",
+    RideStatus.IN_PROGRESS: "already in progress",
     RideStatus.COMPLETED: "already finished",
-    RideStatus.CANCELLED: "cancelled",
+    RideStatus.CANCELLED: "already cancelled",
 }
 
 

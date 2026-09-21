@@ -2214,6 +2214,12 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
+            # Stamp processed_at so the reconciler doesn't re-flag these as
+            # stuck on every daily run. These are known-harmless lifecycle
+            # events — leaving them NULL was masking real stuck events behind
+            # 500+ historical entries (CRIMSON-SMOKE-7445-HC).
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "ignored": True, "event_id": event_id}
         else:
             logger.warning(
                 "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
@@ -2221,7 +2227,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
-        # Leave processed_at NULL for unknown/unhandled events so
+        # Leave processed_at NULL for genuinely unknown/unhandled events so
         # utils/stripe_reconcile.py's daily sweep surfaces them for manual
         # review if they later become actionable (it does not auto-replay
         # -- see _reconcile_stuck_stripe_events, ACTION_ITEMS.md C10).

@@ -29,7 +29,16 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 RECURRED (2nd occurrence, still open):
+_Last updated: 2026-09-21 — C121 gap #2 DECIDED: presented the repository
+owner three options for the GHCR registry-auth gap (make the package
+public / find another Fly-supported private-registry auth path / abandon
+this deploy approach) with a recommendation for making it public, since
+the image was already verified to contain no secrets and it's the one
+option with real-world confirmation it works. Repository owner chose that
+option. Not yet applied — changing GHCR package visibility is a manual
+GitHub repo/org-admin action outside any agent's available tooling here;
+updated `deploy-fly-signed-image.yml`'s header comment and this entry to
+record the decision and flag it as pending manual action. Prior: C122 RECURRED (2nd occurrence, still open):
 the same `locationIntegrity.ts` mock-detection test failed again in CI on
 PR #5580, identical signature to the first occurrence on PR #5538 — same
 assertion, same error, both on PRs touching zero driver-app files. 16
@@ -1267,6 +1276,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       table-wide). Doesn't by itself prove old-app data is blended in —
       needs Spinr's confirmed launch/dual-run-start date to compare
       against, which isn't recorded in this file.
+      - **2026-09-12 — launch-date comparison run, resolved.** Spinr's
+        confirmed launch date (2026-03-30, already recorded elsewhere in
+        this file as the SIN-purge grace-period anchor) compared directly
+        against `driver_stripe_ledger` via a live read-only query against
+        production (`spinrmobileapp`, confirmed reachable this session):
+        `SELECT min(created_at), count(*), count(*) FILTER (WHERE
+        created_at < '2026-03-30'), count(DISTINCT stripe_account_id) FROM
+        driver_stripe_ledger` → earliest row `2026-04-21 13:16:31+00`,
+        **0 of 357 rows predate launch**, 50 distinct Stripe accounts.
+        **Finding: the mirror table itself contains no pre-launch old-app
+        transaction rows** — whatever "blended" means at the Stripe-account
+        level (already confirmed 2026-09-07: yes, blended), the *mirror
+        table* only starts capturing 22 days after launch, so it cannot be
+        the source of any pre-launch contamination in the $185.31–$228.08
+        reconciliation. Reframes rather than raises a new risk: those first
+        22 post-launch days (2026-03-30 to 2026-04-21) have **zero mirror
+        coverage** — any real driver payout activity in that window
+        wouldn't show up in this reconciliation at all, a coverage gap
+        distinct from the contamination question this thread originally
+        asked. Not investigated further here (out of scope for a
+        launch-date comparison); flag for whoever next touches this item.
   - **2026-09-10 — closed the "broader pre-launch question" from the
     migration-approach doc's Phase 6 (raised 2026-08-30, "not yet done as
     of this edit") for drivers/riders/rides, via live read-only queries
@@ -13579,7 +13609,17 @@ record of what was assumed vs. what was actually true</summary>
   lost-phone reset path.
 
 ### C5. Re-enable Railway standby deploys (currently paused)
-- [ ] **Status:** open — `deploy-backend.yml` (Railway) is deliberately blocked via a
+- [x] **Status:** RESOLVED (2026-09-21) — see the 2026-09-21 Update below for the
+  actual fix. **Correction:** the paragraph immediately below (originally written
+  2026-07-27) asserts the standby was "silently drifting from `main`" and that a
+  failover "right now would fail over to a stale build" — this was true of the
+  reader's-perspective symptom at the time but turned out, once Railway MCP access
+  became available (see 2026-09-21 Update), to be wrong about *why*: Railway's own
+  native GitHub integration had been auto-deploying `spinrvm` on every push to
+  `main` the whole time, independent of `deploy-backend.yml`. The standby was never
+  actually stale. Left in place for history — do not use it as current status;
+  read the 2026-09-21 Update for what was actually true.
+- ~~open~~ — `deploy-backend.yml` (Railway) is deliberately blocked via a
   GitHub Environment protection rule (confirmed 2026-07-27). This was meant to be
   **temporary** but has no expiry/owner attached, so Railway has been silently
   drifting from `main` since the pause started — contradicts ADR-007's "hot standby,
@@ -13696,20 +13736,84 @@ record of what was assumed vs. what was actually true</summary>
     service-name issue since a correct `railway service` listing would have
     surfaced the real service name immediately instead of requiring this log
     archaeology.
-  - **Net effect: unchanged from the reader's perspective (Railway standby
-    still deploys 0% of pushes, still drifting from `main`, still a stale
-    fail-over target), but the actual fix is now different and human-only:**
-    someone with Railway dashboard access to the `cooperative-harmony` project
-    needs to open it, find the real service name under the `production`
-    environment, and either (a) rename it to `spinr-backend` to match the
-    workflows as-is, or (b) report the actual name back so `RAILWAY_SERVICE` can
-    be corrected in both workflow files in one small PR. Token rotation (the
-    prior blocker) is done and should not be re-attempted.
+  - **Net effect at the time: `deploy-backend.yml`'s own extra checks still
+    failed on every run because of the service-name mismatch — but see the
+    2026-09-21 Update below: this did NOT mean Railway itself was drifting or
+    stale.** Railway's native GitHub integration (a separate mechanism from
+    this workflow) had been auto-deploying the real service on every push to
+    `main` the entire time; this update's "still drifting from `main`, still a
+    stale fail-over target" language was an unverified assumption carried
+    forward from the original 2026-07-27 framing, not something this update
+    actually re-checked via Railway directly (no Railway MCP/API/CLI access
+    existed for this session at the time). The actual fix ended up being a
+    one-line-per-file config correction, not a human dashboard action — see
+    below.
   - **Still consciously deferred** per the 2026-09-02/09-04 decisions above —
     this update only corrects the record on *why* it's still broken, it does
     not re-open the go-live-vs-fix-now tradeoff. Re-surface with whoever owns
     Railway dashboard access once device testing/go-live winds down, per the
     existing plan.
+- **Update (2026-09-21) — RESOLVED. Root cause confirmed directly via the now-available
+  Railway MCP, standby was never actually stale, fix shipped.**
+  - **The real Railway service name is `spinrvm`, not `spinr-backend`.** Confirmed
+    directly against Railway (not inferred from docs or logs, unlike every prior
+    update on this item) via `list-projects` → `list-services` → `describe-service`
+    in the `cooperative-harmony` project: the service literally named `spinrvm`
+    sources from `srikumarimuddana-lab/spinrvm` on branch `main`, `rootDirectory:
+    /backend` — i.e. it IS the backend service, it was just never named
+    `spinr-backend` in Railway's own service list, which is what every hardcoded
+    `RAILWAY_SERVICE: spinr-backend` in this repo's workflows assumed.
+  - **Correction to every prior update above: the standby was NOT stale or
+    drifting.** `describe-service`'s deployment history shows `spinrvm` has been
+    auto-deploying successfully on every push to `main` this whole time, via
+    Railway's own native GitHub integration (the exact "Alternative (no tokens
+    needed at all)" fallback `deploy-backend.yml`'s own header comment describes) —
+    a mechanism completely independent of `deploy-backend.yml`'s script. What was
+    actually broken, for the entire span the 2026-09-04/09-05/09-14 updates
+    above describe, was only `deploy-backend.yml`'s (and
+    `standby-parity-monitor.yml`'s) own *extra verification layer* on top of that
+    already-working auto-deploy: the env-completeness check (fails the job if a
+    name in `deploy/backend-required-env.txt` is missing from the Railway
+    service's variables), the build-sha stamping (`backend/build_info.json`,
+    read back via `GET /deploy-info`), and the post-deploy serving verification
+    (polls `/deploy-info` until the running build's sha matches the pushed
+    commit, or fails/rolls back). None of those three ran successfully on
+    Railway before this fix — not because Railway wasn't deploying, but because
+    `railway variables --service spinr-backend`/`railway up --service
+    spinr-backend` immediately hit "Service 'spinr-backend' not found" before any
+    of the three checks could execute.
+  - **Also confirmed via `describe-service`:** `spinrvm`'s live variable list
+    already contains every name `deploy/backend-required-env.txt` requires
+    (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `ADMIN_EMAIL`,
+    `ADMIN_PASSWORD`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_DRIVER_APP_ID`,
+    `FIREBASE_RIDER_APP_ID`, `REDIS_URL`, `RATE_LIMIT_REDIS_URL`, `WS_REDIS_URL`,
+    `ALLOWED_ORIGINS`, `SENTRY_DSN`, `ENV`, `SUPABASE_REGION`) — so the
+    env-completeness check should now pass on the next run too, not just the
+    deploy step.
+  - **Fix:** `RAILWAY_SERVICE: spinr-backend` → `RAILWAY_SERVICE: spinrvm` in
+    both `.github/workflows/deploy-backend.yml` and
+    `.github/workflows/standby-parity-monitor.yml` — the only two places in the
+    repo that declare `RAILWAY_SERVICE` (grepped `.github/workflows/` and the
+    repo root for `RAILWAY_SERVICE` and other hardcoded Railway-service-name
+    references to confirm; every other `spinr-backend` string in
+    `.github/workflows/` is a Docker image tag or the unrelated Fly app name
+    `spinr-backend-yyz`/`spinr-backend-staging`, not this bug). Config-only,
+    no application code, no migration. Full Change Impact Log entry:
+    `docs/change-log/2026-09-21-c5-railway-service-name-fix.md`.
+  - **Not re-opening C1's failover drill or the go-live-vs-fix-now tradeoff
+    here** — this update closes the "why is `deploy-backend.yml` broken"
+    question and the service-name mismatch specifically. C1's actual failover
+    drill (confirming a DNS cutover to Railway serves real traffic correctly)
+    is still separate, still not run from this session, and still worth doing
+    before ever relying on the standby in a real incident — Railway *deploying*
+    successfully is necessary but not sufficient evidence the failover path
+    works end to end.
+  - **What was NOT verified:** no ability from this environment to trigger a
+    real `deploy-backend.yml`/`standby-parity-monitor.yml` GitHub Actions run
+    or an actual Railway deploy — verification here is config-correctness only
+    (confirmed via Railway MCP that `spinrvm` is the right name and has the
+    right variables). Only the next real push to `main` proves the workflow
+    itself goes green end to end.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here
@@ -19535,6 +19639,60 @@ mechanical follow-up work, prioritizable independently.
     written but its residual was separately closed 2026-09-11 — see UX4.
   - **Acceptance:** rider-app toast colors match the current theme tokens
     in both light and dark mode. Met.
+
+### GPS-plausibility chain seeded from stale `driver_last_known.updated_at`, falsely rejecting legitimate breadcrumbs (#5357)
+
+- [ ] **Status:** open — filed 2026-09-14 by `spinr-fraud-auditor` during
+  review of PR #5355 (#1231 finding 11's GPS-plausibility-chain fix). Not
+  introduced by that PR — a pre-existing pattern in
+  `persist_trip_location_batch` (v2) that #5355 newly exposed v1 REST
+  traffic to as well (v1 had no plausibility chain to trip before).
+- **What's wrong:** `routes/drivers/status.py`'s go-online/go-offline toggle
+  bumps `drivers.updated_at` on every call, but only writes fresh `lat`/`lng`
+  alongside it when going online *and* the client supplied an immediate
+  non-zero GPS fix. Going offline, or going online without an immediate fix
+  (cold start, permission dialog not yet granted), bumps `updated_at` to
+  "now" while `lat`/`lng` stay stale from an earlier, unrelated write. Both
+  `persist_trip_location_batch` (v2) and `persist_ride_breadcrumbs` (v1)
+  seed their GPS-plausibility chain's "previous point" from this same
+  `drivers` row when the batch has no earlier accepted point — so a
+  stale-`lat`/`lng`-but-fresh-`updated_at` row looks like "this exact
+  position, very recently," understating `elapsed_seconds` and inflating the
+  computed speed for the driver's real next position enough to reject it as
+  `"teleport"`.
+- **Concrete failure scenario:** driver goes offline (stale lat/lng, fresh
+  `updated_at`) → goes back online without an immediate fix (still stale
+  lat/lng, `updated_at` bumped again) → starts a trip and uploads real
+  breadcrumbs from their actual position → the first breadcrumb (and,
+  since a rejected point never advances the chain's baseline, potentially
+  several after it) is falsely rejected right at trip start — exactly when
+  the Period 2/3 insurance audit trail (SGI-reportable) most needs
+  completeness.
+- **Why it happens:** no dedicated location-timestamp column exists on
+  `drivers` (confirmed: no `location_updated_at`/`last_location_at`
+  equivalent). `updated_at` is generic row-modified, not scoped to `lat`/
+  `lng` specifically.
+- **Proposed fix (not yet implemented):** add a location-specific timestamp
+  column (e.g. `drivers.location_updated_at`), written only alongside an
+  actual `lat`/`lng` write, and have both `persist_trip_location_batch` and
+  `persist_ride_breadcrumbs` seed their `driver_last_known` chain from that
+  column instead of the generic `updated_at`. Needs a migration (additive
+  column, backfill optional — a NULL just means "no seed available, chain
+  starts cold," the pre-#5355 v1 behavior anyway) and touches both breadcrumb
+  paths plus every `drivers.lat`/`lng` write site (`routes/drivers/status.py`,
+  `routes/drivers/location.py`, `routes/websocket.py`).
+- **Severity note:** fails closed — drops real breadcrumbs, never lets
+  spoofed data through — so not launch-blocking, but a real correctness gap
+  in a regulatory-audit-adjacent path. Deliberately not fixed inline in
+  #5355: the real fix touches a shared, live-tested surface (driver
+  online/available flags, `drivers` table write paths) beyond that PR's
+  scope, and needs its own Change Impact Log entry per CLAUDE.md's pre-merge
+  gates given the blast radius (a new migration + 3+ call sites).
+- **Files:** `backend/routes/drivers/status.py`, `backend/routes/drivers/
+  location.py`, `backend/routes/websocket.py`, `backend/utils/
+  location_write_gate.py` (or wherever `persist_trip_location_batch`/
+  `persist_ride_breadcrumbs` live), a new `backend/migrations/NN_*.sql`.
+- **Tracking:** srikumarimuddana-lab/spinrvm#5357.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
@@ -27228,8 +27386,9 @@ how much they de-risk a public launch._
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
-### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
-- [ ] **Status:** OPEN, real (not informational) — reproduced by direct execution
+### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
+- [x] **Status:** RESOLVED (2026-09-21) — see "Resolution" below. Originally
+  found OPEN, real (not informational) — reproduced by direct execution
   against a real Postgres running the actual shipped migration SQL, not inferred
   from reading the files. Found by `/code-review` (high effort, CLAUDE.md gate
   #10 — the Task/Agent tool to invoke `spinr-security-auditor` as a full
@@ -27364,12 +27523,34 @@ how much they de-risk a public launch._
   either the trigger fix or Step G's exception handler, would turn today's
   silent no-op into an unhandled-exception rollback of the entire
   `purge_pii_retention()` call.
+- **Resolution (2026-09-21):** fixed by migration 434
+  (`backend/migrations/434_fix_audit_logs_delete_trigger_conflict.sql`), which ships both
+  mandatory halves together in one migration, per this entry's own warning above:
+  (1) narrows migration 57's `audit_logs_no_mutate` trigger to `BEFORE UPDATE` only (option
+  (b) from this entry's two proposed fixes — chosen over making 57's trigger flag-aware on
+  DELETE too, for simplicity and consistency with migration 317's existing precedent that 57
+  overlapping 51 on UPDATE is acceptable), leaving migration 56's `audit_logs_no_delete` as the
+  sole DELETE guard; (2) re-forks `purge_pii_retention()` from its current live body
+  (migration 335) with Step G's missing `PERFORM set_config(...)` call and
+  `BEGIN...EXCEPTION WHEN OTHERS...RAISE...END` wrapper restored, matching Step H/M's shape.
+  Verified against a real local Postgres (started specifically for this fix, since the RLS
+  tier is the only one that can exercise real trigger composition): full `backend/tests/rls`
+  suite 393/393 passing; `test_flag_gated_delete_is_still_blocked_by_migration_57_trigger`
+  renamed to `test_flag_gated_delete_now_succeeds_after_migration_434_trigger_fix` and rewritten
+  to assert the delete now actually succeeds (row confirmed gone), not just that no exception
+  is raised. New static-text regression test
+  `backend/tests/test_migration_434_audit_logs_delete_trigger_fix.py` (15 tests, CI has no
+  Postgres for the main suite) pins both halves of the fix and that Steps A/D/F/H/M are carried
+  forward from 335 unregressed. Full writeup:
+  `docs/change-log/2026-09-21-c112-audit-logs-delete-trigger-fix.md`.
 - **Files (reference only, nothing changed by this entry beyond the new
   regression test):** `backend/migrations/50_audit_logs_append_only.sql`,
   `51_audit_logs_lockdown.sql`, `56_audit_logs_delete_lockdown.sql`,
-  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`;
-  `backend/tests/rls/test_audit_and_insurance_correction_rls.py` (new
-  regression test, does not fix the bug).
+  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`,
+  `434_fix_audit_logs_delete_trigger_conflict.sql` (the fix);
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py`,
+  `backend/tests/rls/conftest.py`,
+  `backend/tests/test_migration_434_audit_logs_delete_trigger_fix.py`.
 
 ### C112. `admin_create_ride`'s FCM push sent `rider_name` (full name, or raw email/phone fallback) with zero PII filtering — parity gap with `routes/rides/matching.py`'s existing `_FCM_EXCLUDE` [duplicate item number — see the other C112 above ("`audit_logs`' migration-57 trigger..."), filed by a different, parallel session the same day working C49. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
 - [x] **Status:** CLOSED (2026-09-14) — fixed the same session it was found.
@@ -27642,7 +27823,7 @@ how much they de-risk a public launch._
   `docs/audit/2026-09-11-understand-anything-plugin-pilot.md` (correction note added),
   `.claude/settings.json` (`enabledPlugins`/`extraKnownMarketplaces`, unchanged by this entry).
 
-### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — real gap, not fixed here
+### C118. `ride_distance_integrity_events` / `ride_distance_recomputes` claim "immutable... on purpose" in their own migration comments, but have no DB-level trigger enforcing it against `service_role` — CLOSED (2026-09-21)
 - **Note:** a second, unrelated entry also numbered C118 (Open Change Requests
   registry) was filed concurrently by a parallel session — see it below,
   right after this entry's own "Files" line. Genuine simultaneous
@@ -27706,11 +27887,62 @@ how much they de-risk a public launch._
   the added trigger-maintenance surface (see C112's finding on triggers
   not composing safely across migrations) versus leaving this as a
   documented, accepted risk.
-- **Files (reference only, nothing changed by this entry):**
-  `backend/migrations/246_ride_distance_integrity_events.sql`,
+- **Closed (2026-09-21):** added `backend/migrations/435_ride_distance_integrity_immutability.sql`
+  — one shared `BEFORE UPDATE OR DELETE` trigger function
+  (`block_mutation_on_immutable_table()`, parameterized via
+  `TG_TABLE_NAME`/`TG_OP` rather than a dedicated function per table) wired
+  to both tables, following exactly the recommendation above: unconditional
+  block, no flag-gated carve-out, since neither table has a legitimate
+  DELETE path. The two regression tests that documented the gap
+  (`test_*_service_role_can_mutate_despite_immutable_comment`) were flipped
+  to `test_*_service_role_cannot_mutate_immutable_table` and now assert
+  `psycopg2.errors.CheckViolation` on both UPDATE and DELETE. Full RLS suite
+  (393 tests) verified passing against a real local Postgres 16 instance.
+  Reviewed via `spinr-migration-reviewer` — verdict SAFE TO APPLY, no
+  blockers. **Prepared, not yet applied to staging/production**, matching
+  this repo's established pattern for new migrations pending a separate,
+  explicit apply step.
+- **New hazard surfaced by the migration review (2026-09-21) — read before
+  ever letting a ride reach the 7-year retention ceiling:** both tables'
+  `ride_id` column is `REFERENCES rides(id) ON DELETE RESTRICT` (by design,
+  per 242/246's own comments — a deletion attempt should "fail loudly rather
+  than silently destroying the audit history"). `purge_pii_retention()`'s
+  Step B (`DELETE FROM rides WHERE created_at < now() - 7 years`, current
+  live body in migration 335) has no exception handler around it. If a ride
+  ever ages past 7 years while still referenced by a row in either of these
+  two tables, Step B raises an uncaught `foreign_key_violation`, which rolls
+  back the **entire** `purge_pii_retention()` call for that run — every
+  other step (GPS anonymization, `audit_logs`/`compliance_export_events`
+  purges, DSAR hard-delete, etc.), not just Step B. This is the same general
+  hazard class as C112 above (an unconditional trigger/constraint
+  interacting badly with the multi-step retention function, uncontained by
+  an exception handler) but a **distinct mechanism** — C112 is a
+  trigger-vs-trigger flag conflict on `audit_logs`; this is an FK-RESTRICT
+  constraint on Step B with no `BEGIN/EXCEPTION WHEN OTHERS` wrapper (unlike
+  sibling steps H and M, which do wrap their deletes). Mitigating factor:
+  Spinr is still in live app testing, so no ride is anywhere near 7 years
+  old yet — this is a latent risk, not an active one, and migration 435
+  did not introduce the RESTRICT constraint (242/246 already had it). What
+  435 *does* change: before this migration, an operator hitting this FK
+  collision in a future world where it fires could manually `DELETE` the
+  blocking child row(s) from either table and retry; after 435, that manual
+  remediation itself now raises `check_violation`, so recovery would require
+  dropping the new trigger first (an emergency schema change) rather than a
+  same-session fix. Not fixed here — options for whoever picks this up: (a)
+  wrap Step B in a `BEGIN/EXCEPTION WHEN OTHERS/RAISE` handler matching
+  Steps H/M's shape (contains the blast radius to Step B alone, doesn't
+  resolve the underlying FK collision), (b) add a session-flag carve-out to
+  the two new triggers mirroring `audit_logs`' pattern so Step B can clear
+  a ride's rows immediately before deleting it, or (c) revisit the FK as
+  `ON DELETE SET NULL` (the path already taken for `financial_events.ride_id`
+  in migrations 294/295) if losing the ride linkage on an already
+  7-year-retained audit row is acceptable.
+- **Files:** `backend/migrations/246_ride_distance_integrity_events.sql`,
   `backend/migrations/242_ride_distance_recomputes.sql`,
-  `backend/tests/rls/test_ride_distance_integrity_rls.py` (new regression
-  tests documenting current behavior).
+  `backend/migrations/435_ride_distance_integrity_immutability.sql` (new),
+  `backend/tests/rls/conftest.py` (replays 435),
+  `backend/tests/rls/test_ride_distance_integrity_rls.py` (regression tests
+  updated to assert the fix), `docs/change-log/2026-09-21-ride-distance-audit-table-immutability.md`.
 
 ### C118. Open Change Requests (`CR-2026-*`, filed via `.github/ISSUE_TEMPLATE/ci_change_request.yml`) were never cross-referenced here — no single place showed the current backlog
 - **Note:** a different, unrelated entry above (the ride-distance-integrity
@@ -27983,9 +28215,9 @@ as evidence that the thing it configures exists.
   `backend/tests/rls/test_notifications_and_docs_admin_rls.py`,
   `backend/tests/rls/test_money_and_safety_rls.py`, `backend/tests/rls/test_otp_and_safety_rls.py`.
 
-### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)
+### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed, 1 decided-not-yet-applied)
 
-- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-20 — gap #3 closed, gap #2 needs a product decision.**
+- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-21 — gap #3 closed, gap #2 decided (make the GHCR package public) but not yet applied — that's a manual repo/org-admin action, not a code change.**
 - **What's wrong:** `deploy-fly.yml` has Fly's remote builder independently
   rebuild the backend from `backend/Dockerfile` on every push to `main`,
   while `ci.yml`'s `docker-image-scan` job separately builds, scans,
@@ -28008,21 +28240,27 @@ as evidence that the thing it configures exists.
      deploy would very likely fire before the image exists. The workflow's
      polling wait covers this in theory but has never been exercised
      end-to-end.
-  2. **Registry auth — still open, and worse than first thought.**
+  2. **Registry auth — decided 2026-09-21 (option a), not yet applied.**
      Researched 2026-09-20: multiple independent reports (Fly community
      thread "deploy from private package with github actions"; flyctl
      issues #75, #1100, #362) describe `flyctl deploy --image` returning
      `401 Unauthorized` pulling a **private** GHCR image even after
      `docker login ghcr.io` — the exact setup `deploy-fly-signed-image.yml`
      uses. The one consistently-reported working fix is making the GHCR
-     package **public**. **This needs an explicit decision, not a silent
-     code change** — the image contains application code/dependencies, not
-     secrets (this repo's Dockerfile never bakes secrets in), but "public"
-     vs "private" for a commercial product's backend image is a product
-     call. Options: (a) make `ghcr.io/<repo>/spinr-backend` public,
-     (b) find another Fly-supported auth path for a private registry,
-     (c) abandon `flyctl deploy --image` against GHCR and push to Fly's own
-     registry instead. None implemented — awaiting a decision.
+     package **public**. Presented three options to the repository owner —
+     (a) make `ghcr.io/<repo>/spinr-backend` public, (b) find another
+     Fly-supported auth path for a private registry, (c) abandon `flyctl
+     deploy --image` against GHCR and push to Fly's own registry instead —
+     with a recommendation for (a), since the image contains application
+     code/dependencies only (verified against the Dockerfile: no secrets
+     baked in) and it's the one option with real-world confirmation it
+     actually works. **Decision: (a).** Not yet applied — changing a GHCR
+     package's visibility is a manual GitHub repo/org-admin action (Package
+     settings → Danger Zone → Change visibility), not something any agent's
+     tooling in this repo can do; the repository owner (or someone with
+     admin access to this package) needs to make the change directly on
+     GitHub. Once applied, re-run gap #1's end-to-end dispatch test with a
+     real auth check and close this gap.
   3. **Build provenance — CLOSED 2026-09-20.** Added a "Stamp build info"
      step to `ci.yml`'s `docker-image-scan` job (mirrors `deploy-fly.yml`'s
      own step; `"provider":"ghcr"` since this job never deploys anywhere
@@ -28322,6 +28560,65 @@ as evidence that the thing it configures exists.
 - **Files:** `deploy/tiles/Dockerfile` (`REGION_URL`/`EXTRA_REGION_URLS`),
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
+
+### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
+
+- [ ] **Status:** OPEN — found 2026-09-21 while root-causing `backend-test`
+  CI failures for PR #5612/#5634 (the #5614-fallout fix round).
+- **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
+  (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
+  fixture that sets `settings_loader._settings_cache = None` before each
+  test and restores it after. Despite that, running the *entire*
+  `backend/tests/` suite in real collection order (confirmed twice,
+  independently: a full 16166-test run and a 794-file prefix-subset run
+  both up to and including this file) reliably fails both
+  `TestFailedReadDoesNotClobber` tests:
+  `test_last_known_survives_a_raising_read` → `KeyError: 'new_ride_requests_enabled'`
+  on the very first `get_app_settings()` call in the test, immediately
+  after mocking `db_supabase.get_rows` to return a row containing that
+  key; `test_a_successful_read_does_advance_it` → `TypeError: 'NoneType'
+  object is not subscriptable`. Both tests pass individually, and pass
+  paired with their immediate neighbor file
+  (`test_settings_column_parity.py`) — the pollution only reproduces
+  under the true, much-longer preceding chain.
+- **Why this matters:** `_settings_cache` backs the booking kill switch
+  (`new_ride_requests_enabled`) — the exact fail-open hole PR #5614's E2
+  fix (`docs/change-log/2026-09-20-booking-kill-switch-last-known-good.md`)
+  closed. A test-isolation gap here doesn't affect production (this tier
+  never touches real Supabase), but it does mean this specific regression
+  protection is not reliably exercised in CI's actual execution order —
+  only when run in isolation, which is not how `backend-test` runs it.
+- **Root cause (partial):** confirmed NOT caused by module-identity
+  splitting (the fixture, the test body, and `get_app_settings()` itself
+  all resolve `settings_loader` — and by extension its own
+  `_settings_cache` global — through the same `from backend import
+  settings_loader` reference within this one file, ruling out the
+  dual-import bare-vs-qualified module-splitting hazard `conftest.py`'s
+  `_BareModuleAliasFinder` exists for). Likely candidate, not yet
+  confirmed: a leaked background task/coroutine from an earlier test in
+  the suite (the same class of hazard `pytest.ini`'s own
+  `filterwarnings` block documents at length as "A8" — a fire-and-forget
+  `asyncio.create_task`/`spawn()` call whose coroutine is never
+  awaited/closed) that calls the real, unmocked `get_app_settings()` on a
+  later event-loop tick that happens to fall during this test's own
+  `await`, overwriting `_settings_cache` with a real (or differently-shaped
+  mocked) settings dict that lacks `new_ride_requests_enabled`. Not
+  confirmed which specific earlier test leaks it — would need either
+  bisection over ~790 preceding files or instrumenting
+  `_settings_cache`'s setter to capture a stack trace on any write during
+  this test's execution window.
+- **Action:** bisect or instrument to find the actual leaking test, then
+  either fix its own task/coroutine cleanup (per the A8 pattern already
+  fixed elsewhere) or, if a specific offender proves hard to isolate,
+  harden this file's own tests against the general hazard class (e.g. a
+  final `await asyncio.sleep(0)` drain in the fixture teardown, or
+  re-asserting `_settings_cache is None` immediately before each
+  cache-dependent call within the test body itself, not just in the
+  fixture).
+- **Files:** `backend/tests/test_settings_loader_last_known.py`,
+  `backend/settings_loader.py` (`_settings_cache` global),
+  `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
+  filterwarnings documentation).
 
 ## Recently completed (do not redo)
 

@@ -678,10 +678,18 @@ def pg_conn(pg_test_dbname):
     # both only rewrite purge_pii_retention(), unrelated to audit_logs'
     # RLS/grant/trigger surface under test here.
     #
-    # 56 and 57's triggers do NOT compose safely -- see
-    # test_flag_gated_delete_is_still_blocked_by_migration_57_trigger below,
-    # which reproduces (does not fix) a real, currently-live production bug:
-    # ACTION_ITEMS.md C112. ---
+    # 56 and 57's triggers did NOT compose safely as originally shipped --
+    # see ACTION_ITEMS.md C112 for the full writeup. Migration 434 fixes
+    # this: it narrows 57's audit_logs_no_mutate trigger to UPDATE only
+    # (leaving 56's flag-gated audit_logs_no_delete as the sole DELETE
+    # guard) and, in the same migration, restores purge_pii_retention()
+    # Step G's missing PERFORM set_config(...)/exception-handler shape
+    # (migration 335's live body had silently dropped it -- see 434's own
+    # header). Applied last in this section so the harness reflects the
+    # fixed, current schema rather than the pre-fix conflict --
+    # test_flag_gated_delete_now_succeeds_after_migration_434_trigger_fix
+    # below proves the fix; test_no_role_can_delete_audit_logs_even_service_role
+    # proves the unflagged path is still fully denied. ---
     migration_06_sql = (migrations_dir / "06_cloud_messaging.sql").read_text()
     cur.execute(_extract_create_table(migration_06_sql, "audit_logs"))
     cur.execute("ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY")
@@ -695,6 +703,7 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "51_audit_logs_lockdown.sql").read_text())
     cur.execute((migrations_dir / "56_audit_logs_delete_lockdown.sql").read_text())
     cur.execute((migrations_dir / "57_audit_logs_schema_standardization.sql").read_text())
+    cur.execute((migrations_dir / "434_fix_audit_logs_delete_trigger_conflict.sql").read_text())
 
     # --- cloud_messages / push_tokens (ACTION_ITEMS.md C123 phase 1, migration
     # 432): same migration-06 file as audit_logs above, reusing migration_06_sql
@@ -900,6 +909,7 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "370_add_unresolved_at_completion_status_to_gap_events.sql").read_text())
     cur.execute((migrations_dir / "242_ride_distance_recomputes.sql").read_text())
     cur.execute((migrations_dir / "246_ride_distance_integrity_events.sql").read_text())
+    cur.execute((migrations_dir / "435_ride_distance_integrity_immutability.sql").read_text())
 
     cur.execute(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ride_location_gap_events, "

@@ -852,7 +852,8 @@ async def test_stuck_stripe_events_flags_only_aged_rows():
     assert out[0]["type"] == "STRIPE_EVENT_STUCK_UNPROCESSED"
     assert out[0]["event_type"] == "payment_intent.succeeded"
     filters = db_mock.get_rows.await_args.args[1]
-    assert filters == {"processed_at": None}
+    assert filters["processed_at"] is None
+    assert "$gte" in filters.get("received_at", {})
     # Detection only — never mutates/replays the row.
     db_mock.update_one.assert_not_awaited()
     db_mock.insert_one.assert_not_awaited()

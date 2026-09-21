@@ -94,4 +94,29 @@ describe('admin route replay contract', () => {
     expect(detailSource).toContain('routeQualityLabel');
     expect(detailSource).toContain('actualSegments={actualSegmentsProp}');
   });
+
+  it('never borrows the pickup-to-dropoff chord for a GPS phase with no geometry', () => {
+    // Ride 0c24901f: the Pickup tab said "No Phase 2 GPS trail for this ride"
+    // and still drew a long diagonal, because suppressStraightFallback was only
+    // set for imported rides. That diagonal is the *trip's* crow-flies line, so
+    // it read as a driver approach on the screen used for SGI and dispute
+    // review and contradicted the 0.60 km pickup card above it.
+    expect(detailSource).toContain('const noGeometryForPhase');
+    expect(detailSource).toContain('suppressStraightFallback={importedNoGps || noGeometryForPhase}');
+    // The planned view is exempt: there the straight line IS the content, and
+    // it is labelled "straight-line reference".
+    expect(detailSource).toContain('selectedPhase !== "planned" && !hasGeometryForPhase');
+    expect(detailSource).toContain('Planned Trip (straight-line reference)');
+  });
+
+  it('counts a phase as having geometry only when a line can actually be drawn', () => {
+    // A one-point trail renders nothing, so it must not keep the suppression
+    // off and let the chord through; the map's own guards use the same bar.
+    expect(detailSource).toContain('(pickupProp?.length ?? 0) > 1');
+    expect(detailSource).toContain('(tripProp?.length ?? 0) > 1');
+    expect(detailSource).toContain('(plannedProp?.length ?? 0) > 1');
+    expect(detailSource).toContain('(trailForMap?.length ?? 0) > 1');
+    expect(detailSource).toContain('actualSegmentsProp != null');
+    expect(mapSource).toContain('!suppressStraightFallback && !hasPlannedTrail && !hasRouteGeometry');
+  });
 });

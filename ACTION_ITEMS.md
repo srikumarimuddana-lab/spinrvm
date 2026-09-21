@@ -28305,6 +28305,65 @@ as evidence that the thing it configures exists.
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
+### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
+
+- [ ] **Status:** OPEN — found 2026-09-21 while root-causing `backend-test`
+  CI failures for PR #5612/#5634 (the #5614-fallout fix round).
+- **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
+  (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
+  fixture that sets `settings_loader._settings_cache = None` before each
+  test and restores it after. Despite that, running the *entire*
+  `backend/tests/` suite in real collection order (confirmed twice,
+  independently: a full 16166-test run and a 794-file prefix-subset run
+  both up to and including this file) reliably fails both
+  `TestFailedReadDoesNotClobber` tests:
+  `test_last_known_survives_a_raising_read` → `KeyError: 'new_ride_requests_enabled'`
+  on the very first `get_app_settings()` call in the test, immediately
+  after mocking `db_supabase.get_rows` to return a row containing that
+  key; `test_a_successful_read_does_advance_it` → `TypeError: 'NoneType'
+  object is not subscriptable`. Both tests pass individually, and pass
+  paired with their immediate neighbor file
+  (`test_settings_column_parity.py`) — the pollution only reproduces
+  under the true, much-longer preceding chain.
+- **Why this matters:** `_settings_cache` backs the booking kill switch
+  (`new_ride_requests_enabled`) — the exact fail-open hole PR #5614's E2
+  fix (`docs/change-log/2026-09-20-booking-kill-switch-last-known-good.md`)
+  closed. A test-isolation gap here doesn't affect production (this tier
+  never touches real Supabase), but it does mean this specific regression
+  protection is not reliably exercised in CI's actual execution order —
+  only when run in isolation, which is not how `backend-test` runs it.
+- **Root cause (partial):** confirmed NOT caused by module-identity
+  splitting (the fixture, the test body, and `get_app_settings()` itself
+  all resolve `settings_loader` — and by extension its own
+  `_settings_cache` global — through the same `from backend import
+  settings_loader` reference within this one file, ruling out the
+  dual-import bare-vs-qualified module-splitting hazard `conftest.py`'s
+  `_BareModuleAliasFinder` exists for). Likely candidate, not yet
+  confirmed: a leaked background task/coroutine from an earlier test in
+  the suite (the same class of hazard `pytest.ini`'s own
+  `filterwarnings` block documents at length as "A8" — a fire-and-forget
+  `asyncio.create_task`/`spawn()` call whose coroutine is never
+  awaited/closed) that calls the real, unmocked `get_app_settings()` on a
+  later event-loop tick that happens to fall during this test's own
+  `await`, overwriting `_settings_cache` with a real (or differently-shaped
+  mocked) settings dict that lacks `new_ride_requests_enabled`. Not
+  confirmed which specific earlier test leaks it — would need either
+  bisection over ~790 preceding files or instrumenting
+  `_settings_cache`'s setter to capture a stack trace on any write during
+  this test's execution window.
+- **Action:** bisect or instrument to find the actual leaking test, then
+  either fix its own task/coroutine cleanup (per the A8 pattern already
+  fixed elsewhere) or, if a specific offender proves hard to isolate,
+  harden this file's own tests against the general hazard class (e.g. a
+  final `await asyncio.sleep(0)` drain in the fixture teardown, or
+  re-asserting `_settings_cache is None` immediately before each
+  cache-dependent call within the test body itself, not just in the
+  fixture).
+- **Files:** `backend/tests/test_settings_loader_last_known.py`,
+  `backend/settings_loader.py` (`_settings_cache` global),
+  `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
+  filterwarnings documentation).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

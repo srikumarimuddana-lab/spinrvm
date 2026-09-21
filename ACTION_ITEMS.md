@@ -19640,6 +19640,60 @@ mechanical follow-up work, prioritizable independently.
   - **Acceptance:** rider-app toast colors match the current theme tokens
     in both light and dark mode. Met.
 
+### GPS-plausibility chain seeded from stale `driver_last_known.updated_at`, falsely rejecting legitimate breadcrumbs (#5357)
+
+- [ ] **Status:** open — filed 2026-09-14 by `spinr-fraud-auditor` during
+  review of PR #5355 (#1231 finding 11's GPS-plausibility-chain fix). Not
+  introduced by that PR — a pre-existing pattern in
+  `persist_trip_location_batch` (v2) that #5355 newly exposed v1 REST
+  traffic to as well (v1 had no plausibility chain to trip before).
+- **What's wrong:** `routes/drivers/status.py`'s go-online/go-offline toggle
+  bumps `drivers.updated_at` on every call, but only writes fresh `lat`/`lng`
+  alongside it when going online *and* the client supplied an immediate
+  non-zero GPS fix. Going offline, or going online without an immediate fix
+  (cold start, permission dialog not yet granted), bumps `updated_at` to
+  "now" while `lat`/`lng` stay stale from an earlier, unrelated write. Both
+  `persist_trip_location_batch` (v2) and `persist_ride_breadcrumbs` (v1)
+  seed their GPS-plausibility chain's "previous point" from this same
+  `drivers` row when the batch has no earlier accepted point — so a
+  stale-`lat`/`lng`-but-fresh-`updated_at` row looks like "this exact
+  position, very recently," understating `elapsed_seconds` and inflating the
+  computed speed for the driver's real next position enough to reject it as
+  `"teleport"`.
+- **Concrete failure scenario:** driver goes offline (stale lat/lng, fresh
+  `updated_at`) → goes back online without an immediate fix (still stale
+  lat/lng, `updated_at` bumped again) → starts a trip and uploads real
+  breadcrumbs from their actual position → the first breadcrumb (and,
+  since a rejected point never advances the chain's baseline, potentially
+  several after it) is falsely rejected right at trip start — exactly when
+  the Period 2/3 insurance audit trail (SGI-reportable) most needs
+  completeness.
+- **Why it happens:** no dedicated location-timestamp column exists on
+  `drivers` (confirmed: no `location_updated_at`/`last_location_at`
+  equivalent). `updated_at` is generic row-modified, not scoped to `lat`/
+  `lng` specifically.
+- **Proposed fix (not yet implemented):** add a location-specific timestamp
+  column (e.g. `drivers.location_updated_at`), written only alongside an
+  actual `lat`/`lng` write, and have both `persist_trip_location_batch` and
+  `persist_ride_breadcrumbs` seed their `driver_last_known` chain from that
+  column instead of the generic `updated_at`. Needs a migration (additive
+  column, backfill optional — a NULL just means "no seed available, chain
+  starts cold," the pre-#5355 v1 behavior anyway) and touches both breadcrumb
+  paths plus every `drivers.lat`/`lng` write site (`routes/drivers/status.py`,
+  `routes/drivers/location.py`, `routes/websocket.py`).
+- **Severity note:** fails closed — drops real breadcrumbs, never lets
+  spoofed data through — so not launch-blocking, but a real correctness gap
+  in a regulatory-audit-adjacent path. Deliberately not fixed inline in
+  #5355: the real fix touches a shared, live-tested surface (driver
+  online/available flags, `drivers` table write paths) beyond that PR's
+  scope, and needs its own Change Impact Log entry per CLAUDE.md's pre-merge
+  gates given the blast radius (a new migration + 3+ call sites).
+- **Files:** `backend/routes/drivers/status.py`, `backend/routes/drivers/
+  location.py`, `backend/routes/websocket.py`, `backend/utils/
+  location_write_gate.py` (or wherever `persist_trip_location_batch`/
+  `persist_ride_breadcrumbs` live), a new `backend/migrations/NN_*.sql`.
+- **Tracking:** srikumarimuddana-lab/spinrvm#5357.
+
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
 _Not launch-gating, but every mature platform at this stage has them. Ordered by

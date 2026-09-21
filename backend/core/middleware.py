@@ -139,6 +139,25 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # without possession of the SMS code.
     "/api/v1/auth/send-otp",
     "/api/v1/auth/verify-otp",
+    # Public trip-share tracking page. track.spinr.ca is a browser surface (the
+    # Next.js page a rider's chosen contacts open from an SMS/push link), so
+    # like the admin dashboard and the company portal it can never attach an
+    # X-Firebase-AppCheck header. Authorisation is the unguessable
+    # secrets.token_urlsafe(32) share token itself, which track_shared_ride
+    # expires after 24h (routes/rides/sharing.py) — App Check was never what
+    # protected this endpoint.
+    #
+    # Without this exemption the page fails in an actively misleading way: App
+    # Check short-circuits with a 401 *outside* CORSMiddleware (CORS is added
+    # first in init_middleware, so it sits innermost and never sees the
+    # short-circuit), the response carries no Access-Control-Allow-Origin, the
+    # browser blocks it, and fetch() rejects as a generic network error
+    # ("Load failed" / "Failed to fetch") rather than a readable 401.
+    #
+    # Prefix safety: GET /track/{share_token} is the ONLY unauthenticated route
+    # under /api/v1/rides/ — every sibling keeps its get_current_user
+    # dependency, so this prefix cannot widen access to any of them.
+    "/api/v1/rides/track/",
 )
 
 

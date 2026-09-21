@@ -1461,16 +1461,39 @@ class TestDriverCancelRideGuards:
         assert exc.value.status_code == 404
 
     async def test_error_when_ride_already_in_progress(self):
+        from fastapi import HTTPException
+
         from backend.routes.drivers.ride_cancel import cancel_ride
-        from backend.utils.error_handling import RideStateError
 
         ride = _ride(status="in_progress")
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
-            with pytest.raises(RideStateError):
+            # #5611: 409 with a phrase-based message, matching the rider-side
+            # guard and the sibling driver-side guards -- not RideStateError's
+            # 422 with a raw status token.
+            with pytest.raises(HTTPException) as exc:
                 await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "in_progress" not in exc.value.detail
+
+    async def test_error_when_ride_already_completed(self):
+        """#5611: the other half of the same guard -- COMPLETED, not just IN_PROGRESS."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_cancel import cancel_ride
+
+        ride = _ride(status="completed")
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "completed" not in exc.value.detail
+        assert "already finished" in exc.value.detail
 
 
 class TestDriverCancelRideBodyReasonParsing:

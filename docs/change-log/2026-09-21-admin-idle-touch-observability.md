@@ -134,7 +134,7 @@ The change is visible only to whoever watches Sentry and the metrics endpoint.
 | File path | What changed | Why |
 |---|---|---|
 | `backend/dependencies/__init__.py` | 2 × `logger.warning` → `logger.opt(exception=True).error` + metric; `_metric_inc` import added to both dual-import branches | E3 |
-| `backend/tests/test_admin_idle_touch_observability.py` | new — 7 tests | pins level, metric, and unchanged let-through |
+| `backend/tests/test_admin_idle_touch_observability.py` | new — 6 tests | pins level, metric, and unchanged let-through |
 | `docs/change-log/2026-09-21-admin-idle-touch-observability.md` | this file | |
 
 ## 7. Before / after

@@ -52,8 +52,9 @@ job when free rides became possible.
 
 One shared helper, `_ride_total_with_fallback(ride, *, site)`, now backs all three sites. It
 **returns exactly what the old expression returned**, and additionally logs and increments
-`spinr_payment_zero_grand_total_fallback_total{site}` when `grand_total` is present-but-falsy while
-`total_fare` disagrees.
+`spinr_payment_zero_grand_total_fallback_total{site, case}` when `grand_total` is present-but-falsy
+while `total_fare` disagrees — where `case` is `free_ride` or `legacy_row`, decided per row from
+`discount_amount` (see §7).
 
 **Why measure instead of fix.** Resolving the ambiguity wrongly costs real money in *both*
 directions:
@@ -74,8 +75,9 @@ not.
 
 **Alternatives considered:** (a) fix the charge site now — rejected, it cannot be made airtight
 against the legacy case without the data; (b) hand-write read-only production SQL for the owner to
-run — viable and offered, but slower and this instrumentation answers the same question
-continuously and in situ.
+run — viable and offered, and after review this is now recorded as the *preferred* resolution, with
+the query in §7 and a dated backlog item (`ACTION_ITEMS.md` R1). The instrument is the fallback for
+if nobody runs it, not a replacement for running it.
 
 ## 4. Risk & impact on existing functionality
 
@@ -95,7 +97,8 @@ break. No other function, table, or code path is touched.
 deliberately: this is a measurement, not a failure, and nobody should be paged. The **counter** is
 the signal to watch.
 
-**PII:** logs `ride_id` (an ID) and two money amounts. No name, phone, email, or location.
+**PII:** logs `ride_id` (an ID) and four money amounts (`grand_total`, `total_fare`,
+`discount_amount`, `tax_amount`, `area_fees_total`). No name, phone, email, or location.
 
 **No migration, no schema, no settings row, no feature flag, no API change.**
 
@@ -109,7 +112,7 @@ charged before this commit — that is the entire point. Visible only in logs an
 | File path | What changed | Why |
 |---|---|---|
 | `backend/services/payment_service.py` | new `_ride_total_with_fallback` + `_ride_total_metric_inc`; 3 call sites routed through it | measure the ambiguity |
-| `backend/tests/test_ride_total_ambiguous_zero.py` | new — 15 tests | pin value-equivalence and which cases count |
+| `backend/tests/test_ride_total_ambiguous_zero.py` | new — 11 test functions (19 cases once the 9-way parametrize expands) | pin value-equivalence and which cases count |
 | `docs/change-log/2026-09-21-ambiguous-zero-grand-total-instrumented.md` | this file | |
 
 ## 7. Before / after
@@ -130,10 +133,36 @@ result = await settle_corporate(ride, ride_id, total_charge=total, tip_amount=De
 
 **Concrete scenario.** A guest-corporate ride settles with `grand_total = 0` and
 `total_fare = 40.00`. *Before and after:* the corporate account is charged **$40.00** — unchanged.
-*New:* a warning naming the site and the raw type, and
-`spinr_payment_zero_grand_total_fallback_total{site="guest_corporate_auto_settle"}` increments. If
-that counter stays flat, the bug is not reachable in production and can be closed as theoretical.
-If it moves, the log says whether those are free rides or legacy rows, and the fix follows.
+*New:* a warning naming the site, the raw type, and `discount_amount` / `tax_amount` /
+`area_fees_total`, plus
+`spinr_payment_zero_grand_total_fallback_total{site="guest_corporate_auto_settle", case="free_ride"|"legacy_row"}`.
+
+**`case` classifies each occurrence on the spot, rather than waiting for aggregate data.**
+`fare_service.py`'s `grand_total = total_fare + fees + tax - discount` subtracts the discount from
+`grand_total` but **not** from `total_fare`. So a genuinely free ride carries a discount roughly
+equal to the fare, while a row predating migration 46 carries none — `discount_amount`
+discriminates deterministically, per row. One logged occurrence now answers the question.
+
+**Correction — a flat counter is NOT proof the bug is absent.** An earlier draft of this section
+said "if that counter stays flat, the bug is not reachable in production and can be closed as
+theoretical." That is wrong in precisely the scenario §3 says it is watching for. If PostgREST
+returns `numeric` as a **string**, `"0.00"` is truthy, `not raw_grand` is `False`, and this branch
+never fires — while the *real* live bug in that world is legacy rows settling at **$0** (silent
+revenue loss, driver still paid), which this instrument is structurally blind to and
+`test_ride_total_ambiguous_zero.py` pins as intended. So a flat counter is equally consistent with
+"no bug" and with "a different bug, invisible here". Caught in review; recorded rather than quietly
+dropped, because the false exit criterion is more dangerous than no exit criterion.
+
+**The honest exit criterion** is a single read-only query against production, which settles it
+immediately and does not require this instrument at all:
+
+```sql
+SELECT count(*) AS ambiguous,
+       count(*) FILTER (WHERE COALESCE(discount_amount, 0) > 0) AS free_rides,
+       count(*) FILTER (WHERE COALESCE(discount_amount, 0) = 0) AS legacy_rows
+FROM rides
+WHERE grand_total = 0 AND total_fare > 0;
+```
 
 ## 8. Rollback plan
 

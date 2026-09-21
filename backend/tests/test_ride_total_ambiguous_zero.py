@@ -37,8 +37,14 @@ from backend.utils import metrics
 _METRIC = "spinr_payment_zero_grand_total_fallback_total"
 
 
-def _counter(site: str) -> float:
-    return metrics.snapshot()["counters"].get(_METRIC, {}).get((("site", site),), 0)
+def _counter(site: str, case: str = "legacy_row") -> float:
+    """metrics._labels_to_key sorts the label pairs, so "case" precedes "site".
+
+    The default is "legacy_row" because a ride dict with no `discount_amount`
+    classifies that way — which is every fixture here except the free-ride one.
+    """
+    key = (("case", case), ("site", site))
+    return metrics.snapshot()["counters"].get(_METRIC, {}).get(key, 0)
 
 
 def _old_expression(ride: dict) -> Decimal:
@@ -91,6 +97,46 @@ class TestAmbiguousCaseIsCounted:
         _ride_total_with_fallback({"grand_total": 0, "total_fare": "12.34"}, site="guest_corporate_auto_settle")
 
         assert _counter("guest_corporate_auto_settle") == before + 1
+
+
+class TestTheCaseLabelDiscriminates:
+    """`discount_amount` separates the two meanings deterministically, per row.
+
+    fare_service's `grand_total = total_fare + fees + tax - discount` subtracts
+    the discount from grand_total but NOT from total_fare. So a genuinely free
+    ride carries a discount roughly equal to the fare, while a row predating
+    migration 46 (which added the column DEFAULT 0) carries none. This is what
+    makes one logged occurrence answer the question, instead of an aggregate
+    counter that only says "it happened".
+    """
+
+    def test_a_discount_marks_it_a_free_ride(self):
+        before = _counter("probe_free", "free_ride")
+
+        result = _ride_total_with_fallback(
+            {"grand_total": 0, "total_fare": "40.00", "discount_amount": "40.00"},
+            site="probe_free",
+        )
+
+        assert _counter("probe_free", "free_ride") == before + 1
+        # Still charges what it charged yesterday -- this classifies, it does
+        # not yet change behaviour.
+        assert result == Decimal("40.00")
+
+    def test_no_discount_marks_it_a_legacy_row(self):
+        before = _counter("probe_legacy", "legacy_row")
+        _ride_total_with_fallback({"grand_total": 0, "total_fare": "40.00"}, site="probe_legacy")
+        assert _counter("probe_legacy", "legacy_row") == before + 1
+
+    def test_an_explicit_zero_discount_is_also_a_legacy_row(self):
+        """A column present and 0 is the same evidence as absent: no discount
+        was applied, so a $0 grand_total cannot be explained by one."""
+        before = _counter("probe_zero_disc", "legacy_row")
+        _ride_total_with_fallback(
+            {"grand_total": 0, "total_fare": "40.00", "discount_amount": 0},
+            site="probe_zero_disc",
+        )
+        assert _counter("probe_zero_disc", "legacy_row") == before + 1
 
 
 class TestUnambiguousCasesAreNotCounted:

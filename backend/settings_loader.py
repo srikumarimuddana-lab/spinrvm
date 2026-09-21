@@ -7,6 +7,8 @@ All readers use get_app_settings() for consistent defaults and shape.
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from loguru import logger
+
 try:
     from . import db_supabase
     from .schemas import AppSettings
@@ -41,6 +43,29 @@ async def get_app_settings() -> Dict[str, Any]:
 
     defaults = _defaults_dict()
     row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1))
+    if not row and _settings_cache is not None:
+        # A ROWLESS read is not an error — get_rows returns [] without raising
+        # (repositories/_base.py) when the row is missing, RLS hides it, the
+        # schema cache blips, or the client is uninitialised on a replica. The
+        # old code overwrote the cache with schema defaults in that case, which
+        # for a kill switch means its default (True, "not killing anything")
+        # silently replaces an operator's pause — the same hole the raise path
+        # was fixed for, but quieter, because nothing raised and nothing logged.
+        #
+        # So: once this process has ever loaded settings successfully, a rowless
+        # read keeps the last known values rather than reverting to defaults,
+        # and says so. A cold process with no cache still falls back to
+        # defaults, which is the only thing it can do.
+        # ERROR, not warning: this branch can only fire when settings loaded
+        # successfully at least once and then stopped returning a row, which is
+        # a real anomaly rather than a cold start. Bounded to roughly one event
+        # per process per TTL (60s), so it cannot flood Sentry.
+        logger.bind(domain="admin").error(
+            "settings row 'app_settings' came back empty — keeping the last known values "
+            "rather than reverting to schema defaults (a kill switch would silently un-pause)"
+        )
+        _settings_cache = (now, _settings_cache[1])
+        return _settings_cache[1]
     if not row:
         result = defaults
     else:

@@ -354,20 +354,22 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         try:
             _env_admin_version = await get_env_admin_token_version()
         except Exception as _ver_err:
-            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             # False positive: the rule matches on the word "token" in
             # "token_version" and assumes a credential is being logged. What is
             # actually logged is a fixed message plus `_ver_err`, the exception
             # from a failed `settings` row read — no secret, no token, no claim
-            # value. The counter itself is an integer generation number, and it
-            # is not logged here either. Suppressed by rule id rather than a
-            # bare `# nosemgrep` so this line stays covered by every other rule.
+            # value. This holds only while utils/env_admin_tokens.py keeps its
+            # narrow `columns=` select; see the tripwire in its docstring.
+            # Suppressed by rule id rather than a bare `# nosemgrep` so this
+            # line stays covered by every other rule.
             #
-            # Placed on the CALL line, not the closing paren: semgrep suppresses
-            # at a match's START line, while GitHub code scanning displays the
-            # alert at its END line (543/361 here) — which is exactly how the
-            # SR-03 suppression in routes/rides/payments.py came to be on the
-            # wrong line and silently stopped working.
+            # The directive MUST be the last comment line before the call:
+            # semgrep honours `# nosemgrep` only on the match's own line or the
+            # one immediately above it. An earlier draft put it at the top of
+            # this comment block, 13 lines away, where it suppressed nothing.
+            # Matches the two suppressions in this repo that demonstrably work
+            # (services/fare_service.py:365, utils/email_receipt.py:333).
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             logger.error(
                 "admin login: env-admin token_version unreadable — refusing to mint: %s",
                 _ver_err,
@@ -550,9 +552,10 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         try:
             token_version = await get_env_admin_token_version()
         except Exception as _ver_err:
-            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             # Same false positive as the login path above — see that comment for
-            # why this is safe and why the suppression sits on the call line.
+            # why this is safe, and why the directive has to be the line
+            # immediately above the call rather than the top of the block.
+            # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             logger.error(
                 "admin refresh: env-admin token_version unreadable — refusing to mint: %s",
                 _ver_err,

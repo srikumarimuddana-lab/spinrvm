@@ -103,26 +103,42 @@ def _ride_total_with_fallback(ride: Dict[str, Any], *, site: str) -> Decimal:
     total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
     # Present, but falsy, while total_fare disagrees — the only ambiguous shape.
     if raw_grand is not None and not raw_grand and _d(raw_fare or 0) > 0:
+        # `discount_amount` discriminates the two meanings deterministically,
+        # per row, which is better than waiting for aggregate data:
+        # fare_service.py's grand_total = total_fare + fees + tax - discount
+        # subtracts the discount from grand_total but NOT from total_fare. So a
+        # genuinely free ride has a discount roughly equal to the fare, while a
+        # row that predates migration 46 (which added the column DEFAULT 0) has
+        # no discount at all. Logging it — with fees and tax, the other two
+        # terms — means one occurrence answers the question, instead of a
+        # counter that only says "it happened".
+        raw_discount = ride.get("discount_amount")
+        case = "free_ride" if _d(raw_discount or 0) > 0 else "legacy_row"
         logger.bind(domain="payments", ride_id=ride.get("id")).warning(
             "[PAYMENT] ambiguous zero grand_total at {} — falling back to total_fare as before "
-            "(charging {}); grand_total={!r} type={}, total_fare={!r}",
+            "(charging {}); case={} grand_total={!r} type={} total_fare={!r} "
+            "discount_amount={!r} tax_amount={!r} area_fees_total={!r}",
             site,
             total,
+            case,
             raw_grand,
             type(raw_grand).__name__,
             raw_fare,
+            raw_discount,
+            ride.get("tax_amount"),
+            ride.get("area_fees_total"),
         )
-        _ride_total_metric_inc(site)
+        _ride_total_metric_inc(site, case)
     return total
 
 
-def _ride_total_metric_inc(site: str) -> None:
+def _ride_total_metric_inc(site: str, case: str) -> None:
     """Metrics are imported per-function in this module, not at module scope."""
     try:
         from ..utils.metrics import inc as _metric_inc
     except ImportError:  # pragma: no cover - dual import
         from utils.metrics import inc as _metric_inc  # type: ignore
-    _metric_inc("spinr_payment_zero_grand_total_fallback_total", {"site": site})
+    _metric_inc("spinr_payment_zero_grand_total_fallback_total", {"site": site, "case": case})
 
 
 # R44 (ACTION_ITEMS.md N15): a corporate rider previously learned their

@@ -17488,6 +17488,51 @@ record of what was assumed vs. what was actually true</summary>
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
+### Follow-ups from the 2026-09-21 review of PR #5614
+
+Filed as real items because the review's own finding was that change-log prose is where
+follow-ups go to die — each of these was promised in a `docs/change-log/2026-09-21-*.md`
+"What was NOT verified" section and had no backlog entry.
+
+- [ ] **R1 — Settle the ambiguous `grand_total = 0` and remove the instrument.**
+  `services/payment_service._ride_total_with_fallback` measures but does not fix a real
+  overcharge (a genuinely-$0 ride billed the pre-tax subtotal at
+  `guest_corporate_auto_settle`). One read-only production query settles it — the SQL is in
+  `docs/change-log/2026-09-21-ambiguous-zero-grand-total-instrumented.md` §7 — after which
+  either fix it or close it as unreachable and delete the helper's logging. **Do not treat a
+  flat counter as proof of absence**: if PostgREST returns `numeric` as a string the branch
+  cannot fire, while the live bug in that world would be legacy rows settling at $0. Review
+  by 2026-10-21.
+- [ ] **R2 — Extract one shared kill-switch read helper.** There are now three read-failure
+  semantics across eight `app_settings` flag reads (fail-closed, last-known-good, fail-open —
+  table in `docs/adr/011-flag-read-failure-semantics.md`'s 2026-09-21 Amendment). ADR-011's own
+  Consequences section predicted the per-site-comment mitigation would be insufficient, and it
+  was: converting the booking site found a live NULL-handling bug (`.get(flag, True)` returns
+  `None` for a column present-but-NULL, and `bool(None)` is `False` — it would have paused every
+  booking platform-wide). **That same bug is still present in all five remaining fail-open
+  sites**: `routes/promotions.py`, `utils/scheduled_rides.py`, `utils/surge_engine.py`,
+  `utils/allowance_reset.py`, `utils/corporate_low_balance.py`. A `read_flag(name, *, on_error=...)`
+  helper encodes the NULL/absent/never-read rule once. (The G5 amendment above names only two of
+  these five — corrected here.)
+- [ ] **R3 — Converge the settings-read-failure metric names.** ADR-011 decision item #2 specified
+  one shared `spinr_payment_settings_read_failed_total{flag}`; this PR added
+  `spinr_rides_settings_read_failed_total{flag,fallback}`. As R2 converts the rest this becomes
+  four or five names for one condition. Decide with R2.
+- [ ] **R4 — Sweep `.bind(domain=...)` across the remaining Sentry-bound ERROR logs.** Two
+  handlers in `dependencies/__init__.py` (the Redis revocation-denylist fail-open and the
+  break-glass allowlist fail-closed) are at ERROR but use neither `.opt(exception=True)` nor a
+  `domain` bind, so they reach Sentry stackless and untagged. Same defect class this PR fixed two
+  lines away.
+- [ ] **R5 — Alerts for the four counters this PR added.** `spinr_auth_admin_idle_touch_failed_total`,
+  `spinr_rides_settings_read_failed_total`, `spinr_payment_rider_notice_failed_total`,
+  `spinr_payment_zero_grand_total_fallback_total`. All live in the per-process in-memory registry
+  (`utils/metrics.py`), reset on deploy, with no dashboard or alert. Four metric names with zero
+  consumers is instrumentation that sits forever.
+- [ ] **R6 — Update `docs/runbooks/saskatoon-launch.md`** (~line 657), which documents
+  `new_ride_requests_enabled` as an operator lever but predates its last-known-good fallback.
+  Operators should know a pause now survives a settings-read failure — and that a cold-started
+  replica does not inherit it.
+
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
 
 Full scenario-by-scenario matrix with file:line for all 45 rider/driver events:

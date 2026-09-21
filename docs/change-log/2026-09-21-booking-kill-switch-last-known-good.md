@@ -65,6 +65,17 @@ await** — a failed read never overwrites it. Resulting behaviour:
 The cold-start case is the narrow residual, and it errs the right way: a process that has just
 booted cannot have observed a pause.
 
+**Correction — a second hole existed, and "the hole is closed" was an overstatement.** Review
+caught that the no-clobber property only held for a *raised* read. `get_rows` returns `[]` **without
+raising** when the row is missing, RLS hides it, the schema cache blips, or the client is
+uninitialised on a replica — and `get_app_settings` then overwrote the cache with schema defaults,
+where `new_ride_requests_enabled` is `True`. So an operator's pause could be silently replaced by
+the default with *no* exception, *no* ERROR and *no* counter: quieter than the hole being fixed, and
+strictly worse. `settings_loader.get_app_settings` now keeps the last known values on a rowless read
+once the process has loaded successfully at least once, and logs at ERROR
+(bounded to ~one event per process per 60 s TTL). A cold process with no cache still falls back to
+defaults, which is all it can do.
+
 **Alternatives considered.** (a) Plain fail-closed, as the review originally recommended — rejected,
 because a sustained settings-read fault would stop every booking platform-wide, the exact outcome
 the existing decision was protecting against, and it would have overridden a written decision on the
@@ -121,8 +132,8 @@ directly, so the refactor would break a named test instead.
 | `backend/settings_loader.py` | new `get_last_known_app_settings()` | the stale-tolerant accessor the fallback needs |
 | `backend/routes/rides/_deps.py` | re-export it (both dual-import branches) | how `booking.py` reaches it, matching `get_app_settings` |
 | `backend/routes/rides/booking.py` | guard falls back to last-known-good; `warning` → `opt(exception=True).error` + metric | E2 |
-| `backend/tests/test_booking_new_ride_requests_kill_switch.py` | docstring rewritten; fail-open test replaced by 4 covering each fallback case | it pinned the old behaviour |
-| `backend/tests/test_settings_loader_last_known.py` | new — 6 tests | pins the no-clobber property the fix depends on |
+| `backend/tests/test_booking_new_ride_requests_kill_switch.py` | docstring rewritten; fail-open test replaced by 6 covering each fallback case | it pinned the old behaviour |
+| `backend/tests/test_settings_loader_last_known.py` | new — 5 tests | pins the no-clobber property the fix depends on |
 | `docs/change-log/2026-09-21-booking-kill-switch-last-known-good.md` | this file | |
 
 Six files, above CLAUDE.md's ≤3 guidance. Three are code, and they are not separable: the accessor,

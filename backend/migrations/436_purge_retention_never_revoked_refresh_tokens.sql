@@ -66,6 +66,21 @@
 --   they are needed. This is precisely why the dry run above is mandatory
 --   rather than advisory. No schema change, no data backfill, no index change.
 --
+-- migration-override-ok: redefines purge_pii_retention() (RPC-by-name caller,
+-- see migration 289's header for why it can't be renamed) -- same intentional
+-- re-fork pattern as migrations 296/321/323/324/335/434.
+--
+-- NOTE on the OTHER gate: this file also trips the dangerous-ops check on
+-- `DELETE FROM`. That check has NO inline override, by deliberate design (see
+-- migration-check.yml's comment above its `code_only_strict` block): an
+-- intentional exception goes through a GitHub Change Request plus an admin
+-- merge-override, never a code annotation. This file's DELETE FROM statements
+-- live inside the purge_pii_retention() function BODY -- nothing executes at
+-- migration-apply time, only when the retention job next calls the function --
+-- which is exactly the CR-2026-033 precedent that check's own comment cites.
+-- Do NOT restructure the SQL to evade that regex; dodging it is precisely what
+-- the gate exists to prevent. See the CR linked from this migration's PR.
+--
 -- WHAT THIS DOES NOT DO
 --   Does not backfill or correct historical `ip` values -- rows written before
 --   PR #5654 hold the proxy address and the real IP was never captured.

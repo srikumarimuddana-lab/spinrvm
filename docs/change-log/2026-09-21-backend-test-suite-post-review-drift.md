@@ -52,9 +52,18 @@ still-open third:
    "vacuously passing" (asserting `record_period_transition` was "not
    awaited", trivially true once nothing on that path calls it directly
    anymore, regardless of driver state).
-3. **A third, separate, order-dependent gap (`tests/
-   test_settings_loader_last_known.py`, 2 tests) is NOT fixed by this PR** —
-   see "What was NOT verified" below.
+3. **A third, separate, order-dependent gap** (`tests/
+   test_settings_loader_last_known.py`, 2 tests) — root-caused via binary
+   search over the full 887-file suite (887 → 1 file in ~9 rounds): `tests/
+   test_forced_upgrade_middleware.py`'s `_client_with_min_version()` helper
+   did a bare `settings_loader.get_app_settings = AsyncMock(...)`
+   module-attribute assignment with no `patch`/`monkeypatch` context
+   manager, permanently replacing the real function on the shared module for
+   the rest of the pytest process. Any later test calling the real
+   `get_app_settings()` got this file's tiny `min_driver_app_version`-only
+   stub instead — explaining both symptoms exactly (`KeyError` on the
+   missing `new_ride_requests_enabled` key; `get_last_known_app_settings()`
+   returning `None` since the leaked stub never touches `_settings_cache`).
 
 `test_logout_all.py::test_refuses_admin_001_super_admin` is a fourth,
 distinct case: not broken by (1) or (2), but asserting the exact OLD behavior
@@ -86,6 +95,11 @@ behavior instead of reverting the feature.
   `test_bumps_env_admin_token_version_for_admin_001_super_admin`, asserting
   the route calls `bump_env_admin_token_version` and returns success, per the
   feature's own documented intent.
+- `tests/test_forced_upgrade_middleware.py`: `_client_with_min_version()`
+  switched from a bare module-attribute assignment to `monkeypatch.setattr`,
+  threaded through all 4 identical `client` fixtures and the one direct call
+  site, so the mock is undone after each requesting test instead of leaking
+  for the rest of the process.
 
 ## 4. Risk & impact on existing functionality
 
@@ -117,6 +131,7 @@ None. Test-only change; no production code path is touched.
 | `backend/tests/test_rides_matching_coverage.py` | 2 tests: same as above | Match the 2026-09-20 consolidation |
 | `backend/tests/test_driver_ride_flow_coverage.py` | Removed 2 redundant/vacuous tests | Scenario already covered by `test_insurance_release_helper.py` |
 | `backend/tests/test_logout_all.py` | Rewrote 1 test to assert new intended behavior | Old assertion tested behavior the feature deliberately replaced |
+| `backend/tests/test_forced_upgrade_middleware.py` | Switched a leaking bare module-attribute mock to `monkeypatch.setattr` | Stop it permanently overwriting `settings_loader.get_app_settings` for the rest of the pytest process |
 
 ## 7. Before / after
 
@@ -150,16 +165,28 @@ data, schema, or runtime-behavior impact either direction.
 - [ ] Not run: `tests/direct_pool`, `tests/rls` (unaffected — no file this PR
   touches is imported by either suite).
 
-## What was NOT verified / left open
+## Update (same day): third gap found and fixed
 
-- **`tests/test_settings_loader_last_known.py::TestFailedReadDoesNotClobber`
-  (2 tests) is a separate, still-open, order-dependent failure**, not fixed
-  by this PR. It only fails in the full-suite run, not in isolation or in a
-  narrower subset — a classic cross-test state-leak signature — but
-  `settings_loader.py` has exactly one module global (`_settings_cache`) and
-  it's already correctly saved/restored by that test file's own `_isolate_cache`
-  autouse fixture. The actual returned dict from `get_app_settings()` is
-  missing the mocked row's key entirely (`KeyError`) rather than reflecting
-  stale cached data, which doesn't fit a simple cache-not-reset theory and
-  wasn't root-caused further given the ~17-minute full-suite iteration cost
-  per attempt. Filed as open rather than guessed at.
+The `tests/test_settings_loader_last_known.py::TestFailedReadDoesNotClobber`
+gap noted above as "still open" was root-caused and fixed in a follow-up
+commit on this same PR, rather than left open. Method: binary search over
+the full 887-file test suite (`--no-cov` for a ~5x speedup per iteration —
+full-suite ~1000s vs. ~200s without coverage instrumentation), narrowing
+887 → 443 → 222 → 110 → 55 → 27 → 14 → 7 → 1 file across ~9 rounds (each
+1-5 minutes instead of a fresh 17-minute full run). Landed on `tests/
+test_forced_upgrade_middleware.py`: its `_client_with_min_version()` helper
+did `settings_loader.get_app_settings = AsyncMock(...)` as a bare
+module-attribute assignment — no `patch()`/`monkeypatch` context manager, no
+teardown — permanently replacing the real function on the shared
+`settings_loader` module for the rest of the pytest process. Every later
+test that called the real `get_app_settings()` got this file's tiny
+`{"min_driver_app_version": ..., "min_rider_app_version": ""}` stub instead,
+which never writes to `_settings_cache` and lacks every other settings key —
+exactly matching both symptoms (`KeyError` on the missing
+`new_ride_requests_enabled` key; `get_last_known_app_settings()` returning
+`None`). Fixed by switching to `monkeypatch.setattr`, threaded through all 4
+identical `client` fixtures and the one direct call site in that file.
+Verified: the previously-failing pair (`test_forced_upgrade_middleware.py` +
+`test_settings_loader_last_known.py`) now passes cleanly (22/22); a full
+local mocked-suite confirmation run was initiated to verify zero remaining
+failures across the whole suite.

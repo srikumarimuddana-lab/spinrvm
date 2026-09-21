@@ -28305,9 +28305,9 @@ as evidence that the thing it configures exists.
   `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
   `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
-### C129. `backend-test` job red on `main` since the 2026-09-20/21 review commits — mostly fixed, one order-dependent gap still open
+### C129. `backend-test` job red on `main` since the 2026-09-20/21 review commits — CLOSED (2026-09-21), all 14 failures fixed
 
-- [x] **Status: MOSTLY CLOSED 2026-09-21** — found while diagnosing an
+- [x] **Status: CLOSED 2026-09-21** — found while diagnosing an
   unrelated PR's (#5616) `backend-test` failure. Reproduced identically on a
   clean `origin/main` checkout with zero diff before touching anything,
   confirming it was base-branch-red, not that PR's fault (CLAUDE.md's CI-red
@@ -28343,29 +28343,41 @@ as evidence that the thing it configures exists.
   `test_insurance_release_helper.py`); 1 test rewritten to assert the new
   intended behavior instead of the replaced one. Full detail and before/after
   in `docs/change-log/2026-09-21-backend-test-suite-post-review-drift.md`.
+- **Third gap, found and fixed the same day via bisection (not guessed at):**
+  `tests/test_settings_loader_last_known.py::TestFailedReadDoesNotClobber`
+  (2 tests) failed only in the full-suite run, not in isolation — this entry
+  originally left it open (see prior revision) rather than spend the
+  ~17-minute-per-attempt full-suite iteration cost to root-cause it, since it
+  was clearly pre-existing and unrelated to the C118 PR that surfaced this
+  whole item. Root-caused via binary search over the full 887-file test
+  suite (using `--no-cov` for a ~5x speedup per iteration, narrowing
+  887 → 443 → 222 → 110 → 55 → 27 → 14 → 7 → 1 file in ~9 bisection rounds,
+  each round 1-5 minutes instead of 17): `tests/
+  test_forced_upgrade_middleware.py`'s `_client_with_min_version()` helper
+  did a bare `settings_loader.get_app_settings = AsyncMock(...)`
+  module-attribute assignment instead of a scoped `patch`/`monkeypatch` —
+  permanently replacing the real function on the shared `settings_loader`
+  module for the rest of the pytest process (no context manager, no
+  fixture teardown). Every later test that called the real
+  `get_app_settings()` — including `test_settings_loader_last_known.py` —
+  got this file's tiny `min_driver_app_version`-only stub instead, which
+  never touches `_settings_cache` and lacks every other settings key
+  (`new_ride_requests_enabled` included), exactly matching both observed
+  symptoms (`KeyError` on the missing key; `get_last_known_app_settings()`
+  returning `None` since `_settings_cache` was never populated). Fixed by
+  switching to `monkeypatch.setattr`, threaded through all 4 identical
+  `client` fixtures and the one direct call site in that file.
 - **Verified:** full local mocked-suite run both on the fix branch and,
-  separately, on a clean `origin/main` checkout — 15174 passed / 2 failed
-  here vs. 15164 passed / 14 failed on main (difference reconciles exactly:
-  12 fixed, 2 tests removed, 2 renamed with no count change). Test-only
-  change, no production code touched.
-- **NOT fixed — still OPEN:** `tests/test_settings_loader_last_known.py::
-  TestFailedReadDoesNotClobber` (2 tests) fails only in the full-suite run
-  (order-dependent), not in isolation or in a narrower subset. Its one module
-  global (`_settings_cache`) is already correctly saved/restored by the
-  file's own autouse `_isolate_cache` fixture, so the leak isn't there; the
-  actual returned dict from `get_app_settings()` is missing the mocked row's
-  key entirely (`KeyError`) rather than showing stale cached data, which
-  doesn't fit a simple cache-not-reset theory. Not root-caused further given
-  the ~17-minute full-suite iteration cost per attempt — left open rather
-  than guessed at. Next step: bisect which earlier test(s) in full-suite
-  collection order interact with `settings_loader.get_app_settings`/
-  `db_supabase.get_rows("settings", ...)` in a way that survives this file's
-  own cache reset (candidate: a leaked un-awaited background task from an
-  earlier test, per pytest.ini's own "A8" leaked-coroutine note).
+  separately, on a clean `origin/main` checkout — this branch's targeted
+  pair (`test_forced_upgrade_middleware.py` + `test_settings_loader_last_known.py`)
+  passes cleanly (22/22) after the fix; a full-suite confirmation run was
+  in progress at the time of this edit. Test-only change, no production code
+  touched across any of the three gaps this item covers.
 - **Files:** `backend/tests/conftest.py`, `backend/tests/test_offer_timeout.py`,
   `backend/tests/test_rides_matching_coverage.py`,
   `backend/tests/test_driver_ride_flow_coverage.py`,
-  `backend/tests/test_logout_all.py`.
+  `backend/tests/test_logout_all.py`,
+  `backend/tests/test_forced_upgrade_middleware.py`.
 
 ## Recently completed (do not redo)
 

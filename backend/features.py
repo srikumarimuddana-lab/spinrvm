@@ -1701,7 +1701,13 @@ _TRANSIENT_NOTIFICATION_TYPES = frozenset(
 )
 
 
-def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None) -> None:
+def _record_inbox_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None,
+    target_app: str | None = None,
+) -> None:
     """Fire-and-forget: persist this push to the user's in-app notification
     inbox (the ``notifications`` table read by GET /notifications).
 
@@ -1714,6 +1720,21 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
 
     Transient, high-frequency push types (see _TRANSIENT_NOTIFICATION_TYPES)
     are skipped — they're not meant to be durable inbox history.
+
+    ``target_app`` carries the caller's own rider/driver intent — the same
+    value that selects the per-app FCM token column — into the inbox row's
+    ``audience`` (migration 436), so a dual-role user (one ``users`` row with
+    both is_rider and is_driver) stops seeing every driver notification in
+    their rider app and vice versa. Deriving it here rather than at each call
+    site keeps the one-choke-point property this function exists for.
+
+    ``None`` maps to ``'both'``, which is deliberately today's behavior —
+    visible in both apps. That covers genuinely account-level notices
+    (suspension, reactivation: see utils/suspension_reactivation.py, where an
+    unset target_app is a documented decision because the account, not a role,
+    is what changed) as well as call sites that have not yet declared one. A
+    notification is only ever narrowed by an explicit caller intent, never by
+    a guess made here.
     """
     notification_type = (data or {}).get("type") or "general"
     if notification_type in _TRANSIENT_NOTIFICATION_TYPES:
@@ -1729,6 +1750,11 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
                 "type": notification_type,
                 "data": data or {},
                 "is_read": False,
+                # 'both' for an undeclared target_app — see this function's
+                # docstring. Never guessed from `data` or the user's role
+                # flags: a wrong narrowing hides a notification entirely,
+                # which is strictly worse than the duplicate it replaces.
+                "audience": target_app if target_app in ("rider", "driver") else "both",
             }
             if notification_type in {"scheduled_ride_reminder", "scheduled_driver_reminder"} and (data or {}).get(
                 "ride_id"
@@ -1828,8 +1854,12 @@ async def send_push_notification(
     non-blocking) regardless of whether device delivery succeeds — the
     underlying event (ride completed, wallet credited, ...) already happened,
     so the Notifications page must reflect it even without a live device token.
+    That row carries ``target_app`` through as its ``audience`` (migration
+    436) so the inbox is scoped per app for dual-role users exactly the way
+    device delivery already is; an unset ``target_app`` records ``'both'``,
+    i.e. today's visible-in-both-apps behavior.
     """
-    _record_inbox_notification(user_id, title, body, data)
+    _record_inbox_notification(user_id, title, body, data, target_app)
     # Tiers that bypass the opt-out AND fall back to the retry queue.
     # 'account' (driver rejected/suspended/banned) is not latency-critical like
     # the other two — it is here for guaranteed delivery: a driver who can no

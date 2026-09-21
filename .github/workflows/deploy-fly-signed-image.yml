@@ -20,20 +20,21 @@ name: Deploy Fly (signed GHCR image) — EXPERIMENTAL, manual only
 #      This workflow's "Wait for signed image" step below polls/retries to
 #      cover that gap, but the wait has never been exercised against a real
 #      run end-to-end.
-#   2. REGISTRY AUTH (open, upgraded from "unverified" to "likely broken as
-#      written"): researched 2026-09-20 — multiple independent reports
-#      (Fly community thread "deploy from private package with github
-#      actions", flyctl issues #75/#1100/#362) describe `flyctl deploy
-#      --image` returning `401 Unauthorized` pulling a PRIVATE ghcr.io image
-#      even with `docker login ghcr.io` already done — the exact setup below.
-#      The one consistently-reported working fix is making the GHCR package
-#      PUBLIC. That is a product/visibility decision (the image is
-#      application code, not secrets — this repo's Dockerfile never bakes
-#      secrets in — but "publicly downloadable backend image" is still a
-#      call this file shouldn't make unilaterally), so it is NOT implemented
-#      here. Needs an explicit decision: make `ghcr.io/<repo>/spinr-backend`
-#      public, find another auth mechanism, or accept this path may not work
-#      as-is and needs redesign (e.g. push to Fly's own registry instead).
+#   2. REGISTRY AUTH (DECIDED 2026-09-21, NOT YET APPLIED): researched
+#      2026-09-20 — multiple independent reports (Fly community thread
+#      "deploy from private package with github actions", flyctl issues
+#      #75/#1100/#362) describe `flyctl deploy --image` returning
+#      `401 Unauthorized` pulling a PRIVATE ghcr.io image even with
+#      `docker login ghcr.io` already done — the exact setup below. The one
+#      consistently-reported working fix is making the GHCR package PUBLIC.
+#      Repository owner decided 2026-09-21: make `ghcr.io/<repo>/spinr-backend`
+#      public (the image is application code, not secrets — this repo's
+#      Dockerfile never bakes secrets in — verified before presenting the
+#      option). Decision made; the actual GitHub package-visibility change is
+#      a manual, repo/org-admin action outside this file and outside any
+#      agent's available tooling — not yet applied as of this comment. Once
+#      applied, this gap can be marked closed and gap #1's end-to-end dispatch
+#      test can include a real auth check.
 #   3. BUILD PROVENANCE (CLOSED 2026-09-20): ci.yml's docker-image-scan job
 #      now has its own "Stamp build info" step (mirrors deploy-fly.yml's),
 #      so the GHCR image carries a real commit SHA instead of the committed

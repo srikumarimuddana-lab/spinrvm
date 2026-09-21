@@ -29,7 +29,16 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 RECURRED (2nd occurrence, still open):
+_Last updated: 2026-09-21 — C121 gap #2 DECIDED: presented the repository
+owner three options for the GHCR registry-auth gap (make the package
+public / find another Fly-supported private-registry auth path / abandon
+this deploy approach) with a recommendation for making it public, since
+the image was already verified to contain no secrets and it's the one
+option with real-world confirmation it works. Repository owner chose that
+option. Not yet applied — changing GHCR package visibility is a manual
+GitHub repo/org-admin action outside any agent's available tooling here;
+updated `deploy-fly-signed-image.yml`'s header comment and this entry to
+record the decision and flag it as pending manual action. Prior: C122 RECURRED (2nd occurrence, still open):
 the same `locationIntegrity.ts` mock-detection test failed again in CI on
 PR #5580, identical signature to the first occurrence on PR #5538 — same
 assertion, same error, both on PRs touching zero driver-app files. 16
@@ -27983,9 +27992,9 @@ as evidence that the thing it configures exists.
   `backend/tests/rls/test_notifications_and_docs_admin_rls.py`,
   `backend/tests/rls/test_money_and_safety_rls.py`, `backend/tests/rls/test_otp_and_safety_rls.py`.
 
-### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)
+### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed, 1 decided-not-yet-applied)
 
-- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-20 — gap #3 closed, gap #2 needs a product decision.**
+- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-21 — gap #3 closed, gap #2 decided (make the GHCR package public) but not yet applied — that's a manual repo/org-admin action, not a code change.**
 - **What's wrong:** `deploy-fly.yml` has Fly's remote builder independently
   rebuild the backend from `backend/Dockerfile` on every push to `main`,
   while `ci.yml`'s `docker-image-scan` job separately builds, scans,
@@ -28008,21 +28017,27 @@ as evidence that the thing it configures exists.
      deploy would very likely fire before the image exists. The workflow's
      polling wait covers this in theory but has never been exercised
      end-to-end.
-  2. **Registry auth — still open, and worse than first thought.**
+  2. **Registry auth — decided 2026-09-21 (option a), not yet applied.**
      Researched 2026-09-20: multiple independent reports (Fly community
      thread "deploy from private package with github actions"; flyctl
      issues #75, #1100, #362) describe `flyctl deploy --image` returning
      `401 Unauthorized` pulling a **private** GHCR image even after
      `docker login ghcr.io` — the exact setup `deploy-fly-signed-image.yml`
      uses. The one consistently-reported working fix is making the GHCR
-     package **public**. **This needs an explicit decision, not a silent
-     code change** — the image contains application code/dependencies, not
-     secrets (this repo's Dockerfile never bakes secrets in), but "public"
-     vs "private" for a commercial product's backend image is a product
-     call. Options: (a) make `ghcr.io/<repo>/spinr-backend` public,
-     (b) find another Fly-supported auth path for a private registry,
-     (c) abandon `flyctl deploy --image` against GHCR and push to Fly's own
-     registry instead. None implemented — awaiting a decision.
+     package **public**. Presented three options to the repository owner —
+     (a) make `ghcr.io/<repo>/spinr-backend` public, (b) find another
+     Fly-supported auth path for a private registry, (c) abandon `flyctl
+     deploy --image` against GHCR and push to Fly's own registry instead —
+     with a recommendation for (a), since the image contains application
+     code/dependencies only (verified against the Dockerfile: no secrets
+     baked in) and it's the one option with real-world confirmation it
+     actually works. **Decision: (a).** Not yet applied — changing a GHCR
+     package's visibility is a manual GitHub repo/org-admin action (Package
+     settings → Danger Zone → Change visibility), not something any agent's
+     tooling in this repo can do; the repository owner (or someone with
+     admin access to this package) needs to make the change directly on
+     GitHub. Once applied, re-run gap #1's end-to-end dispatch test with a
+     real auth check and close this gap.
   3. **Build provenance — CLOSED 2026-09-20.** Added a "Stamp build info"
      step to `ci.yml`'s `docker-image-scan` job (mirrors `deploy-fly.yml`'s
      own step; `"provider":"ghcr"` since this job never deploys anywhere

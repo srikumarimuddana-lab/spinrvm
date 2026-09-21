@@ -959,7 +959,9 @@ class TestAdminCreatePromoCode:
             with pytest.raises(HTTPException) as exc:
                 await admin_create_promo_code(req)
         assert exc.value.status_code == 400
-        assert "discount_type" in exc.value.detail
+        # CR #5587: same fix as test_promotions_coverage.py's sibling test --
+        # current copy reads "discount type" (space), not "discount_type".
+        assert "discount type" in exc.value.detail
 
     async def test_percentage_over_100_raises_400_at_route_level(self):
         from backend.routes.promotions import CreatePromoCodeRequest, admin_create_promo_code

@@ -723,7 +723,9 @@ class TestAdminPromoCodeCrudDirect:
             with pytest.raises(HTTPException) as exc:
                 await admin_create_promo_code(req)
         assert exc.value.status_code == 400
-        assert "discount_type" in exc.value.detail
+        # CR #5587: current copy is "Choose a discount type: ..." (space,
+        # not the field-name spelling "discount_type" this used to assert).
+        assert "discount type" in exc.value.detail
 
     async def test_create_rejects_percentage_over_100(self):
         from backend.routes.promotions import CreatePromoCodeRequest, admin_create_promo_code

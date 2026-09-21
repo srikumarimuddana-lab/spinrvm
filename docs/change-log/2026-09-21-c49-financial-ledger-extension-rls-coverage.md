@@ -225,3 +225,24 @@ The 2 remaining `backend-test` failures after this merge
 tests) are a separate, order-dependent test-isolation bug — not fixed here,
 tracked as [issue #5636](https://github.com/srikumarimuddana-lab/spinrvm/issues/5636)
 (CR-2026-091 / ACTION_ITEMS.md C130).
+
+A fourth merge commit, `bf53b7436`, landed after PR #5634 (the
+`fix/backend-test-5614-fallout` branch already merged into this PR above)
+was independently merged into `main` directly as commit `d243a5cc1`. Since
+this branch already carried that same fix content, merging the now-advanced
+`main` back in produced a real (not stale-state) conflict:
+
+- **Files conflicted:** `ACTION_ITEMS.md` only — `backend/tests/rls/conftest.py`
+  and `backend/tests/test_driver_ride_flow_coverage.py` both showed as
+  touched by the merge but auto-merged cleanly (git recognized the
+  content as already reconciled from the prior merge).
+- **Decision rule:** merged manually — kept this PR's `C129` entry; `main`'s
+  side of the conflict had no competing content at that position (its own
+  merge of #5634 carried `C130` only, which both sides already agreed on
+  outside the conflict markers). Nothing was dropped.
+- **Why:** purely positional again — both sides inserted content
+  immediately after the same preceding entry (C128), not a competing edit.
+- **Verification after this merge:** re-ran `test_driver_ride_flow_coverage.py`
+  (the one file with real content overlap risk, since `main` independently
+  carries an unrelated driver-cancel fix — PR #5611/#5640 — touching the
+  same test file) — 122 passed, 0 failed.

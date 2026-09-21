@@ -750,6 +750,11 @@ async def test_offer_timeout_handler_miss_threshold_lookup_exception_uses_defaul
         mock_deps.get_app_settings = AsyncMock(side_effect=RuntimeError("settings down"))
         mock_deps.db_supabase.set_driver_available = AsyncMock(return_value={"is_available": True})
         mock_deps.record_period_transition = AsyncMock()
+        # `_deps` is wholesale-mocked above, so the release_driver_and_close_period
+        # call this branch makes (utils/insurance_periods.py, added 2026-09-20
+        # to de-duplicate this call site) needs its own explicit AsyncMock, or
+        # an unconfigured MagicMock child comes back and `await`ing it raises.
+        mock_deps.release_driver_and_close_period = AsyncMock(return_value=1)
         mock_deps.manager.send_personal_message = AsyncMock()
         mock_deps.db_supabase.get_driver_by_id = AsyncMock(return_value={"user_id": "u-1"})
 
@@ -759,8 +764,12 @@ async def test_offer_timeout_handler_miss_threshold_lookup_exception_uses_defaul
         ):
             await _offer_timeout_handler("ride-1", "drv-1", "rider-1", timeout_seconds=1)
 
-    # Below default threshold (3) with miss_count=1 -> normal release path ran.
-    mock_deps.db_supabase.set_driver_available.assert_awaited_once_with("drv-1", available=True)
+    # Below default threshold (3) with miss_count=1 -> normal release path ran,
+    # via the shared release_driver_and_close_period helper (not
+    # set_driver_available directly -- that call now lives inside the helper).
+    mock_deps.release_driver_and_close_period.assert_awaited_once_with(
+        "drv-1", reason="offer_timeout", ride_id="ride-1"
+    )
 
 
 async def test_offer_timeout_handler_auto_offline_notifies_and_pushes():
@@ -820,6 +829,9 @@ async def test_offer_timeout_handler_driver_notify_exception_is_swallowed():
         mock_deps.get_app_settings = AsyncMock(return_value={"auto_offline_miss_threshold": 3})
         mock_deps.db_supabase.set_driver_available = AsyncMock(return_value={"is_available": True})
         mock_deps.record_period_transition = AsyncMock()
+        # See the sibling test above for why this needs its own AsyncMock now
+        # that the release path goes through release_driver_and_close_period.
+        mock_deps.release_driver_and_close_period = AsyncMock(return_value=1)
 
         async def _ws_side_effect(payload, key):
             if key.startswith("rider_"):
@@ -836,7 +848,7 @@ async def test_offer_timeout_handler_driver_notify_exception_is_swallowed():
             # Should not raise despite the driver-notify exception.
             await _offer_timeout_handler("ride-1", "drv-1", "rider-1", timeout_seconds=1)
 
-    mock_deps.db_supabase.set_driver_available.assert_awaited_once()
+    mock_deps.release_driver_and_close_period.assert_awaited_once()
 
 
 # ── C35: offer payload carries is_scheduled ──────────────────────────────

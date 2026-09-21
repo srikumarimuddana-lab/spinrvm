@@ -400,6 +400,10 @@ async def test_refresh_super_admin_branch():
             AsyncMock(return_value=("new-raw", "hash", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
         patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
+        # admin-001's token_version is now stamped from the `settings` row
+        # (utils/env_admin_tokens.py, 2026-09-21) rather than hardcoded — stub
+        # it to a fixed value; this test is about the refresh branch, not that.
+        patch.object(admin_auth, "get_env_admin_token_version", AsyncMock(return_value=0)),
     ):
         result = await admin_auth.admin_refresh(_make_request(), admin_auth.RefreshRequest(refresh_token="rt"))
     assert result["token"]

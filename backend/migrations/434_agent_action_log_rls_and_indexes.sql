@@ -1,4 +1,4 @@
--- migration 433: fix agent_action_log's dead admin-read RLS policy (same
+-- migration 434: fix agent_action_log's dead admin-read RLS policy (same
 -- C107/C123 "unreachable admin-role RLS" pattern as migrations 430/432) and
 -- add the two missing indexes flagged by spinr-migration-reviewer during the
 -- 2026-09-20 /full-audit review of migration 429.

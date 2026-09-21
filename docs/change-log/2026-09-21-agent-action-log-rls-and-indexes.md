@@ -15,7 +15,7 @@ Two non-blocking findings from the 2026-09-20 `/full-audit` fleet review of migr
 - **Indexes:** `backend/routes/admin/maintenance.py`'s `GET /agent-actions` filters on `agent_name`, `action_type`, `target_surface`, and `outcome`, ordered by `created_at DESC`. Migration 429 indexed three of those four filters (plus `risk_domain`, not a route filter) but missed `action_type`, and never added a plain `created_at`-only index for the common no-filter call.
 
 ## Fix/remediation
-New migration `433_agent_action_log_rls_and_indexes.sql`:
+New migration `434_agent_action_log_rls_and_indexes.sql`:
 - Drops the dead `agent_action_log_admin_read` policy and replaces it with the same explicit `"agent_action_log admin RLS unreachable (service role only)" ... USING (false)` marker policy migrations 430/432 already use — documents the state as intentional rather than leaving a policy someone might later assume is live.
 - Adds `idx_agent_action_log_action_type (action_type, created_at DESC)` and `idx_agent_action_log_created_at (created_at DESC)`.
 
@@ -32,7 +32,7 @@ None — this table has no rider/driver/corporate-facing surface. The only reade
 ## Files modified
 | File | What changed | Why |
 |---|---|---|
-| `backend/migrations/433_agent_action_log_rls_and_indexes.sql` | New migration: replaces the dead `agent_action_log_admin_read` policy with an explicit unreachable-marker policy (matching migrations 430/432's established pattern); adds `action_type` and `created_at` indexes | Close the two non-blocking findings from the 2026-09-20 `/full-audit` review of migration 429 |
+| `backend/migrations/434_agent_action_log_rls_and_indexes.sql` | New migration: replaces the dead `agent_action_log_admin_read` policy with an explicit unreachable-marker policy (matching migrations 430/432's established pattern); adds `action_type` and `created_at` indexes | Close the two non-blocking findings from the 2026-09-20 `/full-audit` review of migration 429 |
 
 ## Before/after snippet
 Before (migration 429, merged):
@@ -45,7 +45,7 @@ CREATE POLICY agent_action_log_admin_read ON agent_action_log
 -- never reachable: admin JWTs here are never Supabase Auth session JWTs
 ```
 
-After (migration 433):
+After (migration 434):
 ```sql
 DROP POLICY IF EXISTS agent_action_log_admin_read ON agent_action_log;
 CREATE POLICY "agent_action_log admin RLS unreachable (service role only)"

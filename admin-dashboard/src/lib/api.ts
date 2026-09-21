@@ -41,6 +41,7 @@ export {
     resolveComplaint,
     reportLostItem,
     resolveLostItem,
+    getUnpaidRides,
     sendRideInvoice,
     sendPayableRideInvoice,
     getFlags,
@@ -53,7 +54,7 @@ export {
     getComplaints,
     deleteComplaint,
 } from "./api/rides";
-export type { RideListOpts, RideFinancialsPeriod } from "./api/rides";
+export type { RideListOpts, RideFinancialsPeriod, UnpaidRide } from "./api/rides";
 export {
     getDrivers,
     adminSearchDrivers,

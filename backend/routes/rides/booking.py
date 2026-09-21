@@ -390,19 +390,75 @@ async def create_ride(
     # or side effect. Distinct from the E5 flags (scheduled dispatch/surge/
     # promo/corporate billing) — this stops new bookings entirely, for an
     # incident that calls for pausing ride requests rather than forcing every
-    # driver offline. Fails open on a settings-read error, same convention as
-    # every other kill switch in this codebase.
+    # driver offline.
+    #
+    # On a settings-read error this falls back to the LAST KNOWN value of the
+    # flag rather than to a hardcoded default (2026-09-20 review, finding E2).
+    #
+    # This used to fail open, and that was a deliberate, documented choice, not
+    # an oversight: unlike settle_corporate's corporate_billing_enabled (which
+    # fails closed — ACTION_ITEMS.md C54 / WS-1), this flag gates *every* new
+    # booking platform-wide, so a degraded app_settings read must not by itself
+    # take the whole product down. That reasoning still holds and is preserved
+    # below. The hole it left is that the flag's default is True ("not killing
+    # anything"), so a read failure silently resumed bookings during exactly
+    # the incident an operator had paused them for — a kill switch that stops
+    # working when things break is not a kill switch.
+    #
+    # Last-known-good answers both, because get_app_settings() only writes its
+    # cache after a *successful* read: a failed read never overwrites it.
+    #
+    #   * operator paused bookings, then the DB degrades  -> last known False
+    #     -> still paused. The hole is closed.
+    #   * steady state, one transient read blip           -> last known True
+    #     -> the booking proceeds. No platform-wide outage.
+    #   * cold start, never read settings successfully    -> nothing to fall
+    #     back to -> proceed, matching the original fail-open posture. This is
+    #     the narrow residual case, and it is the right side to err on: a
+    #     process that has just booted cannot have observed a pause.
+    #
+    # The 503 and its copy are deliberately identical to the switch-being-off
+    # path: a rider must not be able to tell a paused platform from a broken
+    # one.
+    # NOTHING that can raise HTTPException may go inside this try. The bare
+    # `except Exception` would reclassify it as a settings-read failure and
+    # route it through the fallback, swallowing its real status code — which is
+    # why the 503 below is raised OUTSIDE the block and the old
+    # `except HTTPException: raise` guard could be deleted.
     try:
-        _g5_settings = await _deps.get_app_settings()
-        if not _g5_settings.get("new_ride_requests_enabled", True):
-            raise HTTPException(
-                status_code=503,
-                detail="Ride requests are temporarily unavailable. Please try again shortly.",
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.warning("[BOOKING] app_settings lookup failed for new_ride_requests_enabled; proceeding as enabled")
+        _g5_flag = (await _deps.get_app_settings()).get("new_ride_requests_enabled")
+    except Exception as _g5_err:
+        _g5_last_known = _deps.get_last_known_app_settings()
+        _g5_flag = None if _g5_last_known is None else _g5_last_known.get("new_ride_requests_enabled")
+        # loguru: exc_info= is silently swallowed as a str.format keyword and no
+        # traceback is captured — CLAUDE.md, Observability Conventions.
+        logger.opt(exception=True).error(
+            "[BOOKING] app_settings lookup failed for new_ride_requests_enabled; falling back to {} (flag={}): {}",
+            "last-known-good" if _g5_last_known is not None else "cold-start default",
+            _g5_flag,
+            _g5_err,
+        )
+        _deps._metric_inc(
+            "spinr_rides_settings_read_failed_total",
+            {
+                "flag": "new_ride_requests_enabled",
+                "fallback": "last_known_good" if _g5_last_known is not None else "cold_start",
+            },
+        )
+    # `None` is tested explicitly rather than leaning on `.get(key, True)`, and
+    # that is not pedantry: `.get` only supplies its default when the key is
+    # ABSENT. A settings row whose column exists but is explicitly NULL returns
+    # None, and `bool(None)` is False — so a null column would have paused every
+    # booking platform-wide. All three "no opinion recorded" cases (key absent,
+    # column NULL, no successful read yet) must mean enabled, because a kill
+    # switch defaults to not killing anything
+    # (tests/test_kill_switch_flags.py::test_app_settings_defaults_flag_on).
+    _g5_enabled = True if _g5_flag is None else bool(_g5_flag)
+    if not _g5_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Ride requests are temporarily unavailable. Please try again shortly.",
+        )
 
     _deps.validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 

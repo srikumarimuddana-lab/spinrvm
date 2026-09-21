@@ -474,16 +474,21 @@ async def process_payment(
             logger.opt(exception=True).error(f"[PAYMENT] gps_route_validation read failed for ride {ride_id}")
             _gps_validation = None
         if _gps_validation:
-            # GPS route-deviation percentage, not money -- same false-positive class
-            # already suppressed in email_receipt.py. A trailing same-line comment on
-            # the closing paren of a wrapped multi-line call doesn't suppress the
-            # finding (the rule reports the match on the opening line) -- use a
-            # standalone comment on the line directly above instead, matching
-            # email_receipt.py's proven-working suppression.
-            # nosemgrep: spinr-no-float-in-money
-            _deviation_threshold = float(_app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0))
-            # nosemgrep: spinr-no-float-in-money
-            _deviation_pct = float(_gps_validation.get("deviation_pct") or 0)
+            # GPS route-deviation percentages, not money. These were `float()`
+            # calls carrying `# nosemgrep: spinr-no-float-in-money`, and the
+            # suppression did not hold: SR-03 kept failing the money gate on
+            # them (PR #5602, then again on #5614 at the single-line call, which
+            # rules out the earlier multi-line/START-line theory).
+            #
+            # Rather than keep hunting for a suppression spelling that sticks,
+            # the float is simply gone. Decimal is a drop-in here — both values
+            # are only compared against each other and rendered with `:.1f`,
+            # verified identical to the float behaviour across int/float/str
+            # inputs — so the rule is now satisfied on the merits instead of
+            # silenced, which is also what CLAUDE.md's money rule actually asks
+            # for. No suppression comment left to rot.
+            _deviation_threshold = Decimal(str(_app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0)))
+            _deviation_pct = Decimal(str(_gps_validation.get("deviation_pct") or 0))
             if _gps_validation.get("verdict") == "likely_spoofed" and _deviation_pct > _deviation_threshold:
                 # Optimistic guard on the status we just read: if a concurrent
                 # call already moved payment_status away from _pstatus (e.g.

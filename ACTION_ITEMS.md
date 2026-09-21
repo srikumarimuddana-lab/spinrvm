@@ -17287,9 +17287,10 @@ record of what was assumed vs. what was actually true</summary>
   added to `AppSettings`, checked at the very top of `POST /rides`
   (`create_ride`, `routes/rides/booking.py`), before `validate_ride_location`
   or any DB write. Flipping it off returns a clean `503 "Ride requests are
-  temporarily unavailable. Please try again shortly."`. Fails open on a
+  temporarily unavailable. Please try again shortly."`. ~~Fails open on a
   settings-read error, same convention as `settle_corporate`'s
-  `corporate_billing_enabled` check. Added to `SettingsUpdateRequest`
+  `corporate_billing_enabled` check.~~ **Superseded 2026-09-21 — see the
+  amendment below.** Added to `SettingsUpdateRequest`
   (`routes/admin/settings.py`) so it's admin-settable via the existing
   generic PUT handler, same shape as the four E5 flags (no super-admin gate
   needed). `saskatoon-launch.md` §N-4 updated to document it as a third
@@ -17302,6 +17303,39 @@ record of what was assumed vs. what was actually true</summary>
   normal operation (default `true`). Full backend suite: `12774 passed, 8
   skipped, 1 xfailed, 0 failed`. See
   `docs/change-log/2026-08-22-g5-new-ride-requests-kill-switch.md`.
+- **Amendment (2026-09-21) — the fail-open behaviour above was replaced.**
+  2026-09-20 review finding E2. The original reasoning was sound as far as it
+  went (this flag gates *every* booking platform-wide, so a degraded
+  `app_settings` read must not by itself take the product's demand side down —
+  unlike `corporate_billing_enabled`, whose blast radius is one settlement).
+  What it missed: the flag's default is `True` ("not killing anything"), so a
+  read failure silently **resumed** bookings during exactly the incident an
+  operator had paused them for — and "paused" and "DB degrading" are strongly
+  correlated, because operators pause bookings precisely when infrastructure is
+  failing. A kill switch that stops working when things break is not a kill
+  switch.
+  It now falls back to the **last successfully-read value** of the flag, via the
+  new `get_last_known_app_settings()` in `settings_loader.py` (safe because
+  `get_app_settings()` writes its cache only after a successful read, so a
+  failed read never overwrites it). Paused + DB degrades → still paused;
+  steady-state + transient blip → booking proceeds; cold start with no prior
+  read → proceeds, matching the original posture. Read failures now log at
+  ERROR and increment
+  `spinr_rides_settings_read_failed_total{flag,fallback}`.
+  Also fixed while there: `.get(flag, True)` only supplies its default when the
+  key is **absent**, so a column present but explicitly `NULL` returned `None`
+  and `bool(None)` is `False` — a null column would have paused every booking
+  platform-wide. All three "no opinion recorded" cases (absent, NULL, never
+  read) now read as enabled.
+  `test_booking_new_ride_requests_kill_switch.py`'s
+  `test_settings_lookup_failure_fails_open` is **gone**, replaced by six tests
+  covering each fallback case. See
+  `docs/change-log/2026-09-21-booking-kill-switch-last-known-good.md`.
+  **Still fail-open, not yet revisited:** `promo_redemption_enabled`
+  (`routes/promotions.py`) and `scheduled_dispatch_enabled`
+  (`utils/scheduled_rides.py`) carry the same superseded "same convention as
+  every other kill switch" comment. Each is a separate domain with its own
+  blast radius and needs its own decision.
 - **(historical) Status:** open — identified 2026-08-21. **Not a re-proposal of E5** (CLOSED
   2026-08-11 — `scheduled_dispatch_enabled`, `surge_engine_enabled`,
   `promo_redemption_enabled`, `corporate_billing_enabled`); this is an additional flag
@@ -17453,6 +17487,51 @@ record of what was assumed vs. what was actually true</summary>
   volume makes the next determination's stakes real.
 
 ## P3 — Post-launch backlog (tracked, not gating)
+
+### Follow-ups from the 2026-09-21 review of PR #5614
+
+Filed as real items because the review's own finding was that change-log prose is where
+follow-ups go to die — each of these was promised in a `docs/change-log/2026-09-21-*.md`
+"What was NOT verified" section and had no backlog entry.
+
+- [ ] **R1 — Settle the ambiguous `grand_total = 0` and remove the instrument.**
+  `services/payment_service._ride_total_with_fallback` measures but does not fix a real
+  overcharge (a genuinely-$0 ride billed the pre-tax subtotal at
+  `guest_corporate_auto_settle`). One read-only production query settles it — the SQL is in
+  `docs/change-log/2026-09-21-ambiguous-zero-grand-total-instrumented.md` §7 — after which
+  either fix it or close it as unreachable and delete the helper's logging. **Do not treat a
+  flat counter as proof of absence**: if PostgREST returns `numeric` as a string the branch
+  cannot fire, while the live bug in that world would be legacy rows settling at $0. Review
+  by 2026-10-21.
+- [ ] **R2 — Extract one shared kill-switch read helper.** There are now three read-failure
+  semantics across eight `app_settings` flag reads (fail-closed, last-known-good, fail-open —
+  table in `docs/adr/011-flag-read-failure-semantics.md`'s 2026-09-21 Amendment). ADR-011's own
+  Consequences section predicted the per-site-comment mitigation would be insufficient, and it
+  was: converting the booking site found a live NULL-handling bug (`.get(flag, True)` returns
+  `None` for a column present-but-NULL, and `bool(None)` is `False` — it would have paused every
+  booking platform-wide). **That same bug is still present in all five remaining fail-open
+  sites**: `routes/promotions.py`, `utils/scheduled_rides.py`, `utils/surge_engine.py`,
+  `utils/allowance_reset.py`, `utils/corporate_low_balance.py`. A `read_flag(name, *, on_error=...)`
+  helper encodes the NULL/absent/never-read rule once. (The G5 amendment above names only two of
+  these five — corrected here.)
+- [ ] **R3 — Converge the settings-read-failure metric names.** ADR-011 decision item #2 specified
+  one shared `spinr_payment_settings_read_failed_total{flag}`; this PR added
+  `spinr_rides_settings_read_failed_total{flag,fallback}`. As R2 converts the rest this becomes
+  four or five names for one condition. Decide with R2.
+- [ ] **R4 — Sweep `.bind(domain=...)` across the remaining Sentry-bound ERROR logs.** Two
+  handlers in `dependencies/__init__.py` (the Redis revocation-denylist fail-open and the
+  break-glass allowlist fail-closed) are at ERROR but use neither `.opt(exception=True)` nor a
+  `domain` bind, so they reach Sentry stackless and untagged. Same defect class this PR fixed two
+  lines away.
+- [ ] **R5 — Alerts for the four counters this PR added.** `spinr_auth_admin_idle_touch_failed_total`,
+  `spinr_rides_settings_read_failed_total`, `spinr_payment_rider_notice_failed_total`,
+  `spinr_payment_zero_grand_total_fallback_total`. All live in the per-process in-memory registry
+  (`utils/metrics.py`), reset on deploy, with no dashboard or alert. Four metric names with zero
+  consumers is instrumentation that sits forever.
+- [ ] **R6 — Update `docs/runbooks/saskatoon-launch.md`** (~line 657), which documents
+  `new_ride_requests_enabled` as an operator lever but predates its last-known-good fallback.
+  Operators should know a pause now survives a settings-read failure — and that a cold-started
+  replica does not inherit it.
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
 

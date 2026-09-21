@@ -155,7 +155,7 @@ async def admin_search_users(
     admin_user: dict = Depends(get_admin_user),
 ):
     """Typeahead search for users via POST body to keep search terms out of server logs."""
-    return await admin_get_users(role=body.role, search=body.search, limit=body.limit)
+    return await admin_get_users(role=body.role, search=body.search, limit=body.limit, offset=0)
 
 
 async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:

@@ -11,7 +11,7 @@
  */
 
 import { getApiErrorMessage, clampToastMessage, TOAST_MESSAGE_MAX } from '@shared/api/client';
-import { SENTINEL_MESSAGES } from '@shared/errors/sentinelMessages';
+import { SENTINEL_MESSAGES, messageForSentinel } from '@shared/errors/sentinelMessages';
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -284,6 +284,49 @@ describe('mapped ERR_* sentinels become real copy', () => {
   it('leaves an unmapped sentinel on the caller fallback, as before', () => {
     const err = { response: { status: 400, data: { detail: 'ERR_SOMETHING_WE_DO_NOT_MAP' } } };
     expect(getApiErrorMessage(err, GENERIC)).toBe(GENERIC);
+  });
+
+  // Regression: SENTINEL_MESSAGES is a plain object literal, so an unguarded
+  // `[key]` lookup resolves Object.prototype members — 'constructor' returns a
+  // function, '__proto__' an object. Both are truthy, both reached
+  // clampToastMessage, and both threw `message.trim is not a function` out of
+  // the helper whose contract is to always return a usable string.
+  it.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', 'isPrototypeOf'])(
+    'does not treat the Object.prototype member %p as mapped copy',
+    (key) => {
+      expect(messageForSentinel(key)).toBeUndefined();
+      const fromBody = { response: { status: 400, data: { detail: key } } };
+      expect(() => getApiErrorMessage(fromBody, GENERIC)).not.toThrow();
+      expect(getApiErrorMessage(fromBody, GENERIC)).toBe(GENERIC);
+      expect(() => getApiErrorMessage(new Error(key), GENERIC)).not.toThrow();
+    },
+  );
+
+  it('always returns a string from messageForSentinel or undefined', () => {
+    for (const key of Object.keys(SENTINEL_MESSAGES)) {
+      expect(typeof messageForSentinel(key)).toBe('string');
+    }
+  });
+
+  // These are raised on the wallet-pay path, where the rider never typed an
+  // amount — walletStore's own fallback is kinder and more actionable, and an
+  // entry here would override it with no way for the caller to opt out.
+  it.each(['ERR_FORBIDDEN', 'ERR_FARE_EXCEEDED', 'ERR_FARE_UNDERPAID'])(
+    'leaves %p to the call site rather than overriding its copy',
+    (sentinel) => {
+      expect(messageForSentinel(sentinel)).toBeUndefined();
+      const err = { response: { status: 400, data: { detail: sentinel } } };
+      expect(getApiErrorMessage(err, GENERIC)).toBe(GENERIC);
+    },
+  );
+
+  // ERR_ACCOUNT_DELETED covers a purged account AND one still inside its
+  // deletion grace window, which can self-restore via the reactivate-account
+  // screen. The copy must not tell that user the account is gone for good.
+  it('does not assert permanence for ERR_ACCOUNT_DELETED', () => {
+    const copy = messageForSentinel('ERR_ACCOUNT_DELETED') ?? '';
+    expect(copy).not.toMatch(/has been deleted|permanently|cannot be restored/i);
+    expect(copy.length).toBeGreaterThan(0);
   });
 
   it('keeps every mapped sentence inside the toast budget', () => {

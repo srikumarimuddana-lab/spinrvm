@@ -2230,6 +2230,7 @@ async def check_scheduled_rides():
                         "Ride Dispatched! 🚗",
                         f"Your scheduled ride to {ride.get('dropoff_address', 'destination')} is being matched with a driver.",
                         {"ride_id": ride["id"], "type": "scheduled_dispatch"},
+                        target_app="rider",
                     )
         except Exception as e:
             logger.error(f"Scheduled ride checker error: {e}")

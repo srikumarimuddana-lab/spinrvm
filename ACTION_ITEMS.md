@@ -28782,10 +28782,16 @@ as evidence that the thing it configures exists.
   `backend/migrations/151_subscription_payments_ledger.sql` (reference
   only, nothing changed by this entry).
 
-### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
+### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch — CLOSED (2026-09-21)
 
-- [ ] **Status:** OPEN — found 2026-09-21 while root-causing `backend-test`
-  CI failures for PR #5612/#5634 (the #5614-fallout fix round).
+- [x] **Status: CLOSED 2026-09-21** — found 2026-09-21 while root-causing
+  `backend-test` CI failures for PR #5612/#5634 (the #5614-fallout fix
+  round), independently confirmed and root-caused the same day by a
+  parallel session working PR #5624/C129 (that item's number is now
+  retired — its other two findings, the env-admin-token-version default
+  mock and the insurance-period-release consolidation test staleness, are
+  the same ones #5634 above already fixed; this is the one finding from
+  that session not otherwise covered here).
 - **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
   (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
   fixture that sets `settings_loader._settings_cache = None` before each
@@ -28809,54 +28815,47 @@ as evidence that the thing it configures exists.
   never touches real Supabase), but it does mean this specific regression
   protection is not reliably exercised in CI's actual execution order —
   only when run in isolation, which is not how `backend-test` runs it.
-- **Root cause (partial):** confirmed NOT caused by module-identity
-  splitting (the fixture, the test body, and `get_app_settings()` itself
-  all resolve `settings_loader` — and by extension its own
-  `_settings_cache` global — through the same `from backend import
-  settings_loader` reference within this one file, ruling out the
-  dual-import bare-vs-qualified module-splitting hazard `conftest.py`'s
-  `_BareModuleAliasFinder` exists for). Likely candidate, not yet
-  confirmed: a leaked background task/coroutine from an earlier test in
-  the suite (the same class of hazard `pytest.ini`'s own
-  `filterwarnings` block documents at length as "A8" — a fire-and-forget
-  `asyncio.create_task`/`spawn()` call whose coroutine is never
-  awaited/closed) that calls the real, unmocked `get_app_settings()` on a
-  later event-loop tick that happens to fall during this test's own
-  `await`, overwriting `_settings_cache` with a real (or differently-shaped
-  mocked) settings dict that lacks `new_ride_requests_enabled`. Not
-  confirmed which specific earlier test leaks it — would need either
-  bisection over ~790 preceding files or instrumenting
-  `_settings_cache`'s setter to capture a stack trace on any write during
-  this test's execution window.
-- **Action:** bisect or instrument to find the actual leaking test, then
-  either fix its own task/coroutine cleanup (per the A8 pattern already
-  fixed elsewhere) or, if a specific offender proves hard to isolate,
-  harden this file's own tests against the general hazard class (e.g. a
-  final `await asyncio.sleep(0)` drain in the fixture teardown, or
-  re-asserting `_settings_cache is None` immediately before each
-  cache-dependent call within the test body itself, not just in the
-  fixture).
-- **Corroborating evidence (2026-09-21, later same day):** hit identically
-  on two more, fully unrelated PRs' `backend-test` runs — #5641 (a
-  `.github/workflows/`/`ACTION_ITEMS.md`-only diff, zero backend Python
-  files) and #5651 (a one-assertion test-only fix in a different file,
-  `test_webhooks_main.py`). Both failed with the exact same 2 tests, same
-  error signatures, on the first attempt, no exceptions. Since neither PR
-  touches `settings_loader.py`, this file, or anything plausibly
-  upstream of the leak, and since this repo's `pytest.ini` does not
-  enable a randomizing plugin (collection order is otherwise stable run
-  to run), this reads as **deterministic given the current test-file set**,
-  not an intermittent race that sometimes clears on retry — a re-run of
-  either PR's `backend-test` job would be expected to fail identically
-  again, for as long as the leaking test and this file's relative
-  collection order stay unchanged. That raises the value of the
-  bisection approach above (it will reproduce reliably, not
-  intermittently) and lowers the value of "just retry" as a workaround —
-  worth knowing before spending a rerun on this specific failure.
-- **Files:** `backend/tests/test_settings_loader_last_known.py`,
-  `backend/settings_loader.py` (`_settings_cache` global),
-  `backend/tests/conftest.py` (`_isolate_cache` pattern precedent, `A8`
-  filterwarnings documentation).
+- **Root cause (confirmed):** correctly ruled out module-identity
+  splitting up front (see above) — the actual leak was NOT a leaked
+  background task/coroutine as first suspected. `tests/
+  test_forced_upgrade_middleware.py`'s `_client_with_min_version()` helper
+  did a bare `settings_loader.get_app_settings = AsyncMock(...)`
+  module-attribute assignment with no `patch`/`monkeypatch` context
+  manager and no teardown, permanently replacing the real function on the
+  shared `settings_loader` module for the rest of the pytest process.
+  Every later test that called the real `get_app_settings()` — including
+  both `TestFailedReadDoesNotClobber` tests — got that file's tiny
+  `{"min_driver_app_version": ..., "min_rider_app_version": ""}` stub
+  instead, which never writes to `_settings_cache` (explaining
+  `get_last_known_app_settings()` returning `None`) and lacks every other
+  settings key including `new_ride_requests_enabled` (explaining the
+  `KeyError`). Found via binary search over the full 887-file suite
+  (`--no-cov` for a ~5x speedup per iteration), narrowing
+  887 → 443 → 222 → 110 → 55 → 27 → 14 → 7 → 1 file across ~9 rounds.
+- **Fixed:** switched `_client_with_min_version()` to `monkeypatch.setattr`,
+  threaded through all 4 identical `client` fixtures and the one direct
+  call site in `tests/test_forced_upgrade_middleware.py`. No production
+  code touched.
+- **Verified:** full local mocked-suite run, both on the fix branch and,
+  separately, on a clean `origin/main` checkout for comparison — 0 failures
+  on the fix branch (15174 passed) vs. main's baseline failures at the
+  time. `ruff check` clean.
+- **Files:** `backend/tests/test_forced_upgrade_middleware.py`,
+  `backend/tests/test_settings_loader_last_known.py`,
+  `backend/settings_loader.py` (`_settings_cache` global, unaffected —
+  documented here for context, not because it changed).
+- **Related, separately closed:** the same `backend-test` investigation
+  also surfaced `tests/test_webhooks_main.py::TestStripeWebhookEventLogLevel::
+  test_ignored_lifecycle_event_logs_debug_not_warning` failing — briefly
+  drafted here as a would-be C131 under an incorrect "same leaked-mock
+  class as C130, needs bisection" hypothesis. That hypothesis was wrong:
+  the test fails 100% deterministically even run fully alone, because it
+  asserts the pre-CRIMSON-SMOKE-7445-HC return shape against
+  `routes/webhooks.py` code that already shipped the new one — a plain
+  stale assertion, not a test-isolation bug. Already fixed independently
+  on `main` at commit `2c751d205` (#5651), with no `ACTION_ITEMS.md` entry
+  needed — noted here only so a future reader doesn't go looking for a
+  C131 that was reassigned below to an unrelated, still-open finding.
 
 ### C131. Cloudflare-only origin lock is assumed by `get_real_client_ip()` but enforced nowhere — a direct-to-Fly request can set its own `CF-Connecting-IP`
 

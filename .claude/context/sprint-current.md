@@ -2,13 +2,104 @@
 
 _Update this file at the start of every sprint. Claude loads it via `@.claude/context/sprint-current.md` referenced from CLAUDE.md._
 
-> **Stale (flagged 2026-08-25):** this file's last real status entry is dated 2026-05-06 —
-> everything below describes a sprint that closed months ago, not current work. It was meant to
-> be refreshed at the start of every sprint per the instruction above but hasn't been; the
-> session-start hook already warns about this every session. **For current priorities, use
-> `ACTION_ITEMS.md`'s open `[ ]` items instead of the "Sprint goal" / "In-flight" sections below.**
-> Left as historical record rather than rewritten — the PR/ticket history below is still accurate
-> for what it documents, it's just not "current."
+> **Refreshed 2026-09-21** (previously flagged stale 2026-08-25; the content it was
+> flagging was last genuinely updated 2026-05-06). Rebuilt from `ACTION_ITEMS.md`'s
+> recent closures/updates (grepped for `CLOSED (2026-09-`, `RESOLVED (2026-09-`, and
+> `Update (2026-09-`) cross-checked against `git log origin/main --since="14 days ago"`
+> (2026-09-07 → 2026-09-21, ~620 commits). The original P0 security/safety sprint this
+> file used to open with is preserved unchanged below as **Sprint 1**, now explicitly
+> headed and dated instead of masquerading as current — still accurate for what it
+> documents, just not current work.
+
+## Sprint goal
+
+**No single themed sprint is currently declared.** The last ~2 weeks of merged work is
+continuous production-hardening burn-down against `ACTION_ITEMS.md`'s backlog, not one
+ticketed goal — by commit-prefix volume the busiest areas are `fix(driver-app)` (36),
+`fix(admin)`/`fix(admin-dashboard)` (33 combined), `fix(auth)` (20), `fix(backend)` (17),
+`fix(payments)` (12) and `fix(ci)` (12), spread across many unrelated files rather than one
+feature. The one identifiable *cluster* inside that scatter is a multi-session sweep closing
+out a family of unreachable admin-role RLS policies (`ACTION_ITEMS.md` C107 → C109 → C111 →
+C120 → C123 → C124, closed 2026-09-13 through 2026-09-20), running alongside a parallel
+CI/CD-pipeline-reliability thread (C72, C96, B43, C114, C118, C121, C126, C127). Treat
+"current sprint" as: keep burning down `ACTION_ITEMS.md`'s open `[ ]` items in that file's
+own priority order, weighting anything still flagged P0-severity-in-substance (see its
+"## P0 — Launch gating (code)" section header note) or carrying a 2026-09-2x `Update`.
+
+**Status (2026-09-21):** actively in progress — see In-flight / Blocked below. This is a
+rolling backlog burn-down, not a sprint with a declared completion date.
+
+## In-flight
+
+| Ticket | Owner | State | Notes |
+|---|---|---|---|
+| C122 | — | open, recurring | `driver-app/utils/__tests__/locationIntegrity.test.ts`'s mock-GPS-detection test has flaked red in CI twice (PRs #5538, #5580), both on diffs touching zero driver-app files; code confirmed deterministic across 16 combined local runs — root cause still unknown |
+| C125 | — | open | 8 migrations beyond 430/431 (`379`, `424`–`429`) sit unreviewed/unapplied in production — deliberately deferred pending a human review pass, not silently applied or ignored |
+| C126 | — | open | `backend-test`'s CI timeout bumped 20→30 min as a stopgap (CR #5541); structural fix (pytest-xdist, or splitting the RLS suite into its own job) still undone |
+| C127 | — | open | `deploy-fly-signed-image.yml`'s 30-min image-wait budget no longer has margin against the worst-case `backend-test`→`docker-image-scan` chain after C126's timeout bump (low severity — workflow is manual/opt-in only) |
+| C128 | — | open | Self-hosted tile server has no OSM data for Riyadh; admin map renders roadless there even after the basemap-URL fix |
+| C121 | — | open, partial | Fly still deploys a source rebuild, not the signed/scanned GHCR image; gap #3 closed, gap #2 (make the GHCR package public) decided by the product owner but not yet applied |
+
+## Blocked
+
+| Ticket | Blocker | Unblock action |
+|---|---|---|
+| C43 | RLS disabled on 4 production tables (incl. `settings`, which holds Stripe/Twilio/Google Maps keys) — deliberately deferred by the user (2026-08-25) | Wait for the A41-family legacy-migration work to conclude, then re-open |
+| A43 / C73 | A 34-file security/money PR (#5048) merged 47 seconds after opening, bypassing CI, because `main`'s branch protection doesn't wait for/block on `backend-test` | Needs a repo-admin change to required-status-checks in Settings → Branches; not fixable from an engineering session |
+| C99 / C103 | No Fly.io/Railway CLI access, and the Firebase MCP server can't authenticate from this environment; blocks confirming prod Firebase credentials plus 4 other device/ops-verification items (C70, C90, C91's final step, C97's residual #1/#5) | Needs a human to grant CLI/MCP access |
+| C121 gap #2 | Fly signed-image deploy needs the GHCR package made public (decided, not yet applied) | Needs a repo/org-admin to change GHCR package visibility |
+
+## P0 incidents open
+
+None confirmed open in production as of 2026-09-21. Two items `ACTION_ITEMS.md`'s own P0
+section still flags as "P0-severity in substance" (standing gaps, not active incidents):
+**A43 / C73** (the branch-protection gap above) and **C43** (the RLS-disabled tables above,
+deliberately deferred).
+
+## Do not touch this sprint (current)
+
+- `backend/migrations/430`–`433` and the admin-role RLS policies they touch — active hardening area (C107/C123/C124); coordinate before adding another policy on any table in that family
+- `.github/workflows/ci.yml`'s `backend-test` job and `deploy-fly-signed-image.yml`'s image-wait budget — C126/C127 are open follow-ups on these exact settings; don't retune timeouts without reading those items first
+- `admin-dashboard/e2e/visual-regression.spec.ts` baselines — `dashboard-settings` was just re-seeded 2026-09-20 (CR-2026-091); re-seeding needs human Actions-dispatch access this repo's agent integration doesn't have, so don't invalidate another baseline without a plan to get it re-seeded
+- `driver-app/utils/locationIntegrity.ts` and its test — recurring, unexplained CI flake (C122, 2 occurrences so far); log a 3rd occurrence in `ACTION_ITEMS.md` rather than re-investigating from scratch
+
+## Recently shipped (2026-09-07 → 2026-09-21)
+
+| Item | Date | What |
+|---|---|---|
+| B42 | 2026-09-11 | `payment_failed` Stripe webhook events were silently dropped for ~36 min during PR #5048's live window — fixed and remediated (scope larger than the original framing) |
+| C77 | 2026-09-08 | `charge.refunded` refund accounting hardened: compare-and-swap on `rides.refund_amount`, ledger dedupe key, replay-recovery branch |
+| C72 | 2026-09-08 | `ci-error-audit.yml`'s issue-dedup fingerprint tightened so unrelated `backend-test` failures stop folding into one long-lived issue |
+| C96 | cleared 2026-09-09 | Repo-wide GitHub Actions outage (~20:23–21:09 UTC 2026-09-08) confirmed base-branch-red, not caused by any PR — cleared upstream, no code fix needed |
+| C105 | 2026-09-12 | `GET /maps/directions` proxy gained a 30s Redis result cache, matching its sibling live-route endpoint |
+| C107 | 2026-09-13 | Unreachable `role IN ('admin','super_admin')` RLS pattern (10 tables) confirmed dead via direct production query; legacy admin row's role reset + `chk_users_role_not_admin` constraint validated |
+| C102 | 2026-09-13 | Receipt PDF/HTML generator now renders the discount/promo line (previously JSON-receipt-only) |
+| C108 | 2026-09-14 | `auth.users`-empty-in-production finding closed by correcting the RLS-tier docs to claim policy-logic coverage, not live-traffic coverage |
+| C97 | 2026-09-14 | Driver-app "push notifications not visible" — both root causes fixed (loud Firebase Admin SDK init failure, client fallback-toast) plus a delivery-outcome metric |
+| C115 | 2026-09-14 | Admin Live Monitoring's service-area jump buttons / Follow toggle no longer silently no-op when the map can't render |
+| C116 | 2026-09-14 | Dead, unreachable `admin-dashboard/src/components/driver-map.tsx` deleted (product-owner decision) |
+| C119 | 2026-09-14 | `spinr.app` phantom-domain references (96 sites) removed/corrected — was never a registered domain |
+| C114 | 2026-09-20 | Rate limiting added to `routes/drivers/ride_reads.py`'s entire read-endpoint family (PR #5577) |
+| C123 | 2026-09-20 | Same unreachable admin-RLS pattern fixed on 6 more safety/regulatory-critical tables (migrations 432/433), incl. `driver_insurance_periods`, `safety_incidents` |
+| C124 | 2026-09-20 | Stray, untracked out-of-band admin RLS policy on `corporate_accounts` (no migration ever created it) removed |
+| B43 | 2026-09-20 | `dashboard-settings` visual-regression baseline re-seeded (CR-2026-091) — real cause was a dark-launched PostHog session-replay card, not the originally-suspected commits |
+| C118 | 2026-09-21 | DB-level immutability triggers added to `ride_distance_integrity_events`/`ride_distance_recomputes` (PR #5616) |
+| C112 (dup) | 2026-09-21 | `audit_logs` migration-57 trigger conflict blocking the 7-year retention purge resolved (PR #5613) |
+| A34 | 2026-09-21 | Ledger-blending launch-date open question resolved (PR #5638) |
+
+## Next sprint candidates (current)
+
+- **C125** — review and apply the 8 pending migrations (`379`, `424`–`429`) beyond 430/431; needs `DATABASE_URL` access this sandbox doesn't have
+- **C126** — replace the `backend-test` 20→30 min timeout stopgap with a structural fix (pytest-xdist, or split the RLS suite into its own job)
+- **C121 gap #2** — apply the decided-but-not-yet-applied fix (make the GHCR package public) once a repo/org admin can act on it
+- **C99 / C103** — get a human to grant Fly.io/Railway CLI + Firebase MCP access so the items it blocks (C70, C90, C91, C97's residuals) can finally be verified
+- **C43** — revisit once the A41-family legacy-migration work concludes; RLS is still off on 4 production tables including one holding Stripe/Twilio/Google Maps keys
+- **A43 / C73** — get repo-admin sign-off on making `backend-test` (and the full required-check set) a real merge-blocking gate on `main`
+- **C122** — if the `locationIntegrity.ts` flake recurs a 3rd time, escalate to a real CI-access session rather than another sandbox reproduction attempt
+
+---
+
+# Sprint 1 — P0 Security & Safety Hardening (historical, closed 2026-05-06)
 
 ## Sprint goal
 

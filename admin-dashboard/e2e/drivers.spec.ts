@@ -8,6 +8,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { setupAdminMocks } from './admin-mocks';
+import { readFile } from 'node:fs/promises';
 
 const MOCK_DRIVERS = [
   {
@@ -17,7 +18,8 @@ const MOCK_DRIVERS = [
     last_name: 'Driver',
     email: 'john.driver@example.com',
     phone: '+13065550111',
-    status: 'approved',
+    status: 'active',
+    service_area_id: 'saskatoon',
     is_online: true,
     vehicle_type: 'standard',
     vehicle_make: 'Honda',
@@ -36,6 +38,7 @@ const MOCK_DRIVERS = [
     email: 'amy.wheels@example.com',
     phone: '+13065550112',
     status: 'pending',
+    service_area_id: 'regina',
     is_online: false,
     vehicle_type: 'xl',
     vehicle_make: 'Toyota',
@@ -94,14 +97,22 @@ async function mockDrivers(page: any) {
         return json(200, [{ id: 'standard', name: 'Standard' }, { id: 'xl', name: 'XL' }]);
       }
       if (url.includes('/drivers/stats')) {
-        return json(200, { total: 2, online: 1, approved: 1, pending: 1 });
+        return json(200, { total: 2, online: 1, approved: 1, pending: 1,
+          service_areas: [{ id: 'saskatoon', name: 'Saskatoon' }, { id: 'regina', name: 'Regina' }],
+        });
       }
+      const params = new URL(url).searchParams;
+      const matching = MOCK_DRIVERS.filter(d =>
+        (!params.get('status') || d.status === params.get('status')) &&
+        (!params.get('service_area_id') || d.service_area_id === params.get('service_area_id'))
+      );
+      if (url.includes('/export/drivers')) return json(200, { drivers: matching, count: matching.length });
       // getDrivers() in lib/api.ts returns request<any[]>(...) — a raw
       // array, not { drivers: [...] } (unlike ride-management.spec.ts's
       // older mock, which never got caught because that spec only checks
       // the page heading, not that rows actually render).
       if (url.includes('/drivers') && !url.match(/\/drivers\/driver_e2e_/)) {
-        return json(200, MOCK_DRIVERS);
+        return json(200, matching);
       }
       return null;
     },
@@ -166,13 +177,28 @@ test.describe('admin dashboard: drivers — interaction', () => {
     await expect(page.locator('main')).toBeVisible();
   });
 
-  test('Export button is clickable', async ({ page }) => {
+  test('Export downloads only the active drivers in the selected service area', async ({ page }) => {
     await mockDrivers(page);
     await page.goto('/dashboard/drivers');
+    await page.getByRole('button', { name: /^Active/ }).click();
+    await page.getByLabel('Filter by service area').click();
+    await page.getByRole('option', { name: 'Saskatoon', exact: true }).click();
+    await expect(page.getByText('DRV-1001')).toBeVisible();
+    await expect(page.getByText('DRV-1002')).not.toBeVisible();
     const exportBtn = page.getByRole('button', { name: /export/i });
-    await expect(exportBtn).toBeVisible({ timeout: 20000 });
+    const requestPromise = page.waitForRequest(r => r.url().includes('/export/drivers'));
+    const downloadPromise = page.waitForEvent('download');
     await exportBtn.click();
-    await expect(page.locator('main')).toBeVisible();
+    const [request, download] = await Promise.all([requestPromise, downloadPromise]);
+    const params = new URL(request.url()).searchParams;
+    expect(params.get('status')).toBe('active');
+    expect(params.get('service_area_id')).toBe('saskatoon');
+    expect(params.get('onboarding_complete')).toBe('true');
+    expect(params.has('limit')).toBe(false);
+    expect(params.has('offset')).toBe(false);
+    const csv = await readFile((await download.path())!, 'utf8');
+    expect(csv).toContain('DRV-1001');
+    expect(csv).not.toContain('DRV-1002');
   });
 
   test('clicking a driver row opens the detail sheet', async ({ page }) => {

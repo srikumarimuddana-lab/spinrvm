@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import * as ExpoRouter from 'expo-router';
 import { getLogRocketInstance } from '../services/logRocketInstance';
+import { pausePostHogReplay, resumePostHogReplay } from '../services/posthogReplay';
 
 // Screen-level jest suites across both apps widely `jest.mock('expo-router', () =>
 // ({ useRouter: ..., useLocalSearchParams: ... }))` with only the exports that
@@ -24,25 +25,30 @@ const useFocusEffectOrMount: FocusEffectHook =
 // blur/unmount, so the recording gap is scoped to exactly that screen
 // rather than disabling replay app-wide.
 //
-// No-op when LogRocket isn't initialized (Expo Go, web, Android default-off,
-// or the kill flag) — pauseViewCapture/unpauseViewCapture are only ever
-// called on a real, running SDK instance.
+// No-op when neither LogRocket nor PostHog is initialized (Expo Go, web,
+// Android LogRocket default-off, or the PostHog admin flag off) — pause
+// methods are only ever called on a real, running SDK instance.
 export function useLogRocketPrivacyScreen(): void {
   useFocusEffectOrMount(
     useCallback(() => {
       const LogRocket = getLogRocketInstance();
-      if (!LogRocket) return undefined;
-      try {
-        LogRocket.pauseViewCapture();
-      } catch (e) {
-        console.log('[LogRocket] pauseViewCapture failed:', e);
-      }
-      return () => {
+      if (LogRocket) {
         try {
-          LogRocket.unpauseViewCapture();
+          LogRocket.pauseViewCapture();
         } catch (e) {
-          console.log('[LogRocket] unpauseViewCapture failed:', e);
+          console.log('[LogRocket] pauseViewCapture failed:', e);
         }
+      }
+      pausePostHogReplay();
+      return () => {
+        if (LogRocket) {
+          try {
+            LogRocket.unpauseViewCapture();
+          } catch (e) {
+            console.log('[LogRocket] unpauseViewCapture failed:', e);
+          }
+        }
+        resumePostHogReplay();
       };
     }, [])
   );

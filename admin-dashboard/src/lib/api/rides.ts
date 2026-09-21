@@ -151,6 +151,40 @@ export const sendRideInvoice = (rideId: string, email?: string) =>
         // rider on file.
         body: email ? JSON.stringify({ email }) : undefined,
     });
+// A `type` alias rather than an `interface` on purpose: the rows are handed to
+// useTableSort, whose constraint is `T extends Record<string, any>`, and an
+// interface has no implicit index signature. A type alias does, so this cannot
+// trip the "index signature is missing" error.
+export type UnpaidRide = {
+    id: string;
+    status: string;
+    payment_status: string;
+    payment_retry_count: number;
+    total_fare: number | null;
+    tip_amount: number | null;
+    pickup_address: string | null;
+    dropoff_address: string | null;
+    rider_id: string | null;
+    rider_name: string | null;
+    rider_phone: string | null;
+    driver_name: string | null;
+    created_at: string | null;
+    ride_completed_at: string | null;
+};
+
+// Completed rides whose fare was never collected — the card failed and
+// payment_retry exhausted its attempts. These are NOT withheld from the
+// driver (Spinr pays them and absorbs the charge by policy); this list is the
+// receivable to chase with the rider, via sendPayableRideInvoice below.
+export const getUnpaidRides = (opts: { limit?: number; offset?: number } = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    const qs = sp.toString();
+    return request<{ rides: UnpaidRide[]; count: number }>(
+        `/api/admin/rides/unpaid${qs ? `?${qs}` : ""}`,
+    );
+};
 // Payable Stripe Invoice for a stuck unpaid ride — Stripe emails the rider a
 // hosted pay page; invoice.paid settles the ride. Returns { invoice_url }.
 export const sendPayableRideInvoice = (rideId: string) =>

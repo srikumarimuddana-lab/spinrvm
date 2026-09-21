@@ -38,7 +38,7 @@ def _require_super_admin(admin: dict) -> None:
     the guard survives a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Data Transfer jobs require super_admin")
+        raise HTTPException(status_code=403, detail="Data Transfer jobs require super admin access.")
 
 
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"

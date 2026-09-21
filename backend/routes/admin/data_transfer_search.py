@@ -39,7 +39,7 @@ def _require_super_admin(admin: dict) -> None:
     the guard survives a future re-mount under a weaker dependency.
     """
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Data Transfer search requires super_admin")
+        raise HTTPException(status_code=403, detail="Data Transfer search requires super admin access.")
 
 
 def _text_filter(q: str, table: str) -> dict:

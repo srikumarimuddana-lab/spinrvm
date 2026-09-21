@@ -119,6 +119,94 @@ class TestRunGatePassFail:
         )
         assert rc == 1
 
+    def test_missing_report_names_the_producer_result_it_was_given(self, tmp_path, capsys):
+        """CR #5576: the gate must diagnose, not assume.
+
+        It used to assert "the pytest --cov run must have failed outright"
+        whenever the file was absent — a cause it never checked. On run
+        35526289539 that was flatly untrue: the producer reported success
+        (it had aborted collection and run zero tests, so nothing was ever
+        uploaded), and the claim sent readers hunting a test failure that
+        did not exist.
+        """
+        manifest = {"routes/payments.py": (90.0, "x")}
+        changed = _write_changed_files(tmp_path, ["backend/routes/payments.py"])
+        missing = tmp_path / "does-not-exist.json"
+
+        rc = lib.run_gate(
+            manifest=manifest,
+            coverage_json=missing,
+            changed_files_file=changed,
+            gate_label="test",
+            producer_result="success",
+        )
+        out = capsys.readouterr().out
+        assert rc == 1, "must still fail closed — only the diagnosis changes"
+        assert "NOT a test failure" in out
+        assert "must have failed outright" not in out, "the unchecked claim must be gone"
+
+        rc = lib.run_gate(
+            manifest=manifest,
+            coverage_json=missing,
+            changed_files_file=changed,
+            gate_label="test",
+            producer_result="failure",
+        )
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "reported 'failure'" in out
+        assert "NOT a test failure" not in out, "must not claim success when the producer failed"
+
+    def test_missing_report_without_producer_result_says_so_rather_than_guessing(self, tmp_path, capsys):
+        """A caller that omits --producer-result (local/manual runs) must
+        still get a correct fail-closed gate, and a message that admits the
+        cause could not be narrowed instead of inventing one."""
+        manifest = {"routes/payments.py": (90.0, "x")}
+        changed = _write_changed_files(tmp_path, ["backend/routes/payments.py"])
+        rc = lib.run_gate(
+            manifest=manifest,
+            coverage_json=tmp_path / "does-not-exist.json",
+            changed_files_file=changed,
+            gate_label="test",
+        )
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "was not supplied" in out
+        assert "must have failed outright" not in out
+
+    def test_producer_result_never_changes_the_verdict(self, tmp_path):
+        """The new argument is diagnostic only. A green producer must not
+        turn a genuine floor breach into a pass, and a red producer must not
+        fail a run whose coverage is actually fine."""
+        manifest = {"routes/payments.py": (90.0, "x")}
+        changed = _write_changed_files(tmp_path, ["backend/routes/payments.py"])
+
+        below = _write_coverage_json(tmp_path, {"routes/payments.py": {"summary": {"percent_covered": 80.0}}})
+        for result in ("success", "failure", "cancelled", "skipped", ""):
+            assert (
+                lib.run_gate(
+                    manifest=manifest,
+                    coverage_json=below,
+                    changed_files_file=changed,
+                    gate_label="test",
+                    producer_result=result,
+                )
+                == 1
+            ), f"below floor must fail regardless of producer_result={result!r}"
+
+        above = _write_coverage_json(tmp_path, {"routes/payments.py": {"summary": {"percent_covered": 95.0}}})
+        for result in ("success", "failure", "cancelled", "skipped", ""):
+            assert (
+                lib.run_gate(
+                    manifest=manifest,
+                    coverage_json=above,
+                    changed_files_file=changed,
+                    gate_label="test",
+                    producer_result=result,
+                )
+                == 0
+            ), f"above floor must pass regardless of producer_result={result!r}"
+
     def test_unparseable_coverage_json_fails_loudly(self, tmp_path):
         manifest = {"routes/payments.py": (90.0, "x")}
         bad = tmp_path / "cov.json"

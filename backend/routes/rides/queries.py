@@ -454,6 +454,18 @@ async def get_ride(
     else:
         ride["free_cancel_seconds_remaining"] = None  # driver not yet accepted
 
+    try:
+        from ...utils.datetime_utils import parse_iso_utc
+        from ...utils.scheduled_ride_config import pickup_wait_start
+    except ImportError:
+        from utils.datetime_utils import parse_iso_utc
+        from utils.scheduled_ride_config import pickup_wait_start
+    from datetime import datetime, timezone
+
+    pickup = parse_iso_utc(ride.get("scheduled_time")) if ride.get("is_scheduled") else None
+    if pickup and pickup > datetime.now(timezone.utc):
+        ride["free_cancel_seconds_remaining"] = int((pickup - datetime.now(timezone.utc)).total_seconds()) + 1
+        cancellation_fee_amount = Decimal("0")
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
 
@@ -485,6 +497,7 @@ async def get_ride(
                     arrived_dt = driver_arrived_at
                 if arrived_dt.tzinfo is None:
                     arrived_dt = arrived_dt.replace(tzinfo=timezone.utc)
+                arrived_dt = pickup_wait_start(ride, arrived_dt)
                 elapsed = int((datetime.now(timezone.utc) - arrived_dt).total_seconds())
                 ride["noshow_seconds_remaining"] = max(0, noshow_wait_seconds - elapsed)
                 ride["noshow_eligible"] = elapsed >= noshow_wait_seconds

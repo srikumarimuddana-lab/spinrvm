@@ -154,6 +154,17 @@ jest.mock('@shared/api/client', () => ({
   isAppCheckTokenReady: () => Promise.resolve(true),
 }));
 
+// The bell badge now reads useNotifications(1) (shared TanStack Query hook)
+// instead of an ad-hoc api.get poll — mock the hooks module directly so this
+// tree doesn't need a real QueryClientProvider ancestor. useDriverDashboard
+// (mocked wholesale below) owns the WS side of the badge; this only covers
+// index.tsx's own read of the cache + its widened poll fallback.
+const mockRefetchNotifications = jest.fn();
+let mockNotifUnreadCount = 3;
+jest.mock('@shared/hooks/queries', () => ({
+  useNotifications: () => ({ data: { unread_count: mockNotifUnreadCount }, refetch: mockRefetchNotifications }),
+}));
+
 const mockShowToast = jest.fn();
 jest.mock('../../hooks/useToast', () => ({ showToast: (...a: any[]) => mockShowToast(...a) }));
 
@@ -367,6 +378,7 @@ function resetState() {
     wsError: null,
     wsLatency: null,
     refreshLocation: mockRefreshLocation,
+    retryConnection: jest.fn(),
   };
   mockDiscreetSosEnabled = false;
   mockHeatmapState = {
@@ -395,10 +407,10 @@ beforeEach(() => {
   appStateListeners.length = 0;
   resetState();
   mockApiGet.mockImplementation((url: string) => {
-    if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 3 } });
     if (url === '/service-areas') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: {} });
   });
+  mockNotifUnreadCount = 3;
   mockApiPost.mockResolvedValue({ data: { contacts_notified: true } });
   mockCompleteRide.mockResolvedValue({ confirmationRequired: false });
 });
@@ -451,9 +463,8 @@ describe('DriverDashboardScreen', () => {
     expect(mockClearError).toHaveBeenCalled();
   });
 
-  it('fetches unread notifications once App Check is ready and passes the count to DriverTopBar', async () => {
+  it('passes the useNotifications() unread count to DriverTopBar', async () => {
     const r = await renderScreen();
-    expect(mockApiGet).toHaveBeenCalledWith('/notifications?limit=1');
     expect(allText(r)).toContain('"unread:3"');
   });
 

@@ -31,6 +31,7 @@ import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
+import { useRideLocationFallback } from '../hooks/useRideLocationFallback';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
@@ -62,10 +63,11 @@ function RideInProgressScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide,
-    triggerEmergency, isLoading, error, wsConnected,
+    triggerEmergency, isLoading, error,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
   } = useRideStore();
+  useRideLocationFallback(rideId);
   const { t } = useTranslation();
   // Seed ETA and route from store so this screen shows correct values
   // immediately even before the first Directions fetch completes — and
@@ -211,13 +213,7 @@ function RideInProgressScreenContent() {
 
   useEffect(() => {
     if (!rideId) { router.replace('/(tabs)' as any); return; }
-    fetchRide(rideId);
-    // Suspend fallback poll while WebSocket is delivering updates in real-time.
-    if (wsConnected) return;
-    const interval = setInterval(() => fetchRide(rideId), 15000);
-    return () => clearInterval(interval);
-    // fetchRide is a zustand action (stable); router is expo-router's stable singleton.
-  }, [rideId, wsConnected, fetchRide, router]);
+  }, [rideId, router]);
 
   useEffect(() => {
     // Calculate estimated arrival time

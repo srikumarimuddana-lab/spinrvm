@@ -417,6 +417,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Apple-granted entitlement plus scene-delegate wiring not present here.
         // See docs/carplay-android-auto.md.
         '@logrocket/react-native',
+        // Do not add 'posthog-react-native/expo': that plugin always applies
+        // posthog.gradle / posthog-xcode.sh, which exec posthog-cli during
+        // release bundling. EAS has no usable CLI (versionCode 26–28 failed
+        // on createBundleReleaseJsAndAssets_PostHogUpload). Autolinking still
+        // ships the JS SDK + native replay module from package.json.
         // Meta (Facebook) app events. Same posture as the rider app: Advanced
         // Matching is sent SERVER-side via the Conversions API, so no IDFA is
         // collected, no advertiser tracking happens on-device, and

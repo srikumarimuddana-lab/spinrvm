@@ -312,6 +312,34 @@ class AppSettings(BaseModel):
     # were never previously blocked on these fields. See CLAUDE.md gate #3
     # and docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md.
     enforce_driver_eligibility_recheck: bool = False
+    # When true, the driver status handler classifies insurance periods via
+    # the shared `utils.insurance_periods.derive_insurance_period` table
+    # instead of its own inline ternaries. The behavioural difference is a
+    # driver holding a live batch-dispatch offer: the Go Offline guard only
+    # rejects on a `rides` row, and batch dispatch keeps its claim in
+    # `ride_offers`, so toggling status mid-offer used to overwrite the
+    # correct Period 2 (opened at claim time) with Period 0 or 1 —
+    # understating SGI commercial coverage while the driver was already
+    # obligated to the ride. Defaults to false (dark ship) per CLAUDE.md
+    # gate #3; OFF reproduces the previous behaviour exactly. See
+    # docs/change-log/2026-09-20-insurance-period-derivation.md.
+    insurance_period_live_offer_enabled: bool = False
+    # When true, the Go Offline 409 guard also rejects a driver holding a
+    # live batch-dispatch offer, not just an active `rides` row. Companion
+    # to `insurance_period_live_offer_enabled` above, which fixed the
+    # *audit record* for this same gap without changing driver-visible
+    # behaviour. This flag closes the gap itself: today a driver mid-batch-
+    # offer can tap Go Offline and walk straight past the guard, whose own
+    # comment says "To go offline during an offer, decline it first" — a
+    # rule nothing enforced. Deliberately kept as a SEPARATE flag from the
+    # audit-record fix (not folded into it) because this one changes what a
+    # driver can do (a previously-allowed toggle now 409s), not just what
+    # gets written to `driver_insurance_periods` — the two are different
+    # risk classes and CLAUDE.md gate #3 wants a new/changed validation
+    # rule flagged on its own. Defaults to false (dark ship); OFF reproduces
+    # the previous behaviour exactly. See
+    # docs/change-log/2026-09-20-go-offline-live-offer-guard.md.
+    go_offline_live_offer_guard_enabled: bool = False
     # When true, suspending/closing a corporate account auto-cancels its
     # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
     # driver_arrived) instead of leaving them to run to completion as if the
@@ -661,6 +689,15 @@ class AppSettings(BaseModel):
     # behavior, never to no route line. Both apps. Not a credential/
     # destination field, no masking/super-admin gate needed.
     directions_proxy_enabled: bool = False
+    # ── PostHog session replay (rider-app + driver-app) ──────────────────
+    # Dark-launched. Off (default) = neither app initialises PostHog.
+    # On + a non-empty posthog_api_key = each app inits session replay on
+    # the next cold start. Does not replace LogRocket. Project API key
+    # (phc_...) is client-safe like stripe_publishable_key; not a personal
+    # API key. Not a credential for _CREDENTIAL_FIELDS masking.
+    posthog_session_replay_enabled: bool = False
+    posthog_api_key: str = ""
+    posthog_host: str = "https://us.i.posthog.com"
     # ── Legacy/re-consent notice (2026-08-19 legacy-migration audit) ─────
     # Dark-launch gate for GET/POST /consent/* (routes/legacy_consent.py).
     # Off (default): endpoint reports needs_notice=false unconditionally and
@@ -744,6 +781,10 @@ class AppSettings(BaseModel):
     # See migration 424. Ships dark -- requires human device verification
     # (physical iOS + Android, staging) before enabling in production.
     minimal_fcm_offer_payload_enabled: bool = False
+    # Migration 425: bounded native foreground/background capture reordering
+    # in completed-route finalization. Operated via the trusted settings row;
+    # keep dark until staged route/distance evidence has been reviewed.
+    route_interleaved_capture_enabled: bool = False
     # ── Dispatch geo provider / candidate pool ───────────────────────────
     # Global default provider (migration 397, settings.dispatch_geo_provider
     # TEXT NOT NULL). A service area's own dispatch_geo_provider is a

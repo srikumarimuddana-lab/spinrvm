@@ -458,7 +458,9 @@ async def process_payment(
     try:
         _app_settings = await get_app_settings() or {}
     except Exception:
-        logger.opt(exception=True).error(f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off")
+        logger.opt(exception=True).error(
+            f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off"
+        )
         _app_settings = {}
     if _app_settings.get("gps_spoof_charge_gate_enabled", False):
         _gps_validation: Optional[dict] = None
@@ -474,7 +476,9 @@ async def process_payment(
         if _gps_validation:
             # GPS route-deviation percentage, not money -- see spinr-no-float-in-money's
             # own message; same false-positive class already suppressed in email_receipt.py.
-            _deviation_threshold = float(_app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0))  # nosemgrep: spinr-no-float-in-money
+            _deviation_threshold = float(
+                _app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0)
+            )  # nosemgrep: spinr-no-float-in-money
             _deviation_pct = float(_gps_validation.get("deviation_pct") or 0)  # nosemgrep: spinr-no-float-in-money
             if _gps_validation.get("verdict") == "likely_spoofed" and _deviation_pct > _deviation_threshold:
                 # Optimistic guard on the status we just read: if a concurrent

@@ -9,6 +9,23 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { appCheckHeader } from "@/lib/firebase-app-check";
+
+// Exported for testing: merges the bearer token (if any) with the App Check
+// attestation header for the /api/v1/upload request. Kept as a standalone,
+// pure function so the merge logic — neither header may clobber the other —
+// has a regression test that doesn't require rendering the whole multi-step
+// wizard just to reach the Docs step.
+export async function buildUploadHeaders(token: string): Promise<Record<string, string>> {
+    return {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        // This page is public (no admin session) and unauthenticated by
+        // design — App Check is the only attestation this upload gets.
+        // Without it, enforcing FirebaseAppCheckMiddleware in production
+        // 401s every document upload on this registration flow.
+        ...(await appCheckHeader()),
+    };
+}
 
 export default function DriverRegistrationPage() {
     const router = useRouter();
@@ -130,7 +147,6 @@ export default function DriverRegistrationPage() {
     const uploadFile = async (file: File): Promise<string> => {
         const data = new FormData();
         data.append("file", file);
-        const token = formData.token;
         // /api/v1, not /api: upload_router and drivers_router are mounted only
         // under v1_api_router (backend/server.py). next.config's catch-all
         // proxies /api/:path* through verbatim, so "/api/upload" reached a
@@ -140,10 +156,8 @@ export default function DriverRegistrationPage() {
         const res = await fetch("/api/v1/upload", {
             method: "POST",
             body: data,
-            headers: token ? {
-                'Authorization': `Bearer ${token}`,
-            } : {},
             // Note: Content-Type header is auto-set by browser with boundary for FormData
+            headers: await buildUploadHeaders(formData.token),
         });
         if (!res.ok) throw new Error("Upload failed");
         const json = await res.json();

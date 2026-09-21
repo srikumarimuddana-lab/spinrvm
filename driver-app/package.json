@@ -9,6 +9,7 @@
     "@iternio/react-native-auto-play": "0.5.13",
     "@logrocket/react-native": "^3.10.3",
     "@notifee/react-native": "^9.1.8",
+    "@posthog/react-native-plugin": "2.9.4",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "9.2.1",
     "@react-native-community/netinfo": "12.0.1",
@@ -40,6 +41,7 @@
     "expo-dev-client": "~57.0.19",
     "expo-device": "~57.0.2",
     "expo-document-picker": "~57.0.2",
+    "expo-file-system": "~57.0.7",
     "expo-font": "~57.0.1",
     "expo-haptics": "~57.0.3",
     "expo-image": "~57.0.5",
@@ -47,6 +49,7 @@
     "expo-insights": "~57.0.17",
     "expo-linear-gradient": "~57.0.2",
     "expo-linking": "~57.0.10",
+    "expo-localization": "~57.0.2",
     "expo-location": "~57.0.17",
     "expo-notifications": "~57.0.18",
     "expo-observe": "~57.0.21",
@@ -62,8 +65,9 @@
     "expo-updates": "~57.0.22",
     "expo-web-browser": "~57.0.3",
     "firebase": "^12.19.0",
+    "posthog-react-native": "4.74.0",
     "react": "19.3.0",
-    "react-dom": "19.2.3",
+    "react-dom": "19.3.0",
     "react-native": "0.86.3",
     "react-native-confirmation-code-field": "^8.0.1",
     "react-native-dotenv": "^3.4.11",
@@ -99,22 +103,22 @@
     "jest": "30.3.0",
     "jest-expo": "~57.0.4",
     "patch-package": "^8.0.1",
-    "react-test-renderer": "19.2.3",
+    "react-test-renderer": "19.3.0",
     "serve": "^14.2.6",
     "typescript": "~5.9.2"
   },
   "overrides": {
     "react": "19.3.0",
-    "react-dom": "19.2.3",
+    "react-dom": "19.3.0",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1"
   },
   "resolutions": {
     "react": "19.3.0",
-    "react-dom": "19.2.3",
+    "react-dom": "19.3.0",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",
-    "react-test-renderer": "19.2.3",
+    "react-test-renderer": "19.3.0",
     "@xmldom/xmldom": "^0.8.15",
     "protobufjs": "^7.6.1",
     "@react-native-community/netinfo": "12.0.1",
@@ -160,7 +164,9 @@
       "reactNativeDirectoryCheck": {
         "exclude": [
           "@notifee/react-native",
-          "@logrocket/react-native"
+          "@logrocket/react-native",
+          "posthog-react-native",
+          "@posthog/react-native-plugin"
         ],
         "listUnknownPackages": false
       }

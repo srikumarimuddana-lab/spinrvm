@@ -50,7 +50,8 @@ import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
 import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
 import { SPACING, FONT } from '@shared/utils/responsive';
-import api, { isAppCheckTokenReady } from '@shared/api/client';
+import api from '@shared/api/client';
+import { useNotifications } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { SOSTriggerResult } from '@shared/types/safety';
@@ -184,6 +185,7 @@ function DriverDashboard() {
     wsError,
     wsLatency,
     refreshLocation,
+    retryConnection,
   } = useDriverDashboard();
 
   // Own-vehicle presence ring — colors mirror the insurance-period grouping
@@ -208,23 +210,20 @@ function DriverDashboard() {
     ? { color: colors.primary, pulsing: false }
     : null;
 
-  // Unread notification count — fetched on mount, refreshed every 60s
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  // Unread notification count — sourced from the shared notifications query
+  // cache (useNotifications, App-Check-gated internally). useDriverDashboard's
+  // WS handler merges a `new_notification` push straight into this same
+  // cache for an instant badge update; the interval below is now a periodic
+  // reconciliation fallback for whenever the socket isn't connected — was a
+  // fixed 60s poll with no WS fast path, now widened to 5 minutes since WS
+  // covers the fast path.
+  const { data: rawNotifData, refetch: refetchNotifications } = useNotifications(1);
+  const notifData = rawNotifData as { unread_count?: number } | undefined;
+  const unreadNotifCount = notifData?.unread_count ?? 0;
   useEffect(() => {
-    let cancelled = false;
-    const fetchUnread = async () => {
-      // /api/v1/notifications is App-Check-enforced in prod; polling before the
-      // App Check token is minted 401s. Skip until ready — the 60s interval
-      // retries, so the badge loads once App Check is up.
-      if (!(await isAppCheckTokenReady())) return;
-      api.get('/notifications?limit=1').then((res: any) => {
-        if (!cancelled) setUnreadNotifCount(res.data?.unread_count ?? 0);
-      }).catch(() => {});
-    };
-    fetchUnread();
-    const timer = setInterval(fetchUnread, 60 * 1000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+    const timer = setInterval(() => { refetchNotifications(); }, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [refetchNotifications]);
 
   // Speed-chip staleness tick: `location` only changes when a new GPS fix
   // arrives, but the chip needs to clamp to 0 once the CURRENT fix ages past
@@ -1295,7 +1294,7 @@ function DriverDashboard() {
     if (locationStatus === 'denied' || locationStatus === 'unavailable') {
       const denied = locationStatus === 'denied';
       return (
-        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
+        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACING.xl }]}>
           <Ionicons name={denied ? 'location-outline' : 'navigate-outline'} size={48} color={colors.primary} />
           <Text style={styles.locationFallbackTitle}>
             {t(denied ? 'home.locationDeniedTitle' : 'home.locationUnavailableTitle')}
@@ -1323,7 +1322,7 @@ function DriverDashboard() {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={{ color: colors.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
+        <Text style={{ color: colors.text, marginTop: 12, fontSize: FONT.bodyMd }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }
@@ -1739,7 +1738,7 @@ function DriverDashboard() {
 
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
       {rideState === 'idle' && activeAirportZone && (
-        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: 4 }}>
+        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: SPACING.xs }}>
           <Ionicons name="airplane" size={13} color={colors.surface} />
           <Text style={{ color: colors.surface, fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
         </View>
@@ -1747,8 +1746,8 @@ function DriverDashboard() {
 
       {/* Surge multiplier chip — on map when active (HM-11) */}
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
-        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
-          <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
+        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: SPACING.xs }}>
+          <Text style={{ color: colors.surface, fontSize: FONT.bodySm, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
         </View>
       )}
 
@@ -1785,7 +1784,7 @@ function DriverDashboard() {
       )}
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} onRetryConnection={retryConnection} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
       {/* SOS / Safety — visible during active ride. Flag-gated (ACTION_ITEMS.md
           B16): discreetSosEnabled off (default) renders the unmodified
@@ -1994,7 +1993,7 @@ function DriverDashboard() {
           style={{
             flex: 1,
             justifyContent: 'center',
-            padding: 24,
+            padding: SPACING.lg,
             backgroundColor: 'rgba(0, 0, 0, 0.55)',
           }}
         >
@@ -2014,14 +2013,14 @@ function DriverDashboard() {
                 onPress={() => void requestRideCompletion(confirmation)}
                 style={{ backgroundColor: colors.surfaceLight, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14 }}
               >
-                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
+                <Text style={{ color: colors.text, fontSize: FONT.bodyMd, fontWeight: '600' }}>{label}</Text>
               </TouchableOpacity>
             ))}
             <TouchableOpacity
               onPress={() => setCompletionConfirmationVisible(false)}
               style={{ alignItems: 'center', paddingVertical: 10 }}
             >
-              <Text style={{ color: colors.textDim, fontSize: 15, fontWeight: '600' }}>Keep trip open</Text>
+              <Text style={{ color: colors.textDim, fontSize: FONT.bodyMd, fontWeight: '600' }}>Keep trip open</Text>
             </TouchableOpacity>
           </View>
         </View>

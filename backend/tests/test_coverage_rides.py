@@ -1037,6 +1037,9 @@ async def test_ride_search_timeout_cancels_searching_ride():
         patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push,
     ):
         mock_db.get_ride = AsyncMock(return_value=searching_ride)
+        # The cancel is a compare-and-swap claim via update_one (C2) — the
+        # id-only update_ride is no longer used on this path.
+        mock_db.update_one = AsyncMock(return_value=dict(searching_ride))
         mock_db.update_ride = AsyncMock()
         mock_manager.send_personal_message = AsyncMock()
         mock_manager.broadcast_ride_status = AsyncMock()
@@ -1044,7 +1047,9 @@ async def test_ride_search_timeout_cancels_searching_ride():
 
         await ride_search_timeout(_RIDE_ID, timeout_seconds=0)
 
-    mock_db.update_ride.assert_called()
+    mock_db.update_one.assert_called()
+    assert mock_db.update_one.call_args.args[1] == {"id": _RIDE_ID, "status": "searching"}
+    mock_db.update_ride.assert_not_called()
     # N10 regression: the auto-cancel push goes to the rider, so it must pass
     # target_app='rider' -- fails if target_app reverts to the omitted default.
     mock_push.assert_awaited_once()
@@ -1063,10 +1068,12 @@ async def test_ride_search_timeout_skips_non_searching_ride():
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
     ):
         mock_db.get_ride = AsyncMock(return_value=completed_ride)
+        mock_db.update_one = AsyncMock()
         mock_db.update_ride = AsyncMock()
 
         await ride_search_timeout(_RIDE_ID, timeout_seconds=0)
 
+    mock_db.update_one.assert_not_called()
     mock_db.update_ride.assert_not_called()
 
 
@@ -4620,3 +4627,32 @@ async def test_process_payment_company_allowance_master_debit_fails():
     # master wallet a SECOND time via its own negative master delta,
     # compounding the failure instead of compensating it).
     mock_allowance_svc.apply_ride_debit_reversal.assert_called_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["scheduled", "searching", "driver_assigned", "driver_arrived"])
+async def test_early_scheduled_arrival_response_protects_rider(status):
+    from datetime import datetime, timedelta, timezone
+
+    from backend.routes.rides import get_ride
+
+    now = datetime.now(timezone.utc)
+    ride = _ride(
+        status=status,
+        rider_id=_RIDER_ID,
+        driver_id="d1",
+        is_scheduled=True,
+        scheduled_time=(now + timedelta(minutes=10)).isoformat(),
+        driver_arrived_at=(now - timedelta(minutes=8)).isoformat(),
+    )
+    with patch("backend.routes.rides._deps.db_supabase") as db:
+        db.get_ride = AsyncMock(return_value=ride)
+        db.get_rows = AsyncMock(return_value=[])
+        db.get_driver_by_id = AsyncMock(return_value=None)
+        with patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})):
+            result = await get_ride(request=_starlette_request(), ride_id=_RIDE_ID, current_user=_USER)
+    assert result["cancellation_fee"] == 0
+    assert result["free_cancel_seconds_remaining"] > 0
+    assert result["noshow_eligible"] is False
+    if status == "driver_arrived":
+        assert result["noshow_seconds_remaining"] > 300

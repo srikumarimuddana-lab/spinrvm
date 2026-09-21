@@ -30,12 +30,15 @@ pull it from their own filter-repo output or the mirror clone's commit-map befor
 this request. Do not submit without it; GitHub needs specific SHAs to know what to purge, not
 just file names.
 
-(For reference only, **not verified as complete** — five commits touching
-`driver_bank_sin_migration.sql` are reachable from this session's last pre-rewrite object,
-`b4accffb7`: `16d3d8ea6`, `9379917dd`, `b1edab4ec`, `b6c3e2c1f`, `949a4cba1`. This list does not
-include the runbook's own cited introduction/removal commits — `2d5f54276`, `1d6d329a9`,
-`41356340d`, `44183d3`, `41cee45` — which are not present as objects in this shallow clone at
-all. Treat this parenthetical as a lead, not a substitute for the real commit-map.)
+**SHA list relocated out of this public repo (2026-09-21).** This document's job is to be
+copy-pasted into a GitHub Support ticket, which needs the real pre-rewrite commit SHAs to
+identify what to purge — but publishing those same SHAs in this public repo republishes exactly
+the kind of exposure-identifying metadata the rewrite was meant to close (they pinpoint which
+historical commits carried the PII). The one reference-only, not-verified-complete partial SHA
+list this draft previously carried inline has been delivered directly to the repo owner instead
+of staying in-repo; retrieve it from that delivery (or from a fresh `git filter-repo`
+commit-map / mirror-clone run, which is the authoritative source this section already asks
+whoever submits the request to prefer) before filing.
 
 ## Request to submit (fill in the bracketed section, then send via https://support.github.com/)
 
@@ -50,7 +53,7 @@ all. Treat this parenthetical as a lead, not a substitute for the real commit-ma
 > internal object storage) for some time after the push, we're requesting they be purged rather
 > than left to expire naturally, given the sensitivity of the data involved.
 >
-> Removed commit SHAs (pre-rewrite): **[fill in — see "What this draft is missing" above]**
+> Removed commit SHAs (pre-rewrite): **[fill in — SHA list held privately outside this repo, not duplicated here; see the "relocated out of this public repo" note above for where to get it]**
 >
 > Files removed from history: `driver_bank_sin_migration.sql`, `driver_csv_migration.sql`
 >

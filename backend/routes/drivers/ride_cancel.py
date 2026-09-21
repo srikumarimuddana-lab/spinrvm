@@ -486,6 +486,11 @@ async def mark_rider_noshow(
     else:
         noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
 
+    try:
+        from ...utils.scheduled_ride_config import pickup_wait_start
+    except ImportError:
+        from utils.scheduled_ride_config import pickup_wait_start
+    arrived_dt = pickup_wait_start(ride, arrived_dt)
     waited = (datetime.now(timezone.utc) - arrived_dt).total_seconds()
     if waited < noshow_wait_seconds:
         remaining = int(noshow_wait_seconds - waited)

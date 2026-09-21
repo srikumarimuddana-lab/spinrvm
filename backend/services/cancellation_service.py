@@ -104,6 +104,9 @@ def calculate_cancellation_fee(
     ``area`` is the service_area row for per-area fee overrides.
     Returns (0, 0) when no fee applies (early cancel, no driver yet).
     """
+    pickup = parse_iso_utc(ride.get("scheduled_time")) if ride.get("is_scheduled") else None
+    if pickup and datetime.now(timezone.utc) < pickup:
+        return _d(0), _d(0)
     driver_id = ride.get("driver_id")
     fee_admin, fee_driver, free_window = _resolve_cancel_fees(settings, area)
 

@@ -5,15 +5,17 @@ CLAUDE.md's own priority signal (corporate wallet/billing tables move real
 money via `corporate_wallet_apply_delta` and carry corporate-member PII).
 
 `corporate_accounts` (migrations 05 create, 17 FK-guard + RLS, 416 admin-policy
-fix): migration 416 replaced migration 17's original `FOR ALL TO authenticated`
-(`users.role = 'admin'` exactly) with a SELECT-only `admin` or `super_admin`
-policy, mirroring migration 142's fix on the nine sibling tables below, plus a
-table-level REVOKE of INSERT/UPDATE/DELETE/TRUNCATE from `authenticated` and
-REVOKE ALL from `anon` — so, like the nine sibling tables, every one of
-anon/non-admin-authenticated/admin-authenticated's write attempts now raises a
-grant-level `InsufficientPrivilege`, not a silently-filtered zero-row RLS
-denial, and reads are anon/non-admin-denied by RLS while admin/super_admin
-reads succeed.
+fix, 430 admin-unreachable fix): migration 416 replaced migration 17's original
+`FOR ALL TO authenticated` (`users.role = 'admin'` exactly) with a SELECT-only
+`admin` or `super_admin` policy, mirroring migration 142's fix on the nine
+sibling tables below, plus a table-level REVOKE of INSERT/UPDATE/DELETE/TRUNCATE
+from `authenticated` and REVOKE ALL from `anon` — so, like the nine sibling
+tables, every one of anon/non-admin-authenticated/admin-authenticated's write
+attempts now raises a grant-level `InsufficientPrivilege`, not a
+silently-filtered zero-row RLS denial. Reads are anon/non-admin-denied by RLS;
+admin/super_admin reads are *also* denied as of migration 430 (see below) --
+production data cleanup means no `users` row can hold either value anymore,
+but the policy itself is now `USING (false)` regardless.
 
 `corporate_wallets` / `corporate_wallet_transactions` / `corporate_members`
 / `corporate_member_allowances` / `corporate_allowance_requests` (migration
@@ -47,8 +49,25 @@ Gap found writing this file, fixed before merge: `corporate_accounts`'s own
 admin policy (migration 17) was never included in migration 142's
 admin-check fix -- it still checked `users.role = 'admin'` exactly, excluding
 `super_admin`. Migration 416 (PR #5307) closed this the same day, applying
-migration 142's exact fix pattern to this one table. The tests below assert
-the corrected, post-416 behavior.
+migration 142's exact fix pattern to this one table.
+
+ACTION_ITEMS.md C107 / migration 430: a 2026-09-13 production data cleanup plus
+migration 256's `chk_users_role_not_admin` CHECK constraint already closed the
+original C107 finding by ensuring `users.role` can no longer hold
+'admin'/'super_admin' at all -- that fix is a data/schema guarantee, not a
+policy rewrite, and stays exactly as it was (migration 256 is deliberately
+*not* applied in this file's shared fixture; see conftest.py's comment on why).
+Migration 430 is additional, layered hardening on top of that: it replaces the
+"Admin read <table>" policies themselves with an explicit `USING (false)` on
+all nine tables here plus `corporate_accounts`, so the denial no longer
+depends on the CHECK constraint holding -- even if a future migration ever
+relaxed it, or a role value slipped in some other way, these policies would
+still deny. `test_admin_can_select`/`test_super_admin_can_select` are rewritten
+below as `test_admin_cannot_select`/`test_super_admin_cannot_select`: they
+still seed `role="admin"`/`"super_admin"` (that seed step itself succeeds --
+this fixture doesn't enforce migration 256) and assert the SELECT now returns
+zero rows, pinning migration 430's actual behavior directly rather than only
+inferring it from `test_non_admin_stranger_cannot_select`.
 """
 
 from __future__ import annotations
@@ -228,27 +247,34 @@ _INSERT_FN = {
 
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
-def test_admin_can_select(pg_cur, table):
+def test_admin_cannot_select(pg_cur, table):
+    """migration 430 (ACTION_ITEMS.md C107): the old "Admin read <table>"
+    policy is replaced with an explicit USING (false), so an admin JWT is
+    denied exactly like any other non-owning authenticated user now --
+    production has no users.role='admin' row left to exploit this with, but
+    the policy itself no longer depends on that being true."""
     admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, admin, role="admin")
     ids = _seed_chain(pg_cur)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute(f"SELECT id FROM {table} WHERE id = %s", (ids["row_id"][table],))
-    assert [r[0] for r in pg_cur.fetchall()] == [ids["row_id"][table]]
+    assert pg_cur.fetchall() == []
 
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
-def test_super_admin_can_select(pg_cur, table):
-    """migration 142's fix explicitly includes super_admin for these nine
-    tables (unlike corporate_accounts -- see module docstring)."""
+def test_super_admin_cannot_select(pg_cur, table):
+    """Same as test_admin_cannot_select, for the super_admin role value --
+    migration 430's USING (false) policy makes no distinction between the
+    two, unlike the admin-vs-super_admin parity gap migration 142/416 fixed
+    for the old, now-replaced policy."""
     super_admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, super_admin, role="super_admin")
     ids = _seed_chain(pg_cur)
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute(f"SELECT id FROM {table} WHERE id = %s", (ids["row_id"][table],))
-    assert [r[0] for r in pg_cur.fetchall()] == [ids["row_id"][table]]
+    assert pg_cur.fetchall() == []
 
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
@@ -280,13 +306,14 @@ def test_anon_cannot_select(pg_cur, table):
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
 def test_authenticated_cannot_insert(pg_cur, table):
-    """Even an admin cannot insert -- 142 replaced the FOR ALL policy with
-    SELECT-only, and separately revoked the INSERT grant itself."""
-    admin = _uuid()
+    """No authenticated role can insert, admin or not -- 142 replaced the
+    FOR ALL policy with SELECT-only, and separately revoked the INSERT grant
+    itself at the table-privilege level, independent of role value."""
+    rider = _uuid()
     as_role(pg_cur, None)
-    _seed_user(pg_cur, admin, role="admin")
+    _seed_user(pg_cur, rider, role="rider")
     ids = _seed_chain(pg_cur)
-    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    as_role(pg_cur, "authenticated", {"sub": rider, "role": "authenticated"})
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         _INSERT_FN[table](pg_cur, ids)
 
@@ -302,22 +329,22 @@ def test_anon_cannot_insert(pg_cur, table):
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
 def test_authenticated_cannot_update(pg_cur, table):
-    admin = _uuid()
+    rider = _uuid()
     as_role(pg_cur, None)
-    _seed_user(pg_cur, admin, role="admin")
+    _seed_user(pg_cur, rider, role="rider")
     ids = _seed_chain(pg_cur)
-    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    as_role(pg_cur, "authenticated", {"sub": rider, "role": "authenticated"})
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         pg_cur.execute(f"UPDATE {table} SET id = id WHERE id = %s", (ids["row_id"][table],))
 
 
 @pytest.mark.parametrize("table", _ADMIN_ONLY_MONEY_TABLES)
 def test_authenticated_cannot_delete(pg_cur, table):
-    admin = _uuid()
+    rider = _uuid()
     as_role(pg_cur, None)
-    _seed_user(pg_cur, admin, role="admin")
+    _seed_user(pg_cur, rider, role="rider")
     ids = _seed_chain(pg_cur)
-    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    as_role(pg_cur, "authenticated", {"sub": rider, "role": "authenticated"})
     with pytest.raises(psycopg2.errors.InsufficientPrivilege):
         pg_cur.execute(f"DELETE FROM {table} WHERE id = %s", (ids["row_id"][table],))
 
@@ -339,7 +366,9 @@ def test_service_role_bypasses(pg_cur, table):
 #    choice -- so it can't share the generic id-based parametrized tests) ──
 
 
-def test_admin_can_select_ride_payment_source(pg_cur):
+def test_admin_cannot_select_ride_payment_source(pg_cur):
+    """migration 430 (ACTION_ITEMS.md C107): ride_payment_sources is one of
+    the 11 tables whose admin-read policy is replaced with USING (false)."""
     admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, admin, role="admin")
@@ -348,10 +377,10 @@ def test_admin_can_select_ride_payment_source(pg_cur):
     _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [ride_id]
+    assert pg_cur.fetchall() == []
 
 
-def test_super_admin_can_select_ride_payment_source(pg_cur):
+def test_super_admin_cannot_select_ride_payment_source(pg_cur):
     super_admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, super_admin, role="super_admin")
@@ -360,7 +389,7 @@ def test_super_admin_can_select_ride_payment_source(pg_cur):
     _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [ride_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_non_admin_stranger_cannot_select_ride_payment_source(pg_cur):
@@ -479,7 +508,9 @@ def test_member_can_select_own_allowance_request_row(pg_cur):
 # ── corporate_accounts ──────────────────────────────────────────────────
 
 
-def test_admin_can_select_corporate_account(pg_cur):
+def test_admin_cannot_select_corporate_account(pg_cur):
+    """migration 430 (ACTION_ITEMS.md C107): corporate_accounts's own
+    admin-read policy (migration 416) is replaced with USING (false) too."""
     admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, admin, role="admin")
@@ -487,15 +518,10 @@ def test_admin_can_select_corporate_account(pg_cur):
     _seed_company(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
-def test_super_admin_role_can_select_corporate_account(pg_cur):
-    """Migration 416 (PR #5307) fixed the identical 'role = admin only,
-    excludes super_admin' bug migration 142 had already fixed on the nine
-    corporate_* money tables above, applying the same fix to
-    corporate_accounts's own admin policy (migration 17 had never been
-    included in migration 142's original sweep)."""
+def test_super_admin_cannot_select_corporate_account(pg_cur):
     super_admin = _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, super_admin, role="super_admin")
@@ -503,7 +529,7 @@ def test_super_admin_role_can_select_corporate_account(pg_cur):
     _seed_company(pg_cur, account_id)
     as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM corporate_accounts WHERE id = %s", (account_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [account_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_non_admin_authenticated_cannot_select_corporate_account(pg_cur):

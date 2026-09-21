@@ -176,7 +176,7 @@ async def _process_row(row: dict) -> None:
         if _is_expo_token(token):
             success = await _send_expo_push(token, title, body, data)
         else:
-            success = await _send_fcm_push(token, title, body, data, user_id)
+            success = await _send_fcm_push(token, title, body, data, user_id, target_app)
     except Exception:
         logger.opt(exception=True).error(f"push_retry: unexpected error sending to user {user_id!r} (row {row_id})")
         success = False
@@ -214,6 +214,7 @@ async def _send_fcm_push(
     body: str,
     data: dict,
     user_id: str,
+    target_app: str | None = None,
 ) -> bool:
     """Send a push notification via Firebase Admin SDK (native FCM token).
 
@@ -223,6 +224,14 @@ async def _send_fcm_push(
     and displays a rich heads-up + full-screen-intent notification with
     Accept/Decline action buttons. Without this branch, drivers see two
     competing notifications (the OS one and the Notifee one).
+
+    Android channel_id is chosen by target_app, mirroring features.py's
+    _build_fcm_message: rider app creates "ride-updates", driver app
+    creates "ride-offers", and Android silently drops a notification sent
+    to a channel that doesn't exist on the receiving app. This path used
+    to hardcode "ride-offers" for every non-dispatch push regardless of
+    target_app — safety pushes (e.g. SOS confirmation) routed to a rider
+    were being silently dropped by Android on retry.
     """
     try:
         from firebase_admin import messaging
@@ -231,6 +240,7 @@ async def _send_fcm_push(
         return False
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+    android_channel = "ride-updates" if target_app == "rider" else "ride-offers"
 
     try:
         # Android: data-only for dispatch (Notifee renders). For everything
@@ -240,7 +250,7 @@ async def _send_fcm_push(
             notification=None
             if is_dispatch
             else messaging.AndroidNotification(
-                channel_id="ride-offers",
+                channel_id=android_channel,
             ),
         )
         message = messaging.Message(

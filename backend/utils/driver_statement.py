@@ -229,6 +229,9 @@ async def _build(
     # stamped with the import date, so the two halves land in different
     # periods — one statement showing inflated earnings with no offset, another
     # showing a large payout with no earnings. See utils/legacy_rides.
+    # A completed ride is income on the statement whether or not its fare was
+    # collected: Spinr pays the driver and absorbs a failed card charge by
+    # policy, then pursues the rider separately. See routes/drivers/earnings.py.
     rides = (
         await db_supabase.get_rows(
             "rides",

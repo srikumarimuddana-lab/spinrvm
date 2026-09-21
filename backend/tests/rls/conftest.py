@@ -507,6 +507,15 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "17_corporate_accounts_fk.sql").read_text())
     cur.execute((migrations_dir / "27_corporate_b2b_v1.sql").read_text())
 
+    # ACTION_ITEMS.md C107 / migration 430: `disputes` (migration 10) was
+    # never built by this fixture at all -- out of scope for the money/PII
+    # coverage this harness originally targeted. migration 430's fix spans
+    # `disputes` too (it shares 142's exact broken admin-policy pattern, in
+    # the same file, just not counted in C107's own "10 tables" tally), so
+    # it now needs to exist here for that migration to even apply without
+    # erroring on a missing relation.
+    cur.execute((migrations_dir / "10_disputes_table.sql").read_text())
+
     # New tables need the same baseline grant as earlier batches -- granted
     # by name (like the stripe_disputes/stripe_orphan_refunds grant below),
     # NOT the repeated "ALL TABLES in schema" blanket used earlier in this
@@ -522,11 +531,18 @@ def pg_conn(pg_test_dbname):
         "GRANT SELECT, INSERT, UPDATE, DELETE ON corporate_accounts, corporate_wallets, "
         "corporate_wallet_transactions, corporate_members, corporate_member_allowances, "
         "corporate_allowance_requests, corporate_policies, corporate_allowed_domains, "
-        "ride_payment_sources, corporate_policy_evaluations "
+        "ride_payment_sources, corporate_policy_evaluations, disputes "
         "TO anon, authenticated, service_role"
     )
 
     migration_142_sql = (migrations_dir / "142_fix_rls_financial_tables.sql").read_text()
+    cur.execute(
+        _extract_section(
+            migration_142_sql,
+            "-- 1. disputes:",
+            "-- 2. Corporate financial tables:",
+        )
+    )
     cur.execute(
         _extract_section(
             migration_142_sql,
@@ -540,6 +556,33 @@ def pg_conn(pg_test_dbname):
     # policy + REVOKE/GRANT write lockdown) to this one table, which 142
     # itself never touched.
     cur.execute((migrations_dir / "416_corporate_accounts_rls_super_admin_fix.sql").read_text())
+
+    # ACTION_ITEMS.md C107: production data no longer contains role='admin'/
+    # 'super_admin' in `users` (cleaned up + migration 256's
+    # chk_users_role_not_admin CHECK constraint enforces it going forward,
+    # applied directly against prod -- see docs/change-log for that fix).
+    # migration 256 is deliberately NOT added to this shared fixture: it's a
+    # blanket CHECK on `users.role` and would block every *other* RLS test
+    # file's ability to seed role="admin"/"super_admin" for its own,
+    # unrelated scenarios -- a blast radius this harness has no way to bound
+    # as new test files land from concurrent sessions. migration 430 doesn't
+    # need 256 present to be correct: its USING (false) policy denies
+    # unconditionally regardless of whether that role value could ever be
+    # seeded, so the fixture only needs 430 itself. It replaces the now-dead
+    # "Admin read <table>" policies (142's 9 tables + disputes + 416's
+    # corporate_accounts) with an explicit USING (false) policy.
+    cur.execute((migrations_dir / "430_admin_role_rls_unreachable_service_role_only.sql").read_text())
+
+    # Migration 431: drops an out-of-band "Admin full access for corporate
+    # accounts" policy that no migration file (including 17/416 above) ever
+    # created -- it only ever existed in production, via manual/out-of-band
+    # drift. This harness never had that policy to begin with (its schema is
+    # built entirely by replaying migration files), so applying 431 here is a
+    # safe no-op DROP POLICY IF EXISTS -- included so the harness keeps
+    # applying the real, full migration sequence. The actual regression test
+    # for 431's fix seeds the drifted policy manually first; see
+    # test_corporate_accounts_super_admin_fix.py.
+    cur.execute((migrations_dir / "431_drop_stray_corporate_accounts_admin_policy.sql").read_text())
 
     # --- stripe_disputes (migration 88) / stripe_orphan_refunds (migration
     # 254): admin-only read tables, verbatim. Unlike every other
@@ -653,6 +696,89 @@ def pg_conn(pg_test_dbname):
     cur.execute((migrations_dir / "56_audit_logs_delete_lockdown.sql").read_text())
     cur.execute((migrations_dir / "57_audit_logs_schema_standardization.sql").read_text())
 
+    # --- cloud_messages / push_tokens (ACTION_ITEMS.md C123 phase 1, migration
+    # 432): same migration-06 file as audit_logs above, reusing migration_06_sql
+    # already loaded. Neither table was built by this harness before now --
+    # C123 phase 1 needed real RLS coverage for their admin policies, which
+    # had zero test coverage of any kind.
+    # cloud_messages: "Admin full access" (FOR ALL, broken role check, no
+    # WITH CHECK -- the policy 432 fixes) + service-role bypass. No owner-row
+    # policy -- this is an admin-broadcast table, not user-writable.
+    # push_tokens: "Users manage own push tokens" (legitimate, untouched by
+    # 432) + "Admin read push_tokens" (FOR SELECT, broken check -- the policy
+    # 432 fixes) + service-role bypass.
+    # push_tokens.id and document_requirements.id (below) both default to
+    # uuid_generate_v4() -- backend/supabase_schema.sql creates the uuid-ossp
+    # extension that provides it, but this harness only ever extracts named
+    # CREATE TABLE blocks out of that file (see the users/drivers/rides
+    # extraction above), never runs its CREATE EXTENSION line, so it has to
+    # be created explicitly here. ---
+    cur.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    cur.execute(_extract_create_table(migration_06_sql, "cloud_messages"))
+    cur.execute("ALTER TABLE cloud_messages ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin full access cloud_messages"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass cloud_messages"'))
+
+    cur.execute(_extract_create_table(migration_06_sql, "push_tokens"))
+    cur.execute("ALTER TABLE push_tokens ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Users manage own push tokens"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Admin read push_tokens"'))
+    cur.execute(_extract_policy(migration_06_sql, 'CREATE POLICY "Service role bypass push_tokens"'))
+
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON cloud_messages, push_tokens TO anon, authenticated, service_role"
+    )
+
+    # --- document_requirements (migration 02, ACTION_ITEMS.md C123 phase 1):
+    # "Public read access for requirements" (intentional -- unauthenticated
+    # driver-doc-requirements lookup, untouched by 432) + "Admin full access
+    # for requirements" (the older role='admin'-only form 432 fixes).
+    # Extracted up to the ALTER TABLE driver_documents statement -- this
+    # harness doesn't build driver_documents and that ALTER is irrelevant to
+    # document_requirements' own RLS behavior under test.
+    #
+    # The original "Admin full access for requirements" policy is
+    # deliberately NOT created here. Its USING clause compares
+    # `public.users.id = auth.uid()` with no ::text cast -- `users.id` is
+    # `text` and `auth.uid()` returns `uuid`, and CREATE POLICY fails outright
+    # against that type pairing (confirmed by reproducing the exact error,
+    # `operator does not exist: text = uuid`, against a fresh `users(id
+    # text)` table locally). Production's live pg_policies has this exact
+    # text stored, and a plain SELECT against the table as `authenticated`
+    # doesn't error -- but that's confounded, not proof the clause itself is
+    # sound: `EXPLAIN (VERBOSE, COSTS OFF)` shows Postgres constant-folds
+    # `(true) OR (EXISTS(<this clause>))` down to no filter at all, because
+    # the table's other policy ("Public read access for requirements") is an
+    # unconditional `USING (true)` -- so a plain SELECT never actually
+    # reaches this clause (verified by a spinr-migration-reviewer pass; the
+    # only way to exercise it directly would be an authenticated UPDATE/
+    # DELETE/INSERT attempt, which the Public-read policy doesn't cover).
+    # Ordinary DDL that could explain the divergence -- ALTER COLUMN TYPE on
+    # users.id, or DROP TABLE users -- is also ruled out: Postgres refuses
+    # both outright while a dependent policy exists, naming the policy in
+    # the error. How this policy's stored text ended up mismatched with the
+    # current schema is unresolved (see
+    # docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md for
+    # the full writeup); what's certain is that replaying it verbatim fails
+    # today. So the fixed end state (migration 432's replacement policy) is
+    # real and correct, but the broken original cannot be replayed verbatim
+    # here -- migration 432's own `DROP POLICY IF EXISTS "Admin full access
+    # for requirements"` is therefore a safe no-op in this harness, same
+    # precedent as migration 431's no-op DROP for the corporate_accounts
+    # stray policy above. ---
+    migration_02_sql = (migrations_dir / "02_dynamic_documents.sql").read_text()
+    cur.execute(_extract_create_table(migration_02_sql, "public.document_requirements"))
+    cur.execute("ALTER TABLE public.document_requirements ENABLE ROW LEVEL SECURITY")
+    cur.execute(_extract_policy(migration_02_sql, 'CREATE POLICY "Public read access for requirements"'))
+    cur.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON document_requirements TO anon, authenticated, service_role")
+
+    # ACTION_ITEMS.md C123 phase 1: replaces the unreachable/broken admin
+    # policies built above (audit_logs already applied earlier via 51) with
+    # an explicit USING (false) deny, same shape as migration 430. Does NOT
+    # touch safety_incidents / driver_insurance_periods -- see migration
+    # 432's own header comment for why those two need a different fix.
+    cur.execute((migrations_dir / "432_admin_role_rls_unreachable_phase1.sql").read_text())
+
     # --- driver_insurance_period_corrections (migration 355) / -- 355 references
     # driver_insurance_periods(id) (migration 64, already applied above);
     # driver_period_distances (migration 249) -- both self-contained
@@ -677,6 +803,20 @@ def pg_conn(pg_test_dbname):
         "GRANT SELECT, INSERT, UPDATE, DELETE ON driver_insurance_period_corrections, "
         "driver_period_distances TO anon, authenticated, service_role"
     )
+
+    # ACTION_ITEMS.md C123 phase 2: replaces safety_incidents' two broken
+    # admin policies (SELECT + UPDATE) with an explicit USING (false) deny,
+    # same shape as migration 430/432. Rewrites driver_insurance_periods',
+    # driver_insurance_period_corrections', and driver_period_distances'
+    # single combined SELECT policies (all three already applied above --
+    # migrations 64/355/249) to drop only each one's broken `OR <admin
+    # check>` clause -- NOT a blanket deny, since each policy also carries
+    # a driver's own legitimate self-read access in the same USING clause.
+    # Applied here, after all 4 target tables exist. See migration 433's own
+    # header comment for the full reasoning, including why the corrections/
+    # distances tables (not part of C123's original named scope) are
+    # included.
+    cur.execute((migrations_dir / "433_admin_role_rls_unreachable_phase2_safety_insurance.sql").read_text())
 
     # --- admin PII-export audit trail (ACTION_ITEMS.md C49): three tables
     # tied to the dual-approval/export-audit hardening already done at the

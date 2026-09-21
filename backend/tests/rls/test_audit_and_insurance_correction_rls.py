@@ -37,6 +37,14 @@ test_money_and_safety_rls.py's financial_events tests):
         below, which reproduces (does not fix) this live bug, and
         ACTION_ITEMS.md C112 for the full writeup.
 
+ACTION_ITEMS.md C123 phase 1 / migration 432: the "Admin read audit_logs"
+policy above (migration 51) checks users.role IN ('admin', 'super_admin'),
+the same unreachable pattern migration 430 (C107) fixed on 11 other tables --
+migration 256's CHECK constraint makes that role value permanently
+impossible to hold. Migration 432 replaces it with an explicit USING (false)
+deny; `test_admin_authenticated_cannot_select_audit_logs` below was rewritten
+from a "can select" assertion to pin that denial rather than removed.
+
 `driver_insurance_period_corrections` / `driver_period_distances`: both
 mirror `driver_insurance_periods`' own shape (migration 64, already covered
 in test_money_and_safety_rls.py) -- owner-or-admin SELECT (resolved through
@@ -47,6 +55,18 @@ append-only trigger. `driver_period_distances` additionally blocks UPDATE
 in that same unconditional trigger (unlike `driver_insurance_periods`,
 which permits exactly one UPDATE to close an open period) -- both directions
 exercised here.
+
+ACTION_ITEMS.md C123 phase 2 / migration 433: both tables' single SELECT
+policy carried the identical entangled-OR pattern as `driver_insurance_periods`
+itself -- the owner-driver's legitimate self-read access and a broken
+`users.role IN ('admin', 'super_admin')` check (unreachable since migration
+256) combined in one USING clause. Found while writing 433 (not part of
+C123's original named scope, which only listed `driver_insurance_periods`),
+since 355's own header comment says it deliberately mirrors 64's pattern.
+Fixed the same way: drop only the broken admin disjunct, keep the owner
+access. `test_admin_can_select_any_correction` / `test_admin_can_select_any_distance`
+below were rewritten to `_cannot_select_`, pinning that denial; every other
+test in both sections is unaffected.
 """
 
 from __future__ import annotations
@@ -144,7 +164,13 @@ def test_non_admin_authenticated_selects_no_audit_logs(pg_cur):
 
 
 @pytest.mark.parametrize("role", ["admin", "super_admin"])
-def test_admin_authenticated_can_select_audit_logs(pg_cur, role):
+def test_admin_authenticated_cannot_select_audit_logs(pg_cur, role):
+    """ACTION_ITEMS.md C123 phase 1 / migration 432: the "Admin read
+    audit_logs" policy migration 51 created is unreachable -- migration 256's
+    CHECK constraint makes users.role IN ('admin', 'super_admin') permanently
+    impossible to hold, same root cause as migration 430 (C107). 432 replaces
+    it with an explicit USING (false) deny; admin and super_admin are denied
+    identically, same as every non-admin authenticated user."""
     admin = _uuid()
     log_id = _uuid()
     as_role(pg_cur, None)
@@ -152,7 +178,7 @@ def test_admin_authenticated_can_select_audit_logs(pg_cur, role):
     _seed_audit_log(pg_cur, log_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM audit_logs WHERE id = %s", (log_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [log_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_anon_cannot_insert_audit_logs(pg_cur):
@@ -290,7 +316,14 @@ def test_other_driver_cannot_select_correction(pg_cur):
     assert pg_cur.fetchall() == []
 
 
-def test_admin_can_select_any_correction(pg_cur):
+def test_admin_cannot_select_any_correction(pg_cur):
+    """ACTION_ITEMS.md C123 phase 2 / migration 433: this table's single
+    SELECT policy carried the identical entangled-OR pattern as
+    driver_insurance_periods itself (found while writing 433, not part of
+    C123's original named scope) -- rewritten to drop only the broken `OR
+    <admin check>` clause. An admin JWT is now denied exactly like any other
+    non-owning driver; the owning driver's own access (tested above) is
+    unaffected."""
     driver_user, driver_id, admin = _uuid(), _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, driver_user, role="driver")
@@ -302,7 +335,7 @@ def test_admin_can_select_any_correction(pg_cur):
     _seed_correction(pg_cur, correction_id, period_id, admin)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM driver_insurance_period_corrections WHERE id = %s", (correction_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [correction_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_authenticated_cannot_insert_correction(pg_cur):
@@ -438,7 +471,11 @@ def test_other_driver_cannot_select_distance(pg_cur):
     assert pg_cur.fetchall() == []
 
 
-def test_admin_can_select_any_distance(pg_cur):
+def test_admin_cannot_select_any_distance(pg_cur):
+    """ACTION_ITEMS.md C123 phase 2 / migration 433: same entangled-OR
+    pattern as driver_insurance_periods and the corrections table above,
+    fixed the same way -- an admin JWT is now denied, the owning driver's
+    own access (tested above) is unaffected."""
     driver_user, driver_id, admin = _uuid(), _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, driver_user, role="driver")
@@ -448,7 +485,7 @@ def test_admin_can_select_any_distance(pg_cur):
     _seed_distance(pg_cur, distance_id, driver_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM driver_period_distances WHERE id = %s", (distance_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [distance_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_authenticated_cannot_insert_distance(pg_cur):

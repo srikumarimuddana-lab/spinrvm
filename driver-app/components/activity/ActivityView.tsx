@@ -389,7 +389,7 @@ export default function ActivityView() {
                     </Text>
                   </>
                 ) : (
-                  <Text style={[styles.fareAmount, { color: colors.textDim, fontSize: 16 }]}>$0.00</Text>
+                  <Text style={[styles.fareAmount, { color: colors.textDim, fontSize: FONT.bodyLg }]}>$0.00</Text>
                 )
               ) : (
                 <Text style={styles.fareAmount}>Est. ${toMoney(parseMoney((ride as any).driver_earnings))}</Text>

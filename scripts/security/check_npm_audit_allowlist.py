@@ -39,8 +39,15 @@ ALLOWLISTED_MODULE = "image-size"
 BLOCKING_SEVERITIES = {"high", "critical"}
 
 
-def _leaf_advisories(module: str, vulns: dict, seen: set[str]) -> list[tuple[str, str]]:
-    """Return every (module, url) advisory reachable from `module`'s `via` chain."""
+def leaf_advisories(module: str, vulns: dict, seen: set[str]) -> list[tuple[str, str]]:
+    """Return every (module, url) advisory reachable from `module`'s `via` chain.
+
+    Public (no leading underscore) and imported by scripts/security/
+    threat_watch.py -- keep its name and signature stable, or update both
+    call sites in the same change. Kept in this file rather than a separate
+    shared module since it's small and this allowlist script is its
+    original, still-primary consumer.
+    """
     if module in seen:
         return []
     seen.add(module)
@@ -55,7 +62,7 @@ def _leaf_advisories(module: str, vulns: dict, seen: set[str]) -> list[tuple[str
             found.append((module, via.get("url") or via.get("title", "")))
         else:
             # A dependency-name string — resolve it to its own entry.
-            found.extend(_leaf_advisories(via, vulns, seen))
+            found.extend(leaf_advisories(via, vulns, seen))
     return found or [(module, "(no advisory detail)")]
 
 
@@ -75,7 +82,7 @@ def main() -> int:
         if severity not in BLOCKING_SEVERITIES:
             continue
 
-        leaves = _leaf_advisories(module, vulns, set())
+        leaves = leaf_advisories(module, vulns, set())
         non_allowlisted = [
             (leaf_module, url)
             for leaf_module, url in leaves

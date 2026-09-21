@@ -138,7 +138,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
           </View>
           <Text style={styles.label}>{t('heatmap.legend.busy')}</Text>
           {status === 'stale' && (
-            <Ionicons name="time-outline" size={12} color={colors.warning} style={{ marginLeft: 4 }} />
+            <Ionicons name="time-outline" size={12} color={colors.warning} style={{ marginLeft: SPACING.xs }} />
           )}
           <TouchableOpacity onPress={() => setInfoOpen(true)} hitSlop={8} style={{ marginLeft: 6 }}>
             <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
@@ -146,7 +146,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
           <TouchableOpacity
             onPress={() => setExpanded(false)}
             hitSlop={8}
-            style={{ marginLeft: 4 }}
+            style={{ marginLeft: SPACING.xs }}
             accessibilityRole="button"
             accessibilityLabel={t('heatmap.legend.collapse')}
           >

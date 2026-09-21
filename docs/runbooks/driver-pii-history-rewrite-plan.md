@@ -6,8 +6,9 @@ remote. This document is the thing to review/hand off before anyone pulls the tr
 
 ## Why this is needed
 
-Both files' *working-tree* content is gone (`driver_bank_sin_migration.sql` blanked in
-`44183d3`, `driver_csv_migration.sql` deleted in `41cee45` / #4731), but git history is
+Both files' *working-tree* content is gone (`driver_bank_sin_migration.sql` blanked;
+`driver_csv_migration.sql` deleted via #4731 — commit SHAs withheld 2026-09-19, see the table
+below), but git history is
 append-only — every commit before those still serves the full plaintext PII (157 drivers'
 SIN/bank data; 189 drivers' name/email/phone/license/lat-lng) to anyone with `git log -p`,
 `git show <sha>:<path>`, or a clone made before either removal. See
@@ -21,10 +22,16 @@ of that entry's three still-open items.
 `git show 3c336ff --stat` does not touch either file. The real introduction commits, per
 `git log --all --diff-filter=A -- <file>` run against this checkout:
 
+**Commit SHAs withheld here (2026-09-19)** — this repo is still `visibility: public` and
+remediation for the 544 branches below hasn't happened yet, so publishing the exact commits
+would hand anyone a direct `git show`/fetch target regardless of branch. Reproducible from
+`docs/audit/2026-09-13-pii-branch-exposure-full-scan.md`'s Methodology section against a
+non-shallow clone; un-redact once those branches are rewritten.
+
 | File | Introduced | Content removed |
 |---|---|---|
-| `driver_bank_sin_migration.sql` | `2d5f54276`, squashed into merged PR #3918 (commit `1d6d329a9`, 2026-08-14T06:35:06Z) | `44183d3` (blanked, working tree only) |
-| `driver_csv_migration.sql` | `41356340d`, 2026-08-13T13:46:40Z | `41cee45` (deleted, working tree only, PR #4731) |
+| `driver_bank_sin_migration.sql` | squashed into merged PR #3918, 2026-08-14T06:35:06Z | blanked, working tree only |
+| `driver_csv_migration.sql` | 2026-08-13T13:46:40Z | deleted, working tree only, PR #4731 |
 
 Both files exist, with full plaintext, in every commit's tree from their real introduction
 commit through their respective removal commits — that's the exposure window this rewrite

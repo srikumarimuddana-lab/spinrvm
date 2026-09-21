@@ -292,6 +292,36 @@ async def get_audit_log_top_actors(
     }
 
 
+@router.get("/agent-actions")
+async def get_agent_action_log(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    agent_name: Optional[str] = Query(None),
+    action_type: Optional[str] = Query(None),
+    target_surface: Optional[str] = Query(None),
+    outcome: Optional[str] = Query(None),
+    _admin: dict = Depends(require_module("audit")),
+):
+    """Read-only view of agent_action_log (migration 429) -- what a Claude
+    Code / agentic-engineering task did against the repo/infra: security
+    scans, generated reports, code changes, decisions escalated to a human
+    owner. Distinct from /audit-logs above, which covers rider/driver/admin
+    actions against product data, not engineering automation.
+    """
+    filters: Dict[str, Any] = {}
+    if agent_name:
+        filters["agent_name"] = agent_name
+    if action_type:
+        filters["action_type"] = action_type
+    if target_surface:
+        filters["target_surface"] = target_surface
+    if outcome:
+        filters["outcome"] = outcome
+    return await db_supabase.get_rows(
+        "agent_action_log", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
+
+
 class PiiRevealRequest(BaseModel):
     entity_type: str
     entity_id: str

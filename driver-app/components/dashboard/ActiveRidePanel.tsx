@@ -34,6 +34,9 @@ interface Rider {
 }
 
 interface Ride {
+  is_scheduled?: boolean;
+  scheduled_time?: string;
+  driver_arrived_at?: string;
   id: string;
   pickup_address: string;
   dropoff_address: string;
@@ -275,12 +278,18 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     lastLocRef.current = { lat: latitude, lng: longitude };
   }, [driverLocation, rideState]);
 
+  const waitRideId = ride?.id;
+  const waitArrival = ride?.driver_arrived_at;
+  const bookedPickup = ride?.is_scheduled ? ride.scheduled_time : undefined;
   useEffect(() => {
-    if (rideState === 'arrived_at_pickup') {
+    if (rideState === 'arrived_at_pickup' && waitRideId) {
       // Local wait-timer display, doesn't feed back into rideState.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setWaitSeconds(0);
-      const id = setInterval(() => setWaitSeconds(s => s + 1), 1000);
+      const arrivedAt = Date.parse(waitArrival ?? '');
+      const bookedAt = Date.parse(bookedPickup ?? '');
+      const start = Math.max(Number.isFinite(arrivedAt) ? arrivedAt : Date.now(), Number.isFinite(bookedAt) ? bookedAt : 0);
+      const id = setInterval(() => setWaitSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000))), 1000);
       waitTimerRef.current = id;
       return () => clearInterval(id);
     }
@@ -288,7 +297,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       clearInterval(waitTimerRef.current);
       waitTimerRef.current = null;
     }
-  }, [rideState]);
+  }, [rideState, waitRideId, waitArrival, bookedPickup]);
 
   // Hardware back during an active ride must never pop the screen away (that
   // would strand the driver on a blank map mid-trip). Instead of a dead no-op,
@@ -589,6 +598,15 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </>
           )}
         </View>
+
+        {ride.is_scheduled && ride.scheduled_time && Number.isFinite(Date.parse(ride.scheduled_time)) &&
+          (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (
+          <View style={styles.noteBanner}>
+            <Text style={styles.noteText}>Scheduled pickup: {new Date(ride.scheduled_time).toLocaleString('en-CA', {
+              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            })}</Text>
+          </View>
+        ) : null}
 
         {/* ── Rider's note / meeting instructions (pickup phases) ─ */}
         {!!(ride as any).rider_notes && (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (

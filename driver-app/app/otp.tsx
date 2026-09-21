@@ -20,11 +20,23 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
+import { tKey } from '../i18n';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 import { shakeHorizontal } from '@shared/utils/motion';
+
+const OTP_INVALID_FALLBACK = "That code didn't match. Check the SMS and try again.";
+
+function resolveOtpErrorCopy(err: unknown): string {
+  const fallback = tKey('errors.auth.otp_invalid', OTP_INVALID_FALLBACK);
+  const e = err as { messageKey?: string } | null | undefined;
+  if (e && typeof e === 'object' && e.messageKey) {
+    return tKey(e.messageKey, getApiErrorMessage(err, fallback));
+  }
+  return getApiErrorMessage(err, fallback);
+}
 
 export default function OtpScreen() {
   const router = useRouter();
@@ -252,7 +264,7 @@ export default function OtpScreen() {
       }
       triggerShake();
       setCode('');
-      showToast('error', 'Verification Failed', getApiErrorMessage(err, 'Invalid code. Please try again.'));
+      showToast('error', 'Verification Failed', resolveOtpErrorCopy(err));
     } finally {
       setVerifying(false);
     }

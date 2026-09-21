@@ -94,6 +94,12 @@ _CREDENTIAL_FIELDS = frozenset(
 # Changing either half of the pair therefore requires the same privilege as
 # the credential-reveal flow.
 #
+# posthog_host + posthog_api_key are the same destination shape: a
+# settings-module admin who could repoint them would send session recordings
+# (masked, but still a view of the rider/driver UI) to a project they
+# control. The enable flag stays settings-writable so any settings admin
+# can kill-switch without waiting for super_admin.
+#
 # The Meta dataset ids + access token are the same shape of risk as the LMS
 # pair: they are a DESTINATION for user data. A settings-module admin who could
 # change them could point the conversions sender at a Meta dataset they
@@ -131,6 +137,8 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "meta_capi_access_token",
         "sos_paging_webhook_url",
         "sos_paging_routing_key",
+        "posthog_host",
+        "posthog_api_key",
         "stripe_secret_key",
         "stripe_webhook_secret",
         "stripe_connect_webhook_secret",
@@ -141,10 +149,27 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
 )
 
 
+# Columns that live on the settings row but are NOT settings — internal state
+# that happens to share the singleton, and that no admin UI reads. Dropped from
+# the admin-facing GET entirely rather than masked, because masking implies
+# "reveal it via /settings/reveal/{field}" and there is nothing here an operator
+# should read back.
+#
+# env_admin_token_version is the super admin's live revocation generation
+# (migration 434). Disclosing it to every staff account tells them how many
+# times the super admin has been force-logged-out and what version a forged
+# token would need to claim — useless without JWT_SECRET, but there is no
+# reason to hand it out.
+_INTERNAL_ONLY_FIELDS = frozenset({"env_admin_token_version"})
+
+
 def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of the settings dict with credential values masked."""
+    """Return a copy of the settings dict with credential values masked and
+    internal-only columns removed."""
     result = {}
     for k, v in settings.items():
+        if k in _INTERNAL_ONLY_FIELDS:
+            continue
         if k in _CREDENTIAL_FIELDS and isinstance(v, str) and v:
             result[k] = v[:8] + "*****"
         else:
@@ -419,6 +444,15 @@ class SettingsUpdateRequest(BaseModel):
     # super-admin gate needed. See schemas.py::AppSettings.
     # directions_proxy_enabled for what flipping this on actually does.
     directions_proxy_enabled: Optional[bool] = None
+    # PostHog session replay (rider-app + driver-app). Dark-launched,
+    # default off. posthog_api_key is the project API key (phc_...),
+    # client-safe like stripe_publishable_key — not masked. Host + key
+    # are a recording destination: changing them is super_admin-only
+    # (_SUPER_ADMIN_ONLY_FIELDS). The enable flag is settings-writable
+    # so it can be kill-switched without super_admin.
+    posthog_session_replay_enabled: Optional[bool] = None
+    posthog_api_key: Optional[str] = None
+    posthog_host: Optional[str] = None
     # Legacy/re-consent notice rollout gate (ACTION_ITEMS.md, 2026-08-19
     # legacy-migration audit) -- dark-launched, both apps. Not a credential,
     # no masking/super-admin gate needed. See schemas.py::AppSettings.
@@ -506,6 +540,8 @@ class SettingsUpdateRequest(BaseModel):
     # dropoff tail anchor), ride_repo.py (rider pickup-leg display),
     # route_gap_monitor.py (FCM nudge), stale_p3_closer.py (autoclose).
     idle_location_v2_enabled: Optional[bool] = None
+    background_location_fanout_enabled: Optional[bool] = None
+    driver_stationary_tracking_enabled: Optional[bool] = None
     period1_distance_tracking_enabled: Optional[bool] = None
     # Migration 370. Driver location marker write gate (utils/
     # location_write_gate.py): False = shadow mode (count-only), True =
@@ -587,6 +623,34 @@ class SettingsUpdateRequest(BaseModel):
         if v.startswith(("http://localhost", "http://127.0.0.1")):
             return v
         raise ValueError("sos_paging_webhook_url must use https:// (http:// is allowed only for localhost)")
+
+    @field_validator("posthog_host")
+    @classmethod
+    def _posthog_host_scheme(cls, v: Optional[str]) -> Optional[str]:
+        """Session recordings POST to this host — require TLS so a
+        settings-module typo (or a hostile Save) cannot send them in the
+        clear. localhost http is allowed for local PostHog only."""
+        if not v:
+            return v
+        if v.startswith("https://"):
+            return v
+        if v.startswith(("http://localhost", "http://127.0.0.1")):
+            return v
+        raise ValueError("posthog_host must use https:// (http:// is allowed only for localhost)")
+
+    @field_validator("posthog_api_key")
+    @classmethod
+    def _posthog_api_key_is_project_key(cls, v: Optional[str]) -> Optional[str]:
+        """Reject personal API keys (phx_...) which can mutate the PostHog
+        project. Empty stays valid — that is the fail-closed default."""
+        if v is None:
+            return v
+        cleaned = v.strip() if isinstance(v, str) else v
+        if not cleaned:
+            return cleaned
+        if not cleaned.startswith("phc_"):
+            raise ValueError("posthog_api_key must be a project API key (phc_...), not a personal API key")
+        return cleaned
 
     @field_validator("stripe_secret_key", "stripe_webhook_secret", "stripe_connect_webhook_secret", mode="before")
     @classmethod

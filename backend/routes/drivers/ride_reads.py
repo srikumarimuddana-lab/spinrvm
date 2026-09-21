@@ -12,6 +12,7 @@ from ._deps import (  # noqa: F401
     HTTPException,
     Optional,
     Query,
+    Request,
     RideStatus,
     datetime,
     db_supabase,
@@ -20,6 +21,7 @@ from ._deps import (  # noqa: F401
     get_service_area_polygon,
     logger,
     parse_iso_utc,
+    ride_read_limit,
     timedelta,
     timezone,
 )
@@ -53,7 +55,8 @@ _RIDER_PUBLIC_FIELDS = ("id", "first_name", "last_name", "name", "rating", "prof
 
 
 @router.get("/rides/active")
-async def get_active_ride(current_user: dict = Depends(get_current_user)):
+@ride_read_limit
+async def get_active_ride(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get the driver's current active ride."""
     diag_logger.info(f"[ACTIVE] called by user_id={current_user.get('id')}")
     driver = (lambda _r: _r[0] if _r else None)(
@@ -236,7 +239,8 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/rides/{ride_id}/offer")
-async def get_ride_offer(ride_id: str, current_user: dict = Depends(get_current_user)):
+@ride_read_limit
+async def get_ride_offer(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Authenticated fetch-by-ride_id for a live ride offer (#1231 finding 15,
     remaining half).
 
@@ -432,6 +436,7 @@ async def get_ride_offer(ride_id: str, current_user: dict = Depends(get_current_
         "requires_wav": bool(ride.get("requires_wav")),
         "quiet_mode": bool(ride.get("quiet_mode")),
         "is_scheduled": bool(ride.get("is_scheduled")),
+        "scheduled_time": ride.get("scheduled_time"),
         "countdown_seconds": offer_timeout,
         "offer_expires_at": offer_expires_at,
         "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
@@ -443,7 +448,9 @@ async def get_ride_offer(ride_id: str, current_user: dict = Depends(get_current_
 
 
 @router.get("/rides/history")
+@ride_read_limit
 async def get_ride_history(
+    request: Request = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: Optional[str] = Query(None),

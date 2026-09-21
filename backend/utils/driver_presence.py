@@ -1,5 +1,5 @@
 """
-Driver presence — Uber/Lyft-style "offline by default, online by proof".
+Driver presence — online by recent client activity.
 
 A driver is considered *present* iff a short-TTL Redis key exists for them.
 The key is refreshed on every WebSocket heartbeat (pong), on every status /
@@ -13,10 +13,11 @@ producing "ghost online" drivers nobody could dispatch to.
 
 TTL policy
 ----------
-``PRESENCE_TTL`` is 30 s — 3× the 10 s WebSocket heartbeat interval in
-``routes/websocket.py``. That gives a driver two missed pings of grace
-before they drop offline, which matches how Uber/Lyft behave on flaky
-networks.
+``PRESENCE_TTL`` is a renewable 90-second window from the latest activity,
+not a limit on time spent in the background. Background GPS requests updates
+every 10 seconds, but native scheduling and cellular handoffs can delay them.
+Discovery, estimates and dispatch use the same window. Explicit offline and
+revocation paths clear it immediately; total silence expires within 90 seconds.
 
 Redis transparency
 ------------------
@@ -54,8 +55,8 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-# TTL in seconds. 3× the 10 s WebSocket heartbeat — two missed pings of grace.
-PRESENCE_TTL = 30
+# Allow background delivery jitter within the dispatch domain's 90s upper bound.
+PRESENCE_TTL = 90
 
 _PREFIX = "spinr:presence:driver:"
 
@@ -144,8 +145,7 @@ async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, boo
         except Exception as exc:
             # Configured-but-down: the result is unknowable, not "all offline".
             logger.error(
-                f"[presence] MGET failed — Redis configured but unavailable; "
-                f"presence is unreliable: {exc}",
+                f"[presence] MGET failed — Redis configured but unavailable; presence is unreliable: {exc}",
                 exc_info=True,
             )
             return set(), False

@@ -81,8 +81,10 @@ module.exports = {
     // Sentry needs native modules; tests exercise the errorReporting facade
     // against this stub instead.
     '^@sentry/react-native$': '<rootDir>/__mocks__/sentry-react-native.js',
+    '^posthog-react-native$': '<rootDir>/__mocks__/posthog-react-native.js',
     // Pure geometry — use the real module so marker tests exercise real math.
     '^@shared/utils/vehicleTracking$': '<rootDir>/../shared/utils/vehicleTracking.ts',
+    '^@shared/services/posthogReplay$': '<rootDir>/../shared/services/posthogReplay.ts',
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
     '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',

@@ -19,7 +19,7 @@ export function routePushNotificationTap(
   router: Pick<ReturnType<typeof useRouter>, 'push'>,
   data: Record<string, any>,
 ) {
-  if (data?.type === 'new_ride_assignment') {
+  if (data?.type === 'new_ride_assignment' || data?.type === 'scheduled_driver_reminder') {
     router.push('/driver/' as any);
   } else if (data?.type === 'chat_message' && data?.ride_id) {
     router.push(`/driver/chat?rideId=${data.ride_id}` as any);

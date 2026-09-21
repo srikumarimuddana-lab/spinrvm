@@ -107,6 +107,14 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     needs: [detect-changes]
+    # C47: this job was previously hit by unexplained external cancellations
+    # (exit 143, "runner has received a shutdown signal") with the root
+    # cause never found -- downstream gates were made fail-open on a missing
+    # artifact, but the job itself had no bound. If that same anomaly ever
+    # manifests as a hang instead of an external kill, this is the single
+    # most expensive job in the workflow (~15-18 min real runtime per the
+    # comment below) and would otherwise run to GitHub's 360-minute default.
+    timeout-minutes: 25
     # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
     # 5): this is the single most expensive job in this workflow (a full
     # `pytest --cov` run, ~15-18 min) -- the real turnaround-time win. Every
@@ -152,7 +160,35 @@ jobs:
           ADMIN_PASSWORD: ci-placeholder-password
           ENV: test
         run: |
-          pytest --cov=. --cov-report=json:../shared-coverage.json -q --no-header 2>/dev/null || true
+          # The three --ignore flags mirror ci.yml's `backend-test` step, which
+          # has excluded these since it was written. This step did not, and a
+          # bare `pytest` therefore COLLECTED tests/test_schemathesis_fuzz.py --
+          # whose collection loads the app's OpenAPI schema over the network.
+          # When that read timed out, pytest reported
+          # `Interrupted: 1 error during collection`, which aborts the whole
+          # session: `1 skipped`, ZERO tests run, no coverage file written.
+          # Every downstream floor/regression gate then consumed nothing and
+          # reported its own misleading message. Observed on run 35526289539
+          # (PR #5571); see CR #5578 for the full trace.
+          #
+          # `2>/dev/null` is deliberately gone. It hid the collection error
+          # above, turning a one-glance diagnosis into a four-job
+          # investigation -- the same "never silently swallow errors" rule
+          # CLAUDE.md enforces in application code, applied to the step that
+          # feeds every coverage gate.
+          #
+          # `|| true` STAYS. It is not the bug: this job exists to produce
+          # coverage data, not a pass/fail verdict, and it deliberately
+          # tolerates individual test failures (it runs without a Postgres
+          # service, so a handful of DB-dependent tests always fail here --
+          # see check_admin_coverage_floor.py's FLOOR MANIFEST provenance
+          # note, which measured against exactly this environment shape).
+          # Removing it would make this job fail on those pre-existing
+          # failures and produce no artifact at all -- the very outcome
+          # CR #5578 is about.
+          pytest --cov=. --cov-report=json:../shared-coverage.json -q --no-header \
+            --ignore=tests/direct_pool --ignore=tests/rls \
+            --ignore=tests/test_schemathesis_fuzz.py || true
 
       - name: Upload shared coverage artifact
         # if-no-files-found: warn (not error) -- a hard pytest crash before
@@ -670,7 +706,8 @@ jobs:
         run: |
           python3 scripts/check_money_path_coverage_floor.py \
             --coverage-json shared-coverage.json \
-            --changed-files-file /tmp/changed_files_money.txt
+            --changed-files-file /tmp/changed_files_money.txt \
+            --producer-result '${{ needs.shared-coverage-run.result }}'
 
   # ─── 1d. Admin routes / utilities coverage floor ─────────────────────────
   # CLAUDE.md's coverage-minimums table names ">= 70%" for "Admin routes,
@@ -756,7 +793,8 @@ jobs:
         run: |
           python3 scripts/check_admin_coverage_floor.py \
             --coverage-json shared-coverage.json \
-            --changed-files-file /tmp/changed_files_admin.txt
+            --changed-files-file /tmp/changed_files_admin.txt \
+            --producer-result '${{ needs.shared-coverage-run.result }}'
 
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
@@ -937,7 +975,7 @@ jobs:
           PYEOF
 
       - name: Check for new secrets in diff
-        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # main (2026-08-19)
+        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # main (2026-08-19)
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -1892,8 +1930,22 @@ jobs:
       # kind of never-failing roll-up branch protection would otherwise rely
       # on. Path-filtered `skipped` results still pass; only an actual
       # `failure`/`cancelled` result now fails the job.
+      #
+      # CR #5572: same defect, same fix as `security-gates.yml`'s summary job
+      # -- these two are the only copies of this pattern in the repo (verified
+      # by grep). The `cancelled` half is correct for a gate cancelled
+      # mid-run, but could not tell that apart from the whole run being
+      # superseded by a newer push, so every force-push left a spurious red on
+      # the abandoned sha. `!cancelled()` is true only when the workflow
+      # itself was not cancelled.
+      #
+      # Clause placement is deliberate and matches the sibling workflow: a
+      # real `failure` still fails this job UNCONDITIONALLY; only the
+      # `cancelled` branch is gated. If `cancelled()` misbehaves, the worst
+      # case is a superseded run going red again -- never a genuine gate
+      # failure being swallowed. C74's hole stays closed either way.
       - name: Fail if any required gate failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || (!cancelled() && contains(needs.*.result, 'cancelled')) }}
         run: |
           echo "::error::one or more required CI guardrails failed — see the summary comment above"
           exit 1

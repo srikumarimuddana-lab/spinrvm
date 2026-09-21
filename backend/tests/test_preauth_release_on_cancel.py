@@ -23,6 +23,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _CANCEL_RIDER = (_ROOT / "routes" / "rides" / "cancellation.py").read_text()
 _CANCEL_DRIVER = (_ROOT / "routes" / "drivers" / "ride_cancel.py").read_text()
 _MATCHING = (_ROOT / "routes" / "rides" / "matching.py").read_text()
+_CARD_HOLD_RELEASE = (_ROOT / "utils" / "card_hold_release.py").read_text()
 _MIG_251 = (_ROOT / "migrations" / "251_cancel_fee_payment_intent.sql").read_text()
 _RIDES_DEPS = (_ROOT / "routes" / "rides" / "_deps.py").read_text()
 _DRIVER_DEPS = (_ROOT / "routes" / "drivers" / "_deps.py").read_text()
@@ -83,19 +84,36 @@ class TestDriverCancelReleasesHold:
 
 
 class TestSearchTimeoutReleasesHold:
-    def test_calls_cancel_authorization(self):
-        # Find the ride_search_timeout function section
-        idx = _MATCHING.index("ride_search_timeout")
-        section = _MATCHING[idx:]
-        assert "cancel_authorization" in section
+    """The search-timeout auto-cancel releases the hold through the shared
+    ``utils/card_hold_release.release_open_hold`` (2026-09-20, C2) — the
+    auth-state check and the ``released`` write live there now, not inline
+    in matching.py. Behavioural coverage (claim → Stripe → mark order, and
+    no release on a lost claim) is in test_p0_ship_blockers.py; this class
+    pins the wiring."""
 
-    def test_checks_auth_status_before_release(self):
-        idx = _MATCHING.index("ride_search_timeout")
-        section = _MATCHING[idx:]
-        assert '"authorized"' in section
-        assert '"fare_only"' in section
+    @staticmethod
+    def _section() -> str:
+        idx = _MATCHING.index("async def ride_search_timeout")
+        return _MATCHING[idx:]
 
-    def test_sets_auth_status_released_in_update(self):
-        idx = _MATCHING.index("ride_search_timeout")
-        section = _MATCHING[idx:]
-        assert '"released"' in section
+    def test_releases_hold_via_shared_helper(self):
+        section = self._section()
+        assert "release_open_hold" in section
+        assert "card_hold_release" in section
+
+    def test_claim_precedes_hold_release(self):
+        # CAS claim on status='searching' must come BEFORE the Stripe call —
+        # an accepted ride must never have its hold released by this timer.
+        section = self._section()
+        assert section.index('"status": RideStatus.SEARCHING}') < section.index("release_open_hold(")
+
+    def test_shared_helper_checks_auth_status_before_release(self):
+        assert '"authorized"' in _CARD_HOLD_RELEASE
+        assert '"fare_only"' in _CARD_HOLD_RELEASE
+        assert "cancel_authorization" in _CARD_HOLD_RELEASE
+
+    def test_shared_helper_marks_released_only_on_success(self):
+        assert '"released"' in _CARD_HOLD_RELEASE
+        # The old inline path in matching.py wrote 'released' regardless of
+        # the Stripe outcome; the timer must not have grown that back.
+        assert '"auth_status"] = "released"' not in self._section()

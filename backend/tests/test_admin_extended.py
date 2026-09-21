@@ -712,11 +712,11 @@ class TestAdminGetDrivers:
             return [_user()]
 
         with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
-            asyncio.run(admin_drivers.admin_get_drivers(sort_by="total_earnings", sort_dir="asc", limit=10, offset=20))
+            asyncio.run(admin_drivers.admin_get_drivers(sort_by="total_rides", sort_dir="asc", limit=10, offset=20))
 
         # Derived/whitelisted key -> real column, ascending, and the page window
         # (limit/offset) is preserved so pagination still applies AFTER sorting.
-        assert captured.get("order") == "total_earnings"
+        assert captured.get("order") == "total_rides"
         assert captured.get("desc") is False
         assert captured.get("limit") == 10
         assert captured.get("offset") == 20

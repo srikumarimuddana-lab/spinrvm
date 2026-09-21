@@ -1,14 +1,18 @@
 # Backend environment variables that MUST be present on a production deploy.
 #
-# Single source of truth for two workflows (never edit one list without the
-# other — that is how the standby drifted in the first place, ACTION_ITEMS C5):
+# Single source of truth, read directly by three workflows (never hardcode a
+# second copy of this list anywhere — that is how the standby drifted in the
+# first place, ACTION_ITEMS C5, and how bootstrap-fly.yml's own copy later
+# drifted too, missing SENTRY_DSN, found in a 2026-09-20 CI/CD audit):
 #   .github/workflows/deploy-backend.yml        — Railway: fails the deploy if any
 #                                                  scope=both / scope=railway name
 #                                                  is missing from the service.
 #   .github/workflows/standby-parity-monitor.yml — daily: checks Railway AND Fly
 #                                                  and files a tracked issue on
 #                                                  drift.
-# (bootstrap-fly.yml carries its own copy of the scope=both list — keep in sync.)
+#   .github/workflows/bootstrap-fly.yml         — one-time bootstrap: verifies
+#                                                  the scope=both names exist on
+#                                                  a fresh Fly app before deploying.
 #
 # Format: one variable per line, `NAME SCOPE`, `#` comments and blank lines
 # ignored. Values are NEVER read by these workflows — presence of the NAME

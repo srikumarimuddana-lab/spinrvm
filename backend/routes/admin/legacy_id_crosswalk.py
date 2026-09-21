@@ -52,7 +52,7 @@ router = APIRouter()
 
 def _require_super_admin(admin: dict) -> None:
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Legacy ID crosswalk backfill requires super_admin")
+        raise HTTPException(status_code=403, detail="Legacy ID crosswalk backfill requires super admin access.")
 
 
 async def _build_plans() -> tuple[svc.CrosswalkPlan, svc.CrosswalkPlan]:

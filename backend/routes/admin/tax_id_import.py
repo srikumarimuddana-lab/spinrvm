@@ -105,7 +105,7 @@ _HEADER = ["phone", "sin", "gst_bn"]
 
 def _require_super_admin(admin: dict) -> None:
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Tax ID import requires super_admin")
+        raise HTTPException(status_code=403, detail="Tax ID import requires super admin access.")
 
 
 def _row_ref(index: int, phone: str) -> str:

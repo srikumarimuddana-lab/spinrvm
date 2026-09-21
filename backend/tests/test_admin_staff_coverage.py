@@ -779,4 +779,4 @@ class TestRequireRole:
         with pytest.raises(HTTPException) as exc:
             await dep(admin=OPS)
         assert exc.value.status_code == 403
-        assert "super_admin" in exc.value.detail
+        assert "super admin" in exc.value.detail

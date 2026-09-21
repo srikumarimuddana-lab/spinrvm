@@ -15,7 +15,6 @@ import random as _random
 import re as _re
 import time as _time
 import traceback
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from contextvars import ContextVar as _ContextVar
 from datetime import date, datetime
 from decimal import Decimal
@@ -41,6 +40,7 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 try:
+    from ..utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from ..utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from ..utils.deadline import remaining_seconds as _remaining_seconds
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
@@ -50,6 +50,7 @@ try:
     from ..utils.pii import geohash as _geohash  # type: ignore
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
+    from utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from utils.deadline import remaining_seconds as _remaining_seconds
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
@@ -162,7 +163,11 @@ _breaker = _CircuitBreaker()
 # was capped at 32 while ops believed 64).
 
 _DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ.get("DB_THREAD_POOL_MAX") or "64")
-_DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
+# Bound retained call closures as well as active threads during a DB stall.
+_DB_THREAD_POOL_QUEUE_SIZE = int(_os.environ.get("DB_THREAD_POOL_QUEUE_SIZE", "64"))
+_DB_EXECUTOR = BoundedExecutor(
+    max_workers=_DB_THREAD_POOL_SIZE, queue_size=_DB_THREAD_POOL_QUEUE_SIZE, thread_name_prefix="spinr-db"
+)
 
 # Default row cap for get_rows when no explicit limit is provided.
 # Prevents accidental full-table scans. Callers that genuinely need
@@ -439,7 +444,15 @@ async def run_sync(
                 finally:
                     _metric_observe("spinr_db_run_sync_exec_ms", (_time.monotonic() - _thread_start) * 1000.0)
 
-            future = loop.run_in_executor(_DB_EXECUTOR, _timed_func)  # type: ignore
+            try:
+                future = loop.run_in_executor(_DB_EXECUTOR, _timed_func)
+            except ExecutorSaturated:
+                _breaker.release_probe()
+                _metric_inc("spinr_db_calls_rejected_total", {"reason": "pool_full"})
+                logger.bind(reason="pool_full", retry_policy=retry_policy).error(
+                    "[DB] Executor capacity exhausted; call rejected before submission"
+                )
+                raise ServiceUnavailableException("database") from None
             _record_db_queue_depth()
             try:
                 if remaining is None:
@@ -1201,7 +1214,35 @@ def _log_safe_write(table: str, filters: Dict[str, Any], payload: Dict[str, Any]
     return " ".join(parts)
 
 
-async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
+def _require_write_filters(op: str, table: str, filters: Optional[Dict[str, Any]]) -> None:
+    """Refuse a table-wide write.
+
+    ``_apply_filters`` returns the unfiltered builder for ``{}``/``None`` — fine
+    for a read that pages a whole table, catastrophic for an UPDATE/DELETE. The
+    degenerate-``$or`` case below already raises for exactly this reason; this
+    closes the top-level case so a conditionally-built filter that collapses to
+    ``{}`` surfaces as a caller bug instead of rewriting or truncating a table.
+    Runs before the ``if not supabase`` short-circuit so it fires in dev/test too.
+    """
+    if not filters:
+        raise ValueError(
+            f"{op}({table!r}) called with no filters; refusing to write the whole table. "
+            "Guard the empty case in the caller rather than issuing an unfiltered write."
+        )
+
+
+async def update_one(
+    table: str,
+    filters: Dict[str, Any],
+    update: Dict[str, Any],
+    upsert: bool = False,
+    retry_policy: RetryPolicy = "read",
+):
+    # upsert merges the filters into the payload and matches on the primary
+    # key, so an empty filter there is one row's insert-or-update, never a
+    # table-wide write.
+    if not upsert:
+        _require_write_filters("update_one", table, filters)
     if not supabase:
         # This was the warn-and-continue that CLAUDE.md forbids, left in place
         # because insert_many, insert_many_ignore_conflicts, delete_many and
@@ -1250,7 +1291,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
         return _single_row_from_res(res)
 
-    result = await run_sync(_fn)
+    result = await run_sync(_fn, retry_policy=retry_policy)
 
     if table == "users":
         user_id = None
@@ -1274,6 +1315,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
 
 async def delete_many(table: str, filters: Dict[str, Any]):
+    _require_write_filters("delete_many", table, filters)
     if not supabase:
         _write_skipped("delete_many", table)
         return None

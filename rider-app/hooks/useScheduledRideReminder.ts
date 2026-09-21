@@ -1,27 +1,10 @@
-/**
- * useScheduledRideReminder
- *
- * Schedules a local push notification 10 minutes before a confirmed
- * scheduled ride. Called from the ride-options / payment-confirm flow
- * immediately after the ride is created.
- *
- * The backend also fires an FCM `scheduled_ride_reminder` at T-10 min
- * (backend/utils/scheduled_rides.py::_send_reminder) as the authoritative
- * reminder. This local notification is a best-effort client-side fallback
- * for cases where FCM delivery is delayed. Previously this fired at T-15
- * while the backend fired at T-10 — riders could see two reminders five
- * minutes apart, or (worse) treat the earlier local one as the real signal.
- * Kept in sync with the backend value; if that changes, update both.
- */
+/** Server owns configurable reminders. Clean up alarms made by older app versions. */
 
 import { useCallback } from 'react';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const REMINDER_MAP_KEY = '@spinr:scheduled_reminders';
-const REMINDER_LEAD_MINUTES = 10; // keep in sync with backend/utils/scheduled_rides.py's 10-minute reminder window
-const REMINDER_LEAD_MS = REMINDER_LEAD_MINUTES * 60 * 1000;
-
 // Lazy-load expo-notifications so the app still runs in Expo Go / web.
 let Notifications: any = null;
 try {
@@ -37,7 +20,9 @@ try {
 async function getStoredMap(): Promise<Record<string, string>> {
   try {
     const raw = await AsyncStorage.getItem(REMINDER_MAP_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   } catch {
     return {};
   }
@@ -49,44 +34,24 @@ async function saveStoredMap(map: Record<string, string>): Promise<void> {
   } catch {}
 }
 
-export function useScheduledRideReminder() {
-  const scheduleReminder = useCallback(async (rideId: string, scheduledTime: Date) => {
-    if (!Notifications || Platform.OS === 'web') return;
-
-    const triggerMs = scheduledTime.getTime() - REMINDER_LEAD_MS;
-    const now = Date.now();
-
-    if (triggerMs <= now) {
-      // Less than REMINDER_LEAD_MINUTES away — skip local scheduling, FCM will handle it
-      return;
-    }
-
+export async function clearLegacyScheduledReminders(): Promise<void> {
+  if (!Notifications || Platform.OS === 'web') return;
+  const map = await getStoredMap();
+  for (const [rideId, notificationId] of Object.entries(map)) {
     try {
-      // Cancel any existing reminder for this ride (idempotent re-schedule)
-      const map = await getStoredMap();
-      if (map[rideId]) {
-        try {
-          await Notifications.cancelScheduledNotificationAsync(map[rideId]);
-        } catch {}
-      }
-
-      const notifId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: `Ride in ${REMINDER_LEAD_MINUTES} minutes`,
-          body: `Your scheduled Spinr ride departs at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}. Your driver is on the way!`,
-          data: { type: 'scheduled_ride_reminder', rideId },
-          sound: 'default',
-          ...(Platform.OS === 'android' ? { channelId: 'ride-updates' } : {}),
-        },
-        trigger: { date: new Date(triggerMs) },
-      });
-
-      map[rideId] = notifId;
-      await saveStoredMap(map);
-      console.log(`[Reminder] Scheduled local notification for ride ${rideId} at`, new Date(triggerMs).toISOString());
-    } catch (e) {
-      console.log('[Reminder] Failed to schedule local notification:', e);
+      await Notifications.cancelScheduledNotificationAsync(notificationId);
+      delete map[rideId];
+    } catch {
+      // Keep the ID so a later app open can retry native cleanup.
     }
+  }
+  await saveStoredMap(map);
+}
+
+export function useScheduledRideReminder() {
+  // Compatibility for booking screens: never create a competing local timer.
+  const scheduleReminder = useCallback(async (_rideId: string, _scheduledTime: Date) => {
+    await clearLegacyScheduledReminders();
   }, []);
 
   const cancelReminder = useCallback(async (rideId: string) => {

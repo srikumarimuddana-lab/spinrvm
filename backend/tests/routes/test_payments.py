@@ -38,7 +38,7 @@ async def test_confirm_payment_ownership_check_rejects_non_owner():
             )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "forbidden"
+    assert exc_info.value.detail == ("This ride belongs to a different account, so you can't pay for it.")
 
 
 @pytest.mark.anyio
@@ -114,7 +114,7 @@ async def test_confirm_payment_race_guard_returns_409():
             )
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "payment_already_processing"
+    assert exc_info.value.detail == ("This payment is already being processed. Give it a moment before trying again.")
 
 
 @pytest.mark.anyio
@@ -263,7 +263,13 @@ async def test_confirm_marks_paid_when_bound_and_sufficient():
             request=None,
             current_user=_OWNER_USER,
         )
+    # The API response still echoes Stripe's own status verbatim...
     assert result["status"] == "succeeded"
     mock_db.update_ride.assert_awaited_once()
     written = mock_db.update_ride.call_args[0][1]
-    assert written["payment_status"] == "succeeded"
+    # ...but the persisted status is the canonical "paid" every other
+    # settlement path writes. This assertion used to pin "succeeded" — a value
+    # no reader of rides.payment_status knows (utils/payment_collection's
+    # collected set, webhooks' already-settled guard, admin's terminal-state
+    # check are all spelled "paid"), so it pinned the bug open.
+    assert written["payment_status"] == "paid"

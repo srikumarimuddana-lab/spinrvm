@@ -20,6 +20,7 @@ from limits.aio.storage import MemoryStorage
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
+from core.config import settings
 from utils.async_limiter import AsyncLimiter
 from utils.rate_limiter import get_user_or_ip_key
 
@@ -27,14 +28,12 @@ from utils.rate_limiter import get_user_or_ip_key
 def _admin_request(user_id: str = "admin-1", path: str = "/api/admin/drivers/drv-1/reveal-sin") -> Request:
     """Fake request carrying a bearer token with a `user_id` claim, mirroring
     the shape admin JWTs actually have (routes/admin/auth.py
-    `_mint_admin_access_token`). Signature is irrelevant here —
-    get_user_or_ip_key/_extract_unverified_user_id decodes without verifying,
-    exactly as it does for the real (already-authenticated-by-a-separate-
-    dependency) request.
+    `_mint_admin_access_token`). Signed with the real JWT_SECRET: only a
+    verifying signature selects the per-user bucket
+    (get_user_or_ip_key/_extract_verified_user_id); a forged token would key
+    by IP instead.
     """
-    token = jwt.encode(
-        {"user_id": user_id, "role": "super_admin"}, "unused-test-secret-not-real-jwt-key", algorithm="HS256"
-    )
+    token = jwt.encode({"user_id": user_id, "role": "super_admin"}, settings.JWT_SECRET, algorithm="HS256")
     scope = {
         "type": "http",
         "method": "POST",

@@ -22,6 +22,7 @@ import {
 import VehiclePricingEditor from "./_components/vehicle-pricing-editor";
 import DocumentsEditor from "./_components/documents-editor";
 import CascadeEditor from "./_components/cascade-editor";
+import ScheduledRidesTab from "./_components/scheduled-rides-tab";
 import IncentivesTab from "./_components/incentives-tab";
 import SurgeHistoryChart from "./_components/surge-history-chart";
 import { AreaHeatmapOverrides } from "./_components/area-heatmap-overrides";
@@ -345,6 +346,7 @@ export default function ServiceAreasPage() {
                     <div className="flex gap-1 px-5 pt-3 bg-muted overflow-x-auto">
                       {[
                         { key: 'general', label: 'General', icon: Settings },
+                        { key: 'scheduled', label: 'Scheduled Rides', icon: Car },
                         { key: 'pricing', label: 'Vehicle Pricing', icon: Car },
                         { key: 'fees', label: 'Fees & Taxes', icon: DollarSign },
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
@@ -365,6 +367,8 @@ export default function ServiceAreasPage() {
                     </div>
 
                     <div className="p-5">
+                      {editTab === 'scheduled' && <ScheduledRidesTab key={area.id} area={area}
+                        onSaved={config => setAreas(prev => prev.map(a => a.id === area.id ? {...a, scheduled_ride_config: config} : a))} />}
                       {/* General Tab */}
                       {editTab === 'general' && (
                         <>

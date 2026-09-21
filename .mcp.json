@@ -42,15 +42,6 @@
       }
     },
 
-    "firebase": {
-      "$comment": "Requires a Firebase service account JSON scoped to a single Spinr project, NOT the org-wide account used by backend/core/lifespan.py. Broad scope (Auth users, Storage) — restrict to least privilege before pointing at anything beyond a dev/staging Firebase project.",
-      "command": "npx",
-      "args": ["-y", "firebase-tools", "experimental:mcp"],
-      "env": {
-        "GOOGLE_APPLICATION_CREDENTIALS": "${SPINR_FIREBASE_MCP_SERVICE_ACCOUNT_PATH}"
-      }
-    },
-
     "context7": {
       "$comment": "Upstash, open-source (MIT), read-only doc lookup — no Spinr credentials, no write access, nothing to sandbox. Fetches current version-specific docs/examples for a library (e.g. Next.js App Router, Tailwind v4, Supabase JS) so responses don't rely on stale training data. Works with no API key at low rate limits; optionally set CONTEXT7_API_KEY (from context7.com/dashboard) for a higher limit.",
       "command": "npx",

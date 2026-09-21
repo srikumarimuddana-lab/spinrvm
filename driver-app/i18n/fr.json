@@ -197,6 +197,11 @@
     "markReadErrorBody": "Vérifiez votre connexion et réessayez.",
     "loadFailed": "Impossible de charger les notifications",
     "loadFailedBody": "Vérifiez votre connexion et réessayez.",
+    "deleteTitle": "Supprimer la notification",
+    "deleteBody": "Supprimer cette notification ? Cette action est irréversible.",
+    "clearAllTitle": "Effacer toutes les notifications",
+    "clearAllBody": "Cela supprime toutes les notifications de votre boîte de réception. Cette action est irréversible.",
+    "clearAll": "Tout effacer",
     "retry": "Réessayer"
   },
   "emergencyContacts": {

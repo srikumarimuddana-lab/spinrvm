@@ -17635,6 +17635,36 @@ record of what was assumed vs. what was actually true</summary>
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
+### C133. `cancel_ride_rider` reads `auth_status`/`payment_intent_id` before its own atomic cancel claim, so a hold captured in that window can still hit the fresh-charge fallback against an already-captured PI
+
+- [ ] **Status:** OPEN — found 2026-09-21 by a `spinr-money-auditor` review of the
+  already-captured-hold refund fix (see `docs/change-log/2026-09-21-cancellation-refund-already-captured-hold.md`'s
+  "Adversarial review" section). Deferred, not fixed there — narrower in scope than that
+  fix and would need re-reading the ride's payment fields after the claim throughout the
+  function, not just in the one new branch.
+- **Issue/gap:** `backend/routes/rides/cancellation.py::cancel_ride_rider` reads
+  `ride.get("auth_status")`/`ride.get("payment_intent_id")` from the `ride` dict fetched at
+  the top of the function (before the atomic `status -> cancelled` claim a few lines later)
+  and never re-reads them afterward. `_hold_is_live` and the new `elif _auth == "captured"`
+  branch (added 2026-09-21) both branch on that stale snapshot.
+- **Concrete consequence:** if a hold that was live (`authorized`/`fare_only`) at the initial
+  read gets captured by something else (e.g. `payment_retry.py`'s `requires_capture` branch,
+  now gated to completed rides only but still theoretically reachable via another path) in the
+  window between that read and this function's hold-handling block, `_hold_is_live` is still
+  `True` on the stale data. `capture_cancellation_fee` then attempts to partially capture an
+  already-fully-captured PaymentIntent, which fails — and the existing fallback-on-failure
+  path charges a **fresh** PaymentIntent for the fee on top of the money already captured.
+  This is the double-charge path the 2026-09-21 refund fix's own docstring cites as
+  motivation but does not itself close.
+- **Fix direction (not yet built):** re-read `auth_status`/`payment_intent_id`/
+  `authorized_amount` from the DB immediately before the hold-handling block (after the
+  atomic claim, which already re-fetches nothing — would need its own read), or have the
+  atomic claim's own UPDATE return the current row so the hold-handling logic branches on
+  post-claim state rather than the pre-claim snapshot.
+- **Why not urgent:** requires a specific narrow race window (a concurrent capture landing
+  between this function's initial read and its hold-handling block) — no evidence this has
+  ever actually fired; found by review, not by a real incident.
+
 ### Follow-ups from the 2026-09-21 review of PR #5614
 
 Filed as real items because the review's own finding was that change-log prose is where

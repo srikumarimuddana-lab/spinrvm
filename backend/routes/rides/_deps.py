@@ -223,6 +223,7 @@ try:
         charge_late_corporate_tip,
         charge_late_tip,
         charge_late_wallet_tip,
+        record_refund_event,
         send_ride_receipt,
         settle_card,
         settle_corporate,
@@ -233,6 +234,7 @@ try:
         cancel_authorization,
         capture_cancellation_fee,
         charge_ancillary_fee,
+        refund_excess_capture,
         verify_authorization,
     )
 except ImportError:
@@ -247,6 +249,7 @@ except ImportError:
         charge_late_corporate_tip,
         charge_late_tip,
         charge_late_wallet_tip,
+        record_refund_event,
         send_ride_receipt,
         settle_card,
         settle_corporate,
@@ -257,6 +260,7 @@ except ImportError:
         cancel_authorization,
         capture_cancellation_fee,
         charge_ancillary_fee,
+        refund_excess_capture,
         verify_authorization,
     )
 

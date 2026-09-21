@@ -97,10 +97,39 @@ because the field is harmless:
 - **Purpose** — session provenance and refresh-token theft detection, an explicit security purpose,
   and the column already existed for exactly that (`replayed_ip`, `utils/refresh_tokens.py:416`/`:591`).
   It is the accuracy of the value that was broken, not its justification.
-- **Bounded retention** — the retention purge deletes revoked/expired `refresh_tokens` rows after a
-  30-day grace period (Step E of `purge_pii_retention`, e.g. `migrations/141_retention_purge_ai_messages.sql:96`).
-  With a 30-day refresh-token lifetime that caps IP retention at roughly 60 days. It is **not** caught
-  by the 7-year regulatory trip-record hold, which covers ride records, not session rows.
+- **Retention is NOT bounded for every row — corrected 2026-09-21, see below.** An earlier revision of
+  this entry claimed the purge caps IP retention at ~60 days. That claim was wrong and is retracted.
+  It is at least true that these rows are **not** caught by the 7-year regulatory trip-record hold,
+  which covers ride records, not session rows.
+
+> **⚠ CORRECTION — the retention bound asserted here does not hold (found by `spinr-security-auditor`).**
+>
+> Migration 50 (`migrations/50_pii_retention_purge.sql:212-223`) purged on **expiry**:
+> `DELETE FROM refresh_tokens WHERE expires_at < cutoff` — every token, 30 days after it expired.
+> Somewhere between migration 50 and 117 the filter silently changed and has been carried through
+> every `CREATE OR REPLACE` since. The **live** definition
+> (`migrations/434_fix_audit_logs_delete_trigger_conflict.sql:179-189`, the highest-numbered file
+> redefining this function) purges on **revocation**:
+> `DELETE FROM refresh_tokens WHERE revoked_at IS NOT NULL AND revoked_at < cutoff`.
+>
+> `revoked_at` is only ever stamped by an explicit action — rotation
+> (`utils/refresh_tokens.py:191`), revoke (`:636`), logout-all (`:680`). Natural expiry does not
+> stamp it: `lookup_refresh_token` (`:313-314`) returns `None` on an expired row and writes nothing.
+> So a token issued and never used again — a rider who takes one ride and never reopens the app, an
+> abandoned install — keeps `revoked_at = NULL` forever and **Step E never deletes it**.
+>
+> Before this diff that was a harmless bug: the row held a useless constant proxy address. **After
+> this diff that same never-purged row holds the user's real, identifying IP with no ceiling.** This
+> diff does not cause the gap, but it is what turns it into a live data-minimization problem.
+>
+> Two docs assert the original, no-longer-implemented policy and are now stale:
+> `utils/retention_purge.py:19` and `docs/runbooks/data-retention.md:34`
+> ("refresh_tokens hard-deleted at expires_at + 30 days grace").
+>
+> **Not fixed in this commit** — widening a live `DELETE` to cover rows it has never touched is a
+> destructive, irreversible change to production data and is out of scope for an IP-resolution fix.
+> Escalated to the repo owner for a decision; tracked as an open blocker on this PR. Do not read
+> this entry as claiming the retention story is closed.
 - **Not logged** — the value goes to a DB column only. CLAUDE.md's "never in logs/Sentry/analytics"
   list is unaffected; this adds no new log line, Sentry tag, or analytics field.
 - **Consistent with the admin twin**, which has been retaining real admin IPs this way already.
@@ -181,9 +210,12 @@ to toggle an audit-only field that no user-visible surface reads — more risk t
 - [x] **Reviewed against CLAUDE.md conventions** — dual-import pattern preserved; PIPEDA §"never in
       logs" is unaffected (the IP goes to a DB column, not a log line or Sentry event, and IP is not
       in that section's prohibited list); JWT trust model untouched; no error-swallowing introduced.
-- [ ] **`spinr-security-auditor`** — launched against the actual diff (gate 10) but **had not
-      returned when this was committed**. Findings will be addressed in a follow-up commit on
-      this same branch before any merge. Do not treat this box as ticked when reviewing.
+- [x] **`spinr-security-auditor`** run against the actual diff (gate 10). **Verdict: FIX BLOCKERS.**
+      It confirmed the `routes/auth.py` change itself is sound, that `client_ip` feeds no security
+      decision on any of the 5 paths, and that no other backend surface still resolves IP from the
+      socket peer. It raised one BLOCKER (the retention-bound claim, retracted in §4 above — the
+      audit was right and this entry was wrong) and one WARNING (origin-lock, §4 residual risk).
+      Both are recorded below as open items; neither is a defect in this diff's code.
 - [ ] **Manual repro in staging** — not done, see §10.
 - [x] **Feature flag** — deliberately omitted; justified in §8.
 
@@ -203,9 +235,18 @@ to toggle an audit-only field that no user-visible surface reads — more risk t
 - **No production build run** — backend-only change, no `admin-dashboard`/`rider-app`/`driver-app`
   files touched, so the CLAUDE.md production-build requirement does not apply.
 - **No visual-regression consideration** — no UI surface touched.
-- **The security audit had not completed at commit time.** The commit was made to an unmerged
-  feature branch so the diff would not sit uncommitted; gate 10 gates the *merge*, not the
-  branch commit. The audit's findings are still outstanding as of this entry.
+- **Two open items remain before merge, neither fixed here:**
+  1. **BLOCKER — the `purge_pii_retention()` Step E gap** (§4 correction). Never-revoked refresh
+     tokens are retained indefinitely, now holding real IPs. Needs a follow-up migration widening
+     Step E (e.g. `OR (revoked_at IS NULL AND expires_at < cutoff)`) plus correcting the two stale
+     doc references. Deliberately not bundled here: it is a destructive change to live production
+     data and warrants its own review, dry-run, and rollback plan.
+  2. **WARNING — Cloudflare-only origin lock is unverified.** `get_real_client_ip` trusts
+     `CF-Connecting-IP`, which is only authoritative if the Fly origin refuses non-Cloudflare
+     traffic. No allowlist exists in `backend/fly.toml` and no ACTION_ITEMS entry tracks it. This
+     is pre-existing (`default_limiter` and admin auth already depend on it), but this diff extends
+     the same assumption to `refresh_tokens.ip`, so a replay attacker could inject a false IP into
+     their own incident record. Narrow, but new. Needs a tracked action item.
 - **Historical rows not backfilled.** Every `refresh_tokens.ip` written before this deploy still holds
   a `172.16.x.x` proxy address. Any incident response reading rows older than this deploy must treat
   that column as unreliable. No backfill is possible — the real IP was never captured.

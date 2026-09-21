@@ -62,6 +62,69 @@ def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
 
 
+def _ride_total_with_fallback(ride: Dict[str, Any], *, site: str) -> Decimal:
+    """``grand_total``, falling back to ``total_fare`` — with the ambiguous case counted.
+
+    Three call sites shared the expression
+    ``_round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))``. The
+    ``or`` means "if falsy", not "if missing", and those differ exactly when
+    ``grand_total`` is **0**, which has two incompatible meanings:
+
+      * a genuinely free ride (a 100% promo in an area with no fees and no GST —
+        ``discount`` is capped at the fare by ``routes/promotions.py:305``, so
+        this needs fees and tax to be zero as well), or
+      * a row that predates migration 46, which added the column as
+        ``DECIMAL(10,2) DEFAULT 0`` rather than NULL, so "never computed" also
+        reads as 0.
+
+    Both are falsy, so both fall back to ``total_fare`` — the **pre-tax
+    subtotal**. That is right for the legacy row and an overcharge for the free
+    ride, and at ``settle_corporate``'s call site it is the amount actually
+    charged.
+
+    **This function deliberately does not change the value.** Resolving the
+    ambiguity wrongly costs real money in both directions: charging a free ride
+    is a visible overcharge, while charging $0 for a legacy ride is a silent
+    loss the driver is still paid for (uncollected rides stay payable — see
+    ``docs/change-log/2026-09-21-uncollected-rides-stay-payable.md``). Nobody
+    here can query production to find out which rows exist, so this preserves
+    today's arithmetic exactly and emits a signal instead, letting the real fix
+    be chosen from data rather than guessed. Decided with the repository owner,
+    per CLAUDE.md pre-merge gate 9 ("escalate, don't silently ship").
+
+    The log records the raw value's *type* on purpose: if PostgREST returns this
+    numeric column as a string (``"0.00"`` is truthy), the ambiguity cannot
+    arise at all and the whole question is moot. That is cheaper to learn from
+    one production log line than to prove from here.
+    """
+    raw_grand = ride.get("grand_total")
+    raw_fare = ride.get("total_fare")
+    # Exactly the original expression, unchanged.
+    total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
+    # Present, but falsy, while total_fare disagrees — the only ambiguous shape.
+    if raw_grand is not None and not raw_grand and _d(raw_fare or 0) > 0:
+        logger.bind(domain="payments", ride_id=ride.get("id")).warning(
+            "[PAYMENT] ambiguous zero grand_total at {} — falling back to total_fare as before "
+            "(charging {}); grand_total={!r} type={}, total_fare={!r}",
+            site,
+            total,
+            raw_grand,
+            type(raw_grand).__name__,
+            raw_fare,
+        )
+        _ride_total_metric_inc(site)
+    return total
+
+
+def _ride_total_metric_inc(site: str) -> None:
+    """Metrics are imported per-function in this module, not at module scope."""
+    try:
+        from ..utils.metrics import inc as _metric_inc
+    except ImportError:  # pragma: no cover - dual import
+        from utils.metrics import inc as _metric_inc  # type: ignore
+    _metric_inc("spinr_payment_zero_grand_total_fallback_total", {"site": site})
+
+
 # R44 (ACTION_ITEMS.md N15): a corporate rider previously learned their
 # allowance ran out only from a 4xx at their NEXT booking attempt
 # (routes/rides/booking.py's allowance_low / company_booking_service.py's
@@ -323,7 +386,7 @@ async def record_refund_event(
     meta: Dict[str, Any] = {"source": "charge.refunded", "driver_pay_absorbed_by_platform": True}
     tax_reversed = Decimal("0")
     if ride:
-        total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
+        total = _ride_total_with_fallback(ride, site="refund_tax_reversal")
         tax_total = _round(_d(ride.get("tax_amount") or 0))
         refund_d = _round(_d(refund_cents) / Decimal("100"))
         frac = min(refund_d / total, Decimal("1")) if total > Decimal("0") else Decimal("1")
@@ -936,7 +999,7 @@ async def settle_wallet(
         logger.info("settle_wallet: ride {} already paid — idempotent no-op, skipping ledger write", ride_id)
         return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(total_charge))
 
-    grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
+    grand_total = _ride_total_with_fallback(ride, site="wallet_transaction_record")
     ride_fare = _round(
         _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)
     )
@@ -1526,7 +1589,11 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
     if not claimed:
         return None  # another replica/settlement won the claim — done
 
-    total = _round(_d(str(ride.get("grand_total") or ride.get("total_fare") or 0)))
+    # The only one of the three that is an amount CHARGED, not a recorded value:
+    # it becomes settle_corporate's total_charge. If the ambiguous-zero case ever
+    # fires here, it is a corporate account being billed the pre-tax subtotal for
+    # a ride that may have been free.
+    total = _ride_total_with_fallback(ride, site="guest_corporate_auto_settle")
     try:
         result = await settle_corporate(ride, ride_id, total_charge=total, tip_amount=Decimal("0"))
     except Exception:

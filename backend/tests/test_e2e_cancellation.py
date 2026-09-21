@@ -361,6 +361,12 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
         # and was never updated to match. The driver is still online here
         # (arrived, not force-offlined), so the release genuinely succeeds.
         set_avail = AsyncMock(return_value={"id": DRIVER_ID, "is_available": True})
+        # The release + period close now go through the shared helper
+        # (utils/insurance_periods.release_driver_and_close_period), which calls
+        # record_period_transition from its OWN module namespace — so patching
+        # _deps.record_period_transition no longer intercepts it. Assert on the
+        # helper instead, which is the contract this call site actually has.
+        release = AsyncMock(return_value=1)
         period = AsyncMock()
         ws = AsyncMock()
 
@@ -378,6 +384,7 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
             patch("backend.routes.rides._deps.db_supabase.set_driver_available", set_avail),
             patch("backend.routes.rides._deps.record_period_transition", period),
+            patch("backend.routes.rides._deps.release_driver_and_close_period", release),
             patch("backend.routes.rides._deps.manager.send_personal_message", ws),
             patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
@@ -393,10 +400,11 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
 
         # The cancel still succeeds (the ride is already persisted as cancelled).
         assert result["success"] is True
-        # Driver is released back to available despite the fee-write failure.
-        set_avail.assert_any_await(DRIVER_ID, True)
-        # SGI Period-1 transition is recorded for the released driver.
-        period.assert_any_await(DRIVER_ID, 1)
+        # Driver is released and their assignment-time Period 2 closed out,
+        # despite the fee-write failure. The helper owns both halves now, and
+        # decides 1-vs-0 from the release result (tested directly in
+        # tests/test_insurance_release_helper.py).
+        release.assert_any_await(DRIVER_ID, reason="rider_cancelled", ride_id=RIDE_ID)
         # Driver is notified of the cancellation.
         driver_channel = f"driver_{DRIVER_USER_ID}"
         notified = [call.args[0] for call in ws.call_args_list if len(call.args) > 1 and call.args[1] == driver_channel]

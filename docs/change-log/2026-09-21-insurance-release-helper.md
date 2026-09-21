@@ -70,10 +70,17 @@ Contract:
   that stubs `derive_insurance_period` to return 0 for an online driver and asserts the helper
   follows it.
 
-This change swaps **only the two `ride_flow.py` sites**, which is behaviour-identical to what they
-already did — a pure consolidation with no semantic change. The three remaining siblings are the
-next subtask (§4), per CLAUDE.md's ≤3-files-per-subtask rule and because three of them sit on the
-dispatch hot path.
+Landed in two commits: first the helper plus the two `ride_flow.py` sites (behaviour-identical, a
+pure consolidation), then the three `routes/rides/` siblings. **Converting those three is a real
+behaviour change**, and it is the whole point: they previously wrote *nothing* for an offline
+driver, leaving the claim-time Period 2 open — a standing claim of **primary** commercial cover
+over someone on personal auto, strictly worse than the Period 1 their guard was added to suppress.
+They now close out to Period 0.
+
+A grep after the conversion found **four more copies the review had not identified**:
+`routes/admin/rides.py` ×2 (admin cancel, admin complete), `routes/drivers/ride_cancel.py:677`
+(no-show), and `routes/rides/cancellation.py:524` (the batch-offer release on rider cancel, which
+records **no period at all** — the same open-Period-2 gap). Those are the next subtask; see §10.
 
 **Alternative considered:** leave the five copies and fix only the behavioural divergence (add the
 Period 0 branch to the three laggards). Rejected — it produces five *identical* copies, which is
@@ -215,8 +222,21 @@ untouched.
   `is_online` was read from the repository code and PostgREST's default return-representation
   behaviour, not observed on a live row. If it were ever configured `return=minimal`, the helper
   would receive `None` and correctly write nothing — a coverage regression, not a false record.
-- **The three sibling sites are not converted** (§4) — the immediate follow-up, deliberately not in
-  this diff.
+- **Four further copies are not converted**, found by grepping `set_driver_available` across
+  `routes/` after the five target sites were done — the review had identified five, there are nine:
+  - `routes/admin/rides.py:737` (admin cancel) and `:921` (admin complete) — identical Period
+    1-or-nothing, straight swaps.
+  - `routes/drivers/ride_cancel.py:677` (rider no-show) — identical, straight swap.
+  - `routes/rides/cancellation.py:524` (batch-offer release on rider cancel) — records **no period
+    at all**, so every pending-offer driver keeps the Period 2 their claim opened until some later
+    transition happens to close it. Same class of defect as the original finding.
+  - `routes/drivers/ride_cancel.py:218` (driver-side cancel) is **not** a straight swap and needs a
+    decision, not a refactor: it releases unconditionally but records Period 1 only when the ride
+    was in `driver_assigned`/`accepted`/`arrived`, "to avoid a phantom 1→1 transition" when the
+    ride was still `searching`. Under batch dispatch that reasoning looks stale — a driver holding
+    a pending offer *is* Period 2 while the ride is still `searching` — but changing it alters a
+    regulator-facing record on a judgement call, so it is being raised rather than folded in
+    (CLAUDE.md pre-merge gate #9).
 - **The new metrics have no dashboard or alert.** They are emitted and named per convention;
   nothing consumes them yet.
 - Backend-only, no UI surface, so admin-dashboard's Playwright visual baselines are not implicated.

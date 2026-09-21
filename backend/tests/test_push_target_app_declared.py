@@ -52,8 +52,27 @@ _ACCOUNT_LEVEL_BY_DESIGN: dict[str, tuple[int, str]] = {
     ),
     "routes/rides/_shared.py": (
         1,
-        "_push_in_background is a *args/**kwargs forwarder, not a call site — "
-        "its callers supply target_app and it passes theirs straight through.",
+        "the ONE genuine forwarder: _push_in_background's own body calls "
+        "send_push_notification(*args, **kwargs), so its target_app comes from "
+        "whichever caller invoked it. Its callers are scanned directly via "
+        "_PUSH_CALLABLES, so this exception covers the forwarding line only — "
+        "it does NOT vouch for the callers. An earlier version of this entry "
+        "claimed it did, which hid two real driver-facing bugs.",
+    ),
+    "routes/rides/sharing.py": (
+        1,
+        "trip_shared goes to whoever owns the phone number the rider typed, "
+        "found by a bare users lookup on `phone`. They may be a rider, a "
+        "driver, both or neither — nothing on this path says which app they "
+        "open, so narrowing on a guess would hide the share entirely.",
+    ),
+    "routes/admin/users.py": (
+        1,
+        "account suspend/ban/reactivate is account-level: users.role is "
+        "admin-RBAC only (migration 256) and an account can be both via "
+        "is_rider/is_driver. Previously hardcoded 'rider', which would have "
+        "hidden a driver's own ban notice from the driver app once migration "
+        "436 made target_app decide the inbox audience.",
     ),
     "routes/webhooks.py": (
         1,
@@ -75,8 +94,18 @@ _ACCOUNT_LEVEL_BY_DESIGN: dict[str, tuple[int, str]] = {
 }
 
 
+# Both the direct API and the one wrapper that forwards to it. Scanning only
+# the direct name is how routes/rides/payments.py's tip push and
+# routes/rides/rating.py's rating push — both driver-facing, both undeclared —
+# stayed invisible to an earlier version of this guard while its allow-list
+# asserted, wrongly, that the forwarder's callers all passed target_app. Any
+# future wrapper around send_push_notification must be added here too, or it
+# becomes a blind spot in exactly the same way.
+_PUSH_CALLABLES = ("send_push_notification", "_push_in_background")
+
+
 def _push_calls(tree: ast.AST) -> list[tuple[int, str | None]]:
-    """(lineno, declared target_app) for each send_push_notification call.
+    """(lineno, declared target_app) for each push call, direct or forwarded.
 
     The declared value is the literal when one is given, the sentinel
     '<dynamic>' when it is computed (e.g. _wallet_target_app(user)), and None
@@ -88,7 +117,7 @@ def _push_calls(tree: ast.AST) -> list[tuple[int, str | None]]:
             continue
         fn = node.func
         name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
-        if name != "send_push_notification":
+        if name not in _PUSH_CALLABLES:
             continue
         kw = next((k for k in node.keywords if k.arg == "target_app"), None)
         if kw is None:
@@ -121,7 +150,7 @@ def test_the_scanner_actually_finds_call_sites():
 
     A rename or an import-shape change that made _push_calls match nothing
     would turn every assertion below into a vacuous pass. Pin a floor well
-    under the real count (95 at the time of writing) so this fails loudly
+    under the real count (98 at the time of writing, across both callables) so this fails loudly
     instead of going quiet.
     """
     total = sum(len(v) for v in _scan().values())

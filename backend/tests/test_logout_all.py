@@ -434,24 +434,62 @@ class TestAdminLogoutAll:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_refuses_admin_001_super_admin(self):
-        """admin-001 is the env-var super admin — no DB row exists, so
-        bumping token_version is meaningless. Runbook tells operators
-        to rotate ADMIN_PASSWORD; the handler must redirect them
-        there explicitly rather than silently no-op."""
+    async def test_bumps_env_admin_token_version_and_revokes(self):
+        """admin-001 is the env-var super admin. It used to have no
+        revocation control at all here — a 400 telling the operator to
+        rotate ADMIN_PASSWORD (a redeploy) — until migration 434 gave it a
+        token_version on the `settings` row (utils/env_admin_tokens.py,
+        2026-09-20). This now force-logs-out admin-001 exactly like the
+        staff branch (test_bumps_admin_staff_and_revokes above), not a 400.
+
+        bump_env_admin_token_version's own read/write correctness is pinned
+        in test_env_admin_token_version.py; this test only checks that the
+        endpoint delegates to it and completes the same way the staff branch
+        does."""
         from backend.routes.admin.auth import admin_logout_all
 
         token = _admin_jwt("admin-001")
-        inner = _resolve_inner(admin_logout_all)
-        request = MagicMock()
+        bump_version = AsyncMock(return_value=5)
+        revoke_all = AsyncMock(return_value=2)
+        kick_user = AsyncMock(return_value=0)
 
-        with pytest.raises(HTTPException) as exc:
-            await inner(request, authorization=f"Bearer {token}")
+        with (
+            patch("backend.routes.admin.auth.bump_env_admin_token_version", bump_version),
+            patch("backend.routes.admin.auth.revoke_all_for_user", revoke_all),
+            patch("backend.socket_manager.manager.kick_user", kick_user),
+        ):
+            inner = _resolve_inner(admin_logout_all)
+            request = MagicMock()
+            result = await inner(request, authorization=f"Bearer {token}")
 
-        assert exc.value.status_code == 400
-        # Must explicitly mention the rotation path so the operator
-        # doesn't have to grep the runbook for the recovery step.
-        assert "ADMIN_PASSWORD" in exc.value.detail
+        bump_version.assert_awaited_once()
+        revoke_all.assert_awaited_once_with("admin-001")
+        kick_user.assert_awaited_once_with(
+            "admin-001",
+            client_types=["admin"],
+            reason="logout_all",
+        )
+        assert result == {"success": True, "revoked_refresh_tokens": 2}
+
+    @pytest.mark.asyncio
+    async def test_admin_001_raises_when_token_version_bump_fails(self):
+        """Fail-closed counterpart: if the settings-row read/write itself
+        fails (utils/env_admin_tokens.py's own DatabaseError), the operator
+        must see a loud failure, not a silent 200 that leaves the leaked
+        token live."""
+        from backend.routes.admin.auth import admin_logout_all
+        from utils.error_handling import DatabaseError
+
+        token = _admin_jwt("admin-001")
+
+        with patch(
+            "backend.routes.admin.auth.bump_env_admin_token_version",
+            AsyncMock(side_effect=DatabaseError("env-admin revocation counter is unreadable")),
+        ):
+            inner = _resolve_inner(admin_logout_all)
+            request = MagicMock()
+            with pytest.raises(DatabaseError):
+                await inner(request, authorization=f"Bearer {token}")
 
     @pytest.mark.asyncio
     async def test_404_when_staff_not_found(self):

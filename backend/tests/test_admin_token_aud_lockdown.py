@@ -48,6 +48,9 @@ async def test_legacy_no_aud_admin_token_rejected():
 async def test_admin_aud_token_still_verifies(monkeypatch):
     """Properly-minted admin tokens (aud claim present) keep working."""
     monkeypatch.setattr(dependencies, "redis_get", AsyncMock(return_value=None))
+    # admin-001's token_version DB read (utils/env_admin_tokens.py) is a
+    # separate check from the audience validation under test here.
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
     payload = {**_legacy_admin_payload(), "aud": JWT_AUD_ADMIN}
     user = await _verify_admin_payload(payload)
     assert user is not None

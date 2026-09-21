@@ -343,7 +343,7 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         and verify_password(body.password, settings.admin_password_hash)[0]
     ):
         # admin-001 has no admin_staff row, so its token_version lives on the
-        # settings row instead (migration 433). Stamping the CURRENT value in
+        # settings row instead (migration 434). Stamping the CURRENT value in
         # is what makes /admin/auth/logout-all able to kill this account's
         # sessions: the bump leaves every already-minted token stale.
         #
@@ -526,7 +526,7 @@ async def admin_refresh(request: Request, body: RefreshRequest):
             "documents",
             "staff",
         ]
-        # Must be the CURRENT stored version, not a hardcoded 0 (migration 433).
+        # Must be the CURRENT stored version, not a hardcoded 0 (migration 434).
         # Minting 0 here would be fine only while the counter has never been
         # bumped: after the first /logout-all every refresh would hand back a
         # token that _verify_admin_payload immediately rejects as
@@ -637,10 +637,10 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
     Bumps the caller's token_version and revokes every active refresh token
     for them. For staff that version lives on the ``admin_staff`` row; for the
     env-credential super admin (``admin-001``), which has no such row, it lives
-    on the ``settings`` singleton (migration 433). Either way every access token
+    on the ``settings`` singleton (migration 434). Either way every access token
     minted before the bump is rejected on its next request.
 
-    Until migration 433 this endpoint returned 400 for ``admin-001`` and told
+    Until migration 434 this endpoint returned 400 for ``admin-001`` and told
     the operator to rotate ``ADMIN_PASSWORD`` — a redeploy — which made the
     highest-privilege account the only one that could not be force-logged-out.
     """
@@ -679,7 +679,7 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         # Previously a 400 telling the operator to rotate ADMIN_PASSWORD and
         # redeploy — which made the env super admin the one account that could
         # not be force-logged-out at all. It now carries a token_version on the
-        # settings row (migration 433), so this bump invalidates every
+        # settings row (migration 434), so this bump invalidates every
         # outstanding admin-001 access token on its next request, exactly as the
         # staff branch below does. Both fall through to the same WS kick and
         # response so the two paths cannot drift.

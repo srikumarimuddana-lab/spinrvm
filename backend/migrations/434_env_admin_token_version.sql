@@ -1,4 +1,10 @@
--- 433: revocation generation for the env-credential super admin (admin-001).
+-- 434: revocation generation for the env-credential super admin (admin-001).
+--
+-- Authored as 433, renumbered before merge: 433 was taken by
+-- 433_admin_role_rls_unreachable_phase2_safety_insurance.sql (PR #5597), which
+-- landed on main while this branch was in flight. Safe to rename because this
+-- file has never been applied anywhere — the runner keys on the full filename,
+-- so only ALREADY-APPLIED migrations are frozen (CLAUDE.md, migrations).
 --
 -- admin-001 is defined by ADMIN_EMAIL/ADMIN_PASSWORD in the environment and has
 -- no admin_staff row, so dependencies/__init__.py's _verify_admin_payload

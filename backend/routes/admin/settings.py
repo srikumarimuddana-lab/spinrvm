@@ -156,7 +156,7 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
 # should read back.
 #
 # env_admin_token_version is the super admin's live revocation generation
-# (migration 433). Disclosing it to every staff account tells them how many
+# (migration 434). Disclosing it to every staff account tells them how many
 # times the super admin has been force-logged-out and what version a forged
 # token would need to claim — useless without JWT_SECRET, but there is no
 # reason to hand it out.

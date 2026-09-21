@@ -68,7 +68,7 @@ async def get_env_admin_token_version() -> int:
     0": with ``_token_version_mismatch`` being ``claim < stored``, a stored 0
     passes every token ever minted, which would silently un-revoke everything
     an operator just killed — the exact fail-open behaviour this module exists
-    to remove. **Because a missing column is an error here, migration 433 must
+    to remove. **Because a missing column is an error here, migration 434 must
     be applied before this code is deployed** (see the migration header).
     """
     rows = await db_supabase.get_rows(

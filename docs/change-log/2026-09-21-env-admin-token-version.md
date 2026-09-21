@@ -37,7 +37,7 @@ it were a design ("uses env-var creds and has no persisted token_version") inste
 ## 3. Fix / remediation
 
 `admin-001` gets the one control it was missing, with staff semantics: a monotonic
-`token_version`, stored on the `settings` singleton row (migration 433) because there is no
+`token_version`, stored on the `settings` singleton row (migration 434) because there is no
 `admin_staff` row to hold it.
 
 - **Mint** (`/admin/auth/login`, and `/admin/auth/refresh`) stamps the current stored value into
@@ -139,7 +139,7 @@ revocation generation, not a count.
 | File path | What changed | Why |
 |---|---|---|
 | `backend/utils/env_admin_tokens.py` | new: `ENV_ADMIN_USER_ID`, `get_env_admin_token_version`, `bump_env_admin_token_version` | one definition read by mint, verify and revoke so the three cannot drift |
-| `backend/migrations/433_env_admin_token_version.sql` | new: `settings.env_admin_token_version INTEGER NOT NULL DEFAULT 0` | somewhere to put the counter for an account with no `admin_staff` row |
+| `backend/migrations/434_env_admin_token_version.sql` | new: `settings.env_admin_token_version INTEGER NOT NULL DEFAULT 0` | somewhere to put the counter for an account with no `admin_staff` row |
 | `backend/dependencies/__init__.py` | `elif user_id != "admin-001"` → explicit env-admin branch with a fail-closed version check | the bypass itself |
 | `backend/routes/admin/auth.py` | login + refresh stamp the stored version; logout-all bumps it and shares the staff tail; docstring corrected | mint/revoke halves of the same mechanism |
 | `backend/routes/admin/settings.py` | `_mask_credentials` drops an `_INTERNAL_ONLY_FIELDS` set, holding `env_admin_token_version` | see §4 — the new column would otherwise round-trip to every staff account via `GET /admin/settings` |

@@ -250,6 +250,15 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     # sending total_fare tripped the RPC's fare_underpaid. Mirror the RPC's
     # COALESCE exactly — an explicit None check, not `or`, so a legitimately
     # zero grand_total is not treated as missing.
+    #
+    # Asymmetry worth knowing: the RPC enforces only a FLOOR
+    # (p_amount - tip >= v_server_fare - 0.02). It has no overpay ceiling, so
+    # the ERR_FARE_EXCEEDED check below is the only thing preventing an
+    # overcharge — and it runs against this plain read, taken before the RPC's
+    # own FOR UPDATE re-read of the same row. Nothing rewrites grand_total on
+    # an already-completed ride today (checked admin/rides.py, promotions and
+    # the refund/dispute writers), so the two reads cannot currently disagree;
+    # if that ever changes, this ceiling becomes racy and belongs in the RPC.
     _grand = ride.get("grand_total")
     server_fare = _d(_grand if _grand is not None else ride.get("total_fare", 0))
     debit_amount = _d(req.amount)

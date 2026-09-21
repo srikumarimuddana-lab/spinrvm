@@ -79,6 +79,28 @@ Code-only, no data written, no flag: `git revert` + deploy restores the previous
 - The band was simulated directly with the interpreter for all four test cases, cross-checked against the RPC's guard arithmetic from `migrations/111_wallet_pay_for_ride_security_hardening.sql`: taxed@44.40 passes the route and clears the RPC's $44.38 floor; taxed@40.00 is refused at the route; legacy row (no `grand_total`) unchanged; zero `grand_total` refuses a $15 payment instead of accepting it.
 - Traced `wallet_pay_for_ride`'s other caller (`settle_wallet`) to confirm it already passes `grand_total` and is unaffected.
 
+## 10a. Follow-up raised by review (not fixed here)
+
+`spinr-money-auditor` verified the band arithmetic correct for all four cases (zero-tax, taxed,
+discounted so `grand_total < total_fare`, and NULL `grand_total`), and confirmed the route's
+±0.01 window is a strict subset of the RPC's −0.02 floor, so anything this endpoint accepts the
+RPC accepts too. It also found a **pre-existing asymmetry this change does not introduce and does
+not fix**:
+
+`wallet_pay_for_ride` (migration 111) enforces only a *floor* —
+`p_amount - COALESCE(p_tip_amount,0) >= v_server_fare - 0.02`. There is no overpay ceiling in the
+RPC at all. The `ERR_FARE_EXCEEDED` check in `routes/wallet.py` is therefore the only thing
+preventing an overcharge, and it runs against a plain read taken *before* the RPC's `FOR UPDATE`
+re-read of the same row. If `grand_total` were lowered between those two reads, the RPC would
+accept the stale-higher debit.
+
+Latent, not exploitable: no code path rewrites `grand_total` on an already-`completed` ride
+(`routes/admin/rides.py`, promotions, and the refund/dispute writers all checked). Recorded in a
+code comment at the call site rather than fixed, because moving the ceiling into the RPC is a
+migration against a money function and belongs in its own change. The original comment here
+claimed overpayment was "not possible via this endpoint", which is stronger than what the code
+guarantees — corrected.
+
 ## 10. What was NOT verified
 
 - **pytest was not run** — this sandbox cannot reach PyPI, so `pytest`/`fastapi` are absent. CI is the gate: `tests/test_wallet.py::TestWalletPay`.

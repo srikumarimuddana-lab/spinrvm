@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from ...utils.audit_logger import log_admin_action  # noqa: F401
@@ -199,6 +199,279 @@ class SettingsUpdateRequest(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    google_maps_api_key: Optional[str] = None
+    stripe_publishable_key: Optional[str] = None
+    stripe_secret_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None
+    # Connected-accounts endpoint signing secret (account.updated, payout.*).
+    stripe_connect_webhook_secret: Optional[str] = None
+    # Kill switch for re-provisioning Stripe identities stranded by a
+    # test→live key rotation (see AppSettings for the full rationale).
+    # Settable here so it can be turned off without a redeploy.
+    stripe_reprovision_stale_ids: Optional[bool] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_from_number: Optional[str] = None
+    # Twilio Proxy is what masks rider↔driver phone numbers during a ride;
+    # SID lives in app_settings so it rotates without a redeploy.
+    twilio_proxy_service_sid: Optional[str] = None
+    # Resend powers transactional email (receipts, T4A links, support).
+    # api_key is a credential (masked on GET); from_email is plain.
+    resend_api_key: Optional[str] = None
+    resend_from_email: Optional[str] = None
+    # AWS SES is the PRIMARY transactional-email provider (migration 154);
+    # Resend above is the guardrail fallback. secret_access_key is a
+    # credential (masked on GET); the rest are plain.
+    aws_ses_region: Optional[str] = None
+    aws_ses_access_key_id: Optional[str] = None
+    aws_ses_secret_access_key: Optional[str] = None
+    aws_ses_from_email: Optional[str] = None
+    # Expected SNS topic ARN for the SES bounce/complaint webhook. When set,
+    # /webhooks/ses rejects SNS messages from any other topic.
+    aws_ses_sns_topic_arn: Optional[str] = None
+    # Company info shown on rider receipts + driver T4A slips + the
+    # admin dashboard footer. Edited via the Settings page → Company tab.
+    company_name: Optional[str] = None
+    # Product/brand name for email BODY copy, independent of the legal-entity
+    # company_name above. See schemas.AppSettings.company_app_name and
+    # ACTION_ITEMS.md N17.
+    company_app_name: Optional[str] = None
+    company_address: Optional[str] = None
+    company_phone: Optional[str] = None
+    company_email: Optional[str] = None
+    company_website: Optional[str] = None
+    # Logo for transactional-email headers. Empty = the bundled Spinr asset
+    # served at /api/v1/branding/spinr-logo.png, which is the normal setting.
+    # Validated at render time by utils/company_details._safe_logo_url, which
+    # falls back to the bundled asset for anything that is not an absolute
+    # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
+    company_logo_url: Optional[str] = None
+    # "Open/install the app" CTA link for the rider welcome email. Empty =
+    # the email ships without a CTA button. Validated at render time by
+    # utils/company_details._safe_app_download_url, same rule as the logo URL
+    # above. See schemas.AppSettings.company_app_download_url.
+    company_app_download_url: Optional[str] = None
+    # Renders the ride receipt and Spinr Pass invoice with the shared branded
+    # shell and the company details above. Presentation only — never the fare
+    # rows, GST/PST line items or totals. See migration 288.
+    branded_receipt_enabled: Optional[bool] = None
+    # Locks the rider's quoted fare at booking time so the receipt can't
+    # drift if Maps changes the route mid-trip. Toggle on the Settings page.
+    fare_lock_enabled: Optional[bool] = None
+    driver_matching_algorithm: Optional[str] = None
+    min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
+    cancellation_fee_admin: Optional[float] = Field(default=None, ge=0, le=50)
+    cancellation_fee_driver: Optional[float] = Field(default=None, ge=0, le=50)
+    platform_fee_percent: Optional[float] = Field(default=None, ge=0, le=1.0)
+    require_driver_subscription: Optional[bool] = None
+    terms_of_service_text: Optional[str] = None
+    privacy_policy_text: Optional[str] = None
+    # Driver-app alert ping. URL points at an mp3/wav in Supabase Storage
+    # bucket `audio-assets`. Empty string clears the override and reverts
+    # the driver-app to the bundled placeholder.
+    ride_offer_sound_url: Optional[str] = None
+    # Public base URL for the rider-app "Share Trip" tracking page (the
+    # admin-dashboard `/track/[token]` route). Set this to your deployed
+    # admin domain so safety contacts can open ${base}/${share_token}.
+    # Empty string disables the in-app share link until configured.
+    track_base_url: Optional[str] = None
+    # Comma-separated email addresses notified when a safety_incidents
+    # row opens (rider SOS, driver safety report, auto check-in
+    # escalation). Edited via Settings → Safety. Blank disables outbound
+    # email; WS broadcast + DB row still fire.
+    safety_alert_emails: Optional[str] = None
+    # Real on-call paging for rider/driver SOS (ACTION_ITEMS.md B15(b)),
+    # additive to safety_alert_emails above — utils/safety_paging.py.
+    # webhook_url is plain; routing_key is a credential (masked, in
+    # _CREDENTIAL_FIELDS). Changing either is super_admin-only
+    # (_SUPER_ADMIN_ONLY_FIELDS). Empty webhook_url = disabled (default);
+    # this ships dark until an admin configures real PagerDuty/Opsgenie
+    # credentials.
+    sos_paging_webhook_url: Optional[str] = None
+    sos_paging_routing_key: Optional[str] = None
+    # Safety panel — global tiles (migration 316 covers the per-service-area
+    # local-authority row instead). Surfaced to the apps via GET /settings.
+    # Blank email/phone hides that tile, same "render only what's configured"
+    # rule the authority row uses. Not credentials — these are published to
+    # riders and drivers by design, so no masking or super_admin gate.
+    safety_team_email: Optional[str] = None
+    safety_team_phone: Optional[str] = None
+    sos_show_share_trip: Optional[bool] = None
+    sos_show_report_issue: Optional[bool] = None
+    # Dispatch & matching — also configurable per service area (area overrides global).
+    max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
+    # Global dispatch geo provider (migration 397). NOT NULL in the DB, so
+    # unlike the per-area override this can never be blank — a service area
+    # with no override falls through to this value. Validated against
+    # services/dispatch_candidates.VALID_PROVIDERS so the API and the
+    # dispatch path cannot drift.
+    dispatch_geo_provider: Optional[str] = None
+    # Global default for how many nearby drivers are CONSIDERED before
+    # ranking (migration 404). Not how many receive an offer — that is
+    # max_simultaneous_offers above.
+    max_candidate_pool: Optional[int] = Field(default=None, ge=50, le=500)
+    ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
+    use_eta_ranking: Optional[bool] = None
+    # Hours of unreachability before the stale-intent reconciler flips a
+    # driver's is_online=false (migration 146). Bounds mirror the DB CHECK.
+    stale_intent_offline_hours: Optional[float] = Field(default=None, ge=1, le=48)
+    # ── Driver demand heatmap (HM-13 / AD-05, columns from migration 311) ──
+    # These MUST stay declared here. The model is extra="ignore", so an
+    # undeclared field is dropped at validation while the endpoint still
+    # returns 200 and writes an audit row with changed_keys: [] — which is
+    # exactly how the heatmap config shipped as a silent no-op that reported
+    # success. Bounds mirror the DB CHECK in migration 397 and the runtime
+    # clamps in utils/heatmap_config.py (three layers, deliberately).
+    driver_heatmap_enabled: Optional[bool] = None
+    driver_heatmap_v2_enabled: Optional[bool] = None
+    # Dark-launch allowlist of driver *user* IDs (users.id — not drivers.id).
+    # Capped so an admin paste cannot park an unbounded list in the row.
+    heatmap_internal_driver_ids: Optional[List[str]] = Field(default=None, max_length=500)
+    # ge=3, matching migration 397's CHECK and HEATMAP_SPEC. At ge=1 this model
+    # accepted 1 and 2 and then hit the DB constraint, so an operator got a 500
+    # instead of a 422 telling them the PIPEDA floor is 3.
+    heatmap_k_floor: Optional[int] = Field(default=None, ge=3, le=50)
+    heatmap_cell_lat_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
+    heatmap_cell_lng_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
+    heatmap_decay_half_life_days: Optional[float] = Field(default=None, ge=0.5, le=30)
+    # Floored at 30s: this interval multiplies across every online driver.
+    heatmap_refresh_seconds: Optional[int] = Field(default=None, ge=30, le=600)
+    # Payments — auto-heal of rides stranded in payment_status='processing'.
+    # When true, the daily Stripe reconcile finalises such rides (mark-paid
+    # ONLY, from Stripe truth) instead of just flagging them. Defaults OFF; see
+    # utils/stripe_reconcile._maybe_heal_stuck_processing. Money-moving — enable
+    # only after staging validation.
+    stripe_auto_heal_processing: Optional[bool] = None
+    # Notification throttling (quiet hours + daily cap) — see migration 304.
+    # Defaults OFF; ship dark, verify in staging, then flip on. Global for
+    # every rider/driver — no per-user override yet.
+    notification_throttling_enabled: Optional[bool] = None
+    notification_quiet_hours_start: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_quiet_hours_end: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_daily_cap: Optional[int] = Field(default=None, ge=0, le=100)
+    # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
+    # runtime, keys masked like the Stripe/Twilio credentials above.
+    ai_assistant_enabled: Optional[bool] = None
+    ai_disabled_mode: Optional[str] = Field(default=None, pattern="^(coming_soon|hidden)$")
+    ai_mcp_enabled: Optional[bool] = None
+    ai_provider: Optional[str] = Field(default=None, pattern="^(anthropic|openai|gemini|openrouter)$")
+    ai_model: Optional[str] = Field(default=None, max_length=120)
+    ai_api_key_anthropic: Optional[str] = None
+    ai_api_key_openai: Optional[str] = None
+    ai_api_key_gemini: Optional[str] = None
+    ai_api_key_openrouter: Optional[str] = None
+    ai_max_output_tokens: Optional[int] = Field(default=None, ge=128, le=4096)
+    ai_max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    ai_daily_message_cap: Optional[int] = Field(default=None, ge=1, le=500)
+    # 0 = "not set" → /mcp falls back to ai_daily_message_cap (schemas.py).
+    ai_mcp_daily_tool_cap: Optional[int] = Field(default=None, ge=0, le=5000)
+    ai_history_max_messages: Optional[int] = Field(default=None, ge=2, le=50)
+    ai_faq_cache_enabled: Optional[bool] = None
+    ai_faq_cache_ttl_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
+    ai_faq_semantic_enabled: Optional[bool] = None
+    # AI17/F1 follow-up: operational kill-switch for incremental streaming
+    # only, not a privacy toggle — see schemas.py's field comment /
+    # migration 409 for the full privacy-vs-UX distinction.
+    ai_stream_incremental_enabled: Optional[bool] = None
+    # AI17/F4: gates get_fare_quote() showing a priced-but-unbookable option
+    # for a vehicle type with no drivers online — see schemas.py's field
+    # comment / migration 410 for the full rationale.
+    ai_fare_quote_show_unavailable_enabled: Optional[bool] = None
+    # Allow "" (the unconfigured default the frontend sends back on every save)
+    # in addition to a real provider — otherwise an unrelated settings save 422s.
+    ai_embedding_provider: Optional[str] = Field(default=None, pattern="^(openai|gemini|)$")
+    ai_embedding_model: Optional[str] = Field(default=None, max_length=120)
+    ai_faq_semantic_min_score: Optional[float] = Field(default=None, ge=0, le=1)
+    ai_escalation_creates_ticket: Optional[bool] = None
+    # Public website assistant (spinr.ca chat widget -> POST /ai/public-chat).
+    # Separate from ai_assistant_enabled so the anonymous surface can be turned
+    # off on its own without taking the rider/driver assistant down with it.
+    # Defaults OFF — the feature ships dark.
+    ai_public_chat_enabled: Optional[bool] = None
+    ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
+    # iOS Live Activity APNs (.p8 token auth). key_id/team_id/bundle_id are
+    # identifiers (visible); apns_p8_key is the secret (masked, in
+    # _CREDENTIAL_FIELDS). Feature ships dark until all four are set.
+    apns_key_id: Optional[str] = Field(default=None, max_length=20)
+    apns_team_id: Optional[str] = Field(default=None, max_length=20)
+    apns_bundle_id: Optional[str] = Field(default=None, max_length=200)
+    apns_p8_key: Optional[str] = None
+    # Driver LMS (training platform) integration — services/lms_service.py.
+    # base_url is plain; api_key is a credential (masked, in
+    # _CREDENTIAL_FIELDS) matching SPINR_INTEGRATION_API_KEY on the LMS.
+    # Changing either field is super_admin-only (_SUPER_ADMIN_ONLY_FIELDS).
+    lms_api_base_url: Optional[str] = Field(default=None, max_length=300)
+    lms_api_key: Optional[str] = None
+    # Meta (Facebook) Conversions API — utils/meta_capi.py. Dataset ids are
+    # plain identifiers; the access token is a credential (masked on GET, in
+    # _CREDENTIAL_FIELDS). meta_test_event_code routes events to the Events
+    # Manager "Test Events" tab — it must be cleared for live conversions to
+    # count, so it is deliberately editable here rather than env-only.
+    meta_rider_dataset_id: Optional[str] = Field(default=None, max_length=64)
+    meta_driver_dataset_id: Optional[str] = Field(default=None, max_length=64)
+    meta_capi_access_token: Optional[str] = None
+    meta_test_event_code: Optional[str] = Field(default=None, max_length=64)
+    # admin-dashboard visual refresh (epic #2785 Phase 3+) — single global
+    # on/off flag for the shared shell/typography/radius restyle. No
+    # per-user or per-role targeting exists (see useFeatureFlag.tsx):
+    # flipping this turns it on for every admin/staff account at once, not
+    # a subset. Not a credential, no special masking/super-admin gate
+    # needed.
+    admin_theme_v2_enabled: Optional[bool] = None
+    # Driver-app in-app turn-by-turn navigation dark-launch gate (Phase 1,
+    # docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md).
+    # Backed by migration 418 -- see that file's header for why a column was
+    # required before this field could be declared here at all. Not a
+    # credential, no special masking/super-admin gate needed.
+    driver_turn_by_turn_enabled: Optional[bool] = None
+    # Admin command palette (Cmd+K/Ctrl+K route jumper) — same shape as
+    # admin_theme_v2_enabled above. Not a credential, no masking/
+    # super-admin gate needed. See migration 374.
+    admin_command_palette_enabled: Optional[bool] = None
+    # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md B16) —
+    # dark-launched, driver-app only. Not a credential, no masking/
+    # super-admin gate needed.
+    driver_discreet_sos_enabled: Optional[bool] = None
+    # Ride-less SOS rollout gate (ACTION_ITEMS.md B15(c)) -- dark-launched,
+    # rider-app only. Not a credential, no masking/super-admin gate needed.
+    # See schemas.py::AppSettings.rideless_sos_enabled for the sign-off
+    # requirement before enabling in any environment.
+    rideless_sos_enabled: Optional[bool] = None
+    # Directions proxy rollout gate (docs/audit/ride-experience/ROADMAP.md
+    # R7) -- dark-launched, both apps. Not a credential, no masking/
+    # super-admin gate needed. See schemas.py::AppSettings.
+    # directions_proxy_enabled for what flipping this on actually does.
+    directions_proxy_enabled: Optional[bool] = None
+    # PostHog session replay (rider-app + driver-app). Dark-launched,
+    # default off. posthog_api_key is the project API key (phc_...),
+    # client-safe like stripe_publishable_key — not masked. Host + key
+    # are a recording destination: changing them is super_admin-only
+    # (_SUPER_ADMIN_ONLY_FIELDS). The enable flag is settings-writable
+    # so it can be kill-switched without super_admin.
+    posthog_session_replay_enabled: Optional[bool] = None
+    posthog_api_key: Optional[str] = None
+    posthog_host: Optional[str] = None
+    # Legacy/re-consent notice rollout gate (ACTION_ITEMS.md, 2026-08-19
+    # legacy-migration audit) -- dark-launched, both apps. Not a credential,
+    # no masking/super-admin gate needed. See schemas.py::AppSettings.
+    # legacy_consent_notice_enabled for what flipping this on actually does
+    # (both apps are live-wired to it; it is not a no-op).
+    legacy_consent_notice_enabled: Optional[bool] = None
+    # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
+    # existed in AppSettings/gated the loop (2026-08-02) but was never added
+    # here — there was previously no way to set it via the admin API at all,
+    # only a direct DB update. All four are plain booleans, no credential
+    # masking/super-admin gate needed.
+    scheduled_dispatch_enabled: Optional[bool] = None
+    surge_engine_enabled: Optional[bool] = None
+    promo_redemption_enabled: Optional[bool] = None
+    corporate_billing_enabled: Optional[bool] = None
+    # Demand-side kill switch (ACTION_ITEMS.md G5) — pauses new ride requests
+    # generally, checked at the top of POST /rides. Same plain-boolean shape
+    # as the four flags above, no super-admin gate needed.
+    new_ride_requests_enabled: Optional[bool] = None
     # Rolling-window cap on referrer_reward payouts per referrer
     # (utils/referral_payout.py, ranked blocker #6 / audit finding N2,
     # 2026-08-19) — closes a real-money leak (a $0-cost first_ride_only promo

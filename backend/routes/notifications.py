@@ -475,9 +475,17 @@ async def mark_all_read(
 
     Scoped by audience for the same reason the listing is (see
     _audience_filter): for a dual-role user, "mark all read" tapped in the
-    rider app must not silently clear the driver app's unread badge for
-    notifications the rider app never displayed. Unscoped — unrecognised or
-    absent header — keeps the old whole-inbox behavior.
+    rider app must not clear the driver app's badge for rider-only or
+    driver-only rows the other app never displayed. Unscoped — unrecognised
+    or absent header — keeps the old whole-inbox behavior.
+
+    LIMIT, worth knowing: this does not fully separate the two badges.
+    ``is_read`` is one column per row, not one per app, so an
+    ``audience='both'`` row (account-level notices — suspension,
+    reactivation, wallet top-up, admin broadcast) is marked read in BOTH
+    apps by whichever one is tapped. That is inherent to a shared row and
+    is not new — before this scoping, every row behaved that way. Splitting
+    it would need per-app read state, i.e. a separate table.
     """
     filters: Dict[str, Any] = {"user_id": current_user["id"], "is_read": False}
     audience = _audience_filter(x_app_platform)
@@ -531,10 +539,20 @@ async def clear_notifications(
 
     Also scoped by audience (see _audience_filter). This one is the reason
     that matters most: without it, a dual-role driver tapping "Clear all" in
-    the driver app permanently deletes their rider ride receipts and refund
+    the driver app permanently deleted their rider ride receipts and refund
     notices too — rows they never saw in this app and cannot get back. The
     scope only ever narrows what a DELETE touches, so it is strictly safer
     than the unscoped behavior it replaces.
+
+    It does NOT make the two histories fully independent, though, and the
+    docstring should not be read as promising that. An ``audience='both'``
+    row is by construction shown in both apps, so clearing from either one
+    deletes it from both — with no warning that the other app's history
+    just changed. That category is real (account-level notices, wallet
+    top-ups, admin broadcasts) and it is also where every call site that
+    has not declared a target_app lands, so it grows by default rather
+    than shrinking. Genuinely separating them needs per-app rows, not a
+    per-app filter over shared ones.
     """
     filters: Dict[str, Any] = {"user_id": current_user["id"]}
     audience = _audience_filter(x_app_platform)

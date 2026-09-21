@@ -138,6 +138,13 @@ intended fix, and it is a real, visible change to an already-shipped screen.
   that app never displayed and that nothing can restore.
 - **No notification copy changed.** Not one title or body string was edited, so there is nothing
   to review against the customer-centric tone standard.
+- **Known limit — the two histories are separated, not independent.** An `audience='both'` row is
+  by construction shown in both apps, so "Clear all" from either deletes it from both, and
+  "mark all read" from either flips its read state for both (`is_read` is one column per row, not
+  per app). This is not a regression — before this change *every* row behaved that way — but the
+  fix does not reach account-level rows, and `'both'` is also where any future undeclared call
+  site lands. Genuinely separating them needs per-app rows or per-app read state, i.e. a schema
+  change beyond this diff's scope.
 
 ## 6. Files modified
 
@@ -300,9 +307,11 @@ State plainly, because silence would imply coverage that does not exist:
 - [x] Rollback plan is concrete and testable, with the code-before-migration ordering stated.
 - [x] Blast radius is stated, not assumed — every shared consumer named in §4.
 - [x] No silent behavior change: the mid-session UX effect is filled in at §5.
-- [ ] **Not merge-ready as-is.** Two things must happen first: (1) the 15 unexecuted tests must
-      pass in CI, and (2) a real dual-role manual test on one phone number with both apps
-      installed. Reviewer-agent findings are appended below.
+- [ ] **Not merge-ready as-is.** Both reviewer passes are complete and all 5 blockers/warnings
+      across them are resolved in-branch (§11). Two things still must happen first, neither of
+      which can be done from this container: (1) the 15 unexecuted tests must pass in CI, and
+      (2) a real dual-role manual test — one phone number, both apps installed. Plus the
+      deploy-ordering requirement in §4.1: **migration 436 before the code.**
 
 ## 11. Reviewer findings
 
@@ -320,6 +329,20 @@ Both reviewers were run against the actual diff (not the description) per CLAUDE
 | — | NOT VALID/VALIDATE split | **Upheld as correct.** `VALIDATE` takes SHARE UPDATE EXCLUSIVE, which does not conflict with writers' ROW EXCLUSIVE — the lighter lock is the point, independent of the outcome being a foregone conclusion |
 | — | RLS (437) | **Upheld.** Reviewer independently reconfirmed no Supabase client in either app and no `from('notifications')` in any surface |
 
-### `spinr-notification-ux-reviewer`
+### `spinr-notification-ux-reviewer` — verdict: BLOCKER, FIX BEFORE MERGE
 
-_Running at the time of writing; findings to be appended._
+It confirmed every `target_app` value this diff *adds* is correct (it traced each to its actual
+recipient variable). All three blockers were about things the diff did **not** change — which is
+the more useful result, and two of them were failures of my own process.
+
+| # | Finding | Resolution |
+|---|---|---|
+| B1 | `routes/admin/users.py` hardcoded `target_app="rider"` on a **generic** suspend/ban/reactivate endpoint. Its docstring claimed rider-only but it has no `is_rider`/`is_driver` filter, and the admin dashboard's single Users page posts there for drivers too. Post-436 that files a driver's own ban notice under `audience='rider'` — **permanently invisible in the only app they open** | **Fixed.** Verified independently (no role filter in the handler). Now account-level (`'both'`). Docstring corrected. **My blast-radius check caused this**: I looked for sites *missing* `target_app` and never re-examined existing *declared* ones that migration 436 newly makes decide visibility |
+| B2 | The standing guard only matched literal `send_push_notification`, so pushes via `_push_in_background` were invisible — and its allow-list **asserted the forwarder's callers pass `target_app`, which was false for all three**. `payments.py:308` (tip) and `rating.py:134` (rating), both driver-facing, were live instances of this very bug | **Fixed.** Both now `target_app="driver"`. Scanner walks a `_PUSH_CALLABLES` list; the allow-list entry now says it vouches for the forwarding line only. `sharing.py` added as a genuine exception (recipient is an arbitrary phone lookup — role unknowable) |
+| B3 | Two new tests called `clear_notifications()` without `read_only=`. Direct-calling a FastAPI route leaves the param bound to the truthy `Query` marker, so `if read_only:` takes the wrong branch — **the assertions would have failed in CI** | **Fixed.** All 8 direct calls pass every Query/Header param explicitly, matching `test_notifications_delete.py`'s existing convention, with a comment so they are not tidied away. Test-only; production resolves defaults through FastAPI's DI |
+| W1 | `clear_notifications` / `mark_all_read` docstrings overclaim: an `audience='both'` row is shown in both apps, so clearing or marking-read from either affects both | **Docstrings corrected** to state the limit plainly. Not a regression (pre-diff every row behaved this way) and not fixable with a per-app filter over shared rows — it needs per-app rows or per-app read state. Recorded as known, see §5 |
+| I1 | `routes/admin/wallet.py::_wallet_target_app` narrows admin wallet adjustments to one app by role, while this diff leaves Stripe-initiated top-up at `'both'` — same wallet, two audience outcomes | **Left as-is, flagged.** Pre-existing inconsistency in a file this diff does not touch; worth a human decision, not a unilateral change |
+
+**Process lesson worth recording:** gate 1 (blast radius) as I ran it was one-directional. When a
+change makes an existing field newly load-bearing, the check must cover every existing *value* of
+that field, not only the places where it is absent. B1 and B2 were both missed for that reason.

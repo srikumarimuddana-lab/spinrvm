@@ -125,6 +125,31 @@ README: over the least information-dense band of each screen. Three placements w
 review after the first render — one hid the per-trip prices it was advertising, one sat on top of
 the SOS button it was advertising, and one cut the tab row in half.
 
+### Correction 4 — artboard sizes rejected by App Store Connect
+
+Upload failed: *"Screenshots dimensions should be 1242 × 2688px, 2688 × 1242px, 1284 × 2778px or
+2778 × 1284px"* — the 6.5-inch slot, which the set had no file for. Root cause was naming artboards
+by inch label: "6.7-inch" covers both 1290×2796 and 1284×2778, and those belong to *different*
+upload slots, so a correctly-rendered file was being dragged into a slot that could not accept it.
+
+Artboards are now keyed by exact pixel size, which is what App Store Connect actually validates, and
+the missing 6.5-inch size was added. Final set, one file per slot:
+
+| Upload slot | Accepts | File prefix |
+|---|---|---|
+| App Store 6.9" | 1320×2868 or 1290×2796 | `ios-1320x2868-` (alt `ios-1290x2796-`) |
+| App Store 6.5" | 1242×2688 or 1284×2778 | `ios-1284x2778-` |
+| App Store 5.5" | 1242×2208 | `ios-1242x2208-` |
+| App Store iPad 12.9"/13" | 2064×2752 or 2048×2732 | `ipad-2048x2732-` |
+| Google Play phone | flexible | `android-1080x1920-` |
+
+48 PNGs (8 screens × 6 sizes). A validator now checks each file against its slot's accepted-size
+set, not just against its own filename, so a size that is internally consistent but wrong for its
+slot is caught before upload. The slot table is recorded in the README and in `metadata.json`.
+
+App Store Connect's "Keep using 6.9-inch Display" option also lets the smaller iPhone slots reuse
+the 6.9" set, which makes the 6.5" and 5.5" files optional; they are generated regardless.
+
 ## 8. Rollback plan
 
 `git rm` the four new paths and revert the `metadata.json` block. Nothing is deployed, cached, or

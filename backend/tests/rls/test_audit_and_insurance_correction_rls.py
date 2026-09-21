@@ -14,28 +14,37 @@ test_money_and_safety_rls.py's financial_events tests):
     admin/super_admin by the "Admin read audit_logs" policy, so a non-admin
     authenticated user reaches the grant check but gets zero rows back, not
     a grant-layer error.
-  * append-only, via THREE triggers that do not all compose safely: 51's
-    `audit_logs_no_update` (BEFORE UPDATE, SQLSTATE check_violation), 56's
-    `audit_logs_no_delete` (BEFORE DELETE, flag-gated on the session GUC
-    `spinr.audit_logs.allow_delete` so `purge_pii_retention()`'s 7y
-    retention step can still delete old rows), and 57's `audit_logs_no_mutate`
-    (BEFORE UPDATE OR DELETE, unconditional, no flag awareness at all).
-    Postgres fires same-event BEFORE ROW triggers in alphabetical order by
-    name ("audit_logs_no_delete" < "audit_logs_no_mutate" <
-    "audit_logs_no_update"), confirmed by running this file against a real
-    Postgres rather than assumed from the migrations' text alone:
-      - UPDATE: `audit_logs_no_mutate` (57) fires first and aborts
+  * append-only, via THREE triggers, fixed by migration 434 (ACTION_ITEMS.md
+    C112) to compose safely: 51's `audit_logs_no_update` (BEFORE UPDATE,
+    SQLSTATE check_violation), 56's `audit_logs_no_delete` (BEFORE DELETE,
+    flag-gated on the session GUC `spinr.audit_logs.allow_delete` so
+    `purge_pii_retention()`'s 7y retention step can still delete old rows),
+    and 57's `audit_logs_no_mutate` -- originally BEFORE UPDATE OR DELETE,
+    unconditional, no flag awareness at all; migration 434 narrows it to
+    UPDATE only. Postgres fires same-event BEFORE ROW triggers in
+    alphabetical order by name ("audit_logs_no_delete" <
+    "audit_logs_no_mutate" < "audit_logs_no_update"), confirmed by running
+    this file against a real Postgres rather than assumed from the
+    migrations' text alone:
+      - UPDATE: `audit_logs_no_mutate` (57) still fires first and aborts
         unconditionally -- `audit_logs_no_update` (51) never gets a turn.
-      - DELETE: `audit_logs_no_delete` (56) fires first and, when the flag
-        is set, ALLOWS the delete to proceed to the next trigger -- but
-        `audit_logs_no_mutate` (57) then fires anyway and aborts it
-        unconditionally regardless of the flag. This means
+        Unchanged by 434, which only narrows 57's DELETE side.
+      - DELETE (pre-434): `audit_logs_no_delete` (56) fired first and, when
+        the flag was set, ALLOWED the delete to proceed to the next
+        trigger -- but `audit_logs_no_mutate` (57) then fired anyway and
+        aborted it unconditionally regardless of the flag. This broke
         `purge_pii_retention()`'s Step G (the Saskatchewan Transportation
-        Act's 7-year `audit_logs` retention ceiling) is broken in any
-        environment where migration 57 has been applied on top of 56 --
-        see `test_flag_gated_delete_is_still_blocked_by_migration_57_trigger`
-        below, which reproduces (does not fix) this live bug, and
-        ACTION_ITEMS.md C112 for the full writeup.
+        Act's 7-year `audit_logs` retention ceiling) in any environment
+        where migration 57 had been applied on top of 56.
+      - DELETE (post-434): `audit_logs_no_mutate` (57) no longer fires on
+        DELETE at all, so `audit_logs_no_delete` (56) alone governs it --
+        a flagged delete now succeeds, an unflagged one is still fully
+        denied. See `test_flag_gated_delete_now_succeeds_after_migration_434_trigger_fix`
+        and `test_no_role_can_delete_audit_logs_even_service_role` below,
+        and ACTION_ITEMS.md C112 for the full writeup (including why the
+        live `purge_pii_retention()` body also needed its Step G
+        exception-handler restored in the same migration, not just the
+        trigger fix alone).
 
 ACTION_ITEMS.md C123 phase 1 / migration 432: the "Admin read audit_logs"
 policy above (migration 51) checks users.role IN ('admin', 'super_admin'),
@@ -220,8 +229,9 @@ def test_authenticated_cannot_update_audit_logs(pg_cur):
 
 def test_no_role_can_update_audit_logs_even_service_role(pg_cur):
     """Append-only: with two independent tamper-evidence triggers stacked
-    (51, 57), UPDATE is blocked for every role including service_role (RLS/
-    grant bypass does not bypass triggers)."""
+    (51, 57 -- 434 narrows 57 to UPDATE-only but does not remove it), UPDATE
+    is blocked for every role including service_role (RLS/grant bypass does
+    not bypass triggers)."""
     log_id = _uuid()
     as_role(pg_cur, None)
     _seed_audit_log(pg_cur, log_id)
@@ -231,12 +241,10 @@ def test_no_role_can_update_audit_logs_even_service_role(pg_cur):
 
 
 def test_no_role_can_delete_audit_logs_even_service_role(pg_cur):
-    """migration 56's audit_logs_no_delete trigger fires first (alphabetical
-    trigger order: "audit_logs_no_delete" < "audit_logs_no_mutate") and
-    already blocks an un-flagged DELETE on its own -- confirmed by the
-    actual error class raised here, psycopg2.errors.CheckViolation (56's
-    ERRCODE), not RaiseException (57's plain-SQLSTATE trigger, which never
-    gets a turn once 56 has already raised)."""
+    """migration 56's audit_logs_no_delete trigger is now (post-434) the
+    sole DELETE guard on this table -- an un-flagged DELETE is still fully
+    blocked, confirmed by the actual error class raised here,
+    psycopg2.errors.CheckViolation (56's ERRCODE)."""
     log_id = _uuid()
     as_role(pg_cur, None)
     _seed_audit_log(pg_cur, log_id)
@@ -245,39 +253,44 @@ def test_no_role_can_delete_audit_logs_even_service_role(pg_cur):
         pg_cur.execute("DELETE FROM audit_logs WHERE id = %s", (log_id,))
 
 
-def test_flag_gated_delete_is_still_blocked_by_migration_57_trigger(pg_cur):
-    """Reproduces, does not fix, a real production bug (ACTION_ITEMS.md
-    C112): migration 56 added `audit_logs_no_delete`, a BEFORE DELETE
-    trigger that allows the delete through when the session-local GUC
+def test_flag_gated_delete_now_succeeds_after_migration_434_trigger_fix(pg_cur):
+    """Proves the fix for a real production bug (ACTION_ITEMS.md C112):
+    migration 56 added `audit_logs_no_delete`, a BEFORE DELETE trigger that
+    allows the delete through when the session-local GUC
     `spinr.audit_logs.allow_delete` is 'true' -- exactly what
     `purge_pii_retention()`'s Step G sets immediately before its 7-year
     `audit_logs` retention DELETE. But migration 57 (applied after 56 in
     filename-sort order) separately added `audit_logs_no_mutate`, an
     unconditional BEFORE UPDATE OR DELETE trigger with no knowledge of that
-    flag at all. Postgres fires every applicable BEFORE ROW trigger for one
-    DELETE, not just the first to match -- so even with the flag set
-    exactly the way the retention job sets it, the delete still aborts
-    (RaiseException from 57, once 56's own check has let it through). This
-    means the regulatory 7-year audit-log purge is broken in any
-    environment where both 56 and 57 have been applied, which is the
-    schema this harness now builds. Not fixed here -- correcting a live
-    trigger's interaction is a separate, higher-risk change than adding RLS
-    test coverage and needs its own migration + review; see C112.
+    flag at all -- Postgres fires every applicable BEFORE ROW trigger for
+    one DELETE, not just the first to match, so even with the flag set
+    exactly the way the retention job sets it, the delete used to abort
+    anyway (RaiseException from 57, once 56's own check had let it
+    through).
+
+    Migration 434 fixes this by narrowing 57's audit_logs_no_mutate trigger
+    to UPDATE only, leaving 56 as the sole DELETE guard. With the flag set,
+    the delete must now actually succeed -- both that no exception is
+    raised AND that the row is genuinely gone (proving 56's own check
+    passed, not that some other trigger silently no-op'd).
 
     set_config's third argument is `false` (session-scoped), not `true`
     (transaction-local) as the real purge_pii_retention() uses -- this
     fixture's connection runs autocommit, so each pg_cur.execute() is its
     own implicit transaction and a transaction-local flag from one
     statement would already be gone before the next. Session-scoped is
-    sufficient to prove which trigger blocks the delete; it doesn't change
-    which triggers fire or in what order."""
+    sufficient to prove which trigger(s) fire; it doesn't change which
+    triggers fire or in what order."""
     log_id = _uuid()
     as_role(pg_cur, None)
     _seed_audit_log(pg_cur, log_id)
     as_role(pg_cur, "service_role", None)
     pg_cur.execute("SELECT set_config('spinr.audit_logs.allow_delete', 'true', false)")
-    with pytest.raises(psycopg2.errors.RaiseException):
-        pg_cur.execute("DELETE FROM audit_logs WHERE id = %s", (log_id,))
+    pg_cur.execute("DELETE FROM audit_logs WHERE id = %s", (log_id,))
+    assert pg_cur.rowcount == 1
+    pg_cur.execute("SELECT set_config('spinr.audit_logs.allow_delete', 'false', false)")
+    pg_cur.execute("SELECT id FROM audit_logs WHERE id = %s", (log_id,))
+    assert pg_cur.fetchall() == []
 
 
 # --------------------------------------------------------------------------

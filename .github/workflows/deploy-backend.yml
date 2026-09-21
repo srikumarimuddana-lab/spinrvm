@@ -61,7 +61,7 @@ jobs:
     name: Deploy to Railway
     runs-on: ubuntu-latest
     env:
-      RAILWAY_SERVICE: spinr-backend
+      RAILWAY_SERVICE: spinrvm
       # Hoisted to job env because the `secrets` context is not available in a
       # step `if:` conditional.
       HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}

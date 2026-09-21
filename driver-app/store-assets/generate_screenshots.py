@@ -30,15 +30,19 @@ OUT = HERE / "screenshots"
 
 REF_W, REF_H = 1080, 1920          # the artboard every proportion is derived from
 
-# Store artboards. Apple wants the largest iPhone size plus an iPad size when the
-# app ships with supportsTablet (driver-app/app.config.ts sets it true); Google Play
-# takes the 1080x1920 phone set.
+# Store artboards, keyed by exact pixel size because that is what App Store
+# Connect validates -- an inch label ("6.7-inch") maps to more than one pixel
+# size, and uploading the wrong one to a slot is rejected. Apple wants an iPhone
+# size plus an iPad size when the app ships with supportsTablet
+# (driver-app/app.config.ts sets it true); Google Play takes the 1080x1920 phone
+# set. See the size table in README.md for which slot each one fills.
 ARTBOARDS = [
-    ("android-phone", 1080, 1920, "punch"),    # Google Play phone
-    ("ios-6.9", 1320, 2868, "island"),         # iPhone 16 Pro Max class
-    ("ios-6.7", 1290, 2796, "island"),         # iPhone 15/14 Pro Max class
-    ("ios-5.5", 1242, 2208, "island"),         # legacy iPhone 8 Plus slot
-    ("ipad-12.9", 2048, 2732, "island"),       # iPad Pro 12.9"
+    ("android-1080x1920", 1080, 1920, "punch"),   # Google Play phone
+    ("ios-1320x2868", 1320, 2868, "island"),      # 6.9" slot
+    ("ios-1290x2796", 1290, 2796, "island"),      # 6.9" slot (alternate)
+    ("ios-1284x2778", 1284, 2778, "island"),      # 6.5" slot
+    ("ios-1242x2208", 1242, 2208, "island"),      # 5.5" slot
+    ("ipad-2048x2732", 2048, 2732, "island"),     # iPad 12.9"/13" slot
 ]
 
 # Brand tokens -- shared/theme/index.ts via .claude/context/brand-spinr.md.

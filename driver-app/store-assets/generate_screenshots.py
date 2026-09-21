@@ -168,10 +168,10 @@ body{font-family:'Plus Jakarta Sans','Liberation Sans','DejaVu Sans',sans-serif;
 .head{position:absolute;left:0;right:0;top:0;height:%(headH)dpx;display:flex;
   flex-direction:column;align-items:center;justify-content:center;}
 .logo{width:%(logoW)dpx;margin-bottom:%(logoGap)dpx;}
-h1{text-align:center;font-size:%(h1)dpx;line-height:0.99;font-weight:800;
+h1{text-align:center;font-size:%(h1)dpx;line-height:0.98;font-weight:800;
   letter-spacing:-0.035em;color:%(INK)s;margin-bottom:%(h1Gap)dpx;}
 h1 em{font-style:normal;color:%(RED)s;}
-.sub{text-align:center;font-size:%(sub)dpx;line-height:1.42;font-weight:500;
+.sub{text-align:center;font-size:%(sub)dpx;line-height:1.41;font-weight:500;
   color:%(MUTED)s;letter-spacing:-0.005em;padding:0 %(subPad)dpx;}
 
 /* ---------- phone frame ---------- */
@@ -209,8 +209,8 @@ h1 em{font-style:normal;color:%(RED)s;}
            INK=INK, RED=RED, MUTED=MUTED,
            blob=b.px(430), blobX=b.px(165), blobY=b.px(415),
            blobl=b.px(560), blobB=max(2, b.px(5)), bloblX=b.px(355), bloblY=b.px(165),
-           headH=b.ph_top, logoW=b.px(172), logoGap=b.px(18),
-           h1=b.px(82), h1Gap=b.px(26), sub=b.px(26), subPad=b.px(120),
+           headH=b.ph_top, logoW=b.px(172), logoGap=b.px(53),
+           h1=b.px(99), h1Gap=b.px(28), sub=b.px(33), subPad=b.px(120),
            PH_W=b.ph_w, PH_H=b.ph_h, BEZEL=b.bezel, radius=b.radius, sradius=b.sradius,
            PH_LEFT=b.ph_left, PH_TOP=b.ph_top, SCR_W=b.scr_w, SCR_H=b.scr_h,
            UI_W=UI_W, UI_H=b.ui_h, SCALE=b.scale,
@@ -999,7 +999,7 @@ def build_cards(b, logo):
         ("06-earnings", light_card(
             b, "Your earnings.<br><em>Clearly.</em>",
             "Today, this week, this month &mdash; total earned, trips and your next payout, "
-            "with T4A-ready tax documents at year end.",
+            "always in view.",
             scr_earnings(), logo, [
                 ("left", 0.52, ic("cash"), "Paid every Sunday", "Or cash out anytime"),
                 ("right", 0.81, ic("chart"), "T4A-ready", "Tax docs at year end"),

@@ -34,11 +34,27 @@ appending to `ARTBOARDS` — no per-size layout code. iOS artboards draw an
 iPhone frame (Dynamic Island, Wi-Fi glyph in the status bar); the Android
 artboard draws a punch-hole camera.
 
-**The geometry is measured, not guessed.** `FRAME_ASPECT`, `FRAME_H` and
-`BOTTOM_GAP` come from the live rider-app listing screenshot at 1290×2796,
-where the frame spans x 179–1110, y 765–2740. Rendering `ios-6.7` reproduces
-those bounds exactly. If you change them, keep the aspect near 1:2.12 — a
+**The layout is measured, not guessed.** Everything below comes from the live
+rider-app listing screenshot at 1290×2796, so `ios-6.7` reproduces it and the
+other sizes follow the same proportions:
+
+| Element | Measured on the rider set | Generator value (reference units) |
+|---|---|---|
+| Frame | x 179–1110, y 765–2740 → 931×1975, 1:2.12 | `FRAME_ASPECT`, `FRAME_H`, `BOTTOM_GAP` |
+| Logo | 204 wide | `logoW=b.px(172)` |
+| Logo → headline | 63 | `logoGap=b.px(53)` |
+| Headline line pitch | 116 | `h1=b.px(99)`, `line-height:0.98` |
+| Headline → subtitle | 33 | `h1Gap=b.px(28)` |
+| Subtitle line pitch | 55 | `sub=b.px(33)`, `line-height:1.41` |
+
+Reference units are the measured pixels divided by that board's content scale
+(1.194 at 1290×2796). Keep the frame aspect near 1:2.12 if you change it — a
 taller frame reads as an elongated slab rather than a phone.
+
+Headlines are two lines and subtitles two lines by design; the header block is
+centred in the space above the frame, and on the 16:9 Android canvas that space
+is tightest (~44px above the logo). A subtitle long enough to wrap to three
+lines eats that margin, so keep them to roughly 90 characters.
 
 ### Callout cards
 

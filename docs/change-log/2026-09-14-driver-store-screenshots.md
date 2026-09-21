@@ -104,6 +104,18 @@ rendering `ios-6.7` reproduces the live frame bounds exactly and the other four 
 same proportions. The usable screen is 845 logical px (was 907 at its widest), so the top-anchored
 screens were re-checked.
 
+### Correction 3 — header type scale
+
+Matching the frame fixed the phone but not the text above it. The same live screenshot was measured
+for the header block: logo 204 wide, 63 to the headline, 116 headline line pitch, 33 to the
+subtitle, 55 subtitle line pitch. Mine had the logo right (205) but every gap and size undersized —
+the logo-to-headline gap was 22 against 63, the headline pitch 97 against 116, the subtitle pitch 44
+against 55. Corrected, so headline and subtitle sizes and spacing now match the rider set; the
+header stays centred in the space above the frame, which keeps it safe on the tighter 16:9 canvas
+where a top-anchored block would collide. One subtitle was shortened because at the corrected size
+it wrapped to three lines and crowded the Android canvas to a 21px top margin against 44px
+elsewhere; it also duplicated that screen's own callout.
+
 ### Addition — floating callout cards
 
 The live rider screenshot also carries two floating feature cards overlapping the phone (upper-left

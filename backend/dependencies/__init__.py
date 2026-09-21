@@ -20,6 +20,7 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.env_admin_tokens import ENV_ADMIN_USER_ID, get_env_admin_token_version
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
     from .utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from .utils.pii import redact_error_detail
@@ -28,6 +29,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.env_admin_tokens import ENV_ADMIN_USER_ID, get_env_admin_token_version
     from utils.error_handling import DatabaseError, ServiceUnavailableException
     from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from utils.pii import redact_error_detail
@@ -321,7 +323,33 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED") from _bg_err
         if not _bg_active:
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
-    elif user_id != "admin-001":
+    elif user_id == ENV_ADMIN_USER_ID:
+        # Env-credential super admin (ADMIN_EMAIL/ADMIN_PASSWORD). No admin_staff
+        # row exists, so is_active / idle-timeout cannot apply — but token_version
+        # can, and it is the one control that makes the account revocable without
+        # a redeploy. It lives on the settings row; see utils/env_admin_tokens.py
+        # for why the DB and not a Redis allowlist like break-glass.
+        #
+        # FAIL CLOSED on a read error. Defaulting to 0 here would silently
+        # un-revoke every token an operator had just killed with logout-all,
+        # which is precisely the fail-open hole this replaces. 503 (not 401) so
+        # the client retries rather than discarding a token that is probably
+        # still valid.
+        try:
+            _env_admin_version = await get_env_admin_token_version()
+        except Exception as _env_err:
+            # loguru: exc_info= is silently swallowed as a str.format kwarg, so
+            # the traceback has to come from .opt(exception=True) — CLAUDE.md,
+            # Observability Conventions.
+            logger.opt(exception=True).error(
+                f"[auth] env-admin token_version unreadable — failing CLOSED for {ENV_ADMIN_USER_ID}: {_env_err}"
+            )
+            raise HTTPException(
+                status_code=503, detail="Sign-in is temporarily unavailable. Please try again."
+            ) from _env_err
+        if _token_version_mismatch(payload, {"token_version": _env_admin_version}):
+            raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+    else:
         staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
         staff = staff_rows[0] if staff_rows else None
         if not staff or not staff.get("is_active", True):

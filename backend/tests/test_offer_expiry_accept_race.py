@@ -42,6 +42,14 @@ def _penalty_patches():
         "miss": patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
         "rate": patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
         "period": patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
+        # The normal-timeout release now goes through the shared helper, which
+        # owns both the set_driver_available call and the period write. Patched
+        # and asserted alongside "period" so the not-awaited assertions below
+        # stay meaningful instead of passing because the call moved.
+        "release": patch(
+            "backend.routes.rides._deps.release_driver_and_close_period",
+            AsyncMock(return_value=1),
+        ),
         "avail": patch(
             "backend.routes.rides._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"is_available": True}),
@@ -90,6 +98,7 @@ class TestReaperStandsDownWhenTheDriverWonTheRide:
         )
         assert won is False
         m["period"].assert_not_awaited()
+        m["release"].assert_not_awaited()
         m["avail"].assert_not_awaited()
         m["clear"].assert_not_awaited()
 
@@ -179,3 +188,4 @@ class TestFailClosedOnReadFailure:
         assert won is False
         mocks["miss"].assert_not_awaited()
         mocks["period"].assert_not_awaited()
+        mocks["release"].assert_not_awaited()

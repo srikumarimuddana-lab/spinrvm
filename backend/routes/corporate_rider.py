@@ -155,7 +155,13 @@ async def do_join_domain(
             detail="ERR_EMAIL_UNVERIFIED",
         )
 
-    user_email = (current_user.get("phone_or_email") or current_user.get("email") or "").lower()
+    # `email` is the only address on a user row. A `phone_or_email` fallback
+    # used to lead here, but no writer anywhere in the backend ever set that
+    # key (grep: this line was its sole occurrence), so it was always None —
+    # and had anything ever populated it from client-controlled input, the
+    # email_verified flag checked above and the domain matched below would
+    # have described two different addresses (2026-09-20 review, C5).
+    user_email = (current_user.get("email") or "").lower()
     domain = user_email.split("@")[-1] if "@" in user_email else ""
     if not domain:
         raise HTTPException(

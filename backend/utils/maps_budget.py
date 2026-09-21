@@ -36,6 +36,7 @@ try:
 except ImportError:  # pragma: no cover - dual import path
     from utils.redis_client import (  # type: ignore
         redis_delete,
+        redis_eval,
         redis_expire,
         redis_get,
         redis_incr,

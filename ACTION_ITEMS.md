@@ -28623,23 +28623,46 @@ as evidence that the thing it configures exists.
   `get_user_or_ip_key`, and all 5 `routes/admin/auth.py` call sites. PR #5654
   adds `refresh_tokens.ip` (and therefore `audit_logs.details.replayed_ip`,
   written at `backend/utils/refresh_tokens.py:416` and `:591`) to that set.
-  The new consequence is narrow but specific: an attacker replaying a stolen
-  refresh token could set a false `CF-Connecting-IP` and poison the forensic
-  record of the very theft that field exists to investigate. Not an auth
-  bypass — nothing gates on the value (traced: `is_new_device()` fingerprints
-  on `user_agent` only and its docstring excludes `ip` deliberately).
+  **Corrected 2026-09-21 (`/code-review`):** this entry originally said an
+  attacker "replaying a stolen refresh token could set a false
+  `CF-Connecting-IP` and poison the forensic record of the very theft." That
+  mechanism is **not reachable** and must not be used to scope the remedy.
+  `lookup_refresh_token(raw)` (`backend/utils/refresh_tokens.py:231`) takes only
+  the token string; it dispatches `_handle_refresh_token_reuse(row)` /
+  `_record_post_revoke_race(row)` with the stored row alone and writes
+  `replayed_ip: row.get("ip")` — the issuance IP. Headers on the *replay*
+  request are never read, so a spoofed one is discarded.
+
+  The real, still-valid consequence is at **issuance**, not replay: anyone who
+  reaches this origin directly can choose the value written into
+  `refresh_tokens.ip` on their own successful login or refresh — which then
+  surfaces as `replayed_ip` in a 7-year, admin-rendered `audit_logs` row, and as
+  their own rate-limit key. Not an auth bypass — nothing gates on the value
+  (traced: `is_new_device()` fingerprints on `user_agent` only and its docstring
+  excludes `ip` deliberately).
 - **Suggestive evidence the bypass is real, not theoretical:** the `.env`/
   `.git/config` scanner traffic that surfaced the original PR #5654 bug was
   reaching the Fly app and appearing in its logs. That is consistent with an
   unlocked origin, though not proof on its own — Cloudflare may simply be
   passing the requests through. **Confirm before assuming either way.**
-- **Suggested remedy (infra, not code):** verify whether the Fly origin already
-  restricts ingress to Cloudflare; if not, restrict it (Fly proxy allowlist or
-  an equivalent control) and note it in `docs/adr/007-fly-primary-railway-standby.md`.
-  Do NOT "fix" this by widening trust in code — e.g. setting uvicorn
+- **Suggested remedy (infra):** verify whether the Fly origin already restricts
+  ingress to Cloudflare; if not, restrict it (Fly proxy allowlist or an
+  equivalent control) and note it in `docs/adr/007-fly-primary-railway-standby.md`.
+- **A code-side option worth evaluating first (added 2026-09-21, `/code-review`
+  — this entry originally foreclosed all code remedies, which was too broad):**
+  Fly's own proxy sets **`Fly-Client-IP`** on every request it terminates,
+  overwriting any client-supplied value. It appears nowhere in this repo
+  (grepped: zero hits). Inserting it into `get_real_client_ip`'s chain *after*
+  `CF-Connecting-IP` and *before* the client-settable `X-Real-IP` would — if
+  Fly's overwrite semantics hold — stop a direct-to-origin request from
+  producing an attacker-chosen value, without waiting on an infra change that is
+  currently undated and unowned. **Verify against Fly's proxy documentation
+  before adopting**; this is a candidate, not a confirmed fix.
+- **Still do NOT** "fix" this by widening trust generally — e.g. uvicorn
   `--forwarded-allow-ips='*'` would make the leftmost `X-Forwarded-For`
   authoritative, which is the spoofable path `get_real_client_ip` was written
-  to avoid (P2-7, C5).
+  to avoid (P2-7, C5). That warning stands; it just does not rule out
+  `Fly-Client-IP`, which is proxy-set rather than client-set.
 - **Files:** `backend/utils/rate_limiter.py` (`get_real_client_ip`, lines 87-107),
   `backend/fly.toml` (no allowlist), `backend/utils/refresh_tokens.py:416,591`
   (`replayed_ip` consumers), `docs/change-log/2026-09-21-auth-real-client-ip.md`

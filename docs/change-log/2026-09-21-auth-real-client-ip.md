@@ -60,19 +60,67 @@ already proven in the admin twin.
 
 Greps performed (non-test, repo-wide):
 - `get_remote_address` → **only** `routes/auth.py` (import + 5 uses). No other backend module used it.
-- `issue_refresh_token` → 10 call sites: 5 in `routes/auth.py` (this fix), 5 in `routes/admin/auth.py`
-  (already correct, untouched).
+- `issue_refresh_token` → **11** call sites: **6** in `routes/auth.py` (this fix — `verify_otp`
+  calls it twice, at `:1147` existing-user and `:1249` new-user, both reusing the one `client_ip`
+  from `:1082`) and 5 in `routes/admin/auth.py` (already correct, untouched).
 - Readers of `refresh_tokens.ip` → `utils/refresh_tokens.py:416` and `:591`, both writing
   `"replayed_ip": row.get("ip")` into the reuse-detection audit row.
-- `admin-dashboard` → no UI reads `refresh_tokens` or renders a session-IP column, so no frontend change.
+- `admin-dashboard` → no UI reads the `refresh_tokens` **table**. **This was the wrong thing to
+  grep** — see the correction immediately below.
+
+> **⚠ CORRECTION — the blast-radius grep was keyed on names, not on the value (`/code-review`).**
+> It searched for the strings `refresh_tokens` and `get_remote_address` and concluded "isolated, two
+> readers, no frontend." Following the *value* instead finds **three** downstream consumers, two of
+> which this entry originally missed:
+>
+> 1. `refresh_tokens.ip` — the column named above.
+> 2. **`audit_logs.details.replayed_ip`** — `utils/refresh_tokens.py:591` copies `row.get("ip")` into
+>    an `audit_logs` row. `admin-dashboard/src/app/dashboard/audit-logs/page.tsx`'s `formatDetails()`
+>    renders **every** key/value of `details` into the Details column, and the same function feeds
+>    the **CSV export**. So this value *is* rendered on an already-shipped admin screen and is
+>    downloadable. `audit_logs` is retained **7 years** (`docs/runbooks/data-retention.md`), not the
+>    `refresh_tokens` purge window.
+> 3. **Meta Conversions API** — `verify_otp`'s new-user branch forwards the same `client_ip` to
+>    `_fire_signup_conversion` (`routes/auth.py:1282`) → `meta_conversions_service.send_rider_registration`
+>    → `utils/meta_capi.py:173-174`, which sets `user_data["client_ip_address"]` **unhashed**. It is
+>    consent-gated by `has_ad_attribution_consent()` and fails closed, and at signup that gate
+>    almost always denies (no `marketing_preferences` row exists yet) — but the gate is the only
+>    thing between this change and a cross-border export of a real IP, and the original entry did
+>    not name it at all.
+>
+> Gate 1 should be re-run against value flow, not string matches, on any follow-up here.
 
 What this touches, concretely:
 
-- **Refresh-token reuse/replay detection** (`utils/refresh_tokens.py:416`, `:591`). This is the one
-  place the value is read back. A token-theft alert previously logged `replayed_ip: 172.16.30.130`
-  for every rider/driver — our own proxy — making the field useless for incident response. It will
-  now carry the attacker's IP. **Improvement, not a regression**, but note the audit-row *shape* is
-  unchanged; only the value gets more accurate.
+- **Refresh-token reuse/replay detection** (`utils/refresh_tokens.py:416`, `:591`). Previously
+  logged `replayed_ip: 172.16.30.130` for every rider/driver — our own proxy — making the field
+  useless. It now carries a real IP. **Improvement, not a regression**, and the audit-row *shape* is
+  unchanged.
+
+> **⚠ CORRECTION — `replayed_ip` is the ISSUANCE IP, not the replaying request's IP (`/code-review`).**
+> An earlier revision of this entry, this PR's body, its commit message and ACTION_ITEMS C131 all
+> claimed this fix makes a token-theft alert "name the attacker." **That is wrong**, and the
+> before/after block in §7 illustrating it was fabricated — it asserted behaviour the code does not
+> have.
+>
+> `lookup_refresh_token(raw: str)` (`utils/refresh_tokens.py:231`) takes **only the raw token
+> string** — no `Request`, no headers, no socket peer. On detecting a revoked row it calls
+> `_handle_refresh_token_reuse(row)` / `_record_post_revoke_race(row)` with the **stored row alone**,
+> and writes `replayed_ip: row.get("ip")` — the IP recorded when *that token was issued*.
+> `refresh_access_token` does compute `client_ip`, but at `:1796`, **after** `lookup_refresh_token`
+> has already returned at `:1745`, and never passes it in.
+>
+> So in a real theft — victim rotates at `198.51.100.4`, attacker replays from `203.0.113.9` — the
+> audit row reads **`198.51.100.4`, the victim's issuance IP**. The attacker's IP is never captured
+> anywhere on the reuse path.
+>
+> **What this fix actually buys** is still real, just narrower than claimed: the row now identifies
+> *where the legitimate session originated* instead of naming our own proxy — useful for
+> "was this session ever plausibly the user's?", useless for "who stole it."
+>
+> **The underlying gap is real and remains open:** the reuse audit row records no attribute of the
+> replaying request at all. Fixing it means threading request context into the reuse path — out of
+> scope here, and not attempted.
 - **No security decision consumes this value.** `is_new_device()` (`utils/refresh_tokens.py:200`)
   fingerprints on `user_agent` only, and its docstring states `ip` is deliberately excluded as "too
   unstable on mobile networks." Rate limiting never used this path — `default_limiter` is already
@@ -130,16 +178,34 @@ because the field is harmless:
 > destructive, irreversible change to production data and is out of scope for an IP-resolution fix.
 > Escalated to the repo owner for a decision; tracked as an open blocker on this PR. Do not read
 > this entry as claiming the retention story is closed.
-- **Not logged** — the value goes to a DB column only. CLAUDE.md's "never in logs/Sentry/analytics"
-  list is unaffected; this adds no new log line, Sentry tag, or analytics field.
+- **Not logged** — this adds no new log line, Sentry tag, or analytics field, so CLAUDE.md's
+  "never in logs/Sentry/analytics" list is unaffected. **But "a DB column only" was wrong**: the
+  value is also copied into `audit_logs.details.replayed_ip` (rendered in the admin UI and CSV
+  export, **7-year** retention) and, behind a consent gate that currently fails closed at signup,
+  forwarded to Meta's Conversions API unhashed. See the §4 correction. The 7-year `audit_logs`
+  copy is **not** bounded by the `refresh_tokens` purge discussed above.
 - **Consistent with the admin twin**, which has been retaining real admin IPs this way already.
 
 ## 5. User-experience effect
 
-**Nobody — rider, driver, corporate admin, or internal admin — sees any difference.** No response
-body, status code, header, screen, or notification changes. The value is written to a column that no
-customer-facing or admin-facing surface renders today. Not visible mid-session to a rider mid-ride
-or a driver online. No copy change.
+**No rider- or driver-facing difference.** No response body, status code, header, screen, or
+notification changes; nothing is visible mid-session to a rider mid-ride or a driver online, and
+there is no copy change.
+
+> **⚠ CORRECTION — an internal admin does see a difference (`/code-review`).** This section
+> originally said "Nobody — rider, driver, corporate admin, or internal admin — sees any
+> difference," and the PR body declared `User-visible change: none`. Both are false for the
+> **internal-admin** surface.
+>
+> When a refresh-token reuse or post-revoke race fires, `replayed_ip` lands in an `audit_logs` row,
+> and `admin-dashboard/src/app/dashboard/audit-logs/page.tsx`'s `formatDetails()` renders every
+> `details` key/value in the Details column and in the CSV export. Before this change that cell
+> showed a meaningless `172.16.x.x`; after it, it shows a **real user IP**, visible to every admin
+> with audit-log access and downloadable as a file.
+>
+> Per CLAUDE.md pre-merge gate 5, a change that alters what an already-shipped screen displays is a
+> UX change even on an internal admin screen, and needed this field filled in rather than declared
+> `none`.
 
 ## 6. Files modified
 
@@ -167,15 +233,22 @@ client_ip = get_real_client_ip(request)   # -> CF-Connecting-IP, the real user
 await issue_refresh_token(user["id"], audience="rider", user_agent=user_agent, ip=client_ip)
 ```
 
-Concrete scenario — a stolen refresh token replayed from 203.0.113.9:
+Concrete scenario — victim's session was issued at `198.51.100.4`; an attacker steals the rotated
+token and replays it from `203.0.113.9`:
 
 ```
 # Before: audit_logs row
 {"action": "refresh_token_reuse", "replayed_ip": "172.16.30.130", ...}   # our own proxy; useless
 
 # After
-{"action": "refresh_token_reuse", "replayed_ip": "203.0.113.9", ...}     # the attacker
+{"action": "refresh_token_reuse", "replayed_ip": "198.51.100.4", ...}    # the VICTIM's issuance IP
 ```
+
+**Note what this is not.** An earlier revision of this entry printed `203.0.113.9  # the attacker`
+here. That was fabricated — `replayed_ip` is `row.get("ip")`, the IP stored when the replayed token
+was *issued*, and the reuse path never sees the replaying request (see the §4 correction). The
+attacker's IP appears nowhere. The gain is that the row now identifies the legitimate session's
+origin instead of our proxy.
 
 ## 8. Rollback plan
 

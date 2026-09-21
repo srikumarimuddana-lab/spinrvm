@@ -28545,8 +28545,24 @@ as evidence that the thing it configures exists.
 
 ### C130. `test_settings_loader_last_known.py`'s two `TestFailedReadDoesNotClobber` tests fail only under full-suite ordering — module-global `_settings_cache` pollution the file's own isolation fixture doesn't fully catch
 
-- [ ] **Status:** OPEN — found 2026-09-21 while root-causing `backend-test`
-  CI failures for PR #5612/#5634 (the #5614-fallout fix round).
+- [x] **Status:** FIX APPLIED 2026-09-21 (branch `fix/settings-loader-cache-isolation`) —
+  found while root-causing `backend-test` CI failures for PR #5612/#5634
+  (the #5614-fallout fix round). Hardened per this entry's own suggested
+  fallback rather than completing the bisection (see "What was NOT
+  verified" in that branch's Change Impact Log entry): both async tests in
+  `TestFailedReadDoesNotClobber` now drain the event loop's ready queue
+  (50×`await asyncio.sleep(0)`, `_drain_leaked_tasks()`) and re-null
+  `_settings_cache` as their own first statement, on top of the existing
+  autouse fixture, before doing their own patched read — closing the
+  window in which a leaked task's write can land ahead of this test's own.
+  Passes in isolation and paired with `test_settings_column_parity.py`
+  (unchanged from before); the full-suite-ordering repro that originally
+  surfaced this was **not** re-run to confirm the fix closes it (too
+  expensive to repeat locally — the original 16166-test / 794-file runs
+  are the only known repro) — CI is the first real re-check. The offending
+  leaked-task test itself was still not identified; if this hardening
+  doesn't fully close it, the next step is the bisection/instrumentation
+  this entry already describes below.
 - **Issue/gap:** `backend/tests/test_settings_loader_last_known.py`
   (itself added by PR #5614) has an `autouse=True` `_isolate_cache`
   fixture that sets `settings_loader._settings_cache = None` before each

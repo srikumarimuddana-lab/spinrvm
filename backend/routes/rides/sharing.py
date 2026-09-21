@@ -21,6 +21,7 @@ from ._deps import (  # noqa: F401
     logger,
     ride_action_limit,
     secrets,
+    share_track_limit,
     timedelta,
     timezone,
     uuid,
@@ -226,7 +227,8 @@ async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_cur
 
 
 @router.get("/track/{share_token}")
-async def track_shared_ride(share_token: str):
+@share_track_limit
+async def track_shared_ride(share_token: str, request: Request = None):
     """Public endpoint - Get ride status via share token (no auth required)."""
     ride = (lambda _r: _r[0] if _r else None)(
         await _deps.db_supabase.get_rows("rides", {"shared_trip_token": share_token}, limit=1)

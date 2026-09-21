@@ -388,6 +388,25 @@ cancel_ride_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key
 # ~6 simultaneously-polling riders on one carrier exhausted it between them.
 ride_read_limit = default_limiter.limit("120/minute", key_func=get_user_or_ip_key)
 
+# Public trip-share tracking page (GET /api/v1/rides/track/{share_token}).
+# Unlike every sibling here, that endpoint is unauthenticated BY DESIGN, so
+# there is never a user to key on: default_limiter's own key_func
+# (get_real_client_ip) is the right one, and get_user_or_ip_key would resolve
+# to the same IP bucket anyway.
+#
+# 120/minute mirrors ride_read_limit. The browser page polls every 5 s (~12
+# req/min per viewer), so this is roughly 10 simultaneous viewers of one link
+# from a single egress IP.
+#
+# Known trade-off, accepted deliberately: get_user_or_ip_key's docstring above
+# records why IP keying hurt authenticated ride reads — a carrier-grade NAT
+# puts many subscribers behind one egress IP. That applies here too and cannot
+# be keyed away, precisely because the endpoint is anonymous. Recipients open
+# these links from an SMS on mobile data, so simultaneous viewers of DIFFERENT
+# links on one carrier can share this bucket. The ceiling is generous for that
+# reason — raise it before narrowing it.
+share_track_limit = default_limiter.limit("120/minute")
+
 # Driver demand-heatmap reads. The app polls on the server-supplied interval,
 # which is clamped to a 30 s floor — i.e. at most 2/minute in normal operation,
 # so 20/minute is ~10x headroom and only bites a runaway client (a retry loop,

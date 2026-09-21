@@ -27258,8 +27258,9 @@ how much they de-risk a public launch._
   `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
   `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
-### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE — real bug, empirically confirmed, not fixed here [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
-- [ ] **Status:** OPEN, real (not informational) — reproduced by direct execution
+### C112. `audit_logs`' migration-57 trigger silently breaks migration-56's flag-gated 7-year retention DELETE [duplicate item number — see the other C112 below ("`admin_create_ride`'s FCM push sent `rider_name`..."), filed by a different, parallel session the same day; this session's own C111 entry above notes C111 was already a duplicate for the same reason. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
+- [x] **Status:** RESOLVED (2026-09-21) — see "Resolution" below. Originally
+  found OPEN, real (not informational) — reproduced by direct execution
   against a real Postgres running the actual shipped migration SQL, not inferred
   from reading the files. Found by `/code-review` (high effort, CLAUDE.md gate
   #10 — the Task/Agent tool to invoke `spinr-security-auditor` as a full
@@ -27394,12 +27395,34 @@ how much they de-risk a public launch._
   either the trigger fix or Step G's exception handler, would turn today's
   silent no-op into an unhandled-exception rollback of the entire
   `purge_pii_retention()` call.
+- **Resolution (2026-09-21):** fixed by migration 434
+  (`backend/migrations/434_fix_audit_logs_delete_trigger_conflict.sql`), which ships both
+  mandatory halves together in one migration, per this entry's own warning above:
+  (1) narrows migration 57's `audit_logs_no_mutate` trigger to `BEFORE UPDATE` only (option
+  (b) from this entry's two proposed fixes — chosen over making 57's trigger flag-aware on
+  DELETE too, for simplicity and consistency with migration 317's existing precedent that 57
+  overlapping 51 on UPDATE is acceptable), leaving migration 56's `audit_logs_no_delete` as the
+  sole DELETE guard; (2) re-forks `purge_pii_retention()` from its current live body
+  (migration 335) with Step G's missing `PERFORM set_config(...)` call and
+  `BEGIN...EXCEPTION WHEN OTHERS...RAISE...END` wrapper restored, matching Step H/M's shape.
+  Verified against a real local Postgres (started specifically for this fix, since the RLS
+  tier is the only one that can exercise real trigger composition): full `backend/tests/rls`
+  suite 393/393 passing; `test_flag_gated_delete_is_still_blocked_by_migration_57_trigger`
+  renamed to `test_flag_gated_delete_now_succeeds_after_migration_434_trigger_fix` and rewritten
+  to assert the delete now actually succeeds (row confirmed gone), not just that no exception
+  is raised. New static-text regression test
+  `backend/tests/test_migration_434_audit_logs_delete_trigger_fix.py` (15 tests, CI has no
+  Postgres for the main suite) pins both halves of the fix and that Steps A/D/F/H/M are carried
+  forward from 335 unregressed. Full writeup:
+  `docs/change-log/2026-09-21-c112-audit-logs-delete-trigger-fix.md`.
 - **Files (reference only, nothing changed by this entry beyond the new
   regression test):** `backend/migrations/50_audit_logs_append_only.sql`,
   `51_audit_logs_lockdown.sql`, `56_audit_logs_delete_lockdown.sql`,
-  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`;
-  `backend/tests/rls/test_audit_and_insurance_correction_rls.py` (new
-  regression test, does not fix the bug).
+  `57_audit_logs_schema_standardization.sql`, `317_check_disabled_guard_triggers.sql`,
+  `434_fix_audit_logs_delete_trigger_conflict.sql` (the fix);
+  `backend/tests/rls/test_audit_and_insurance_correction_rls.py`,
+  `backend/tests/rls/conftest.py`,
+  `backend/tests/test_migration_434_audit_logs_delete_trigger_fix.py`.
 
 ### C112. `admin_create_ride`'s FCM push sent `rider_name` (full name, or raw email/phone fallback) with zero PII filtering — parity gap with `routes/rides/matching.py`'s existing `_FCM_EXCLUDE` [duplicate item number — see the other C112 above ("`audit_logs`' migration-57 trigger..."), filed by a different, parallel session the same day working C49. Kept as-is rather than renumbered, per the existing C13/C100/C111 duplicate-ID precedent in this file]
 - [x] **Status:** CLOSED (2026-09-14) — fixed the same session it was found.

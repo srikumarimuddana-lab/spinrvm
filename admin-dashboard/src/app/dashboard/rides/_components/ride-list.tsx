@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX, Tag, AlertTriangle } from "lucide-react";
-import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
+import { getStatusBadge, fmtTime, fmtKm, fmtGrandTotal, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
@@ -91,7 +91,8 @@ export default function RideList({
                 { key: "pickup_address", label: "Pickup" },
                 { key: "dropoff_address", label: "Dropoff" },
                 { key: "status", label: "Status" },
-                { key: "total_fare", label: "Fare" },
+                { key: "total_fare", label: "Base Fare" },
+                { label: "Grand Total", value: (r) => fmtGrandTotal(r.grand_total) },
                 { key: "tip_amount", label: "Tip" },
                 { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
                 { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
@@ -254,8 +255,13 @@ export default function RideList({
                                 </th>
                                 <th className="text-right py-2 px-4">
                                     <button onClick={() => handleSort("total_fare")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition ml-auto">
-                                        Fare <SortIcon col="total_fare" />
+                                        Base Fare <SortIcon col="total_fare" />
                                     </button>
+                                </th>
+                                <th className="text-right py-2 px-4">
+                                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        Grand Total
+                                    </span>
                                 </th>
                                 <th className="text-right py-2 px-4 hidden md:table-cell">
                                     <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -347,6 +353,9 @@ export default function RideList({
                                         {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
                                             <p className="text-[10px] font-semibold text-success mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
+                                    </td>
+                                    <td className="py-3 px-4 text-right">
+                                        <p className="text-sm font-bold">{ride.grand_total != null ? fmtGrandTotal(ride.grand_total) : "—"}</p>
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">
                                         {(() => {

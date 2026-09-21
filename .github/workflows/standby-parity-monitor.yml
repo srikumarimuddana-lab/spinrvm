@@ -46,7 +46,7 @@ permissions:
 
 env:
   FLY_APP: spinr-backend-yyz
-  RAILWAY_SERVICE: spinr-backend
+  RAILWAY_SERVICE: spinrvm
   ISSUE_LABEL: "standby-parity"
   # Secrets (BACKEND_HEALTH_URL, FLY_HEALTH_URL, METRICS_AUTH_TOKEN, the two
   # provider tokens) are scoped to the individual steps that use them, never

@@ -13579,7 +13579,17 @@ record of what was assumed vs. what was actually true</summary>
   lost-phone reset path.
 
 ### C5. Re-enable Railway standby deploys (currently paused)
-- [ ] **Status:** open — `deploy-backend.yml` (Railway) is deliberately blocked via a
+- [x] **Status:** RESOLVED (2026-09-21) — see the 2026-09-21 Update below for the
+  actual fix. **Correction:** the paragraph immediately below (originally written
+  2026-07-27) asserts the standby was "silently drifting from `main`" and that a
+  failover "right now would fail over to a stale build" — this was true of the
+  reader's-perspective symptom at the time but turned out, once Railway MCP access
+  became available (see 2026-09-21 Update), to be wrong about *why*: Railway's own
+  native GitHub integration had been auto-deploying `spinrvm` on every push to
+  `main` the whole time, independent of `deploy-backend.yml`. The standby was never
+  actually stale. Left in place for history — do not use it as current status;
+  read the 2026-09-21 Update for what was actually true.
+- ~~open~~ — `deploy-backend.yml` (Railway) is deliberately blocked via a
   GitHub Environment protection rule (confirmed 2026-07-27). This was meant to be
   **temporary** but has no expiry/owner attached, so Railway has been silently
   drifting from `main` since the pause started — contradicts ADR-007's "hot standby,
@@ -13696,20 +13706,84 @@ record of what was assumed vs. what was actually true</summary>
     service-name issue since a correct `railway service` listing would have
     surfaced the real service name immediately instead of requiring this log
     archaeology.
-  - **Net effect: unchanged from the reader's perspective (Railway standby
-    still deploys 0% of pushes, still drifting from `main`, still a stale
-    fail-over target), but the actual fix is now different and human-only:**
-    someone with Railway dashboard access to the `cooperative-harmony` project
-    needs to open it, find the real service name under the `production`
-    environment, and either (a) rename it to `spinr-backend` to match the
-    workflows as-is, or (b) report the actual name back so `RAILWAY_SERVICE` can
-    be corrected in both workflow files in one small PR. Token rotation (the
-    prior blocker) is done and should not be re-attempted.
+  - **Net effect at the time: `deploy-backend.yml`'s own extra checks still
+    failed on every run because of the service-name mismatch — but see the
+    2026-09-21 Update below: this did NOT mean Railway itself was drifting or
+    stale.** Railway's native GitHub integration (a separate mechanism from
+    this workflow) had been auto-deploying the real service on every push to
+    `main` the entire time; this update's "still drifting from `main`, still a
+    stale fail-over target" language was an unverified assumption carried
+    forward from the original 2026-07-27 framing, not something this update
+    actually re-checked via Railway directly (no Railway MCP/API/CLI access
+    existed for this session at the time). The actual fix ended up being a
+    one-line-per-file config correction, not a human dashboard action — see
+    below.
   - **Still consciously deferred** per the 2026-09-02/09-04 decisions above —
     this update only corrects the record on *why* it's still broken, it does
     not re-open the go-live-vs-fix-now tradeoff. Re-surface with whoever owns
     Railway dashboard access once device testing/go-live winds down, per the
     existing plan.
+- **Update (2026-09-21) — RESOLVED. Root cause confirmed directly via the now-available
+  Railway MCP, standby was never actually stale, fix shipped.**
+  - **The real Railway service name is `spinrvm`, not `spinr-backend`.** Confirmed
+    directly against Railway (not inferred from docs or logs, unlike every prior
+    update on this item) via `list-projects` → `list-services` → `describe-service`
+    in the `cooperative-harmony` project: the service literally named `spinrvm`
+    sources from `srikumarimuddana-lab/spinrvm` on branch `main`, `rootDirectory:
+    /backend` — i.e. it IS the backend service, it was just never named
+    `spinr-backend` in Railway's own service list, which is what every hardcoded
+    `RAILWAY_SERVICE: spinr-backend` in this repo's workflows assumed.
+  - **Correction to every prior update above: the standby was NOT stale or
+    drifting.** `describe-service`'s deployment history shows `spinrvm` has been
+    auto-deploying successfully on every push to `main` this whole time, via
+    Railway's own native GitHub integration (the exact "Alternative (no tokens
+    needed at all)" fallback `deploy-backend.yml`'s own header comment describes) —
+    a mechanism completely independent of `deploy-backend.yml`'s script. What was
+    actually broken, for the entire span the 2026-09-04/09-05/09-14 updates
+    above describe, was only `deploy-backend.yml`'s (and
+    `standby-parity-monitor.yml`'s) own *extra verification layer* on top of that
+    already-working auto-deploy: the env-completeness check (fails the job if a
+    name in `deploy/backend-required-env.txt` is missing from the Railway
+    service's variables), the build-sha stamping (`backend/build_info.json`,
+    read back via `GET /deploy-info`), and the post-deploy serving verification
+    (polls `/deploy-info` until the running build's sha matches the pushed
+    commit, or fails/rolls back). None of those three ran successfully on
+    Railway before this fix — not because Railway wasn't deploying, but because
+    `railway variables --service spinr-backend`/`railway up --service
+    spinr-backend` immediately hit "Service 'spinr-backend' not found" before any
+    of the three checks could execute.
+  - **Also confirmed via `describe-service`:** `spinrvm`'s live variable list
+    already contains every name `deploy/backend-required-env.txt` requires
+    (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `ADMIN_EMAIL`,
+    `ADMIN_PASSWORD`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_DRIVER_APP_ID`,
+    `FIREBASE_RIDER_APP_ID`, `REDIS_URL`, `RATE_LIMIT_REDIS_URL`, `WS_REDIS_URL`,
+    `ALLOWED_ORIGINS`, `SENTRY_DSN`, `ENV`, `SUPABASE_REGION`) — so the
+    env-completeness check should now pass on the next run too, not just the
+    deploy step.
+  - **Fix:** `RAILWAY_SERVICE: spinr-backend` → `RAILWAY_SERVICE: spinrvm` in
+    both `.github/workflows/deploy-backend.yml` and
+    `.github/workflows/standby-parity-monitor.yml` — the only two places in the
+    repo that declare `RAILWAY_SERVICE` (grepped `.github/workflows/` and the
+    repo root for `RAILWAY_SERVICE` and other hardcoded Railway-service-name
+    references to confirm; every other `spinr-backend` string in
+    `.github/workflows/` is a Docker image tag or the unrelated Fly app name
+    `spinr-backend-yyz`/`spinr-backend-staging`, not this bug). Config-only,
+    no application code, no migration. Full Change Impact Log entry:
+    `docs/change-log/2026-09-21-c5-railway-service-name-fix.md`.
+  - **Not re-opening C1's failover drill or the go-live-vs-fix-now tradeoff
+    here** — this update closes the "why is `deploy-backend.yml` broken"
+    question and the service-name mismatch specifically. C1's actual failover
+    drill (confirming a DNS cutover to Railway serves real traffic correctly)
+    is still separate, still not run from this session, and still worth doing
+    before ever relying on the standby in a real incident — Railway *deploying*
+    successfully is necessary but not sufficient evidence the failover path
+    works end to end.
+  - **What was NOT verified:** no ability from this environment to trigger a
+    real `deploy-backend.yml`/`standby-parity-monitor.yml` GitHub Actions run
+    or an actual Railway deploy — verification here is config-correctness only
+    (confirmed via Railway MCP that `spinrvm` is the right name and has the
+    right variables). Only the next real push to `main` proves the workflow
+    itself goes green end to end.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

@@ -130,12 +130,17 @@ def test_every_session_id_write_failure_raises_rather_than_continuing() -> None:
     working for that session. CLAUDE.md: never log a DB/auth error and continue
     -- return a clean HTTPException so the client retries.
 
-    Source-level because the two call sites live in long handlers with heavy
-    setup; this pins the control flow cheaply and catches a regression in either
-    one. Today there are exactly two such handlers (``verify_otp`` and
-    ``firebase_auth_login``); the other ``current_session_id`` writes either ride
-    along in a larger create/update payload or have no try/except at all, so an
-    error there already propagates.
+    Matches on AST SHAPE, not on log wording: any ``try`` whose body writes
+    ``current_session_id``, and whose ``except`` mentions the session, must
+    contain a ``raise``.
+
+    An earlier version of this guard filtered on the literal substring
+    "update session_id". That silently skipped ``reactivate_account``, whose
+    log line reads "could not **set** session_id" -- so the guard reported
+    "exactly two handlers" while a third was still swallowing, and this file's
+    own change log then repeated that false count. Found by
+    `spinr-security-auditor`. Shape-matching cannot be defeated by rewording a
+    log message.
     """
     source = (pathlib.Path(__file__).parents[1] / "routes" / "auth.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -143,20 +148,26 @@ def test_every_session_id_write_failure_raises_rather_than_continuing() -> None:
     offenders: list[int] = []
     handlers = 0
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ExceptHandler):
+        if not isinstance(node, ast.Try):
             continue
-        segment = ast.get_source_segment(source, node) or ""
-        if "update session_id" not in segment.lower():
+        body = ast.get_source_segment(source, node) or ""
+        if "current_session_id" not in body:
             continue
-        handlers += 1
-        if not any(isinstance(inner, ast.Raise) for inner in ast.walk(node)):
-            offenders.append(node.lineno)
+        for handler in node.handlers:
+            segment = ast.get_source_segment(source, handler) or ""
+            if "session_id" not in segment.lower():
+                continue
+            handlers += 1
+            if not any(isinstance(inner, ast.Raise) for inner in ast.walk(handler)):
+                offenders.append(handler.lineno)
 
-    assert handlers >= 2, (
-        f"expected at least 2 session_id-write handlers in routes/auth.py, found {handlers} -- "
-        "if a path was renamed or removed, update this guard deliberately"
+    assert handlers >= 3, (
+        f"expected at least 3 session_id-write handlers in routes/auth.py, found {handlers} "
+        "(verify_otp, reactivate_account, firebase_auth_login) -- if a path was renamed or "
+        "removed, update this guard deliberately rather than lowering the floor"
     )
     assert not offenders, (
         "these except handlers log a failed session_id write and continue instead of "
-        f"raising (routes/auth.py lines {offenders})"
+        f"raising, so the minted token's session can never be tombstoned "
+        f"(routes/auth.py lines {offenders})"
     )

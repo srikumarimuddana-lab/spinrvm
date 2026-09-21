@@ -855,6 +855,10 @@ def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
     """Flatten a list of {col: predicate} dicts into a PostgREST or_() string."""
     parts: List[str] = []
     for clause in clauses or []:
+        if not isinstance(clause, dict):
+            raise TypeError(
+                f"_build_or_clause expected each $or element to be a dict, got {type(clause).__name__}: {clause!r}"
+            )
         for col, val in clause.items():
             term = _build_or_clause_term(col, val)
             if term is not None:

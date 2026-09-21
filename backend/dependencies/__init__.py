@@ -555,13 +555,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
-    except Exception as e:
-        # Never log the signing secret, even partially — it's a credential.
-        logger.error(f"JWT verification failed: {e}")
+    except HTTPException as e:
+        if e.detail == "Token has expired":
+            # Expired tokens are a normal part of the client refresh cycle —
+            # the mobile app retries with a fresh token after the 401.
+            logger.warning("JWT expired (normal client refresh cycle)")
+        else:
+            logger.error(f"JWT verification failed: {e}")
         # Static client message (C4): interpolating the PyJWT reason lets an
         # attacker fingerprint which claim failed (alg/aud/exp/sig). The real
         # cause is in the server log above; the client only learns the token is
         # invalid — matching every other auth path.
+        raise HTTPException(status_code=401, detail="Invalid token") from e
+    except Exception as e:
+        logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     # A reactivation token is single-purpose (POST /auth/reactivate); it must

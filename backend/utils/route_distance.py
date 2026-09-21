@@ -90,6 +90,20 @@ _OSRM_RADIUS_MAX_M = 50
 _OSRM_RADIUS_DEFAULT_M = 20
 _MAX_COMPLETED_ENDPOINT_SNAP_M = 150.0
 
+# Slack allowed ABOVE the crow-flies gap distance before a routed gap answer is
+# rejected as a detour artefact. The ratio gate (5x) governs long gaps; this
+# absolute term is what governs SHORT ones, where 5x of a small number is still
+# small. 2.0 km of slack on a ~300 m gap let a router's legal-U-turn answer
+# (opposite carriageway of a divided road) stand in for the missing GPS and add
+# ~2 km of phantom distance to a finalized trip. Kept as the default so the
+# live-trail consumer (live_breadcrumbs.py) is unchanged; the completed-route
+# reconstruction passes the strict value instead.
+_GAP_MAX_EXTRA_KM_DEFAULT = 2.0
+# Bearing tolerance (degrees, +/-) applied to a gap endpoint whose direction of
+# travel is known. Wide enough to absorb GPS heading noise, narrow enough to
+# exclude the opposing carriageway.
+_GAP_BEARING_RANGE_DEG = 60
+
 # Cap the saved road geometry so the rides row stays bounded. The matched route
 # can contain hundreds of vertices; ~300 is plenty for a faithful map replay.
 _MAX_ROAD_POLYLINE_POINTS = 300
@@ -530,12 +544,22 @@ async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng:
 
 
 async def _compute_route_via_osrm(
-    from_lat: float, from_lng: float, to_lat: float, to_lng: float, osrm_url: str
+    from_lat: float, from_lng: float, to_lat: float, to_lng: float, osrm_url: str, bearings: Optional[str] = None
 ) -> Optional[dict]:
-    """Point-to-point route via OSRM /route. None on any failure."""
+    """Point-to-point route via OSRM /route. None on any failure.
+
+    ``bearings`` is an OSRM ``bearings`` value (``"<deg>,<range>;<deg>,<range>"``,
+    an empty entry meaning "unconstrained for that coordinate"). It pins each
+    endpoint to the carriageway heading in the direction of travel, so a route
+    between two points on opposite sides of a divided road is not answered with
+    a drive to the next legal turnaround and back. Omitted by default — the live
+    ETA path has no direction of travel to assert.
+    """
     coords = f"{from_lng},{from_lat};{to_lng},{to_lat}"  # OSRM is lng,lat
     url = f"{osrm_url.rstrip('/')}/route/v1/driving/{coords}"
     params = {"overview": "full", "geometries": "geojson", "steps": "false", "alternatives": "false"}
+    if bearings:
+        params["bearings"] = bearings
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
@@ -606,8 +630,44 @@ async def snap_endpoint_via_osrm(point: dict, osrm_url: str) -> Optional[List[fl
     return [round(snapped_lat, 6), round(snapped_lng, 6)]
 
 
-async def compute_gap_route_via_osrm(start: List[float], end: List[float], osrm_url: str) -> Optional[RoadMatch]:
-    """Route one missing completed-trip interval without using OSRM Trip."""
+def _gap_bearings(start_bearing: Optional[float], end_bearing: Optional[float]) -> Optional[str]:
+    """Build an OSRM ``bearings`` value for a two-coordinate gap route.
+
+    Returns None when neither endpoint has a known direction of travel, so the
+    parameter is omitted entirely rather than sent as a pair of empty entries.
+    """
+
+    def entry(value: Optional[float]) -> str:
+        if value is None:
+            return ""
+        try:
+            degrees = int(round(float(value))) % 360
+        except (TypeError, ValueError):
+            return ""
+        return f"{degrees},{_GAP_BEARING_RANGE_DEG}"
+
+    first, second = entry(start_bearing), entry(end_bearing)
+    if not first and not second:
+        return None
+    return f"{first};{second}"
+
+
+async def compute_gap_route_via_osrm(
+    start: List[float],
+    end: List[float],
+    osrm_url: str,
+    *,
+    start_bearing: Optional[float] = None,
+    end_bearing: Optional[float] = None,
+    max_extra_km: float = _GAP_MAX_EXTRA_KM_DEFAULT,
+) -> Optional[RoadMatch]:
+    """Route one missing completed-trip interval without using OSRM Trip.
+
+    ``start_bearing``/``end_bearing`` are the directions of travel observed
+    either side of the gap. Supplying them keeps the answer on the carriageway
+    actually driven instead of the fastest legal path, which on a divided road
+    can otherwise run to the next turnaround and back.
+    """
     if len(start) < 2 or len(end) < 2 or not osrm_url:
         return None
     try:
@@ -618,12 +678,18 @@ async def compute_gap_route_via_osrm(start: List[float], end: List[float], osrm_
     if not all(math.isfinite(value) for value in (start_lat, start_lng, end_lat, end_lng)):
         return None
 
-    routed = await _compute_route_via_osrm(start_lat, start_lng, end_lat, end_lng, osrm_url)
+    bearings = _gap_bearings(start_bearing, end_bearing)
+    routed = await _compute_route_via_osrm(start_lat, start_lng, end_lat, end_lng, osrm_url, bearings)
+    if not routed and bearings:
+        # A bearing constraint can legitimately make a gap unroutable (the fix
+        # either side snapped to a road the heading excludes). Retry once
+        # unconstrained rather than lose the gap to a strict hint.
+        routed = await _compute_route_via_osrm(start_lat, start_lng, end_lat, end_lng, osrm_url)
     if not routed:
         return None
     direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
     distance_km = float(routed.get("distance_km") or 0)
-    maximum_km = max(direct_km * 5.0, direct_km + 2.0)
+    maximum_km = max(direct_km * 5.0, direct_km + max_extra_km)
     if distance_km < direct_km or distance_km > maximum_km:
         return None
 
@@ -639,12 +705,19 @@ async def compute_gap_route_via_osrm(start: List[float], end: List[float], osrm_
     return round(distance_km, 3), polyline
 
 
-async def compute_gap_route_via_google(start: List[float], end: List[float], api_key: str) -> Optional[RoadMatch]:
+async def compute_gap_route_via_google(
+    start: List[float],
+    end: List[float],
+    api_key: str,
+    *,
+    max_extra_km: float = _GAP_MAX_EXTRA_KM_DEFAULT,
+) -> Optional[RoadMatch]:
     """Route one missing completed-trip interval via Google Directions.
 
     Mirror of :func:`compute_gap_route_via_osrm` using Google as Tier 2
     fallback.  Same distance sanity gates (direct_km bounds) so a misbehaving
-    provider can never corrupt inferred gap geometry.
+    provider can never corrupt inferred gap geometry. Directions has no bearing
+    constraint, so the caller's ``max_extra_km`` is the only extra guard here.
     """
     if len(start) < 2 or len(end) < 2 or not api_key:
         return None
@@ -661,7 +734,7 @@ async def compute_gap_route_via_google(start: List[float], end: List[float], api
         return None
     direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
     distance_km = float(routed.get("distance_km") or 0)
-    maximum_km = max(direct_km * 5.0, direct_km + 2.0)
+    maximum_km = max(direct_km * 5.0, direct_km + max_extra_km)
     if distance_km < direct_km or distance_km > maximum_km:
         return None
 

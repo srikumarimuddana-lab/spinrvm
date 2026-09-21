@@ -28668,6 +28668,46 @@ as evidence that the thing it configures exists.
   (`replayed_ip` consumers), `docs/change-log/2026-09-21-auth-real-client-ip.md`
   (§4 residual risk).
 
+### C132. Refresh-token reuse detection records nothing about the *replaying* request — `replayed_ip`/`replayed_user_agent` describe the token's issuance, so a theft alert cannot identify the thief
+
+- [ ] **Status:** OPEN — found 2026-09-21 by `/code-review` (max effort) on PR #5654, which
+  had claimed the opposite. See that PR's change log for the retraction.
+- **Issue/gap:** the OAuth2-BCP §4.14.2 reuse-detection path writes an `audit_logs` row whose
+  `details` carry `replayed_ip` and `replayed_user_agent`
+  (`backend/utils/refresh_tokens.py:416` in `_record_post_revoke_race`, `:591` in
+  `_handle_refresh_token_reuse`). Both read `row.get("ip")` / `row.get("user_agent")` — the
+  values stored when **that token was issued**, not attributes of the request replaying it.
+- **Why it can't currently be otherwise:** `lookup_refresh_token(raw: str)`
+  (`backend/utils/refresh_tokens.py:231`) takes only the raw token string — no `Request`, no
+  headers, no socket peer — and dispatches both handlers with the stored row alone.
+  `refresh_access_token` (`backend/routes/auth.py`) *does* resolve `client_ip` at `:1796`, but
+  that is **after** `lookup_refresh_token` returned at `:1745`, and it is never passed in.
+- **Concrete consequence:** victim's session is issued at `198.51.100.4`; an attacker steals the
+  rotated token and replays it from `203.0.113.9`. The cascade fires correctly (token_version
+  bump, sessions revoked, WS kicked) — but the forensic row reads `replayed_ip: 198.51.100.4`,
+  the victim. The attacker's IP and user-agent are captured nowhere, so the 7-year audit record
+  that exists specifically to investigate token theft cannot identify the thief. PR #5654 made
+  these values *real* rather than a constant `172.16.x.x` proxy address, which is an improvement,
+  but it does not and cannot address this.
+- **Suggested remedy (design decision, not a mechanical fix):** thread request context into the
+  reuse path — e.g. `lookup_refresh_token(raw, *, request_ip=None, request_ua=None)` passed
+  through to both handlers, recorded as new `replaying_ip` / `replaying_user_agent` keys
+  **alongside** the existing issuance fields rather than replacing them (both are useful: one
+  says where the session came from, the other who is replaying it). Prefer additive keys per
+  CLAUDE.md gate 2 — `_reuse_already_handled` reads back `details`, and the admin audit-log UI
+  renders every key, so repurposing an existing key would silently change both.
+- **Cost/risk to weigh before doing it:** `lookup_refresh_token` is on the hot path of every
+  `/auth/refresh` call and has several callers; changing its signature touches a
+  security-sensitive path where a mistake fails open. Also note the value would arrive via
+  `get_real_client_ip()`, so it inherits C131's spoofability caveat — an attacker could choose
+  what their own replay records until the origin is Cloudflare-locked. That argues for doing
+  C131 first, or at least recording both the resolved IP and the raw socket peer.
+- **Files:** `backend/utils/refresh_tokens.py` (`lookup_refresh_token:231`,
+  `_record_post_revoke_race:390`, `_handle_refresh_token_reuse:484`),
+  `backend/routes/auth.py` (`refresh_access_token`, `:1745` lookup / `:1796` client_ip),
+  `admin-dashboard/src/app/dashboard/audit-logs/page.tsx` (renders every `details` key),
+  `docs/change-log/2026-09-21-auth-real-client-ip.md` (the retraction).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

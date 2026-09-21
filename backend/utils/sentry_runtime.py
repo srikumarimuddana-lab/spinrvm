@@ -66,10 +66,7 @@ def init_backend_sentry(*, process_name: str = "spinr backend") -> None:
         logger.add(_loguru_sentry_sink, level="ERROR")
         logger.info("Sentry SDK initialized for error monitoring process={}", process_name)
         if getattr(settings, "ENV", "development") == "production":
-            sentry_sdk.capture_message(
-                f"{process_name} started — Sentry pipeline verified",
-                level="info",
-            )
+            logger.info("{} started — Sentry pipeline verified", process_name)
         return
 
     if getattr(settings, "ENV", "development") == "production":

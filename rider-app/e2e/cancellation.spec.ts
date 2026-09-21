@@ -124,7 +124,10 @@ test.describe('rider-app: cancellation flow', () => {
       await route.fulfill({
         status: 409,
         contentType: 'application/json',
-        body: JSON.stringify({ detail: "Ride is in status 'completed'; cannot cancel." }),
+        body: JSON.stringify({
+          detail:
+            "This ride is already finished, so that action isn't available right now. Refresh to see its latest status.",
+        }),
       });
     });
 

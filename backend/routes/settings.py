@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from fastapi import APIRouter
 
 try:
@@ -41,6 +43,14 @@ history) and uses it only to operate the service. We do not sell
 personal data. For questions contact support.
 
 Last updated: not yet finalized."""
+
+
+def _money_setting(value, default: str) -> str:
+    """A money setting as a 2-decimal string ("1.00"), whatever type the row holds."""
+    try:
+        return f"{Decimal(str(value if value is not None else default)):.2f}"
+    except (InvalidOperation, ValueError):
+        return default
 
 
 @api_router.get("/settings")
@@ -97,6 +107,10 @@ async def get_public_settings():
         # Default-off canary for high-accuracy stationary idle GPS. Operated via
         # the settings row; clients keep the existing cadence until enabled.
         "driver_stationary_tracking_enabled": settings.get("driver_stationary_tracking_enabled") is True,
+        # Migration 438: the rider app blocks custom tips between $0 and this
+        # before submitting; the server enforces the same rule
+        # (utils/tip_policy.py). "0.00" means no minimum.
+        "min_tip_amount": _money_setting(settings.get("min_tip_amount"), "0.00"),
     }
 
 

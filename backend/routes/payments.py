@@ -8,8 +8,10 @@ from pydantic import BaseModel, Field
 
 try:
     from ..utils.background import spawn as _spawn
+    from ..utils.tip_policy import enforce_min_tip
 except ImportError:
     from utils.background import spawn as _spawn  # type: ignore
+    from utils.tip_policy import enforce_min_tip  # type: ignore
 
 try:
     from .. import db_supabase
@@ -69,6 +71,10 @@ async def _authoritative_ride_charge(ride_id: str, rider_id: str, tip_amount: De
     same total ``/rides/{id}/process-payment`` settles. Falls back to
     ``total_fare`` only for legacy rides written before ``grand_total`` existed.
     """
+    # Before the ride is read or any PaymentIntent created: this is the Google
+    # Pay / PaymentSheet path, and a sub-minimum tip charged here would then be
+    # rejected by /rate — money collected, tip never recorded for the driver.
+    await enforce_min_tip(tip_amount)
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")

@@ -861,8 +861,18 @@ class TestDeclineRideSuccessBranches:
     async def test_period_1_recorded_when_release_leaves_driver_available(self):
         """Insurance Period 2 opens at claim/offer time (matching.py); decline
         must close it back to Period 1 — but only when the driver is actually
-        still online. Mirrors process_expired_offer's guard."""
+        still online. Mirrors process_expired_offer's guard.
+
+        Goes through the real release_driver_and_close_period (unmocked here,
+        unlike test_decline_goes_through_the_shared_release_helper above) since
+        the 0-vs-1 derivation under test lives inside it. That helper calls its
+        own module-local record_period_transition
+        (utils/insurance_periods.py), not the `_deps` copy `_base_patches`
+        mocks[5] patches — patching only the latter left this assertion
+        checking a mock the real code path never reaches.
+        """
         from backend.routes.drivers.ride_flow import decline_ride
+        from backend.utils import insurance_periods
 
         ride = _ride(status="driver_assigned")
         patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
@@ -870,8 +880,10 @@ class TestDeclineRideSuccessBranches:
             "backend.routes.drivers._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
         )
-        with _Patches(*patches) as mocks:
-            period_transition = mocks[5]
+        with (
+            _Patches(*patches),
+            patch.object(insurance_periods, "record_period_transition", AsyncMock()) as period_transition,
+        ):
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
         period_transition.assert_awaited_once_with(_DRIVER_ID, 1)

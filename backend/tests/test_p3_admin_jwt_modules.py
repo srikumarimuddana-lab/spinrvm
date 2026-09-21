@@ -119,7 +119,7 @@ class TestMintAdminAccessToken:
             "settings",
             "corporate_accounts",
             "documents",
-                    "staff",
+            "staff",
         ]
         token = _mint(role="super_admin", modules=all_modules)
         payload = _decode(token)
@@ -133,11 +133,19 @@ class TestGetCurrentUserAdminJWT:
     """Admin tokens bypass the DB lookup and return claims directly."""
 
     @pytest.mark.anyio
-    async def test_admin_jwt_returns_modules_without_db_lookup(self):
-        """admin-001 (env-seeded super admin) has no DB row — claims are trusted directly."""
+    async def test_admin_jwt_returns_modules_without_db_lookup(self, monkeypatch):
+        """admin-001 (env-seeded super admin) has no admin_staff DB row — claims
+        are trusted directly. It does read its own token_version off the
+        `settings` row (utils/env_admin_tokens.py) as of 2026-09-21, which is
+        unrelated to the claim-parsing behavior under test here."""
+        from unittest.mock import AsyncMock
+
         from fastapi.security import HTTPAuthorizationCredentials
 
+        import dependencies
         from dependencies import get_current_user
+
+        monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
 
         modules = ["dashboard", "promotions"]
         # admin-001 is the one user_id that bypasses the admin_staff DB lookup
@@ -151,10 +159,15 @@ class TestGetCurrentUserAdminJWT:
         assert user["modules"] == modules
 
     @pytest.mark.anyio
-    async def test_operations_role_passes_through(self):
+    async def test_operations_role_passes_through(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
         from fastapi.security import HTTPAuthorizationCredentials
 
+        import dependencies
         from dependencies import get_current_user
+
+        monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
 
         # Use admin-001 to bypass the admin_staff DB lookup — this test
         # verifies JWT claim parsing for operations role, not DB validation.

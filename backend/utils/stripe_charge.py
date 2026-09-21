@@ -61,10 +61,10 @@ from typing import Any, Dict, Optional, Union
 
 try:
     from ..settings_loader import get_app_settings
-    from .money import dollars_to_cents, to_decimal
+    from .money import cents_to_dollars, dollars_to_cents, to_decimal
 except ImportError:
     from settings_loader import get_app_settings
-    from utils.money import dollars_to_cents, to_decimal
+    from utils.money import cents_to_dollars, dollars_to_cents, to_decimal
 
 try:
     import stripe
@@ -1192,3 +1192,108 @@ async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
     except Exception as e:  # pragma: no cover — defence-in-depth
         logger.exception("Unexpected error cancelling pre-auth hold ride=%s: %s", ride_id, e)
         return False
+
+
+async def refund_excess_capture(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    fee_owed: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Refund whatever was captured on ``payment_intent_id`` beyond ``fee_owed``.
+
+    Covers a ride whose hold is ALREADY captured (auth_status == "captured")
+    by the time a cancellation runs — e.g. the retry loop's requires_capture
+    branch auto-captured a stranded hold moments before the rider cancelled —
+    where the cancellation's own fee calculation owes less than what was
+    already taken. ``cancel_authorization``/``capture_cancellation_fee`` above
+    only know how to act on a LIVE (uncaptured) hold; this is their
+    already-captured counterpart. 2026-09-21: found via a real test ride
+    where a rider cancelled for a computed $0 fee after the fare had already
+    been fully captured, with no refund path anywhere in the cancellation
+    flow — see docs/change-log/ for the writeup.
+
+    Reads the PaymentIntent's own ``amount_received`` as the source of truth
+    for what was actually captured, rather than trusting a DB column
+    (``authorized_amount``/``grand_total``) that could be stale or could
+    reflect the original hold rather than what a partial capture elsewhere
+    actually took.
+
+    ``ChargeOutcome.status``:
+        "refunded"     refund issued for the full excess. ``charged_amount``
+                        is the refunded amount.
+        "not_needed"   nothing was captured, or ``fee_owed`` already covers
+                        (or exceeds) what was captured — no refund due.
+        "failed"       Stripe error issuing the refund; caller must not
+                        treat this as done (money may still be un-refunded).
+        "unconfigured" Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if not payment_intent_id:
+        return ChargeOutcome(status="not_needed", charged_amount=Decimal("0.00"))
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    try:
+        intent = await asyncio.to_thread(stripe.PaymentIntent.retrieve, payment_intent_id, api_key=secret)
+    except _StripeBaseError as e:
+        logger.error(
+            "[CANCEL] Stripe error retrieving PI for excess-capture refund ride=%s pi=%s: %s",
+            ride_id,
+            payment_intent_id,
+            e,
+        )
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("[CANCEL] unexpected error retrieving PI for excess-capture refund ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    captured_cents = int(getattr(intent, "amount_received", 0) or 0)
+    fee_owed_cents = dollars_to_cents(to_decimal(fee_owed))
+    refund_cents = captured_cents - fee_owed_cents
+    if refund_cents <= 0:
+        return ChargeOutcome(status="not_needed", payment_intent_id=payment_intent_id, charged_amount=Decimal("0.00"))
+
+    try:
+        refund = await asyncio.to_thread(
+            lambda: stripe.Refund.create(
+                payment_intent=payment_intent_id,
+                amount=refund_cents,
+                reason="requested_by_customer",
+                api_key=secret,
+                # Amount is part of the key so a later, different-amount refund
+                # (e.g. a subsequent admin dispute refund) gets its own key
+                # rather than an IdempotencyError against this one.
+                idempotency_key=f"ride-cancelrefund-{ride_id}-{refund_cents}",
+            )
+        )
+    except _StripeBaseError as e:
+        logger.error(
+            "[CANCEL] Stripe error issuing excess-capture refund ride=%s pi=%s amount_cents=%s: %s",
+            ride_id,
+            payment_intent_id,
+            refund_cents,
+            e,
+        )
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("[CANCEL] unexpected error issuing excess-capture refund ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    refund_id = getattr(refund, "id", None)
+    logger.info(
+        "[CANCEL] refunded excess capture ride=%s pi=%s refund=%s amount_cents=%s",
+        ride_id,
+        payment_intent_id,
+        refund_id,
+        refund_cents,
+    )
+    return ChargeOutcome(
+        status="refunded",
+        payment_intent_id=payment_intent_id,
+        charged_amount=cents_to_dollars(refund_cents),
+        raw={"refund_id": refund_id},
+    )

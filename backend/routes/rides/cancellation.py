@@ -141,6 +141,9 @@ async def cancel_ride_rider(
     # auth_status write below can tell 'released' apart from 'left open after a
     # failed capture'.
     _hold_released_in_full = False
+    # Non-zero only when the ALREADY-captured-hold branch below issues a real
+    # Stripe refund. Feeds refund_amount / payment_status in the final update.
+    _excess_refunded = Decimal("0")
 
     # WS-8 (finding 11): the booking-time hold must not sit on the rider's card
     # for up to 7 days after a cancel. Two ways out, and which one we take
@@ -223,6 +226,88 @@ async def cancel_ride_rider(
                     logger.info("[CANCEL] released pre-auth hold ride_id={} pi={}", ride_id, _booking_pi)
             except Exception as _rel_exc:
                 logger.opt(exception=True).error("[CANCEL] pre-auth release failed ride_id={}: {}", ride_id, _rel_exc)
+    elif _auth == "captured" and bool(_booking_pi):
+        # _hold_is_live only covers a LIVE (uncaptured) hold. This is its
+        # already-captured counterpart: the booking hold was captured before
+        # this cancellation ran (e.g. the payment-retry loop's requires_capture
+        # auto-capture raced this same cancellation — 2026-09-21 fix,
+        # docs/change-log/2026-09-21-payment-retry-requires-capture-pre-trip-guard.md).
+        # Refund whatever was taken beyond the fee actually owed here, which
+        # may be the full amount on a free cancellation. Without this branch
+        # the rider keeps paying full fare for a ride the fee calculation says
+        # should cost them nothing — confirmed via a real test ride.
+        try:
+            _refund_outcome = await _deps.refund_excess_capture(
+                ride_id=ride_id,
+                payment_intent_id=_booking_pi,
+                fee_owed=total_cancel_fee,
+            )
+        except Exception as _refund_exc:  # pragma: no cover — helper never raises
+            logger.opt(exception=True).error(
+                "[CANCEL] excess-capture refund raised ride_id={}: {}", ride_id, _refund_exc
+            )
+            _refund_outcome = None
+
+        if _refund_outcome is not None and _refund_outcome.status == "refunded":
+            _excess_refunded = _round(_d(_refund_outcome.charged_amount))
+            # The fee (if any) was already retained from the capture — the
+            # fresh-charge fallback below must NOT also bill it.
+            fee_taken_from_hold = total_cancel_fee if total_cancel_fee > 0 else _excess_refunded
+            logger.info(
+                "[CANCEL] refunded excess capture ride_id={} refunded={} fee_owed={}",
+                ride_id,
+                _excess_refunded,
+                total_cancel_fee,
+            )
+            _refund_cents = _deps.ledger_to_cents(_excess_refunded)
+            # F1 replay-safety (matches routes/webhooks.py's two record_refund_event
+            # call sites): keyed on PI + amount so a retried cancellation call
+            # books this refund's ledger row exactly once.
+            _refund_ledger_id = await _deps.record_refund_event(
+                ride_id=ride_id,
+                user_id=current_user["id"],
+                refund_cents=_refund_cents,
+                payment_intent_id=_refund_outcome.payment_intent_id,
+                ride=ride,
+                dedupe_key=f"stripe_refund|{_refund_outcome.payment_intent_id}|{_refund_cents}",
+            )
+            if _refund_ledger_id is None:
+                logger.error(
+                    "[CANCEL] excess-capture refund succeeded on Stripe but the ledger write "
+                    "failed ride_id={} refunded={} — money moved, needs reconciliation",
+                    ride_id,
+                    _excess_refunded,
+                )
+        elif _refund_outcome is not None and _refund_outcome.status == "not_needed":
+            # Whatever was captured already covers (or falls short of) the fee
+            # owed — nothing to give back. Still mark the fee as covered by
+            # the capture so the fresh-charge fallback below doesn't bill it
+            # again for money already sitting captured.
+            if total_cancel_fee > 0:
+                fee_taken_from_hold = total_cancel_fee
+            else:
+                # Anomalous: nothing owed AND nothing was captured to refund,
+                # despite auth_status=="captured" implying money should be
+                # sitting there. Log for visibility rather than pass silently.
+                logger.warning(
+                    "[CANCEL] auth_status is 'captured' but nothing was received on the "
+                    "PaymentIntent to refund ride_id={} pi={}",
+                    ride_id,
+                    _booking_pi,
+                )
+        else:
+            # Money is still sitting captured and un-refunded. Never silently
+            # swallow a payment-path failure (CLAUDE.md) — surface loudly so
+            # this gets reconciled rather than lost. Deliberately do NOT set
+            # fee_taken_from_hold here: with the refund unresolved, falling
+            # through to a fresh fee charge would double-bill on top of an
+            # already-captured, un-refunded hold.
+            logger.error(
+                "[CANCEL] excess-capture refund failed ride_id={} status={} — rider may be owed a refund from "
+                "an already-captured hold; needs manual reconciliation",
+                ride_id,
+                getattr(_refund_outcome, "status", "raised"),
+            )
 
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
@@ -401,6 +486,14 @@ async def cancel_ride_rider(
         # for audit and preventing payment_retry from chasing the wrong PI.
         _base_update["payment_status"] = cancel_fee_payment_status
         _base_update["cancel_fee_payment_intent_id"] = cancel_fee_payment_intent_id
+    if _excess_refunded > 0:
+        # An already-captured hold (the elif branch above) got a real Stripe
+        # refund. "refunded" when nothing was owed (a fully free cancel),
+        # "partially_refunded" when a fee was legitimately kept out of it —
+        # matches the vocabulary routes/webhooks.py already uses for
+        # charge.refunded / charge.refund.updated.
+        _base_update["refund_amount"] = _f(_excess_refunded)
+        _base_update["payment_status"] = "refunded" if total_cancel_fee <= 0 else "partially_refunded"
     # Migration 38 — attribution. Fall back to the legacy payload on
     # PGRST204 so the rider's cancel button never 503s if the column
     # isn't in prod yet.

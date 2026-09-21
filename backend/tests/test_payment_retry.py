@@ -35,6 +35,11 @@ def _make_ride(**overrides) -> dict:
         "payment_status": "failed",
         "payment_retry_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # Default to "completed": the requires_capture branch only auto-captures
+        # a stranded post-settlement hold on a completed ride (2026-09-21 fix) —
+        # most fixtures here exercise that intended case. Tests exercising the
+        # pre-trip-hold guard override this explicitly.
+        "status": "completed",
     }
     base.update(overrides)
     return base
@@ -340,6 +345,100 @@ async def test_requires_capture_hold_is_captured_for_owed_amount():
     # processing (pre-capture). The paid flip moved to db_supabase.update_ride.
     statuses = [c[0][2].get("$set", {}).get("payment_status") for c in mock_db_update.await_args_list]
     assert statuses == ["retrying", "processing"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "pre_trip_status",
+    ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"],
+)
+async def test_requires_capture_skips_pre_trip_ride(pre_trip_status):
+    """2026-09-21 fix: a booking-time hold can sit in Stripe's requires_capture
+    state on a ride that hasn't completed yet (or ever will) — that is normal,
+    not a "stranded post-settlement hold". Auto-capturing it here would charge
+    the full fare before the trip happened and could race a same-ride
+    cancellation, which only knows how to release/partially-capture a LIVE
+    hold — not refund one this loop already captured behind its back. Found
+    via a real test-ride discrepancy (rider cancelled a scheduled ride for a
+    computed $0 fee; the fare had already been fully captured with nothing
+    refunded) — see docs/change-log/ for the writeup.
+
+    The loop must skip the capture (no Stripe capture call) AND release the
+    'retrying' claim back to the ride's original payment_status, unchanged
+    retry_count. A spinr-money-auditor review of the first version of this
+    fix caught that leaving the claim at 'retrying' would wedge the ride out
+    of every future scan (which only re-selects failed/requires_action/
+    processing) AND out of process_payment's own settlement claim (which also
+    excludes 'retrying') — permanently blocking collection once the ride
+    actually completes. This test pins the release, not just the skip."""
+    ride = _make_ride(grand_total=20.00, tip_amount=0, status=pre_trip_status, payment_status="failed")
+
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_capture = MagicMock()
+
+    intent = _fake_intent("requires_capture")
+    intent.amount = 3000
+
+    fake_settings = {"stripe_secret_key": STRIPE_SECRET}
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=fake_settings)),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
+        patch("stripe.PaymentIntent.capture", mock_capture),
+        patch("services.payment_service.record_payment_event", AsyncMock()),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_capture.assert_not_called()
+    calls = [c[0][2].get("$set", {}) for c in mock_db_update.await_args_list]
+    statuses = [c.get("payment_status") for c in calls]
+    # retrying (claim) -> failed (released back to the pre-claim status) —
+    # the ride must NOT be left sitting at 'retrying' forever.
+    assert statuses == ["retrying", "failed"]
+    # Not penalized: skipping isn't a failed attempt, so no counter bump.
+    assert all("payment_retry_count" not in c for c in calls)
+
+
+@pytest.mark.anyio
+async def test_requires_capture_skip_is_reselected_on_next_tick():
+    """Direct regression for the money-auditor's "next tick" gap: a ride
+    skipped by the pre-trip guard must come back through the scan's own
+    payment_status filter on a later run — proving the release actually
+    un-wedges it, not just that SOME update happened."""
+    ride = _make_ride(grand_total=20.00, tip_amount=0, status="in_progress", payment_status="failed")
+
+    intent = _fake_intent("requires_capture")
+    intent.amount = 3000
+    fake_settings = {"stripe_secret_key": STRIPE_SECRET}
+
+    released_status = {}
+
+    async def fake_update_one(table, filter_, update):
+        released_status["payment_status"] = update.get("$set", {}).get("payment_status", filter_.get("payment_status"))
+        return {"id": RIDE_ID}
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=fake_settings)),
+        patch("utils.payment_retry.db.update_one", AsyncMock(side_effect=fake_update_one)),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
+        patch("stripe.PaymentIntent.capture", MagicMock()),
+        patch("services.payment_service.record_payment_event", AsyncMock()),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    # The scan's own filter (line ~360) only re-selects payment_status in
+    # (failed, requires_action, processing) — assert the ride landed back in
+    # one of those, not stuck at 'retrying'.
+    assert released_status["payment_status"] in ("failed", "requires_action", "processing")
 
 
 @pytest.mark.anyio

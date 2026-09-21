@@ -472,7 +472,7 @@ class TestAdminLogoutAll:
         assert result == {"success": True, "revoked_refresh_tokens": 2}
 
     @pytest.mark.asyncio
-    async def test_admin_001_500s_when_token_version_bump_fails(self):
+    async def test_admin_001_raises_when_token_version_bump_fails(self):
         """Fail-closed counterpart: if the settings-row read/write itself
         fails (utils/env_admin_tokens.py's own DatabaseError), the operator
         must see a loud failure, not a silent 200 that leaves the leaked

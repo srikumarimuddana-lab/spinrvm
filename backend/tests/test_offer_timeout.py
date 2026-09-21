@@ -60,7 +60,6 @@ class TestOfferTimeoutHandler:
                 "backend.routes.rides._deps.db_supabase.set_driver_available",
                 AsyncMock(return_value={"id": "driver_1", "is_available": True}),
             ) as mock_set_available,
-            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
             patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)),
             patch("utils.driver_presence.reset_miss_streak", AsyncMock()),
             patch("utils.driver_presence.clear_presence", AsyncMock()),

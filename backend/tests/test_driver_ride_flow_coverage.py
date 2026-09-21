@@ -880,6 +880,10 @@ class TestDeclineRideSuccessBranches:
             "backend.routes.drivers._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
         )
+        # _base_patches' own record_period_transition patch (index 5) never
+        # intercepts this path -- see the docstring above -- so it's dropped
+        # rather than left in as dead setup.
+        del patches[5]
         with (
             _Patches(*patches),
             patch.object(insurance_periods, "record_period_transition", AsyncMock()) as period_transition,

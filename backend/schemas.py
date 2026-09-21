@@ -300,6 +300,12 @@ class AppSettings(BaseModel):
     cancellation_fee_admin: DecimalStr = Decimal("0.50")  # Admin gets $0.50
     cancellation_fee_driver: DecimalStr = Decimal("4.00")  # Driver gets $4.00
     platform_fee_percent: DecimalStr = Decimal("0.0")  # 0% commission - driver keeps all fare
+    # Migration 438. Smallest non-zero tip (CAD); "no tip" is always allowed and
+    # 0 switches the rule off. Stripe can't charge a separate amount under
+    # $0.50, so sub-minimum tips used to fail silently (utils/tip_policy.py).
+    # Ships OFF: older rider apps show a generic error and lose the rating on a
+    # rejected tip, so admins set $1.00 once the updated rider app is live.
+    min_tip_amount: DecimalStr = Decimal("0.00")
     # When false, drivers can go online without an active Spinr Pass. Set
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.

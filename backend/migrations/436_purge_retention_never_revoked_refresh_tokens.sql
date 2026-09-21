@@ -52,6 +52,23 @@
 --   in batches out-of-band BEFORE applying, rather than widening the predicate
 --   and letting the scheduled job take it all at once.
 --
+-- ⚠ TIMING: APPLY WITH LEAD TIME BEFORE 03:00 UTC.
+--   The pre-flight query above is the ONLY safeguard. The daily caller,
+--   `run_retention_purge_tick` (backend/utils/retention_purge.py:148-170),
+--   issues ONE unbatched `rpc("purge_pii_retention", ...)` call with no
+--   row-count cap, no chunking, and no automatic dry-run-then-decide gate --
+--   and `retention_purge_loop` fires it once per day at ~03:00 UTC. So the
+--   first run after this migration lands takes the whole accumulated backlog
+--   in a single statement, unattended, whatever its size.
+--
+--   Applying this migration shortly before 03:00 UTC leaves no window to run
+--   the count and react. Apply it early in the day, run the pre-flight query,
+--   and batch out-of-band first if the number warrants it.
+--
+--   (Applying the migration itself is safe against in-flight traffic --
+--   CREATE OR REPLACE FUNCTION takes only a brief catalog lock, not a table
+--   lock. All the deferred risk is in the next scheduled purge run.)
+--
 -- SAFETY
 --   Only rows already invalid for 30+ days are touched. A row matching the new
 --   arm has expires_at in the past, so lookup_refresh_token (:313-314) already

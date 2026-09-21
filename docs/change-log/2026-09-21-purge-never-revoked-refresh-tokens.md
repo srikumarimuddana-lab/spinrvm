@@ -67,11 +67,22 @@ the same backlog forever. Widening the predicate fixes the cause once.
 
 **Blast radius: single-surface — one Postgres function, one table, one step.**
 
-Mechanically verified that the executable SQL diff between 434's function and 436's is **exactly the
-two changed predicates** (the `DELETE` arm and the dry-run `COUNT` arm), with identical executable
-line counts (339 vs 339) and no other table written by any changed line. This matters more than
-usual: a `CREATE OR REPLACE` silently reverts any step accidentally dropped or mangled while copying,
-so "only Step E changed" is a correctness requirement, not a nicety.
+Mechanically verified that the executable SQL diff between 434's **function body** and 436's is
+**exactly the two changed predicates** (the `DELETE` arm and the dry-run `COUNT` arm), with identical
+executable line counts (339 vs 339) and no other table written by any changed line. This matters more
+than usual: a `CREATE OR REPLACE` silently reverts any step accidentally dropped or mangled while
+copying, so "only Step E changed" is a correctness requirement, not a nicety.
+
+> **Correction (`spinr-migration-reviewer`):** an earlier revision of this entry, and the commit
+> message for `6ba6b5b`, said "exactly the two predicates" without qualification. That overstated the
+> scope of the check. My equivalence script compared lines 78-480 — the function body — which
+> **excludes the trailing `COMMENT ON FUNCTION` string literal**, and that string was also
+> deliberately changed (436:509 vs 434:486) to document the new fix. The reviewer re-derived the
+> comparison independently with different boundaries (344 vs 344 lines, including the
+> REVOKE/GRANT/COMMENT tail) and reached the same substantive conclusion — equal length, single
+> logic-bearing diff region, no step silently dropped — while correctly catching that the
+> documentation string is a second, benign changed region. The correct claim is: **the only
+> logic-bearing change is Step E's predicate; the only other change is a documentation string.**
 
 - **No live session can be signed out.** Every row the new arm deletes has `expires_at` in the past,
   so `lookup_refresh_token` (`:313-314`) already returns `None` for it. Deleting it cannot revoke
@@ -171,11 +182,22 @@ the *data* is PITR, and the rollback plan for the *behavior* is re-applying 434.
       no collision, no renumbering of existing files.
 - [x] **Reviewed against `backend/migrations/CLAUDE.md`** — append-only (new file, no edit to a merged
       one), rollback plan in a top comment, no new index needed, idempotent `CREATE OR REPLACE`.
-- [ ] **`spinr-migration-reviewer`** — launched against the actual diff (gate 10), **had not
-      returned when this was committed**. Its job here is specifically to independently
-      re-confirm the 434→436 byte-faithfulness in §4, since a CREATE OR REPLACE that silently
-      drops a step is this change's worst failure mode. Findings will land as follow-up
-      commits on this branch. Do not treat this box as ticked when reviewing.
+- [x] **`spinr-migration-reviewer`** run against the actual diff (gate 10). **Verdict: FIX BLOCKERS
+      (all now resolved) + NEEDS DBA REVIEW.** It independently re-derived the 434→436 comparison
+      and confirmed no step was silently dropped, and independently confirmed: `expires_at` has
+      never had `NOT NULL` loosened (zero `DROP NOT NULL` hits across the migration tree); the
+      partial index was never dropped; no production reader depends on never-revoked expired rows;
+      `NEVER_APPLY` is unaffected. Its findings and their disposition:
+      1. *Blocker — missing `migration-override-ok` marker.* Already fixed in `369ed60` before the
+         review returned; CI confirms it (Migration Safety Check went from 2 failures to 1).
+      2. *Warning — CHECK E needs a CR + admin merge-override, do not weaken any DELETE.* Matches
+         the read already acted on; CR filed as #5656.
+      3. *Warning — the daily caller has no batching or row cap.* **New, acted on** — added the
+         03:00 UTC timing warning to the migration header (§4 below).
+      4. *Precision note — the "exactly two predicates" claim omitted the COMMENT string.*
+         **Correct; retracted in §4 above.**
+      5. *Informational — a pre-existing redundant index `idx_refresh_tokens_expires_at`
+         (`50_pii_retention_purge.sql:87-89`).* Not introduced here, nothing to change.
 - [ ] **Executed against a real Postgres** — not done, see §10.
 - [x] **Feature flag** — not applicable; a retention predicate cannot be meaningfully flagged. The
       dry-run gate serves the same "measure before committing" purpose.
@@ -191,6 +213,12 @@ the *data* is PITR, and the rollback plan for the *behavior* is re-applying 434.
   yet knows whether this deletes a thousand rows or a million. That number must be obtained before
   applying, and it determines whether batching is required.
 - **No staging run.** Not applied to any environment, including staging.
+- **The first purge run is unattended and unbatched.** `run_retention_purge_tick`
+  (`utils/retention_purge.py:148-170`) makes one `rpc("purge_pii_retention", ...)` call with no row
+  cap, no chunking, and no automatic dry-run gate, fired daily at ~03:00 UTC by
+  `retention_purge_loop`. Nothing in the calling code will measure the backlog first. **Someone with
+  production DB access must run the header's pre-flight query, and the migration must be applied
+  with lead time before 03:00 UTC, not just before it.**
 - **Historical `ip` values are not corrected.** Rows written before PR #5654 hold the Fly proxy
   address; the real IP was never captured and cannot be reconstructed. This migration deletes such
   rows on schedule but does not fix the ones still inside the window.

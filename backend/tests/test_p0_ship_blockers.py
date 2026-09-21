@@ -184,8 +184,8 @@ class TestNoDriversAvailableTimeout:
 
         claim_calls = []
 
-        async def _capture_claim(table, filters, patch):
-            claim_calls.append((table, filters, patch))
+        async def _capture_claim(table, filters, patch, retry_policy="read"):
+            claim_calls.append((table, filters, patch, retry_policy))
             return {**searching, **patch}
 
         ws_calls = []
@@ -211,7 +211,7 @@ class TestNoDriversAvailableTimeout:
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
         assert claim_calls, "the cancel claim (update_one) was not issued on timeout"
-        table, claim_filter, update_patch = claim_calls[0]
+        table, claim_filter, update_patch, retry_policy = claim_calls[0]
         assert table == "rides"
         # Compare-and-swap: only a ride STILL searching may be cancelled by
         # the timer (C2 — an id-only update_ride overwrote accepted rides).
@@ -219,6 +219,10 @@ class TestNoDriversAvailableTimeout:
         assert update_patch["status"] == "cancelled"
         assert "cancellation_reason" in update_patch
         update_ride.assert_not_called()
+        # #5600: single-attempt CAS, matching utils/stuck_ride_sweeper.py's
+        # own claim — no retry to mask a committed-but-ack-lost attempt as a
+        # fresh zero-row query.
+        assert retry_policy == "write", "search-timeout claim must not use the retrying default policy"
 
         assert any(f"rider_{RIDER_ID}" in str(c) and m.get("type") == "ride_cancelled" for c, m in ws_calls), (
             "Rider channel was not notified on search timeout"
@@ -306,7 +310,7 @@ class TestNoDriversAvailableTimeout:
         order = []
         writes = []
 
-        async def _capture_write(table, filters, patch):
+        async def _capture_write(table, filters, patch, retry_policy="read"):
             # Both the timer's claim and card_hold_release's auth_status
             # write land here (one shared db_supabase module object).
             writes.append((filters, patch))
@@ -355,7 +359,7 @@ class TestNoDriversAvailableTimeout:
         )
         writes = []
 
-        async def _capture_write(table, filters, patch):
+        async def _capture_write(table, filters, patch, retry_policy="read"):
             writes.append((filters, patch))
             return {**searching, **patch}
 
@@ -387,7 +391,7 @@ class TestNoDriversAvailableTimeout:
         searching = _ride(status="searching")
         update_calls = []
 
-        async def _capture_update(table, filters, patch):
+        async def _capture_update(table, filters, patch, retry_policy="read"):
             # First call (with attribution columns) fails; the retry (base
             # fields only) succeeds.
             if "cancelled_by" in patch:

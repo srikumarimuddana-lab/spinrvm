@@ -1,4 +1,10 @@
--- 432: flag gating whether uncollected fares are excluded from driver-payable money.
+-- 434: flag gating whether uncollected fares are excluded from driver-payable money.
+--
+-- Originally authored as 432. Renumbered before merge: 432 was taken by
+-- 432_admin_role_rls_unreachable_phase1.sql (PR #5592), which landed on main
+-- while this branch was in flight. Safe to rename because this file has never
+-- been applied anywhere — the runner keys on the full filename, so only
+-- ALREADY-APPLIED migrations must never be renamed (CLAUDE.md, migrations).
 --
 -- Backs utils/payment_collection.payable_ride_filter, which is read by
 -- /drivers/balance, the weekly auto_payout batch, and driver statements.

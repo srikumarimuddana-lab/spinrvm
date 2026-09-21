@@ -231,8 +231,12 @@ never locked out of the gap.
   *after* seeing it match the pre-fix source, so it is not a vacuous assertion).
 - Blast radius for the response-shape change traced to `admin-dashboard/src/lib/api/auth.ts:113`
   and resolved by converging both branches on the existing tail rather than adding a second shape.
-- Migration numbering: `433` is the next free prefix (`ls backend/migrations | sort -V | tail`
-  shows `432` as the highest), so `migration-check.yml` CHECK B has no collision to flag.
+- Migration numbering: `433` is free. **Corrected after merging `main`:** the branch was 12 commits
+  behind, and `432_admin_role_rls_unreachable_phase1.sql` (PR #5592) had landed there in the
+  meantime — colliding with this branch's own `432_uncollected_rides_excluded_from_payable_flag.sql`
+  from the C1 work, which `migration-check.yml` CHECK B hard-fails. That file was renumbered to
+  `434` (never applied anywhere, so renaming it is safe; the runner keys on the full filename, so
+  only *already-applied* migrations are frozen). `433` here was unaffected and stands.
 - **`spinr-security-auditor` was run against the diff** per CLAUDE.md's pre-commit gate. Verdict:
   no blockers. It independently confirmed the branch chain is mutually exclusive (no token can
   skip both checks, no staff token can enter the env-admin branch), that the fail-closed 503 is

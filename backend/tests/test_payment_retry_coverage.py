@@ -43,6 +43,9 @@ def _make_ride(**overrides) -> dict:
         "tip_amount": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        # Default to "completed": the requires_capture branch only auto-captures
+        # a stranded post-settlement hold on a completed ride (2026-09-21 fix).
+        "status": "completed",
     }
     base.update(overrides)
     return base
@@ -474,7 +477,9 @@ class TestRetryFailedPaymentsScan:
             patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
             patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
             patch("utils.payment_retry.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
-            patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_capture", amount=5000))),
+            patch(
+                "stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_capture", amount=5000))
+            ),
             patch("stripe.PaymentIntent.capture", mock_capture),
             patch("services.payment_service.record_payment_event", AsyncMock()),
             patch("utils.payment_retry._fire_purchase_conversion", AsyncMock()),

@@ -376,7 +376,12 @@ async def retry_failed_payments():
                 # computation — without them every stranded-hold capture would
                 # silently fall back to total_fare (no fees/taxes/tip).
                 "grand_total,tip_amount,payment_method,surge_multiplier,"
-                "stripe_invoice_id,created_at,updated_at"
+                # status gates the requires_capture branch below — a
+                # booking-time hold can sit in Stripe's requires_capture
+                # state for a ride that hasn't completed yet (or ever will),
+                # and that is NOT the "stranded post-settlement hold" this
+                # branch exists for.
+                "stripe_invoice_id,created_at,updated_at,status"
             ),
         )
     except Exception as e:
@@ -546,6 +551,56 @@ async def retry_failed_payments():
                 # the owed amount now that Stripe is reachable again. NEVER
                 # capture the full authorized amount blindly: the hold includes
                 # the tip buffer, so that would overcharge the rider.
+                #
+                # Guard: only a COMPLETED ride can have a stranded
+                # post-settlement hold in this sense. A ride still pre-trip
+                # (searching/assigned/accepted/arrived/in_progress) can
+                # legitimately have its booking-time hold sitting in
+                # requires_capture — that is normal, not stranded — and
+                # blindly capturing it here would charge the full fare before
+                # the trip has even happened, race a same-ride cancellation
+                # (which only knows how to release/partially-capture a LIVE
+                # hold, not refund an already-captured one), and leave the
+                # rider paying full fare for a ride that may end up free to
+                # cancel. Found via a real test-ride discrepancy: 2026-09-21
+                # review, see docs/change-log/ for the writeup.
+                #
+                # `ride["status"]` here is from the fetch at the TOP of this
+                # scan, not re-checked right before this branch runs — a ride
+                # that completes in the few-hundred-ms gap between that fetch
+                # and this line could false-skip a genuinely stranded hold.
+                # Accepted: self-heals on the next tick (5 min later) once the
+                # fresh fetch sees status=="completed", so the cost is a bounded
+                # delay, not a stuck hold — unlike leaving payment_status stuck
+                # at 'retrying' below, which would never self-heal.
+                if ride.get("status") != RideStatus.COMPLETED:
+                    logger.warning(
+                        f"Payment retry: ride {ride_id} has a requires_capture hold but "
+                        f"status={ride.get('status')} (not completed) — skipping "
+                        "auto-capture; a genuinely stranded hold here will be caught "
+                        "once the ride actually completes, or released/refunded by "
+                        "the cancellation flow"
+                    )
+                    # Release the 'retrying' claim made above — the scan only
+                    # re-selects payment_status in (failed, requires_action,
+                    # processing), so leaving it at 'retrying' would wedge this
+                    # ride out of every future tick AND out of process_payment's
+                    # own settlement claim (which also excludes 'retrying'),
+                    # permanently blocking collection once the ride completes.
+                    # No retry_count bump: nothing failed, the ride just isn't
+                    # done yet, and penalizing it here would falsely exhaust
+                    # MAX_RETRIES for a ride that's simply still in progress.
+                    await db.update_one(
+                        "rides",
+                        {"id": ride_id},
+                        {
+                            "$set": {
+                                "payment_status": current_status,
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        },
+                    )
+                    continue
                 owed = ride.get("grand_total")
                 if owed is None:
                     owed = ride.get("total_fare", 0)

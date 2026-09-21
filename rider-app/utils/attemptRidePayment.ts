@@ -118,6 +118,18 @@ const STRIPE_UNAVAILABLE_ALERT: PaymentAlert = {
 // An admin has emailed a payable invoice for this trip. In-app charging is
 // blocked server-side, so Change Card/Retry would just loop on the same 409 —
 // direct the rider to the emailed pay link instead.
+// The server rejected the tip as under the minimum (settings.min_tip_amount,
+// backend/utils/tip_policy.py) — only reachable when the minimum changed after
+// this screen loaded it, since the screen blocks sub-minimum tips itself. Show
+// the server's exact message; "Edit tip" dismisses so the rider fixes the tip
+// on this screen (Change Card can't help), Support stays as the way out.
+export const MIN_TIP_ALERT = (message: string): PaymentAlert => ({
+  title: 'Tip too small',
+  message,
+  variant: 'warning',
+  buttons: [{ text: 'Edit tip', kind: 'cancel' }, SUPPORT_BTN],
+});
+
 const INVOICE_ISSUED_ALERT: PaymentAlert = {
   title: 'Invoice emailed',
   message:
@@ -247,6 +259,10 @@ export async function attemptRidePayment(
 
     if (status === 502) {
       return { ok: false, alert: PROCESSOR_ERROR_ALERT };
+    }
+
+    if (status === 400 && typeof message === 'string' && message.startsWith('Minimum tip is')) {
+      return { ok: false, alert: MIN_TIP_ALERT(message) };
     }
 
     // 400 (e.g. legacy no-payment-method, validation) — never a dead end on a

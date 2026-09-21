@@ -61,6 +61,7 @@ import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import ConfirmSheet from '../components/ConfirmSheet';
 import type { ConfirmSheetButton } from '../components/ConfirmSheet';
 import Toast from '../components/Toast';
+import { MinTipAmountContext } from '../utils/minTipContext';
 
 export const StripeKeyContext = React.createContext<string | null>(null);
 // Public base URL for the "Share Trip" tracking page, served from
@@ -349,6 +350,7 @@ function RootLayout() {
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const [ridelessSosEnabled, setRidelessSosEnabled] = useState<boolean>(false);
   const [directionsProxyEnabled, setDirectionsProxyEnabled] = useState<boolean>(false);
+  const [minTipAmount, setMinTipAmount] = useState<number>(1);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
   // Current route, mirrored into a ref so the AppState listener (registered
@@ -395,6 +397,7 @@ function RootLayout() {
           posthog_session_replay_enabled?: boolean;
           posthog_api_key?: string;
           posthog_host?: string;
+          min_tip_amount?: string;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -402,6 +405,8 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        const minTip = Number(res.data?.min_tip_amount);
+        if (Number.isFinite(minTip) && minTip >= 0) setMinTipAmount(minTip);
         const posthogFactory = tryCreateNativePostHogClient();
         if (posthogFactory) {
           await initPostHogReplayFromSettings(res.data, posthogFactory);
@@ -921,7 +926,7 @@ function RootLayout() {
           }}
         >
           <ThemeProvider>
-            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} directionsProxyEnabled={directionsProxyEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
+            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} minTipAmount={minTipAmount} directionsProxyEnabled={directionsProxyEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
           </ThemeProvider>
         </PersistQueryClientProvider>
       ) : null}
@@ -966,6 +971,7 @@ function RootLayoutInner({
   stripePublishableKey,
   trackBaseUrl,
   ridelessSosEnabled,
+  minTipAmount,
   directionsProxyEnabled,
   wsState,
   confirmSheet,
@@ -977,6 +983,7 @@ function RootLayoutInner({
   stripePublishableKey: string | null;
   trackBaseUrl: string | null;
   ridelessSosEnabled: boolean;
+  minTipAmount: number;
   directionsProxyEnabled: boolean;
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
@@ -1006,6 +1013,7 @@ function RootLayoutInner({
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <TrackBaseUrlContext.Provider value={trackBaseUrl}>
           <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>
+          <MinTipAmountContext.Provider value={minTipAmount}>
           <DirectionsProxyEnabledContext.Provider value={directionsProxyEnabled}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
@@ -1065,6 +1073,7 @@ function RootLayoutInner({
           </Stack>
           </MaybeStripeProvider>
           </DirectionsProxyEnabledContext.Provider>
+          </MinTipAmountContext.Provider>
           </RidelessSosEnabledContext.Provider>
           </TrackBaseUrlContext.Provider>
           </StripeKeyContext.Provider>

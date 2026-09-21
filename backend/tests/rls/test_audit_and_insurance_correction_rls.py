@@ -37,6 +37,14 @@ test_money_and_safety_rls.py's financial_events tests):
         below, which reproduces (does not fix) this live bug, and
         ACTION_ITEMS.md C112 for the full writeup.
 
+ACTION_ITEMS.md C123 phase 1 / migration 432: the "Admin read audit_logs"
+policy above (migration 51) checks users.role IN ('admin', 'super_admin'),
+the same unreachable pattern migration 430 (C107) fixed on 11 other tables --
+migration 256's CHECK constraint makes that role value permanently
+impossible to hold. Migration 432 replaces it with an explicit USING (false)
+deny; `test_admin_authenticated_cannot_select_audit_logs` below was rewritten
+from a "can select" assertion to pin that denial rather than removed.
+
 `driver_insurance_period_corrections` / `driver_period_distances`: both
 mirror `driver_insurance_periods`' own shape (migration 64, already covered
 in test_money_and_safety_rls.py) -- owner-or-admin SELECT (resolved through
@@ -144,7 +152,13 @@ def test_non_admin_authenticated_selects_no_audit_logs(pg_cur):
 
 
 @pytest.mark.parametrize("role", ["admin", "super_admin"])
-def test_admin_authenticated_can_select_audit_logs(pg_cur, role):
+def test_admin_authenticated_cannot_select_audit_logs(pg_cur, role):
+    """ACTION_ITEMS.md C123 phase 1 / migration 432: the "Admin read
+    audit_logs" policy migration 51 created is unreachable -- migration 256's
+    CHECK constraint makes users.role IN ('admin', 'super_admin') permanently
+    impossible to hold, same root cause as migration 430 (C107). 432 replaces
+    it with an explicit USING (false) deny; admin and super_admin are denied
+    identically, same as every non-admin authenticated user."""
     admin = _uuid()
     log_id = _uuid()
     as_role(pg_cur, None)
@@ -152,7 +166,7 @@ def test_admin_authenticated_can_select_audit_logs(pg_cur, role):
     _seed_audit_log(pg_cur, log_id)
     as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
     pg_cur.execute("SELECT id FROM audit_logs WHERE id = %s", (log_id,))
-    assert [r[0] for r in pg_cur.fetchall()] == [log_id]
+    assert pg_cur.fetchall() == []
 
 
 def test_anon_cannot_insert_audit_logs(pg_cur):

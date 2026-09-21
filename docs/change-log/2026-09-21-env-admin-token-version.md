@@ -211,9 +211,14 @@ Two independent levers, neither needing a second deploy:
 Migration 433 itself needs no rollback to make the revert safe; `DROP COLUMN` is documented in the
 migration header for when the readers are retired.
 
-Ordering note for the forward deploy: **the migration can land before or after the code.** Code
-without the column reads `None` → `0`, and the check is symmetric on 0, so the super admin is
-never locked out of the gap.
+Ordering note for the forward deploy: **the migration must land BEFORE the code.** An earlier
+draft of this change tolerated a missing column by reading it as `0`, which made the deploy order
+free — and was rejected in review as a fail-open hole (§9): the comparison is `claim < stored`, so
+a stored `0` passes every token ever minted, meaning absent data silently un-revokes everything an
+operator just killed. The read now selects the column by name and fails closed on any error, so
+deploying the code against a database without the column returns 503 on env-admin auth until the
+migration runs. That is the deliberate trade: a recoverable deploy-ordering constraint in exchange
+for a revocation control that cannot silently do nothing.
 
 ## 9. Verification performed
 
@@ -257,6 +262,28 @@ never locked out of the gap.
      the file (the mint below it and two staff-only guards); they are not part of the
      mint/verify/revoke trio and were left alone rather than churned.
   It also corrected a factual error in §4 of this log: 5 call sites, not 6.
+- **An architecture review pass was run against the same diff**, and found two defects the
+  security pass did not. Both fixed here, both verified by executing the changed code paths
+  directly (pytest being unavailable):
+  1. **Fail-open on absent data — a hole in the control this change exists to add.** The
+     fail-closed posture only covered *raised exceptions*. A missing `settings` row, or a missing
+     column, returned `0`; since `_token_version_mismatch` is `claim < stored`, a stored `0`
+     passes every token ever minted. An operator's revocation would silently do nothing. The
+     read now raises `DatabaseError` (503) when the row is absent and selects the column by
+     name so a missing column is an error rather than a `0`. Two tests that had codified the old
+     behaviour as *intended* were inverted.
+  2. **`/logout-all` could report success having written nothing.** `bump_env_admin_token_version`
+     discarded `update_one`'s return, and `update_one` returns `None` on a zero-row match without
+     raising (`repositories/_base.py:1286`); the settings row can legitimately be absent, which
+     `routes/admin/settings.py:813` proves by branching to `insert_one` for that case. So the
+     endpoint could answer `200` with a new version for a revocation that never reached the
+     database — the operator believing a leaked super-admin token was dead while it stayed live
+     until its own expiry. The write is now verified.
+  It also found that the read pulled `SELECT *` — ~130 columns including `stripe_secret_key`,
+  `twilio_auth_token`, `apns_p8_key` and four `ai_api_key_*` values — into an auth function's
+  frame on every super-admin request. Narrowed to `id,env_admin_token_version`, which also turns
+  a missing column into the hard error that finding 1 requires. The previously-unused
+  `DatabaseError` import it flagged as dead is now the exception both paths raise.
 
 ## 10. What was NOT verified
 

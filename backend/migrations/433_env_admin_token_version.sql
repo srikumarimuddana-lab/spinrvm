@@ -22,6 +22,17 @@
 -- keep working until their normal expiry (ADMIN_ACCESS_TOKEN_TTL_HOURS) — the
 -- version check is symmetric on 0, exactly like the staff path.
 --
+-- DEPLOY ORDERING: THIS MIGRATION MUST BE APPLIED BEFORE THE CODE THAT READS
+-- IT. utils/env_admin_tokens.py selects this column by name and treats a read
+-- failure as fail-closed (503), deliberately: a missing column must never be
+-- read as "version 0", because the comparison is `claim < stored` and a stored
+-- 0 passes every token ever minted — silently un-revoking everything an
+-- operator just killed. The cost of that choice is that deploying the code
+-- against a database without this column locks the env super admin out until
+-- the migration runs. An earlier draft inverted this (tolerating the missing
+-- column by returning 0) and was rejected in review as a fail-open hole in the
+-- very control this exists to add.
+--
 -- Deliberately NOT added to SettingsUpdateRequest: this is auth state an
 -- operator changes via /admin/auth/logout-all, not a settings-screen field.
 --

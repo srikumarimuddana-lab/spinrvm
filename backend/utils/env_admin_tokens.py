@@ -56,13 +56,33 @@ async def get_env_admin_token_version() -> int:
     super-admin token live for up to a minute after an operator pressed
     logout-all — which is the moment they least want lag.
 
-    Raises whatever the DB layer raises. Callers on the request path must turn
-    that into a 503 rather than defaulting to 0: treating an unreadable counter
-    as "version 0" would silently un-revoke every token the operator just
-    killed, which is the fail-open behaviour this module exists to remove.
+    **Selects only the two columns it needs, never ``*``.** The ``settings``
+    singleton carries ~130 columns including `stripe_secret_key`,
+    `twilio_auth_token`, `apns_p8_key` and four `ai_api_key_*` values. A
+    ``SELECT *`` here would drag the entire production secret bundle into the
+    local frame of an auth function on every super-admin request — not logged
+    today, but one future traceback or Sentry breadcrumb away from being so.
+
+    Raises ``DatabaseError`` (503) rather than ever returning a fallback. A
+    missing row, a missing column, or a read failure must NOT read as "version
+    0": with ``_token_version_mismatch`` being ``claim < stored``, a stored 0
+    passes every token ever minted, which would silently un-revoke everything
+    an operator just killed — the exact fail-open behaviour this module exists
+    to remove. **Because a missing column is an error here, migration 433 must
+    be applied before this code is deployed** (see the migration header).
     """
-    row = await db_supabase.find_one("settings", {"id": _SETTINGS_ROW_ID})
-    return int((row or {}).get(_VERSION_COLUMN) or 0)
+    rows = await db_supabase.get_rows(
+        "settings",
+        {"id": _SETTINGS_ROW_ID},
+        limit=1,
+        columns=f"id,{_VERSION_COLUMN}",
+    )
+    if not rows:
+        raise DatabaseError(
+            "env-admin revocation counter is unreadable",
+            details={"reason": "settings_row_missing", "row_id": _SETTINGS_ROW_ID},
+        )
+    return int(rows[0].get(_VERSION_COLUMN) or 0)
 
 
 async def bump_env_admin_token_version() -> int:
@@ -75,9 +95,23 @@ async def bump_env_admin_token_version() -> int:
     strictly greater than the version stamped into any already-minted token,
     and a single increment achieves it. It is a revocation generation, not a
     count of revocations.
+
+    Raises ``DatabaseError`` if the read fails or the write matched no row.
     """
     new_version = await get_env_admin_token_version() + 1
-    await db_supabase.update_one("settings", {"id": _SETTINGS_ROW_ID}, {_VERSION_COLUMN: new_version})
+    updated = await db_supabase.update_one("settings", {"id": _SETTINGS_ROW_ID}, {_VERSION_COLUMN: new_version})
+    # update_one returns None when the filter matched NO row, and does not
+    # raise (repositories/_base.py). Discarding that return would let
+    # /admin/auth/logout-all answer 200 with a new version for a revocation
+    # that never hit the database — the operator would believe a leaked
+    # super-admin token was dead while it stayed live until its own expiry.
+    # That is the single worst outcome this module can produce, so the write
+    # is verified rather than assumed.
+    if not isinstance(updated, dict):
+        raise DatabaseError(
+            "env-admin revocation counter was not written",
+            details={"reason": "settings_row_not_updated", "row_id": _SETTINGS_ROW_ID},
+        )
     return new_version
 
 

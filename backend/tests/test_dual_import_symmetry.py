@@ -39,7 +39,15 @@ import pytest
 _BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
 # Directories with no runtime dual-import obligation.
-_SKIP_PARTS = {"tests", "migrations", "__pycache__", "node_modules", "scripts", "evals"}
+#
+# `scripts/` is deliberately NOT skipped. An earlier draft excluded it on the
+# assumption that scripts carry no such obligation — false in this repo: 22
+# files under backend/scripts/ use the pattern, one of them commenting "dual
+# import pattern per repo convention" verbatim (audit_migration_drift.py), and
+# run_migrations.py is what applies migrations to production. Excluding them
+# left the exact bug class this test exists to catch invisible in the one tree
+# where a NameError does its damage outside a request handler.
+_SKIP_PARTS = {"tests", "migrations", "__pycache__", "node_modules", "evals"}
 
 
 def _bound_names(body: list[ast.stmt]) -> set[str]:

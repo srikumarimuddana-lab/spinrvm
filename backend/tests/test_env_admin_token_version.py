@@ -109,10 +109,9 @@ class TestVerifyPath:
         assert exc.value.status_code == 503
 
     async def test_zero_on_both_sides_still_passes(self, monkeypatch):
-        """Forward-compatibility: a token minted before migration 433 carries 0,
-        and a settings row without the column reads 0. The check is symmetric on
-        0 exactly like the staff path, so deploying code ahead of the migration
-        does not lock the super admin out."""
+        """The steady state before anyone has ever pressed logout-all: the
+        column defaults to 0 and tokens are stamped 0. The check is symmetric
+        on 0 exactly like the staff path, so nothing is locked out."""
         monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
         user = await _verify_admin_payload(_admin_payload(token_version=0))
         assert user is not None
@@ -127,27 +126,44 @@ class TestVerifyPath:
 
 
 class TestStoredVersionHelpers:
-    async def test_missing_row_reads_as_zero(self, monkeypatch):
+    """These pin the fail-CLOSED posture. An earlier draft returned 0 for a
+    missing row or a missing column, and had tests asserting that as intended.
+    `spinr-*` architecture review showed it to be a hole in the very control
+    this module adds: `_token_version_mismatch` is `claim < stored`, so a
+    stored 0 passes EVERY token ever minted — absent data silently un-revoked
+    everything an operator had just killed.
+    """
+
+    async def test_missing_row_raises_rather_than_reading_as_zero(self, monkeypatch):
         import utils.env_admin_tokens as mod
 
-        monkeypatch.setattr(mod.db_supabase, "find_one", AsyncMock(return_value=None))
-        assert await mod.get_env_admin_token_version() == 0
+        monkeypatch.setattr(mod.db_supabase, "get_rows", AsyncMock(return_value=[]))
+        with pytest.raises(mod.DatabaseError):
+            await mod.get_env_admin_token_version()
 
-    async def test_row_without_the_column_reads_as_zero(self, monkeypatch):
-        """The window where code is deployed but migration 433 has not run."""
+    async def test_read_selects_only_the_two_columns_it_needs(self, monkeypatch):
+        """Never `SELECT *`. The settings singleton carries ~130 columns
+        including stripe_secret_key, twilio_auth_token and four ai_api_key_*
+        values; pulling them into an auth function's frame on every
+        super-admin request is one future traceback away from exposure."""
         import utils.env_admin_tokens as mod
 
-        monkeypatch.setattr(mod.db_supabase, "find_one", AsyncMock(return_value={"id": "app_settings"}))
-        assert await mod.get_env_admin_token_version() == 0
+        get_rows = AsyncMock(return_value=[{"id": "app_settings", "env_admin_token_version": 2}])
+        monkeypatch.setattr(mod.db_supabase, "get_rows", get_rows)
+
+        assert await mod.get_env_admin_token_version() == 2
+        columns = get_rows.await_args.kwargs["columns"]
+        assert columns == "id,env_admin_token_version"
+        assert "*" not in columns
 
     async def test_bump_writes_stored_plus_one(self, monkeypatch):
         import utils.env_admin_tokens as mod
 
-        update = AsyncMock()
+        update = AsyncMock(return_value={"id": "app_settings", "env_admin_token_version": 8})
         monkeypatch.setattr(
             mod.db_supabase,
-            "find_one",
-            AsyncMock(return_value={"id": "app_settings", "env_admin_token_version": 7}),
+            "get_rows",
+            AsyncMock(return_value=[{"id": "app_settings", "env_admin_token_version": 7}]),
         )
         monkeypatch.setattr(mod.db_supabase, "update_one", update)
 
@@ -157,11 +173,28 @@ class TestStoredVersionHelpers:
         assert filters == {"id": "app_settings"}
         assert patch_doc == {"env_admin_token_version": 8}
 
+    async def test_bump_raises_when_the_write_matched_no_row(self, monkeypatch):
+        """`update_one` returns None on a zero-row match and does NOT raise. If
+        that return is discarded, /admin/auth/logout-all answers 200 for a
+        revocation that never reached the database, and the operator believes a
+        leaked super-admin token is dead while it stays live."""
+        import utils.env_admin_tokens as mod
+
+        monkeypatch.setattr(
+            mod.db_supabase,
+            "get_rows",
+            AsyncMock(return_value=[{"id": "app_settings", "env_admin_token_version": 7}]),
+        )
+        monkeypatch.setattr(mod.db_supabase, "update_one", AsyncMock(return_value=None))
+
+        with pytest.raises(mod.DatabaseError):
+            await mod.bump_env_admin_token_version()
+
     async def test_read_error_propagates_rather_than_defaulting(self, monkeypatch):
         """Callers decide the failure posture; the helper must not swallow."""
         import utils.env_admin_tokens as mod
 
-        monkeypatch.setattr(mod.db_supabase, "find_one", AsyncMock(side_effect=RuntimeError("db down")))
+        monkeypatch.setattr(mod.db_supabase, "get_rows", AsyncMock(side_effect=RuntimeError("db down")))
         with pytest.raises(RuntimeError):
             await mod.get_env_admin_token_version()
 

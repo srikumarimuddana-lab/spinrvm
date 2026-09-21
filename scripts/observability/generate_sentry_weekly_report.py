@@ -12,12 +12,21 @@ Markdown from JSON someone already produced.
 PII discipline (non-negotiable, per CLAUDE.md's PIPEDA section and the
 investigator agent's own output rules): this script only ever renders
 short-id, title, category, dates, counts, domain/surface tags, and free-text
-fields the investigator already wrote (root_cause, recommended_fix, etc.) --
-it never has access to a raw Sentry payload/stacktrace/breadcrumb, and it
-does not accept one as input. If a caller ever adds a field carrying raw
-event data to the input schema, that is a bug in the caller, not something
-this script should try to detect or scrub -- the investigator agent's own
-rules are what keep raw payloads out of the input in the first place.
+fields the investigator already wrote (root_cause, correlated_timeline,
+recommended_fix, etc.) -- it never has access to a raw Sentry payload/
+stacktrace/breadcrumb, and it does not accept one as input. If a caller ever
+adds a field carrying raw event data to the input schema, that is a bug in
+the caller, not something this script should try to detect or scrub -- the
+investigator agent's own rules are what keep raw payloads out of the input
+in the first place.
+
+`correlated_timeline` (added 2026-09-21, alongside the investigator's new
+Correlate step) carries the investigator's own free-text summary of what
+correlate_incident.py and local grep/git-history checks found -- including,
+when applicable, the mandatory "log/audit correlation not available this
+run" disclosure. Rendering it here is what lets that disclosure survive
+into the durable, published report rather than existing only in the
+in-session chat output.
 
 A missing/empty input (no issues this week) is not an error -- it's the
 report's expected content on a clean week, and must say so plainly rather
@@ -96,6 +105,8 @@ def _render_issue(issue: dict[str, Any]) -> str:
 
     if issue.get("root_cause"):
         lines.append(f"- **Root cause:** {issue['root_cause']}")
+    if issue.get("correlated_timeline"):
+        lines.append(f"- **Correlated timeline:** {issue['correlated_timeline']}")
     if issue.get("recommended_fix"):
         lines.append(f"- **Fix:** {issue['recommended_fix']}")
     if issue.get("confidence"):

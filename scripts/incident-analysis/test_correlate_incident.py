@@ -120,6 +120,20 @@ def test_correlate_sorts_by_severity_then_event_count():
     assert clusters[-1]["request_id"] == "req-warn"
 
 
+def test_correlate_ranks_fatal_above_error():
+    # Regression test: LEVEL_RANK previously had no "fatal" entry, so a
+    # fatal-level event fell back to rank 0 (tied with "debug") instead of
+    # sorting above "error" -- exactly backwards for the daily
+    # severity-scoped triage mode, which targets error/fatal first.
+    events = [
+        _event("req-error", level="error"),
+        _event("req-fatal", level="fatal"),
+    ]
+    clusters = correlate(events, [], [])
+    assert clusters[0]["request_id"] == "req-fatal"
+    assert clusters[0]["top_level"] == "fatal"
+
+
 def test_correlate_captures_domain_tags():
     events = [_event("req-1", domain="dispatch")]
     clusters = correlate(events, [], [])

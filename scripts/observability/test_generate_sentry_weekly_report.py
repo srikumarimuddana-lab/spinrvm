@@ -71,6 +71,7 @@ def test_render_report_renders_issue_fields_without_raw_pii_passthrough():
                 "domain": "payments",
                 "surface": "backend",
                 "root_cause": "surge_multiplier missing when service area has no auto-mode row",
+                "correlated_timeline": "Sentry cluster only (via correlate_incident.py) — log/audit correlation not available this run; candidate deploy: commit abc1234",
                 "recommended_fix": "default to 1.0 with an explicit log line",
                 "confidence": "high",
                 "action_taken": "fixed_pr",
@@ -87,6 +88,12 @@ def test_render_report_renders_issue_fields_without_raw_pii_passthrough():
     assert "KeyError in fare_service.calculate_fare" in report
     assert "domain=`payments`" in report
     assert "surface=`backend`" in report
+    # Regression test: the report generator previously had no field for the
+    # investigator's "Correlated timeline" output, so this disclosure
+    # (including the mandatory "not available this run" caveat) was silently
+    # dropped from the durable, published report even when produced.
+    assert "Correlated timeline" in report
+    assert "log/audit correlation not available this run" in report
     assert "Fix PR opened" in report
     assert "https://github.com/srikumarimuddana-lab/spinrvm/pull/9999" in report
     assert "C2: Sentry alert rule" in report

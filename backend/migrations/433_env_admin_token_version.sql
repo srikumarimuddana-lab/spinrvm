@@ -1,0 +1,45 @@
+-- 433: revocation generation for the env-credential super admin (admin-001).
+--
+-- admin-001 is defined by ADMIN_EMAIL/ADMIN_PASSWORD in the environment and has
+-- no admin_staff row, so dependencies/__init__.py's _verify_admin_payload
+-- skipped is_active, token_version and the idle timeout for it, and
+-- /admin/auth/logout-all refused to act on the account at all. The only
+-- revocation control was the per-JTI Redis denylist, which fails OPEN on a
+-- Redis error by design.
+--
+-- This column is that account's token_version, with the same semantics as
+-- admin_staff.token_version: mint stamps the current value into the token,
+-- every admin request compares the claim against it, and logout-all bumps it so
+-- every previously-minted token is rejected on its next request.
+--
+-- Backs backend/utils/env_admin_tokens.py. Read uncached on the request path —
+-- the 60s app-settings cache is deliberately bypassed so revocation is not
+-- delayed by up to a minute.
+--
+-- Safe to apply against live traffic: additive, NOT NULL with a DEFAULT, no
+-- rewrite of existing rows' meaning, no index, no policy change. Tokens minted
+-- before this lands carry token_version 0 and the column defaults to 0, so they
+-- keep working until their normal expiry (ADMIN_ACCESS_TOKEN_TTL_HOURS) — the
+-- version check is symmetric on 0, exactly like the staff path.
+--
+-- Deliberately NOT added to SettingsUpdateRequest: this is auth state an
+-- operator changes via /admin/auth/logout-all, not a settings-screen field.
+--
+-- Rollback (restores the previous behaviour without a redeploy — every token
+-- then compares 0 against 0 and passes, which is the pre-433 posture):
+--   UPDATE public.settings SET env_admin_token_version = 0 WHERE id = 'app_settings';
+-- Schema rollback, after retiring the code readers:
+--   ALTER TABLE public.settings DROP COLUMN IF EXISTS env_admin_token_version;
+
+SET lock_timeout = '5s';
+
+ALTER TABLE public.settings
+    ADD COLUMN IF NOT EXISTS env_admin_token_version INTEGER NOT NULL DEFAULT 0;
+
+RESET lock_timeout;
+
+COMMENT ON COLUMN public.settings.env_admin_token_version IS
+    'Revocation generation for the env-credential super admin (admin-001), which has no '
+    'admin_staff row. Mint stamps it into the token_version claim; _verify_admin_payload '
+    'rejects any admin-001 token whose claim is lower; /admin/auth/logout-all increments it. '
+    'Not settable through the admin settings API.';

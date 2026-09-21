@@ -40,8 +40,15 @@
 --                           enough collected earnings to cover every payout).
 
 WITH collected_statuses AS (
-    -- Keep in step with backend/utils/payment_collection.py
-    SELECT unnest(ARRAY['paid', 'waived_admin', 'refunded', 'partially_refunded', 'disputed', 'dispute_lost']) AS s
+    -- Keep in step with backend/utils/payment_collection.py's
+    -- COLLECTED_PAYMENT_STATUSES. 'succeeded' was missing here (found by the
+    -- 2026-09-21 swarm-watch drift audit, issue #5600): pre-fix code wrote
+    -- that raw Stripe status directly to rides.payment_status before the
+    -- 'paid'-mapping fix landed, with no backfill — so any ride settled
+    -- before that fix still reads 'succeeded' and this report misclassified
+    -- it as uncollected, inflating the exposure numbers finance would use to
+    -- decide a clawback/absorb policy.
+    SELECT unnest(ARRAY['paid', 'succeeded', 'waived_admin', 'refunded', 'partially_refunded', 'disputed', 'dispute_lost']) AS s
 ),
 completed AS (
     SELECT

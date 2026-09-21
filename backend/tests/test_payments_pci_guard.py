@@ -49,7 +49,7 @@ class TestAddCardRejectsRawCardData:
             await add_card(_mock_request(body), current_user={"id": "user_1"})
 
         assert exc_info.value.status_code == 400
-        assert "tokenize" in exc_info.value.detail.lower()
+        assert "secure card form" in exc_info.value.detail.lower()
 
     async def test_rejects_multiple_raw_fields(self):
         from backend.routes.payments import add_card
@@ -109,7 +109,7 @@ class TestAddCardRequiresPaymentMethodId:
             )
 
         assert exc_info.value.status_code == 400
-        assert "object" in exc_info.value.detail.lower()
+        assert "couldn't read that request" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio

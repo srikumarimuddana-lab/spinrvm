@@ -40,6 +40,7 @@ except ImportError:
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
     from utils.route_validation import validate_trip_route  # type: ignore
+    from utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs  # type: ignore
 
 # geo_utils lives at the backend root, one level above utils — keep its import in
 # its own block so its parent-relative path can't drag the sibling imports above

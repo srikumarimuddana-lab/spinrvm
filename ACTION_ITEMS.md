@@ -29,7 +29,25 @@
 > add an entry here (not just at the collision site) if a new collision is
 > unavoidable.
 
-_Last updated: 2026-09-20 — C122 INVESTIGATED (still open): traced
+_Last updated: 2026-09-20 — C122 RECURRED (2nd occurrence, still open):
+the same `locationIntegrity.ts` mock-detection test failed again in CI on
+PR #5580, identical signature to the first occurrence on PR #5538 — same
+assertion, same error, both on PRs touching zero driver-app files. 16
+total local reproduction attempts across both investigations still never
+reproduced it, and the code trace still shows no application-level
+mechanism for non-determinism, but two identical occurrences is now a
+confirmed recurring pattern, not a one-off — updated the action item to
+recommend a real CI-access session test the Jest/coverage-instrumentation
+hypothesis (the likely remaining locus) rather than keep guessing from a
+sandbox that can't rerun CI or inspect runner specs. Prior: C121 gap #3
+CLOSED, gap #2 UPGRADED: added a build-info stamp step to `ci.yml`'s
+`docker-image-scan` job and re-enabled `deploy-fly-signed-image.yml`'s
+build-SHA verification (gap #3). Researched Fly's actual
+documented/community-reported behavior for gap #2 (registry auth) and
+found real evidence the current approach likely fails against a PRIVATE
+GHCR image (`401 Unauthorized` even after `docker login`) — the known
+working fix (make the package public) is a product decision, not
+implemented here; flagged for the user. Prior: C122 INVESTIGATED (still open): traced
 `locationIntegrity.ts`'s mock-detection branch line by line — it is fully
 synchronous and deterministic (no timers, no wall-clock dependency), and
 `git log` confirms nothing has changed in the source or test since the
@@ -14162,6 +14180,42 @@ record of what was assumed vs. what was actually true</summary>
   is to delete the PR-review-handling section rather than leave it describing
   a workflow nobody runs — the same cleanup done for the Claude reviewer in
   #3096.
+- **Correction (2026-09-20) — this is not a "stall, cause still findable," it's
+  effectively dead with one unexplained one-day exception.** Re-verified fresh
+  rather than trusting the 2026-08-01 snapshot above, ahead of drafting a C9/C7
+  decision brief for the budget owner:
+  - `commenter:app/chatgpt-codex-connector created:>=2026-08-01` → **3** results
+    total, all three **created 2026-09-16** (#5480, #5481, #5483). Zero in all
+    of August, zero from 2026-09-17 through today (checked explicitly:
+    `created:>=2026-09-17` → 0).
+  - Volume in the same window: `is:merged created:>=2026-08-01` → **1,548**
+    merged PRs (as of this check; ~1,580 created, merged or not). So Codex
+    reviewed **3 out of ~1,550+ PRs merged over 7 weeks** — not a stall
+    recovering, a single one-day blip bracketed by silence on both sides.
+  - Control query re-run to rule out a search-syntax false negative (the
+    original entry's own concern): `commenter:app/github-actions
+    created:>=2026-08-01` → 1,580. The search mechanism works; Codex's 3 is
+    real signal.
+  - **Revised framing for whoever gets org/Codex-dashboard access to
+    investigate:** don't look for a clean on/off switch flipped around
+    July 29–30 and left off. Look for whatever happened specifically on
+    2026-09-16 that let it fire 3 times and then stopped again — a billing/
+    quota flap, a transient token refresh, or a config change that partially
+    reverted are all more consistent with this shape than a simple outage.
+  - **C7 re-verified the same day, unchanged:** `claude-review.yml`'s own job
+    log on this session's PR #5581 (run resolved 2026-09-20) shows
+    `HAS_ANTHROPIC_KEY: false` and a clean skip — the 2026-08-01 decision to
+    leave the key unset is still in effect, not silently reversed or drifted.
+  - **Net, corrected:** zero effective automated PR review from either vendor
+    across ~1,550+ PRs since the last time this was measured, with no fix
+    landed and no config change on the Claude-review side. The decision this
+    entry and C7 describe is still fully open — see the 2026-09-20 decision
+    brief (session `session_014H5KG38UmphVxPYyvY5kxn`) for the options
+    scored against this corrected picture, including that C7's old
+    "~50-80 runs/day" cost estimate is now stale in the budget owner's favor:
+    `synchronize` was already dropped and `paths-ignore` added for docs
+    before this correction, so real volume is closer to ~1 run per non-doc
+    PR (~25-30/day at current merge volume), not 50-80.
 
 ### C10. No reconciliation job for `stripe_events` rows stuck at `processed_at IS NULL`
 - [x] **Status:** closed 2026-08-01, same day it was filed — found while
@@ -27711,8 +27765,11 @@ as evidence that the thing it configures exists.
   `driver-app/app/driver/profile.tsx` — all already fixed on `main`, no
   changes made by this entry's closure.
 
-### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 7 more tables — safety/regulatory-sensitive, deliberately not fixed alongside C107
-- [ ] **Status:** OPEN — found during C107's review (2026-09-20) by grepping every migration for
+### C123. Same unreachable `users.role IN ('admin','super_admin')` RLS pattern found on 6 more tables — safety/regulatory-sensitive tables deliberately not fixed alongside C107
+- [x] **Status: PHASE 1 RESOLVED 2026-09-20** (`audit_logs`, `push_tokens`, `cloud_messages`,
+  `document_requirements`) via migration 432. **Phase 2 OPEN** (`safety_incidents`,
+  `driver_insurance_periods` — deliberately deferred, see below).
+  Found during C107's review (2026-09-20) by grepping every migration for
   the same pattern, rather than trusting C107's own "10 tables" scope as complete. Deliberately
   **not** fixed in the same pass as C107 — two of these tables are safety/regulatory-critical and
   warrant their own review rather than folding into a fix for an unrelated, lower-stakes surface.
@@ -27720,37 +27777,63 @@ as evidence that the thing it configures exists.
   pre-existing C108 about `auth.users`; the next pick, "C116", collided with a second, unrelated,
   concurrently-filed C116 about `driver-map.tsx`; the next pick, "C121", collided with a third,
   unrelated, concurrently-filed C121 about the Fly deploy signed-image gap.)
+  **Correction (2026-09-20, phase 1):** this item's own title said "7 more tables" while its list
+  below only ever named 6 — not a real discrepancy, just an ambiguous count: `document_requirements`
+  has 2 independent problems on one table (the unreachable-role-check pattern, *and* the older
+  `role = 'admin'`-only form missing `super_admin`), so "7" counted problems, not tables. Title
+  corrected to "6 more tables" to avoid re-confusing a future reader the way it briefly did this one.
 - **Affected tables and their migrations:**
-  1. `audit_logs` (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
+  1. ~~`audit_logs`~~ **FIXED (phase 1, migration 432)** (migration 51, `51_audit_logs_lockdown.sql`) — security/observability.
   2. `safety_incidents` (migration 94, `94_safety_incidents.sql`, 2 policies: "Admin read/update"
-     + "Admin update") — **safety-critical**.
+     + "Admin update") — **safety-critical, phase 2, still open**.
   3. `driver_insurance_periods` (migration 64, `64_driver_insurance_periods.sql`) — **regulatory-
-     critical**: 7-year TNC insurance audit retention (CLAUDE.md's regulatory-sk.md). Its own
-     `test_admin_can_select_any_insurance_period` RLS test is untouched and still passing —
-     migration 256 was deliberately kept out of the shared RLS test fixture specifically to avoid
-     breaking this and other unrelated tests' ability to seed `role="admin"` (see
-     `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS policy
-     is untouched.
-  4. `cloud_messages` (migration 06, `06_cloud_messaging.sql`) — notifications.
-  5. `push_tokens` (migration 06, same file, "Admin read push_tokens") — notifications.
-  6. `document_requirements` (migration 02, `02_dynamic_documents.sql`) — driver docs. Uses the
+     critical, phase 2, still open**: 7-year TNC insurance audit retention (CLAUDE.md's
+     regulatory-sk.md). Its own `test_admin_can_select_any_insurance_period` RLS test is untouched
+     and still passing — migration 256 was deliberately kept out of the shared RLS test fixture
+     specifically to avoid breaking this and other unrelated tests' ability to seed `role="admin"`
+     (see `docs/change-log/2026-09-20-c107-admin-rls-unreachable-fix.md`). The table's own RLS
+     policy is untouched. **Not a straight copy of migration 430's fix** — its one SELECT policy
+     ORs the driver's own legitimate self-read access together with the broken admin check
+     (`driver_id = own OR <broken admin check>`), so a blanket `USING (false)` would also break the
+     driver's real, working ability to read their own insurance-period history. Needs a rewrite
+     that drops only the `OR <broken admin check>` clause and keeps the driver-owned-row access.
+  4. ~~`cloud_messages`~~ **FIXED (phase 1, migration 432)** (migration 06, `06_cloud_messaging.sql`) — notifications.
+  5. ~~`push_tokens`~~ **FIXED (phase 1, migration 432)** (migration 06, same file, "Admin read push_tokens") — notifications.
+  6. ~~`document_requirements`~~ **FIXED (phase 1, migration 432)** (migration 02, `02_dynamic_documents.sql`) — driver docs. Used the
      older `role = 'admin'` form (no `super_admin` at all — the same excludes-super_admin bug
-     migration 142/416 already fixed elsewhere), so this one has two independent problems, not one.
+     migration 142/416 already fixed elsewhere), so this one had two independent problems, not one;
+     both close via the same `USING (false)` replacement.
 - **Same root cause as C107, same real-world risk profile:** production data cleanup + migration
   256 already ensure `users.role` holds neither value today; the backend's only Supabase client
   always uses service-role (bypasses RLS entirely), so none of these policies gate any live
   request today — defense-in-depth correctness gaps, not active vulnerabilities.
-- **Action:** apply C107's exact fix pattern (migration 430) to these 7 tables in a follow-up
-  migration — but get explicit sign-off given `safety_incidents`/`driver_insurance_periods`'
-  sensitivity, and audit each table's existing test coverage (only `driver_insurance_periods` has
-  any RLS tests today) before touching them, per the same process C107 followed.
-- **Files:** `backend/migrations/02_dynamic_documents.sql`, `06_cloud_messaging.sql`,
-  `51_audit_logs_lockdown.sql`, `64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
+- **Phase 1 fix/remediation (2026-09-20):** migration 432 applies C107's exact fix pattern
+  (explicit `USING (false)` deny) to `audit_logs` and `push_tokens` (both were `SELECT`-only, same
+  shape as migration 430's 11 tables). `cloud_messages` and `document_requirements`'s admin
+  policies were `FOR ALL` with no `WITH CHECK` — the same missing-`WITH CHECK` write gap migration
+  416 fixed on `corporate_accounts` — so their replacement is `FOR ALL ... USING (false)`, which
+  Postgres also applies as the (absent) `WITH CHECK` for INSERT/UPDATE, closing that gap in the
+  same migration rather than as a separate follow-up. Verified against live production
+  `pg_policies` immediately before writing the migration — no out-of-band drift on any of the 4
+  tables (unlike C124's `corporate_accounts` finding). Full details, including a genuinely unusual
+  finding on `document_requirements` (its original admin policy compares `users.id` (`text`) to
+  `auth.uid()` (`uuid`) with no cast — a comparison that cannot be freshly `CREATE POLICY`'d against
+  today's schema, yet the live copy in production evaluates without error — see
+  `docs/change-log/2026-09-20-c123-phase1-rls-unreachable-admin.md`.
+- **Phase 2 action (still open):** apply the same fix pattern to `safety_incidents` (straightforward
+  — 2 separate policies, no entangled legitimate-access clause) and `driver_insurance_periods`
+  (needs the tailored, non-blanket-deny rewrite described above) in a follow-up migration — explicit
+  sign-off already given for phase 1's split (2026-09-20); phase 2 needs its own sign-off given
+  before implementation, per the same escalation this item originally called for.
+- **Files:** `backend/migrations/432_admin_role_rls_unreachable_phase1.sql` (phase 1, done),
+  `backend/tests/rls/conftest.py`, `backend/tests/rls/test_audit_and_insurance_correction_rls.py`,
+  `backend/tests/rls/test_notifications_and_docs_admin_rls.py` (phase 1, done). Phase 2 remaining:
+  `backend/migrations/64_driver_insurance_periods.sql`, `94_safety_incidents.sql`,
   `backend/tests/rls/test_money_and_safety_rls.py`.
 
-### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 3 unresolved gaps
+### C121. Fly deploys a source rebuild, not the signed GHCR image ci.yml already builds/scans/signs — `deploy-fly-signed-image.yml` added as an opt-in, manual-only alternative pending 2 open gaps (1 closed)
 
-- [ ] **Status: OPEN (partial), filed 2026-09-20.**
+- [ ] **Status: OPEN (partial), filed 2026-09-20, updated 2026-09-20 — gap #3 closed, gap #2 needs a product decision.**
 - **What's wrong:** `deploy-fly.yml` has Fly's remote builder independently
   rebuild the backend from `backend/Dockerfile` on every push to `main`,
   while `ci.yml`'s `docker-image-scan` job separately builds, scans,
@@ -27767,45 +27850,74 @@ as evidence that the thing it configures exists.
   so the two can never race the same Fly app. It is **not** wired to the
   `push: branches: [main]` trigger — `deploy-fly.yml` is unchanged and
   remains the production path.
-- **Why not fully automatic yet — 3 concrete gaps found, none resolved:**
-  1. **Race condition:** `docker-image-scan` needs `backend-test`
-     (~13-14 min) plus build/push/sign time; a push-triggered deploy would
-     very likely fire before the image exists. The new workflow's polling
-     wait covers this in theory but has never been exercised end-to-end.
-  2. **Unverified registry auth:** no prior art in this repo for `flyctl
-     deploy --image` against a private, non-Fly registry. The
-     `docker/login-action` GHCR login step is a best-effort guess at how
-     flyctl picks up pull credentials — unproven from this sandbox
-     (egress-restricted, no live Fly credentials).
-  3. **Missing build provenance:** `docker-image-scan` builds without
-     `deploy-fly.yml`'s "Stamp build info" step, so the GHCR image ships
-     with the committed `backend/build_info.json` placeholder
-     (`"sha": null"`), not the real commit SHA. `deploy-fly.yml`'s
-     "Verify the deployed build SHA is serving" check would always fail
-     against it — deliberately omitted from the new workflow rather than
-     left in to fail every run.
+- **Gap status (2026-09-20 update):**
+  1. **Race condition — still open.** `docker-image-scan` needs
+     `backend-test` (~13-14 min) plus build/push/sign time; a push-triggered
+     deploy would very likely fire before the image exists. The workflow's
+     polling wait covers this in theory but has never been exercised
+     end-to-end.
+  2. **Registry auth — still open, and worse than first thought.**
+     Researched 2026-09-20: multiple independent reports (Fly community
+     thread "deploy from private package with github actions"; flyctl
+     issues #75, #1100, #362) describe `flyctl deploy --image` returning
+     `401 Unauthorized` pulling a **private** GHCR image even after
+     `docker login ghcr.io` — the exact setup `deploy-fly-signed-image.yml`
+     uses. The one consistently-reported working fix is making the GHCR
+     package **public**. **This needs an explicit decision, not a silent
+     code change** — the image contains application code/dependencies, not
+     secrets (this repo's Dockerfile never bakes secrets in), but "public"
+     vs "private" for a commercial product's backend image is a product
+     call. Options: (a) make `ghcr.io/<repo>/spinr-backend` public,
+     (b) find another Fly-supported auth path for a private registry,
+     (c) abandon `flyctl deploy --image` against GHCR and push to Fly's own
+     registry instead. None implemented — awaiting a decision.
+  3. **Build provenance — CLOSED 2026-09-20.** Added a "Stamp build info"
+     step to `ci.yml`'s `docker-image-scan` job (mirrors `deploy-fly.yml`'s
+     own step; `"provider":"ghcr"` since this job never deploys anywhere
+     itself). `deploy-fly-signed-image.yml`'s "Verify the deployed build
+     SHA is serving" step is re-enabled accordingly (compares against the
+     image's own tag SHA, not `GITHUB_SHA`, since this workflow can deploy
+     a different commit's image than the one that triggered the run). Both
+     still pending confirmation on a real end-to-end dispatch, like gaps 1
+     and 2.
 - **Risk & impact if promoted to automatic without closing the gaps:**
-  every `main` push would risk a failed/stalled production deploy (gap 1),
-  a deploy that can't authenticate to pull the image at all (gap 2), or a
-  standby-parity monitor (ACTION_ITEMS C5) that can never confirm Fly's
-  running SHA (gap 3). `deploy-fly.yml`'s rolling strategy means a failed
-  deploy fails safe (old release keeps serving) — but a systematically
-  broken deploy path is still an operational outage waiting to happen.
-- **Action to promote to automatic:** (a) manually dispatch
-  `deploy-fly-signed-image.yml` and confirm it succeeds end-to-end against
-  a real Fly app; (b) add a build-info stamp step to `ci.yml`'s
-  `docker-image-scan` job (own blast-radius review — that job is the
-  shared, always-on CVE-scan/publish path); (c) once both are proven,
-  either link the two workflows with `workflow_run:` or fold the polling
-  wait into `deploy-fly.yml` directly and retire the separate file.
-- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (new),
-  `.github/workflows/ci.yml` (cosign-verify doc-comment accuracy fix —
-  the example referenced `:latest`, which is pushed but never signed;
-  corrected to the sha tag that's actually signed).
+  every `main` push would risk a failed/stalled production deploy (gap 1)
+  or a deploy that can't authenticate to pull the image at all (gap 2).
+  `deploy-fly.yml`'s rolling strategy means a failed deploy fails safe (old
+  release keeps serving) — but a systematically broken deploy path is
+  still an operational outage waiting to happen.
+- **Action to promote to automatic:** (a) decide gap #2 (see options
+  above); (b) manually dispatch `deploy-fly-signed-image.yml` and confirm
+  it succeeds end-to-end against a real Fly app, including the now-enabled
+  build-SHA verification; (c) once proven, either link the two workflows
+  with `workflow_run:` or fold the polling wait into `deploy-fly.yml`
+  directly and retire the separate file.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (new, then
+  updated 2026-09-20 for gap #3), `.github/workflows/ci.yml` (cosign-verify
+  doc-comment accuracy fix, then the "Stamp build info" step for gap #3).
 
 ### C122. `driver-app/utils/__tests__/locationIntegrity.test.ts` — one mock-GPS-detection test flaked red in CI, passed locally on the identical commit
 
-- [ ] **Status: OPEN, investigated 2026-09-20 — code confirmed deterministic; no fix possible without a fresh reproduction.**
+- [ ] **Status: OPEN, RECURRED 2026-09-20 (2nd occurrence) — code confirmed deterministic across both; still no root cause, upgraded from "one data point" to "confirmed pattern."**
+- **2nd occurrence (2026-09-20, later same day):** identical failure,
+  same exact assertion, same exact error (`Expected: "mock_location_detected"`,
+  `Received: undefined`), on PR #5580 (head `cb4456f61`, a
+  `.github/workflows/ci.yml` + `deploy-fly-signed-image.yml` +
+  `ACTION_ITEMS.md` change — zero driver-app files touched, same pattern
+  as the 1st occurrence). Run `35535699992`, job `106144246088`. Attempted
+  `rerun_failed_jobs` again — same `403`. Ran the full suite 8 MORE times
+  locally after this 2nd occurrence (16 total across both investigations,
+  standalone/CI-flags/`--runInBand`/full-suite) — still never reproduced.
+  Checked Node version parity (local `v22.22.2` vs CI's `NODE_VERSION: '22'`
+  — matches, not a lead). Two occurrences with an identical signature, both
+  on PRs with zero driver-app files changed, is no longer explainable as a
+  one-off runner glitch — this is a real, recurring problem — but the
+  code-level trace from the 1st investigation still holds: the failing
+  assertion has no application-level mechanism to be non-deterministic.
+  The likely locus has narrowed to Jest/coverage-instrumentation/worker
+  machinery itself (something Istanbul- or worker-pool-related under
+  `--coverage`), not `locationIntegrity.ts` — but this is still a
+  hypothesis, not a confirmed cause.
 - **What's wrong:** `driver-app-test` failed on PR #5538 (head `f0ffbb9a1`,
   a `.github/workflows/`-only + `ACTION_ITEMS.md` change — zero
   driver-app files touched) with one failure:
@@ -27849,13 +27961,20 @@ as evidence that the thing it configures exists.
 - **Not re-run to confirm** — attempted `rerun_failed_jobs` on the
   original CI run, got `403 Resource not accessible by integration`;
   this session's GitHub integration lacks the permission.
-- **Action:** watch for recurrence rather than treat as an open code
-  defect. If `driver-app-test` fails on this exact assertion again,
-  capture the run URL/job ID immediately (before a later push supersedes
-  it) and check for Jest/coverage-transform warnings in the full log —
-  that would be the first real signal beyond what's here. Do not modify
-  `locationIntegrity.ts` speculatively; the trace above shows nothing to
-  fix in it today.
+- **Action:** now that it's confirmed recurring, this deserves a real
+  session with CI rerun/inspection access (not just this sandbox's static
+  trace + local repro attempts) — someone who can: (a) actually re-run the
+  same failing commit's CI job repeatedly to measure the real failure
+  rate, (b) check GitHub Actions runner specs (CPU count) for both
+  occurrences to test the worker-parallelism hypothesis, (c) try disabling
+  `--coverage` on a manual run to see if the failure stops (would point
+  squarely at Istanbul/coverage instrumentation rather than the app code
+  or Jest core). Do not modify `locationIntegrity.ts` speculatively; the
+  trace across both occurrences still shows nothing to fix in it today —
+  if the coverage-instrumentation hypothesis is confirmed, the fix belongs
+  in `driver-app/jest.config.js` (e.g. excluding this file from coverage
+  collection, or a `--coverage`-related jest/babel-plugin-istanbul version
+  bump), not in application code.
 - **Files:** `driver-app/utils/__tests__/locationIntegrity.test.ts`,
   `driver-app/utils/locationIntegrity.ts` — both inspected, unchanged.
 
@@ -27941,6 +28060,98 @@ as evidence that the thing it configures exists.
   runner on a batch of unreviewed files.
 - **Files:** the 8 files listed above, `backend/scripts/run_migrations.py`
   (`NEVER_APPLY` skip-list, for the 4 correctly-excluded ones).
+
+### C126. `backend-test`'s 20-minute CI timeout was raised to 30 as a stopgap (CR #5541) — the structural fix (pytest-xdist or splitting the RLS suite into its own job) is still undone
+
+- [ ] **Status:** OPEN — found 2026-09-20 while driving PR #5536/#5537 to
+  green: the job's three real steps (mocked-DB pytest suite with coverage,
+  a direct-pool real-Postgres suite, an RLS role-level real-Postgres suite)
+  share one 20-minute budget. One run passed with 12 seconds to spare;
+  a near-identical diff was killed by the timeout mid-suite (`cancelled`,
+  not a real test failure). `.github/workflows/ci.yml`'s `backend-test`
+  `timeout-minutes` was bumped 20→30 in CR #5541 to restore real margin.
+  `docs/audit/2026-09-05-engineering-director-review-round3.md:782`
+  predicted this exact failure mode two weeks earlier ("No pytest-xdist on
+  a 20-minute job; the suite will hit the timeout").
+- **Why this matters:** 30 minutes is evidence-based headroom, not a
+  permanent fix — if the suite's runtime keeps growing run over run, the
+  new ceiling gets eaten the same way the old one did, and without this
+  entry that repeats as a fresh "mystery CI red" investigation instead of
+  a known, prioritized item (per the `spinr-cicd-infra-reviewer` review
+  that flagged this gap on CR #5541's PR).
+- **Action:** a human or future session should decide between (1) adding
+  `pytest-xdist` for parallel execution — parallel-safety of the
+  direct-pool/RLS suites' real-Postgres fixtures is unverified and would
+  need checking first — or (2) extracting `Run RLS role-level tests (real
+  Postgres)` into its own job with its own Postgres service container and
+  timeout, reviewing interaction with `needs: [backend-test]` dependents
+  (`ci.yml` lines ~522, ~598, ~1082, ~1213, ~1330). Both were considered
+  and deliberately deferred in CR #5541 as higher-risk than a timeout bump
+  for an urgent-reliability fix, not overlooked.
+- **Files:** `.github/workflows/ci.yml` (`backend-test` job).
+
+### C127. `deploy-fly-signed-image.yml`'s hardcoded 30-minute image-wait budget no longer has margin against the worst-case `backend-test` → `docker-image-scan` chain
+
+- [ ] **Status:** OPEN — found 2026-09-20 by the `spinr-cicd-infra-reviewer`
+  review of CR #5541 (see C126). This experimental, `workflow_dispatch`-only
+  workflow (not wired to `push`, not on the production deploy path — see
+  C121) polls for a GHCR-signed image with a 30-attempt × 60s = 30-minute
+  budget, sized against a comment estimate of "backend-test ~13-14 min,
+  then build+push+sign." The real worst-case chain it depends on is
+  `backend-test` (now `timeout-minutes: 30`, C126) →
+  `docker-image-scan` (`timeout-minutes: 10`, `needs: [backend-test]`) = 40
+  minutes worst case, i.e. the poll can now time out 10 minutes before a
+  slow-but-successful `backend-test` run even finishes. This coupling was
+  already unverified before C126's change (the workflow's own comments
+  note the wait has never been exercised end-to-end against a real run);
+  C126 makes the gap wider, not new.
+- **Why this matters:** low severity today because the workflow is
+  manual/opt-in only, but whoever eventually promotes
+  `deploy-fly-signed-image.yml` off manual-dispatch-only needs to revisit
+  this budget first, or a legitimate slow-but-passing deploy will be
+  reported as a poll timeout.
+- **Action:** before promoting this workflow to any automatic trigger,
+  raise its image-wait budget to match the current worst-case chain (40+
+  min) or make it read the actual upstream job timeouts instead of a
+  hardcoded estimate.
+- **Files:** `.github/workflows/deploy-fly-signed-image.yml` (image-wait
+  poll, ~line 129).
+
+### C128. Self-hosted tile server has no OSM data for Riyadh — a real, product-confirmed international service area — so its admin map will render roadless even after the basemap-URL fix
+
+- [ ] **Status:** OPEN — found 2026-09-20 while diagnosing and fixing the
+  Heat Map / Live Monitoring "Failed to load map style" report
+  (admin-dashboard).
+- **Issue/gap:** `deploy/tiles/Dockerfile`'s `REGION_URL`/`EXTRA_REGION_URLS`
+  bake in only Saskatchewan and Alberta OSM extracts
+  (`saskatchewan-latest.osm.pbf`, `alberta-latest.osm.pbf`) at image build
+  time — no other region is loaded. `riyadh`/`riyadh airport` are real,
+  product-confirmed `service_areas` rows (`backend/tests/test_service_areas_public.py`,
+  migrations 263/265 — already noted elsewhere in this file as
+  "intentional (international market), not a data-hygiene concern,
+  confirmed with product"). Since `docs/change-log/2026-09-14-self-hosted-basemap-only.md`,
+  the self-hosted tile server is the *only* basemap hop for every admin
+  map when `NEXT_PUBLIC_MAP_STYLE_URL` is set — no third-party fallback.
+  So even with the map-style URL itself resolving correctly (the bug this
+  session fixed via a production redeploy), any admin map centered on
+  Riyadh will render a basemap with no roads, building outlines, or place
+  labels — the tile server has never ingested that region's data — while
+  every Saskatchewan/Alberta-area map renders normally.
+- **Why this matters:** Heat Map and Live Monitoring are the two admin
+  surfaces most likely to be viewed per-service-area. An admin filtering
+  to Riyadh will see a plausible-looking but road-less/label-less map and
+  may reasonably read that as "still broken," reopening the same report
+  this session just closed for the SK/AB areas.
+- **Action:** add a Riyadh/Saudi Arabia OSM extract to
+  `EXTRA_REGION_URLS` in `deploy/tiles/Dockerfile` and rebuild the
+  `TilesServer` Railway image, or confirm with product whether Riyadh
+  should instead fall back to a third-party basemap specifically — which
+  would need a per-service-area override, not currently supported by
+  `primaryMapStyle()`/`basemapChain()` — rather than being lumped into the
+  single self-hosted-only chain.
+- **Files:** `deploy/tiles/Dockerfile` (`REGION_URL`/`EXTRA_REGION_URLS`),
+  `admin-dashboard/src/lib/map/maplibre-base.ts` (`basemapChain()`,
+  `selfHostedStyleUrl()`, `primaryMapStyle()`).
 
 ## Recently completed (do not redo)
 

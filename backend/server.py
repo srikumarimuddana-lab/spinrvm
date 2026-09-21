@@ -141,6 +141,7 @@ from routes.notifications import api_router as notifications_router
 from routes.offer_card import router as offer_card_router
 from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
+from routes.quests import admin_router as quests_admin_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
@@ -573,6 +574,16 @@ app.include_router(legal_documents_router)
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
+# Staff endpoints that historically lived only under /api/v1/, which is
+# App-Check-enforced — the browser dashboard can't send that header, so every
+# call 401'd and the dashboard's 401 handler logged the admin out. Also mounted
+# here under the App-Check-exempt /api/admin/ (the /api/v1 mounts stay too),
+# with the same module gates their /api/admin siblings use (promotions_router,
+# service_areas_router in routes/admin/__init__.py).
+app.include_router(
+    quests_admin_router, prefix="/api/admin/quests", dependencies=[Depends(require_module("promotions"))]
+)
+app.include_router(admin_support_router, prefix="/api/admin", dependencies=[Depends(require_module("service_areas"))])
 # See the ordering note above v1_api_router's equivalent block: the static
 # single-segment routers must be included before corporate_accounts_router's
 # catch-all GET /{account_id}.

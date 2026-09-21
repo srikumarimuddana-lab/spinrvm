@@ -559,6 +559,115 @@ class TestAdminGetParticipants:
         assert resp.status_code == 404
 
 
+class TestAdminQuestsUnderApiAdmin:
+    """The same admin handlers mounted at /api/admin/quests/* — the App-Check-
+    exempt namespace the browser dashboard can actually reach. At
+    /api/v1/quests/admin/* production App Check 401'd every dashboard call and
+    the dashboard's 401 handler logged the admin out. Gated on the promotions
+    module like the other /api/admin promotions routes."""
+
+    @pytest.fixture(autouse=True)
+    def _promotions_admin(self, client):
+        import dependencies
+        from backend.server import app
+
+        app.dependency_overrides[dependencies.get_admin_user] = lambda: {**SAMPLE_ADMIN, "modules": ["promotions"]}
+
+    def _as_admin(self, **admin):
+        import dependencies
+        from backend.server import app
+
+        app.dependency_overrides[dependencies.get_admin_user] = lambda: {**SAMPLE_ADMIN, **admin}
+
+    def test_admin_without_promotions_module_is_forbidden(self, client):
+        self._as_admin(modules=["drivers"])
+        with patch("routes.quests.db", make_mock_db()):
+            resp = client.get("/api/admin/quests/list")
+
+        assert resp.status_code == 403
+
+    def test_super_admin_passes_without_modules(self, client):
+        self._as_admin(role="super_admin", modules=[])
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[])
+        with patch("routes.quests.db", mock_db):
+            resp = client.get("/api/admin/quests/list")
+
+        assert resp.status_code == 200
+
+    def test_list(self, client):
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(side_effect=[[SAMPLE_QUEST], []])
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.get("/api/admin/quests/list")
+
+        assert resp.status_code == 200
+        assert resp.json()[0]["id"] == "quest_1"
+
+    def test_create(self, client):
+        mock_db = make_mock_db()
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.post(
+                "/api/admin/quests/create",
+                json={
+                    "title": "Weekend Sprint",
+                    "description": "Complete 5 rides this weekend.",
+                    "type": "ride_count",
+                    "target_value": 5,
+                    "reward_amount": 10.0,
+                    "start_date": _PAST,
+                    "end_date": _FUTURE,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Weekend Sprint"
+
+    def test_update(self, client):
+        mock_db = make_mock_db()
+        mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.patch("/api/admin/quests/quest_1", json={"is_active": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is False
+
+    def test_participants(self, client):
+        mock_db = make_mock_db()
+        mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
+        mock_db.get_rows = AsyncMock(return_value=[])
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.get("/api/admin/quests/quest_1/participants")
+
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_still_requires_admin(self, client):
+        import dependencies
+        from backend.server import app
+
+        # Drop only the admin override: get_current_user still resolves to a
+        # plain rider, which get_admin_user must reject.
+        app.dependency_overrides.pop(dependencies.get_admin_user)
+        resp = client.get("/api/admin/quests/list")
+
+        assert resp.status_code == 403
+
+    def test_path_is_app_check_exempt_but_driver_quests_stay_enforced(self):
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        def exempt(path: str) -> bool:
+            return any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES)
+
+        assert exempt("/api/admin/quests/list")
+        assert not exempt("/api/v1/quests")
+        assert not exempt("/api/v1/quests/quest_1/join")
+
+
 class TestQuestTrackerOnRideComplete:
     """utils.quest_tracker.update_quest_progress_on_ride_complete — the hook the
     ride-completion paths (drivers.py::complete_ride, rides.py::rider_complete_ride)

@@ -158,15 +158,18 @@ export const getAuditLogTopActors = (opts: { days?: number; limit?: number } = {
 };
 
 /* ── Quests / Bonus Challenges ──────────── */
+// Must stay under /api/admin/ (App-Check-exempt): the backend's v1 namespace
+// is App-Check-enforced and this browser app can't send that header — every
+// call 401'd and request() logged the admin out.
 export const getQuests = (isActive?: boolean) =>
-    request<any[]>(`/api/v1/quests/admin/list${isActive !== undefined ? `?is_active=${isActive}` : ''}`);
+    request<any[]>(`/api/admin/quests/list${isActive !== undefined ? `?is_active=${isActive}` : ''}`);
 
 export const createQuest = (data: any) =>
-    request<any>("/api/v1/quests/admin/create", { method: "POST", body: JSON.stringify(data) });
+    request<any>("/api/admin/quests/create", { method: "POST", body: JSON.stringify(data) });
 
 export const updateQuest = (id: string, data: any) =>
-    request<any>(`/api/v1/quests/admin/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+    request<any>(`/api/admin/quests/${id}`, { method: "PATCH", body: JSON.stringify(data) });
 
 export const getQuestParticipants = (questId: string) =>
-    request<any[]>(`/api/v1/quests/admin/${questId}/participants`);
+    request<any[]>(`/api/admin/quests/${questId}/participants`);
 

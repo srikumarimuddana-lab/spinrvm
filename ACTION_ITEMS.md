@@ -25071,9 +25071,56 @@ how much they de-risk a public launch._
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
-- [x] **Status:** code fix done 2026-09-08 on
-  `claude/pr-5085-5079-hardening-c91-monitoring-baseline`; one step remains
-  and needs a human (see below) — not fully closed until that runs.
+- [ ] **Status, corrected 2026-09-21 — reopened from "code fix done," see
+  finding below.** The 2026-09-08 fix (`#5123`) is real and its `extra`
+  mock/fixture-driver logic is sound — but direct A/B evidence now shows
+  it **does not actually render a marker on GitHub's own CI runner**,
+  contradicting that commit's own "verified locally end-to-end" claim.
+  This is a bigger problem than the "just needs a human to re-capture the
+  baseline" framing below, which is why it's reopened rather than left
+  checked off. Do not re-capture this baseline until the finding below is
+  root-caused — doing so would commit a still-marker-less screenshot as
+  the new "expected" baseline, permanently masking the exact bug this
+  item exists to catch.
+- **2026-09-21 finding (found while picking up C90/C103's due-diligence
+  ask):** the `update-visual-baselines.yml` run the user triggered
+  manually for the unrelated dashboard-settings re-seed (B43/CR-2026-091)
+  regenerated all 6 baselines in one artifact, including
+  `dashboard-monitoring`. Byte-for-byte comparison showed it identical to
+  the already-committed (pre-#5123-fix-looking) baseline — worth checking
+  directly rather than assuming "no diff = still fine," since the whole
+  point of #5123 was to make this page's baseline stop being marker-less.
+  Opened both PNGs: **no driver marker visible in either, and the
+  on-page counts read "0 Online / 0 On Ride" — despite the fixture driver
+  in `visual-regression.spec.ts` being `is_online: true`.** That's not
+  "baseline needs re-capturing," that's "the fix isn't taking effect on
+  CI's runner at all."
+  To isolate whether this is a real regression or a local-vs-CI
+  environment difference, reproduced the exact same mock/fixture setup
+  locally (`npm run build && npx next start`, matching
+  `update-visual-baselines.yml`'s own commands and env vars exactly, this
+  sandbox's pre-installed Chromium via a temporary uncommitted debug spec
+  — not committed, cleaned up after) and it **worked correctly**: marker
+  attaches, is visible (`rgb(34, 197, 94)` green, 22×22px, positioned
+  dead-center), and the count reads "1 Online." Full DOM inspection
+  (`getBoundingClientRect()`, computed style) confirmed a normally
+  rendered, non-clipped, fully opaque marker element.
+  So: same test, same mocks, same fixture, same build commands — passes
+  locally, fails (silently — `.spinr-map-marker`'s `waitFor({state:
+  'attached'})` still succeeds, satisfying the test's own gate, even
+  though the marker never becomes visible) on GitHub's actual Ubuntu
+  Chromium. This also retroactively explains why `Visual regression
+  (Playwright)` has stayed green on every recent PR touching this page
+  (e.g. #5570) — it's not proving the fix works, it's comparing one
+  marker-less render against another marker-less baseline and finding
+  them identical.
+  **Not root-caused further this session** — that needs either a
+  Playwright trace/HTML report from an actual CI run (this workflow
+  doesn't currently capture one; would need a temporary `trace: 'on'`
+  config change + another manual dispatch) or a Chromium build matching
+  CI's exact pinned revision, neither of which this session has. Filed as
+  a concrete, reproducible sub-finding under C103 rather than guessed at
+  further.
   **Correction to the original root-cause below: driver markers are NOT
   WebSocket-only.** `page.tsx`'s `loadData()` also fetches
   `GET /api/admin/monitoring/drivers` (`getMonitoringDrivers()`) on mount
@@ -26387,11 +26434,22 @@ how much they de-risk a public launch._
      rider-app and driver-app (the rider-app port landed via this session's R1/R11 work,
      `docs/change-log/2026-09-12-...` CarMarker fork reconciliation — code-level parity is
      confirmed, on-device rendering is not).
-  3. **C91's remaining step** — re-capturing the `dashboard-monitoring` visual-regression
-     baseline via `update-visual-baselines.yml`, which requires GitHub Actions-dispatch access
-     no session in this repo's agent integration has. The code fix (seeding a fixture driver so
-     the baseline actually includes a marker) shipped 2026-09-08; only the baseline PNG itself
-     is blocked.
+  3. **C91's remaining step — upgraded 2026-09-21 from "just needs a baseline re-capture" to
+     "the fix doesn't actually work on CI, needs root-causing."** Originally filed as blocked
+     purely on Actions-dispatch access (no session in this repo's agent integration has it,
+     confirmed again 2026-09-20/21 — see B43/CR-2026-091 elsewhere in this file for how that gap
+     got worked around one-off, by the user manually dispatching the workflow, for a *different*
+     baseline). But re-capturing this baseline is no longer
+     the right next step: a direct local-vs-CI A/B (see C91's 2026-09-21 finding) shows the
+     2026-09-08 fixture-driver fix genuinely doesn't render a visible marker on GitHub's actual
+     Ubuntu/Chromium runner, even though it renders correctly on this sandbox's local Chromium
+     and even though the CI test's own `.spinr-map-marker` attachment check passes either way
+     (false-positive coverage). Blindly re-capturing now would commit the still-broken,
+     marker-less render as the new "correct" baseline. What's actually needed: either a
+     Playwright trace/HTML report from a real CI run (the current `update-visual-baselines.yml`
+     doesn't capture one — needs a temporary `trace: 'on'` change + another dispatch) or hands-on
+     access to a Chromium build matching CI's exact pinned revision to reproduce and debug
+     directly. Both are the same class of gap as everything else in this list.
   4. ~~**C97 #1**~~ — **RESOLVED**, see the 2026-09-20 update below. (Was: ops check to confirm
      `FIREBASE_SERVICE_ACCOUNT_JSON` is actually set/valid on both Fly.io and Railway. C97's own
      entry already closed this for Fly on 2026-09-14 via a scoped Fly API credential a different

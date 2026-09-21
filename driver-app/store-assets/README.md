@@ -27,17 +27,28 @@ actually renders. Edit `build_cards()` to change headlines or ordering.
 | `ipad-12.9` | 2048×2732 | iPad Pro 12.9" |
 
 Layout is derived from one reference artboard (1080×1920), so every size shares
-the composition: the device frame is a 1:2.18 handset (670×1461 at the reference
-size, matching the rider-app store set) sitting fully on the canvas with its
-bottom bezel and home indicator visible, and the header block is centred in the
-space above it. Add a size by appending to `ARTBOARDS` — no per-size layout
-code. iOS artboards draw an iPhone frame (Dynamic Island, Wi-Fi glyph in the
-status bar); the Android artboard draws a punch-hole camera.
+the composition: a 1:2.12 handset frame sitting fully on the canvas with its
+bottom bezel and home indicator visible, the header block centred in the space
+above it, and two floating callout cards overlapping the phone. Add a size by
+appending to `ARTBOARDS` — no per-size layout code. iOS artboards draw an
+iPhone frame (Dynamic Island, Wi-Fi glyph in the status bar); the Android
+artboard draws a punch-hole camera.
 
-The frame proportion is deliberate: stretching it taller so it bleeds off the
-bottom edge makes the mock-up read as an elongated slab rather than a phone.
-`FRAME_ASPECT`, `FRAME_H` and `BOTTOM_GAP` at the top of the generator control
-it — keep the aspect near 1:2.18 if you change them.
+**The geometry is measured, not guessed.** `FRAME_ASPECT`, `FRAME_H` and
+`BOTTOM_GAP` come from the live rider-app listing screenshot at 1290×2796,
+where the frame spans x 179–1110, y 765–2740. Rendering `ios-6.7` reproduces
+those bounds exactly. If you change them, keep the aspect near 1:2.12 — a
+taller frame reads as an elongated slab rather than a phone.
+
+### Callout cards
+
+Each light card carries two floating feature cards that overlap the phone —
+upper-left and lower-right, as on the rider set. They are defined per screen in
+`build_cards()` as `(side, y_fraction, icon, title, subtitle)`. The `y_fraction`
+is a fraction of canvas height, so a card holds its position across all five
+sizes. When picking one, put it over the least information-dense band of that
+screen: covering a map or a chart is fine, covering a price, a hero number or
+the control the card is advertising is not.
 
 ### Screens
 

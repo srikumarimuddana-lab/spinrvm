@@ -86,15 +86,32 @@ Additive; `metadata.json`'s manifest block is the only edit to existing content.
 "_generated_note": "... iOS sizes and tablet sizes are not yet produced ..."
 ```
 
-### Correction — device proportion (same day)
+### Correction 1 — device proportion
 
 A first pass stretched the frame to 670×1524 (1:2.27) so it would bleed off the bottom edge of the
 canvas. That reads as an elongated slab, not a phone, and did not match the rider-app set, whose
 frame sits fully on the canvas with its bottom bezel visible. Caught on review by the requester.
-Corrected to the rider set's own geometry — 670×1461 (1:2.18), top 447, bottom 1908 of 1920 — and a
-home indicator was added now that the bottom of the screen is in frame. The usable screen dropped
-from 907 to 869 logical px as a result, so the two top-anchored screens (earnings, quests) were
-re-rendered and checked to confirm nothing is cut.
+A home indicator was added at the same time, now that the bottom of the screen is in frame.
+
+### Correction 2 — geometry measured against the live listing
+
+The 1:2.18 used in correction 1 was still an estimate, eyeballed from rider screenshots pasted into
+the conversation. The requester then supplied the actual live rider listing screenshot, which was
+measured directly (a small PNG decoder, since PIL is unavailable in this sandbox): 1290×2796 canvas,
+frame spanning x 179–1110, y 765–2740 — **931×1975, 1:2.12**, 72.2% of canvas width, 27.4% top,
+56px bottom gap. `FRAME_ASPECT` / `FRAME_H` / `BOTTOM_GAP` now derive from those numbers, so
+rendering `ios-6.7` reproduces the live frame bounds exactly and the other four sizes follow the
+same proportions. The usable screen is 845 logical px (was 907 at its widest), so the top-anchored
+screens were re-checked.
+
+### Addition — floating callout cards
+
+The live rider screenshot also carries two floating feature cards overlapping the phone (upper-left
+and lower-right), which the driver set lacked entirely. Added, with per-screen copy defined in
+`build_cards()` as `(side, y_fraction, icon, title, subtitle)`. Placement rule recorded in the
+README: over the least information-dense band of each screen. Three placements were corrected during
+review after the first render — one hid the per-trip prices it was advertising, one sat on top of
+the SOS button it was advertising, and one cut the tab row in half.
 
 ## 8. Rollback plan
 

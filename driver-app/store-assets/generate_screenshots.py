@@ -103,9 +103,12 @@ def font_face_css():
 # into the mock-up frame, so the in-phone UI can use natural sizes. Every
 # artboard derives from the same proportions, so one layout serves all sizes.
 UI_W = 390
-FRAME_ASPECT = 670 / 1461          # phone frame width / height -- matches rider-app set
-FRAME_H = 1461 / 1920              # frame height as a fraction of artboard height
-BOTTOM_GAP = 12 / 1920             # canvas left visible below the frame
+# Measured off the live rider-app listing screenshot (1290x2796): frame spans
+# x 179..1110, y 765..2740. Keep these in step with that set -- a taller frame
+# reads as an elongated slab rather than a phone.
+FRAME_ASPECT = 931 / 1975          # 1:2.12, a real handset body
+FRAME_H = 1975 / 2796              # frame height as a fraction of artboard height
+BOTTOM_GAP = 56 / 2796             # canvas left visible below the frame
 
 
 class Board:
@@ -185,6 +188,17 @@ h1 em{font-style:normal;color:%(RED)s;}
 .home-ind{position:absolute;bottom:%(hiB)dpx;left:50%%;transform:translateX(-50%%);
   width:%(hiW)dpx;height:%(hiH)dpx;border-radius:%(hiR)dpx;background:rgba(20,22,26,.32);z-index:60;}
 
+/* ---------- floating callout cards ---------- */
+.callout{position:absolute;z-index:40;display:flex;align-items:center;
+  gap:%(coGap)dpx;width:%(coW)dpx;background:#fff;border-radius:%(coR)dpx;
+  padding:%(coPad)dpx;box-shadow:0 %(coSy)dpx %(coSb)dpx rgba(30,10,8,.16);}
+.co-ic{width:%(coI)dpx;height:%(coI)dpx;border-radius:50%%;background:#FFF1F0;
+  flex:none;display:flex;align-items:center;justify-content:center;}
+.co-t{font-size:%(coT)dpx;font-weight:800;letter-spacing:-0.015em;color:%(INK)s;
+  line-height:1.2;}
+.co-s{font-size:%(coS)dpx;font-weight:500;color:%(MUTED)s;line-height:1.3;
+  margin-top:%(coSg)dpx;}
+
 /* ---------- red brand card ---------- */
 .card.red{background:%(RED)s;}
 .card.red .ring{position:absolute;border-radius:50%%;background:rgba(0,0,0,.055);}
@@ -203,6 +217,9 @@ h1 em{font-style:normal;color:%(RED)s;}
            notchT=b.notch_top, notchW=b.notch_w, notchH=b.notch_h, notchR=b.notch_r,
            hiB=b.hi_bottom, hiW=b.hi_w, hiH=b.hi_h, hiR=b.hi_h // 2,
            shadY=b.px(38), shadB=b.px(80), shad2=b.px(6), shad3=b.px(18),
+           coGap=b.px(13), coW=b.px(358), coR=b.px(22), coPad=b.px(17),
+           coSy=b.px(10), coSb=b.px(30), coI=b.px(47), coT=b.px(25),
+           coS=b.px(20), coSg=b.px(2),
            logoWr=b.px(186))
 
 
@@ -778,11 +795,21 @@ def phone(b, ui, cls="center", style=""):
             % (cls, style, ui))
 
 
-def light_card(b, headline, sub, ui, logo):
+def callout(b, side, y_frac, ic, title, sub):
+    """Floating feature card overlapping the phone, as on the rider-app set."""
+    edge = "left" if side == "left" else "right"
+    return ('<div class="callout" style="%s:%dpx;top:%dpx">'
+            '<div class="co-ic">%s</div>'
+            '<div><div class="co-t">%s</div><div class="co-s">%s</div></div></div>'
+            % (edge, b.px(37), round(y_frac * b.h), ic, title, sub))
+
+
+def light_card(b, headline, sub, ui, logo, callouts=()):
+    cards = "".join(callout(b, *c) for c in callouts)
     return ('<div class="card light"><div class="blob-r"></div><div class="blob-l"></div>'
             '<div class="head"><img class="logo" src="%s"><h1>%s</h1>'
-            '<div class="sub">%s</div></div>%s</div>'
-            % (logo, headline, sub, phone(b, ui)))
+            '<div class="sub">%s</div></div>%s%s</div>'
+            % (logo, headline, sub, phone(b, ui), cards))
 
 
 def red_hero_card(b, ui, logo):
@@ -928,41 +955,69 @@ def build_cards(b, logo):
     optional extras (Play Store allows 8 phone screenshots)."""
     global IOS_CHROME
     IOS_CHROME = b.notch == "island"
+
+    def ic(name, colour=RED):
+        return icon(name, b.px(23), colour)
+
+    # (side, vertical position as a fraction of canvas height, icon, title, sub)
+    # Positions mirror the rider-app set: upper-left and lower-right, each
+    # overlapping the phone.
     return [
         ("01-drive-canadian", red_hero_card(b, scr_earnings(), logo), RED),
         ("02-go-online", light_card(
             b, "Go online.<br>Earn on your <em>terms</em>",
             "One tap to go live &mdash; and today's earnings and trip count stay in view "
             "the whole time you drive.",
-            scr_dashboard(online=False), logo), CREAM),
+            scr_dashboard(online=False), logo, [
+                ("left", 0.40, ic("flash"), "One tap online", "Go live instantly"),
+                ("right", 0.70, ic("cash"), "Today's earnings", "Always in view"),
+            ]), CREAM),
         ("03-know-your-earnings", light_card(
             b, "Know what<br>you'll <em>earn</em>",
             "Every offer shows the full payout, both stops and the distance before you accept "
             "&mdash; and all of it is yours.",
-            scr_offer(), logo), CREAM),
+            scr_offer(), logo, [
+                ("left", 0.34, ic("cash"), "Full payout upfront", "Before you accept"),
+                ("right", 0.83, ic("check", SUCCESS_DARK), "100% yours", "Spinr takes 0%"),
+            ]), CREAM),
         ("04-demand", light_card(
             b, "Drive where<br>the <em>demand</em> is",
             "A live map of the busy zones, what each one is paying per trip, "
             "and when the next rush lands.",
-            scr_demand(), logo), CREAM),
+            scr_demand(), logo, [
+                ("left", 0.45, ic("flame"), "Live heat map", "See the busy zones"),
+                ("right", 0.61, ic("chart"), "Paying per trip", "Know where to go"),
+            ]), CREAM),
         ("05-guided-live", light_card(
             b, "Every trip,<br>guided <em>live</em>",
             "Turn-by-turn to the pickup, the rider one tap away, "
             "and safety controls on the same screen.",
-            scr_nav(), logo), CREAM),
+            scr_nav(), logo, [
+                ("left", 0.40, ic("pin"), "Turn-by-turn", "Straight to pickup"),
+                ("right", 0.71, ic("shield"), "Safety built in", "SOS one tap away"),
+            ]), CREAM),
         ("06-earnings", light_card(
             b, "Your earnings.<br><em>Clearly.</em>",
             "Today, this week, this month &mdash; total earned, trips and your next payout, "
             "with T4A-ready tax documents at year end.",
-            scr_earnings(), logo), CREAM),
+            scr_earnings(), logo, [
+                ("left", 0.52, ic("cash"), "Paid every Sunday", "Or cash out anytime"),
+                ("right", 0.81, ic("chart"), "T4A-ready", "Tax docs at year end"),
+            ]), CREAM),
         ("07-rider-pin", light_card(
             b, "The right rider,<br>every <em>time</em>",
             "A 4-digit PIN handshake confirms who's getting in before the trip starts.",
-            scr_pin(), logo), CREAM),
+            scr_pin(), logo, [
+                ("left", 0.36, ic("shield"), "PIN handshake", "Right rider, every time"),
+                ("right", 0.82, ic("check", SUCCESS_DARK), "Verified pickup", "Before the trip starts"),
+            ]), CREAM),
         ("08-quests", light_card(
             b, "Hit targets,<br>keep the <em>bonus</em>",
             "Quest challenges pay out on top of your fares, and land straight in your wallet.",
-            scr_quests(), logo), CREAM),
+            scr_quests(), logo, [
+                ("left", 0.55, ic("trophy"), "Bonus on top", "Of every fare you drive"),
+                ("right", 0.81, ic("cash"), "Straight to wallet", "The moment you hit it"),
+            ]), CREAM),
     ]
 
 

@@ -858,21 +858,57 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
-    # test_period_1_recorded_when_release_leaves_driver_available and
-    # test_period_1_skipped_when_driver_went_offline_before_decline used to
-    # live here, mocking set_driver_available/record_period_transition
-    # directly and asserting the 0-vs-1 derivation at this call site. The
-    # consolidation into release_driver_and_close_period (this class's own
-    # test_decline_goes_through_the_shared_release_helper above) moved that
-    # derivation into utils/insurance_periods.py, so decline_ride no longer
-    # calls either mock directly — the first test broke (release now calls
-    # set_driver_available positionally inside the helper, never through
-    # _deps), and the second started passing vacuously (asserting
-    # record_period_transition was "not awaited" when nothing in this
-    # call path awaits it anymore, regardless of driver state). Both
-    # scenarios are covered at the correct layer by
-    # test_insurance_release_helper.py's test_online_driver_is_closed_out_to_
-    # period_1 / test_offline_driver_is_closed_out_to_period_0.
+    async def test_period_1_recorded_when_release_leaves_driver_available(self):
+        """Insurance Period 2 opens at claim/offer time (matching.py); decline
+        must close it back to Period 1 — but only when the driver is actually
+        still online. Mirrors process_expired_offer's guard.
+
+        Goes through the real release_driver_and_close_period (unmocked here,
+        unlike test_decline_goes_through_the_shared_release_helper above) since
+        the 0-vs-1 derivation under test lives inside it. That helper calls its
+        own module-local record_period_transition
+        (utils/insurance_periods.py), not the `_deps` copy `_base_patches`
+        mocks[5] patches — patching only the latter left this assertion
+        checking a mock the real code path never reaches.
+        """
+        from backend.routes.drivers.ride_flow import decline_ride
+        from backend.utils import insurance_periods
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
+        )
+        # _base_patches' own record_period_transition patch (index 5) never
+        # intercepts this path -- see the docstring above -- so it's dropped
+        # rather than left in as dead setup.
+        del patches[5]
+        with (
+            _Patches(*patches),
+            patch.object(insurance_periods, "record_period_transition", AsyncMock()) as period_transition,
+        ):
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
+
+    async def test_period_1_skipped_when_driver_went_offline_before_decline(self):
+        """A driver who toggled offline between the offer being sent and this
+        decline must NOT get a Period 1 row falsely reopened — they're
+        already Period 0 from their own go-offline call."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False, "is_online": False}),
+        )
+        with _Patches(*patches) as mocks:
+            period_transition = mocks[5]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_not_awaited()
 
 
 class TestDeclineAdminAssignedRideRecovery:
@@ -1441,16 +1477,39 @@ class TestDriverCancelRideGuards:
         assert exc.value.status_code == 404
 
     async def test_error_when_ride_already_in_progress(self):
+        from fastapi import HTTPException
+
         from backend.routes.drivers.ride_cancel import cancel_ride
-        from backend.utils.error_handling import RideStateError
 
         ride = _ride(status="in_progress")
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
-            with pytest.raises(RideStateError):
+            # #5611: 409 with a phrase-based message, matching the rider-side
+            # guard and the sibling driver-side guards -- not RideStateError's
+            # 422 with a raw status token.
+            with pytest.raises(HTTPException) as exc:
                 await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "in_progress" not in exc.value.detail
+
+    async def test_error_when_ride_already_completed(self):
+        """#5611: the other half of the same guard -- COMPLETED, not just IN_PROGRESS."""
+        from fastapi import HTTPException
+
+        from backend.routes.drivers.ride_cancel import cancel_ride
+
+        ride = _ride(status="completed")
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await cancel_ride(ride_id=_RIDE_ID, reason="", request=None, current_user={"id": _USER_ID})
+        assert exc.value.status_code == 409
+        assert "completed" not in exc.value.detail
+        assert "already finished" in exc.value.detail
 
 
 class TestDriverCancelRideBodyReasonParsing:

@@ -278,6 +278,49 @@ class TestGetCurrentUser:
 
         assert exc_info.value.status_code == 401
 
+    async def test_expired_token_logs_warning_not_error(self, mock_credentials):
+        """Regression: expired tokens are a normal client refresh cycle event
+        and must log at WARNING, not ERROR. Logging at ERROR caused 1,446
+        Sentry events (CRIMSON-SMOKE-7445-E) because the client-side 401
+        handler recovers silently but the backend had already emitted an
+        error-level log to Sentry."""
+        from fastapi import HTTPException
+
+        from backend.dependencies import get_current_user
+
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.logger") as mock_logger,
+        ):
+            mock_verify.side_effect = HTTPException(status_code=401, detail="Token has expired")
+
+            with pytest.raises(HTTPException):
+                await get_current_user(mock_credentials)
+
+            mock_logger.warning.assert_called_once()
+            mock_logger.error.assert_not_called()
+
+    async def test_invalid_token_still_logs_error(self, mock_credentials):
+        """Non-expiry JWT failures (invalid signature, tampered) must still
+        log at ERROR — only expired tokens get downgraded to WARNING."""
+        from fastapi import HTTPException
+
+        from backend.dependencies import get_current_user
+
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.logger") as mock_logger,
+        ):
+            mock_verify.side_effect = HTTPException(status_code=401, detail="Invalid token")
+
+            with pytest.raises(HTTPException):
+                await get_current_user(mock_credentials)
+
+            mock_logger.error.assert_called_once()
+            mock_logger.warning.assert_not_called()
+
 
 class TestAdminUserVerification:
     """Tests for admin user verification."""

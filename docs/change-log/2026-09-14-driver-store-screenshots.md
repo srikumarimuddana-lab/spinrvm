@@ -28,10 +28,11 @@ but nothing in the repo could render them, so the listing had copy and no imager
 Added `driver-app/store-assets/generate_screenshots.py`, a dependency-free generator that renders
 the 8 marketing artboards with headless Chromium at every store size (1080×1920 Play Store phone,
 1320×2868 / 1290×2796 / 1242×2208 iPhone, 2048×2732 iPad Pro), and committed the resulting 40 PNGs.
-Layout is derived from one reference artboard so all sizes share a composition: the header block is
-centred in the space above the device frame, and the frame is sized to run off the bottom edge. iOS
-artboards draw an iPhone frame (correctly proportioned Dynamic Island, Wi-Fi glyph in the status
-bar); the Android artboard keeps a punch-hole camera.
+Layout is derived from one reference artboard so all sizes share a composition: a 1:2.18 handset
+frame (670×1461 at the reference size, matching the rider-app store set) sitting fully on the canvas
+with its bottom bezel and home indicator visible, and the header block centred in the space above
+it. iOS artboards draw an iPhone frame (correctly proportioned Dynamic Island, Wi-Fi glyph in the
+status bar); the Android artboard keeps a punch-hole camera.
 Phone mock-ups reproduce the real driver-app screens: copy is taken from `driver-app/i18n/en.json`
 (`home.go`/`home.stop`, `dashboard.youreOnline`, `activeRide.*`, `rideOffer.*`, `earnings.*`) and
 layout from `components/dashboard/*`, `components/panels/RideOfferPanel.tsx` and
@@ -84,6 +85,70 @@ Additive; `metadata.json`'s manifest block is the only edit to existing content.
 "android_phone_generated": [ "01-drive-canadian", ... "08-quests" ]              # all 8 committed
 "_generated_note": "... iOS sizes and tablet sizes are not yet produced ..."
 ```
+
+### Correction 1 — device proportion
+
+A first pass stretched the frame to 670×1524 (1:2.27) so it would bleed off the bottom edge of the
+canvas. That reads as an elongated slab, not a phone, and did not match the rider-app set, whose
+frame sits fully on the canvas with its bottom bezel visible. Caught on review by the requester.
+A home indicator was added at the same time, now that the bottom of the screen is in frame.
+
+### Correction 2 — geometry measured against the live listing
+
+The 1:2.18 used in correction 1 was still an estimate, eyeballed from rider screenshots pasted into
+the conversation. The requester then supplied the actual live rider listing screenshot, which was
+measured directly (a small PNG decoder, since PIL is unavailable in this sandbox): 1290×2796 canvas,
+frame spanning x 179–1110, y 765–2740 — **931×1975, 1:2.12**, 72.2% of canvas width, 27.4% top,
+56px bottom gap. `FRAME_ASPECT` / `FRAME_H` / `BOTTOM_GAP` now derive from those numbers, so
+rendering `ios-6.7` reproduces the live frame bounds exactly and the other four sizes follow the
+same proportions. The usable screen is 845 logical px (was 907 at its widest), so the top-anchored
+screens were re-checked.
+
+### Correction 3 — header type scale
+
+Matching the frame fixed the phone but not the text above it. The same live screenshot was measured
+for the header block: logo 204 wide, 63 to the headline, 116 headline line pitch, 33 to the
+subtitle, 55 subtitle line pitch. Mine had the logo right (205) but every gap and size undersized —
+the logo-to-headline gap was 22 against 63, the headline pitch 97 against 116, the subtitle pitch 44
+against 55. Corrected, so headline and subtitle sizes and spacing now match the rider set; the
+header stays centred in the space above the frame, which keeps it safe on the tighter 16:9 canvas
+where a top-anchored block would collide. One subtitle was shortened because at the corrected size
+it wrapped to three lines and crowded the Android canvas to a 21px top margin against 44px
+elsewhere; it also duplicated that screen's own callout.
+
+### Addition — floating callout cards
+
+The live rider screenshot also carries two floating feature cards overlapping the phone (upper-left
+and lower-right), which the driver set lacked entirely. Added, with per-screen copy defined in
+`build_cards()` as `(side, y_fraction, icon, title, subtitle)`. Placement rule recorded in the
+README: over the least information-dense band of each screen. Three placements were corrected during
+review after the first render — one hid the per-trip prices it was advertising, one sat on top of
+the SOS button it was advertising, and one cut the tab row in half.
+
+### Correction 4 — artboard sizes rejected by App Store Connect
+
+Upload failed: *"Screenshots dimensions should be 1242 × 2688px, 2688 × 1242px, 1284 × 2778px or
+2778 × 1284px"* — the 6.5-inch slot, which the set had no file for. Root cause was naming artboards
+by inch label: "6.7-inch" covers both 1290×2796 and 1284×2778, and those belong to *different*
+upload slots, so a correctly-rendered file was being dragged into a slot that could not accept it.
+
+Artboards are now keyed by exact pixel size, which is what App Store Connect actually validates, and
+the missing 6.5-inch size was added. Final set, one file per slot:
+
+| Upload slot | Accepts | File prefix |
+|---|---|---|
+| App Store 6.9" | 1320×2868 or 1290×2796 | `ios-1320x2868-` (alt `ios-1290x2796-`) |
+| App Store 6.5" | 1242×2688 or 1284×2778 | `ios-1284x2778-` |
+| App Store 5.5" | 1242×2208 | `ios-1242x2208-` |
+| App Store iPad 12.9"/13" | 2064×2752 or 2048×2732 | `ipad-2048x2732-` |
+| Google Play phone | flexible | `android-1080x1920-` |
+
+48 PNGs (8 screens × 6 sizes). A validator now checks each file against its slot's accepted-size
+set, not just against its own filename, so a size that is internally consistent but wrong for its
+slot is caught before upload. The slot table is recorded in the README and in `metadata.json`.
+
+App Store Connect's "Keep using 6.9-inch Display" option also lets the smaller iPhone slots reuse
+the 6.9" set, which makes the 6.5" and 5.5" files optional; they are generated regardless.
 
 ## 8. Rollback plan
 

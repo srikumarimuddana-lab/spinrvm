@@ -7,6 +7,13 @@ a genuine revocation (Redis reachable, key present) must still be blocked.
 
 Uses the admin-001 bootstrap identity so the staff-table DB lookup is skipped
 and the test exercises only the revocation branch.
+
+`get_env_admin_token_version` is mocked to return a fixed 0 in every test:
+admin-001's own token_version DB read (utils/env_admin_tokens.py, added
+2026-09-21) is a separate, later check in `_verify_admin_payload` from the
+one these tests exercise, so it's stubbed out here rather than left to hit
+the real (mocked-empty) `settings` table and fail closed with an unrelated
+503 before the revocation-branch logic under test ever runs.
 """
 
 from __future__ import annotations
@@ -34,9 +41,8 @@ def _admin_payload() -> dict:
 @pytest.mark.anyio
 async def test_fails_open_when_redis_unavailable(monkeypatch):
     """redis_get raising (Upstash down) must NOT reject a valid admin token."""
-    monkeypatch.setattr(
-        dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable"))
-    )
+    monkeypatch.setattr(dependencies, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable")))
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
     user = await _verify_admin_payload(_admin_payload())
     assert user is not None
     assert user["id"] == "admin-001"
@@ -57,6 +63,7 @@ async def test_blocks_when_redis_reports_revoked(monkeypatch):
 async def test_allows_when_redis_reports_not_revoked(monkeypatch):
     """Healthy Redis, JTI absent from denylist → token passes."""
     monkeypatch.setattr(dependencies, "redis_get", AsyncMock(return_value=None))
+    monkeypatch.setattr(dependencies, "get_env_admin_token_version", AsyncMock(return_value=0))
     user = await _verify_admin_payload(_admin_payload())
     assert user is not None
     assert user["id"] == "admin-001"

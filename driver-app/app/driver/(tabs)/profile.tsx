@@ -320,7 +320,17 @@ function ProfileScreenInner() {
               await logoutAll();
               router.replace('/login' as any);
             } catch {
-              showToast('error', 'Sign Out Failed', 'Your session could not be closed. Please try again.');
+              // Distinct from handleLogout's toast (2026-09-21 full-audit
+              // finding): this is the lost/stolen-phone recovery flow, and a
+              // driver who lands here on failure needs to know their other
+              // sessions may still be live -- a generic "try again" reads
+              // identically to a routine single-device sign-out hiccup and
+              // could give false reassurance.
+              showToast(
+                'error',
+                'Sign Out Failed',
+                'Some devices may still be signed in. Please try again or contact support.'
+              );
             }
           },
         },

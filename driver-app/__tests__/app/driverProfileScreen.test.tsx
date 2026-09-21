@@ -374,10 +374,13 @@ describe('ProfileScreen (driver)', () => {
     await act(async () => { await confirm.onPress(); await flush(); });
     expect(mockLogoutAll).toHaveBeenCalled();
     expect(mockReplace).not.toHaveBeenCalledWith('/login');
+    // 2026-09-21: copy distinguished from handleLogout's failure toast --
+    // this is the lost/stolen-phone recovery flow, so the driver needs to
+    // know other sessions may still be live, not a generic "try again".
     expect(mockShowToast).toHaveBeenCalledWith(
       'error',
       'Sign Out Failed',
-      'Your session could not be closed. Please try again.',
+      'Some devices may still be signed in. Please try again or contact support.',
     );
   });
 

@@ -64,9 +64,30 @@ _ERROR_STATUS = {
 }
 
 
+# Sentences for the same keys. Without this, _http_error returned the raw
+# token as the entire user-facing message, so an admin assigning a plan to a
+# company with no card read "no_payment_method_on_file". The reader is Spinr
+# staff (this whole router sits behind get_admin_user), so these name real
+# concepts — company, plan, Stripe price — without naming the service's
+# internal error constants.
+_ERROR_MESSAGE = {
+    "company_not_found": "We couldn't find that company account.",
+    "company_not_in_pilot": "This company isn't in the subscription-billing pilot yet.",
+    "plan_not_found_or_inactive": "That plan doesn't exist or is no longer active.",
+    "plan_missing_stripe_price": "That plan has no Stripe price set. Add one before assigning it.",
+    "subscription_already_active": "This company already has an active subscription.",
+    "no_payment_method_on_file": ("This company has no payment method on file. Add a card before assigning a plan."),
+    "stripe_not_configured": "Stripe isn't configured yet. Add the API keys in admin Settings.",
+    "no_active_subscription": "This company doesn't have an active subscription to cancel.",
+}
+
+
 def _http_error(exc: CorporateSubscriptionError) -> HTTPException:
     reason = str(exc)
-    return HTTPException(status_code=_ERROR_STATUS.get(reason, 400), detail=reason)
+    return HTTPException(
+        status_code=_ERROR_STATUS.get(reason, 400),
+        detail=_ERROR_MESSAGE.get(reason, "That subscription change could not be completed."),
+    )
 
 
 class AssignSubscriptionRequest(BaseModel):
@@ -115,10 +136,18 @@ async def assign_company_subscription(
     if not billing_enabled:
         raise HTTPException(
             status_code=403,
-            # Staff enable this via the `corporate_subscription_billing_enabled`
-            # toggle in admin Settings; the person hitting this endpoint is a
-            # corporate admin who cannot action that, so they get support.
-            detail=("Subscription billing is not available for your account yet. Please contact Spinr support."),
+            # This router is mounted behind require_module("corporate_accounts")
+            # and every endpoint takes Depends(get_admin_user), so the reader is
+            # Spinr staff — not a corporate customer. An earlier pass rewrote
+            # this as "contact Spinr support", which told an operator to contact
+            # their own support desk and dropped the one actionable fact. The
+            # setting has no labelled control in the admin UI yet, so naming the
+            # key is the useful thing to say here.
+            detail=(
+                "Corporate subscription billing is turned off. A super admin can enable "
+                "the corporate_subscription_billing_enabled setting once it has been "
+                "verified in staging."
+            ),
         )
 
     try:

@@ -67,10 +67,25 @@ async def test_failed_refund_creates_a_distinct_deterministic_retry_key():
     ), patch("backend.utils.payment_operations.db.insert_one", AsyncMock(return_value=created)) as insert:
         from backend.utils.payment_operations import prepare_refund_operation
 
-        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500,
+                                                allow_terminal_advance=True)
 
     assert result == created
     assert insert.await_args.args[1]["idempotency_key"] == "ride-cancelrefund-ride1-500-a2"
+
+
+@pytest.mark.asyncio
+async def test_request_path_does_not_advance_terminal_refund_without_provider_reconciliation():
+    failed = {"id": "op1", "status": "failed", "idempotency_key": "key1"}
+    with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[failed])), patch(
+        "backend.utils.payment_operations.db.insert_one", AsyncMock()
+    ) as insert:
+        from backend.utils.payment_operations import prepare_refund_operation
+
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+
+    assert result == failed
+    insert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

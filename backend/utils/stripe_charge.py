@@ -54,9 +54,9 @@ CAD, hardcoded. See P0-5 scoping doc §9 for the multi-currency question.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Union
 
@@ -1279,6 +1279,14 @@ async def refund_excess_capture(
         logger.error("[CANCEL] refund retry limit reached ride=%s; manual review required", ride_id)
         return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id,
                              error_message="Refund retries exhausted; manual review required")
+
+    if operation.get("status") in {"failed", "canceled"}:
+        return ChargeOutcome(
+            status=str(operation["status"]), payment_intent_id=payment_intent_id,
+            raw={"refund_id": operation.get("provider_object_id"),
+                 "refund_status": operation["status"]},
+            error_message="Previous refund is terminal; reconciliation must verify Stripe state before retry",
+        )
 
     if operation.get("status") in {"pending", "processing", "requires_action", "succeeded"}:
         provider_id = operation.get("provider_object_id")

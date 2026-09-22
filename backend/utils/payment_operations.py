@@ -45,8 +45,13 @@ async def record_operation(
     raise RuntimeError("Payment operation could not be durably recorded")
 
 
-async def prepare_refund_operation(*, ride_id: str, payment_intent_id: str, amount_cents: int) -> Dict[str, Any]:
-    """Return the live attempt or durably create the next retry before Stripe."""
+async def prepare_refund_operation(*, ride_id: str, payment_intent_id: str, amount_cents: int,
+                                  allow_terminal_advance: bool = False) -> Dict[str, Any]:
+    """Return the live attempt or durably create a retry before Stripe.
+
+    Terminal attempts advance only when the reconciliation worker opts in
+    after verifying the provider object and the complete Refund page.
+    """
     prior = await db.get_rows(TABLE, {
         "operation_type": "refund", "ride_id": ride_id,
         "payment_intent_id": payment_intent_id, "amount_cents": int(amount_cents),
@@ -62,6 +67,11 @@ async def prepare_refund_operation(*, ride_id: str, payment_intent_id: str, amou
                                    last_error="Refund operation retry limit reached")
             last = {**last, "status": "exhausted"}
         return last
+    if prior and prior[0].get("status") in {"failed", "canceled"} and not allow_terminal_advance:
+        # User-facing requests may replay a terminal object, but only the
+        # reconciler may advance after retrieving Stripe and checking that no
+        # active Refund exists for the PaymentIntent.
+        return prior[0]
     attempt = len(prior) + 1
     # Each terminal failed attempt has its own stable key. Replaying a
     # requested attempt reuses its key; a confirmed failure can safely advance.
@@ -181,7 +191,6 @@ async def reconcile_due_operations() -> int:
     }, order="created_at", limit=50)
     processed = 0
     for candidate in due or []:
-        prior_status = candidate.get("status")
         operation = await claim_due_operation(candidate)
         if not operation:
             continue
@@ -288,6 +297,11 @@ async def reconcile_due_operations() -> int:
                 refund_id = getattr(refund, "id", None)
                 amount = int(getattr(refund, "amount", operation["amount_cents"]) or operation["amount_cents"])
                 if status in {"failed", "canceled"}:
+                    if not operation.get("provider_object_id") and getattr(refunds, "has_more", False):
+                        await update_operation(op_id, status="requires_action", next_attempt_at=None,
+                                               provider_object_id=refund_id,
+                                               last_error="Refund history exceeds one page; manual review required")
+                        continue
                     # Advance only after Stripe has confirmed the previous
                     # object is terminal. A retrieve/list exception leaves the
                     # same operation pending via schedule_retry().
@@ -296,7 +310,7 @@ async def reconcile_due_operations() -> int:
                                            last_error=f"Stripe confirmed refund {status}")
                     operation = await prepare_refund_operation(
                         ride_id=ride_id, payment_intent_id=str(operation.get("payment_intent_id")),
-                        amount_cents=int(operation.get("amount_cents") or 0),
+                        amount_cents=int(operation.get("amount_cents") or 0), allow_terminal_advance=True,
                     )
                     continue
                 stored_status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"

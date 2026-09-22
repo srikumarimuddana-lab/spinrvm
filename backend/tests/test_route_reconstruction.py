@@ -687,3 +687,65 @@ async def test_a_short_gap_is_connected_directly_and_never_routed(monkeypatch):
     # excluded from measured distance.
     assert result["routed_connector_distance_km"] == 0.0
     assert result["straight_connector_distance_km"] == pytest.approx(0.073, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_connector_ids_stay_unique_when_a_ride_both_stops_and_drops_gps(monkeypatch):
+    """A short gap must consume an attempt number, not hand it to the next one.
+
+    Segment ids are f"inferred-{reason}-{attempt}". The short-gap branch emitted
+    a connector without incrementing the counter, so the next connector with the
+    same gap_reason took the same number and both landed in the stored geometry
+    with one id. Reachable on an ordinary ride: a stop (time-split gap under
+    MIN_ROUTED_GAP_M) followed by a real dropout (distance-split gap over it) —
+    the two failure modes this work exists for, in one trip.
+
+    road_matched_segments is SGI and dispute evidence, so two segments claiming
+    one identity is a defect in the record regardless of who reads it.
+    """
+    completion = {"lat": 50.4165, "lng": -104.6200, "accuracy": 8}
+    segmented = segment_route(
+        [
+            _point(0, 0, 50.4100, -104.6200),
+            _point(5, 1, 50.4105, -104.6200),
+            # 70 s stop, ~55 m of drift: time-split, connector below 150 m.
+            _point(75, 2, 50.4110, -104.6200),
+            _point(80, 3, 50.4115, -104.6200),
+            # ~500 m jump: distance-split, connector above 150 m, so routed.
+            _point(90, 4, 50.4160, -104.6200),
+            _point(95, 5, 50.4165, -104.6200),
+        ],
+        _lifecycle(),
+        completion,
+    )
+    matched = {
+        "segments": [
+            {
+                "segment_index": index,
+                "matched_segments": [
+                    {"provider": "osrm_match", "distance_km": 0.055, "polyline": [list(start), list(end)]}
+                ],
+            }
+            for index, (start, end) in enumerate(
+                [
+                    ((50.4100, -104.6200), (50.4105, -104.6200)),
+                    ((50.4110, -104.6200), (50.4115, -104.6200)),
+                    ((50.4160, -104.6200), (50.4165, -104.6200)),
+                ]
+            )
+        ],
+        "failures": [],
+    }
+    gap_route = AsyncMock(return_value=(0.5, [[50.4115, -104.6200], [50.4160, -104.6200]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.4100, "lng": -104.6200}, completion
+    )
+
+    identifiers = [section["id"] for section in result["segments"]]
+    assert len(identifiers) == len(set(identifiers)), f"duplicate segment ids: {identifiers}"
+    inferred = [section for section in result["segments"] if section["geometry_kind"] == "inferred"]
+    assert len(inferred) == 2
+    # One connected directly (the stop), one routed (the dropout).
+    assert {section["provider"] for section in inferred} == {"haversine_interpolated", "osrm_inferred"}

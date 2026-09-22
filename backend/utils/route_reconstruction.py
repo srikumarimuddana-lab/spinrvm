@@ -359,6 +359,14 @@ async def reconstruct_completed_route(
             _count_connector("refused_time_cap")
             return
 
+        # Counted before any connector is emitted, including the short-gap one
+        # below. Segment ids are f"inferred-{reason}-{attempt}", so an emitted
+        # connector that does not consume an attempt hands its number to the
+        # next one and both end up with the same id -- a real case on a ride
+        # that both stops (short gap) and loses GPS (long gap), which is
+        # exactly the pair of failures this branch exists for.
+        connector_attempts += 1
+
         # Short-gap direct connect — before any routing tier. See
         # MIN_ROUTED_GAP_M: over this distance a router's answer is not a
         # better guess than the straight line, and can be far worse.
@@ -370,11 +378,9 @@ async def reconstruct_completed_route(
                 MIN_ROUTED_GAP_M,
             )
             straight_connector_km += gap_distance / 1000.0
-            output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts + 1))
+            output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
             _count_connector("straight_short_gap")
             return
-
-        connector_attempts += 1
 
         # If we've exceeded max connectors, use haversine (always succeeds).
         if connector_attempts > MAX_INFERRED_CONNECTORS:

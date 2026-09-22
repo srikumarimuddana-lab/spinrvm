@@ -54,7 +54,7 @@ function RideCompletedScreenContent() {
     tip?: string;
     rated?: string;
   }>();
-  const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, rateRide, clearRide, _clearedRideId } = useRideStore();
 
   // P0-5: confirmPayment is called when the backend returns
   // requires_action for 3DS / SCA. StripeProvider is wired at the app
@@ -208,14 +208,18 @@ function RideCompletedScreenContent() {
   // A custom tip between $0 and the minimum can't be submitted: the rider stays
   // here, sees why, and fixes it (the server rejects it too — never dropped).
   const tipMinimumError = effectiveTip ? null : customTipMinimumError(getCustomTipAmount(customTip), minTip);
-  // Nothing is chargeable until the ride loads — the button would quote a fare
-  // the rider was never shown, and the server would charge the real
-  // grand_total regardless (attemptRidePayment settles by rideId, not by this
-  // number), so the amount on the button and the amount on the card statement
-  // would disagree. `alreadyPaid` is exempt: that button only rates and
-  // leaves, it never charges.
-  const submitDisabled =
-    isSubmitting || sheetLoading || !!tipMinimumError || (!rideLoaded && !alreadyPaid);
+  // Waiting on the ride row: nothing here is chargeable yet. The button would
+  // quote a fare the rider was never shown, while the server charges the real
+  // grand_total regardless (attemptRidePayment settles by rideId and sends no
+  // amount) — so the figure on the button and the figure on the card statement
+  // would disagree. `alreadyPaid` is exempt: that button only rates and leaves.
+  //
+  // It becomes a RETRY, not a disabled button. This screen blocks the hardware
+  // back button and sets gestureEnabled:false, so a dead control here is a
+  // trap with no way out — and tapping this button is, today, the only escape
+  // a rider stuck on an unloaded receipt actually has.
+  const awaitingRide = !rideLoaded && !alreadyPaid;
+  const submitDisabled = isSubmitting || sheetLoading || (!awaitingRide && !!tipMinimumError);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
@@ -375,6 +379,32 @@ function RideCompletedScreenContent() {
     // fire at most once, so adding these doesn't change that.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- showPaymentAlert is recreated every render (not memoized); including it would refire this effect on every render, defeating the once-only guard it already has via initialPaymentChecked.
   }, [currentRide?.payment_status, clearRide, router]);
+
+  // Leave when this client has already finished with this ride locally.
+  //
+  // clearRide() records the ride id in the store's `_clearedRideId`, and from
+  // that moment BOTH fetchRide (rideStore.ts — it discards any response whose
+  // id matches) and fetchActiveRide refuse that ride, until a new one is
+  // booked. So on a re-entry to this screen for that id — a `ride_completed`
+  // push tap (_layout.tsx's routeFromNotificationData), the in-app
+  // notification list (notifications.tsx), or a late WS ride_completed —
+  // `currentRide` can never become non-null. The fare reads $0.00 forever, and
+  // the auto-dismiss effect above cannot rescue it: that one keys on
+  // `currentRide?.payment_status`, which stays `undefined`.
+  //
+  // Nothing is owed here (clearRide only runs after the ride was paid, waived,
+  // held, or cancelled) and this screen blocks the hardware back button, so
+  // leaving is the only correct action. Without this, a rider's one escape was
+  // tapping the $0.00 pay button — which round-trips to the server purely to
+  // be told `already_paid`, then navigates home off the back of that.
+  //
+  // This is a guard against the stuck state, NOT the general fix: the
+  // permanent latch in `_clearedRideId` is the underlying defect and is
+  // tracked separately (see the change-log entry for this fix).
+  useEffect(() => {
+    if (!rideId || !_clearedRideId || _clearedRideId !== rideId) return;
+    router.replace('/(tabs)');
+  }, [_clearedRideId, rideId, router]);
 
   const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
@@ -929,12 +959,14 @@ function RideCompletedScreenContent() {
         )}
         <TouchableOpacity
           style={[styles.submitBtn, submitDisabled && { opacity: 0.6 }]}
-          onPress={() => handleSubmit()}
+          // While the ride is unloaded this retries the fetch instead of
+          // charging — see the awaitingRide note above.
+          onPress={() => (awaitingRide ? rideId && fetchRide(rideId as string) : handleSubmit())}
           disabled={submitDisabled}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={
-            alreadyPaid ? 'Rate and finish' : rideLoaded ? 'Pay and finish' : 'Loading your trip'
+            alreadyPaid ? 'Rate and finish' : awaitingRide ? 'Retry loading your trip' : 'Pay and finish'
           }
           accessibilityState={{ disabled: submitDisabled, busy: isSubmitting }}
         >
@@ -952,13 +984,17 @@ function RideCompletedScreenContent() {
                   ? 'Rate & Done'
                   // No dollar figure until the ride loads. This button used to
                   // read "Pay $0.00 & Done" in that window, which is both wrong
-                  // and tappable — see the rideLoaded note above.
-                  : !rideLoaded
-                    ? 'Loading your trip…'
+                  // and tappable — see the rideLoaded note above. The copy says
+                  // "tap to retry" rather than flipping between a loading and a
+                  // failed label: `isLoading` is shared store state that settles
+                  // a frame after mount, so a two-state label would flicker, and
+                  // the action is the same either way.
+                  : awaitingRide
+                    ? 'Loading your trip… tap to retry'
                     : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
                 }
               </Text>
-              {(alreadyPaid || rideLoaded) && (
+              {!awaitingRide && (
                 <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
               )}
             </>

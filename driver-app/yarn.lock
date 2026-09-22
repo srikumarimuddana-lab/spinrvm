@@ -3350,16 +3350,16 @@
     "@sentry/browser-utils" "10.74.0"
     "@sentry/core" "10.74.0"
 
-"@shopify/react-native-skia@^2.11.2":
-  version "2.11.2"
-  resolved "https://registry.yarnpkg.com/@shopify/react-native-skia/-/react-native-skia-2.11.2.tgz#9d00428a3f654d99f64a5bcf3a742b6b93e33546"
-  integrity sha512-BGTSMlsl3gM/gw9FyfCDgEATBQvNkhyDX9iEDu/iu3ZLcZT7+QzeFwpC0Sij2pLjuY33x3UDPS2DhSis7Mo7Xw==
+"@shopify/react-native-skia@^2.12.0":
+  version "2.12.0"
+  resolved "https://registry.yarnpkg.com/@shopify/react-native-skia/-/react-native-skia-2.12.0.tgz#0cb1280c0d3a13eca474f3b4c25315c2f3ea4aa3"
+  integrity sha512-GXjZfmD2GhK7lH8h0A1OgVkKlwI500Qjm69+0ngHVgoSCZE1DOU3M7hPiSDhU32O2NFPWZnPet/GY3N9UTO/5A==
   dependencies:
     canvaskit-wasm "0.41.0"
-    react-native-skia-android "152.0.0"
-    react-native-skia-apple-ios "152.0.0"
-    react-native-skia-apple-macos "152.0.0"
-    react-native-skia-apple-tvos "152.0.0"
+    react-native-skia-android "154.0.0"
+    react-native-skia-apple-ios "154.0.0"
+    react-native-skia-apple-macos "154.0.0"
+    react-native-skia-apple-tvos "154.0.0"
     react-reconciler "0.31.0"
 
 "@sinclair/typebox@^0.27.8":
@@ -9403,25 +9403,25 @@ react-native-screens@^4.26.0, react-native-screens@~4.26.2:
     react-freeze "^1.0.0"
     warn-once "^0.1.0"
 
-react-native-skia-android@152.0.0:
-  version "152.0.0"
-  resolved "https://registry.yarnpkg.com/react-native-skia-android/-/react-native-skia-android-152.0.0.tgz#8dd685f04026a784c504abe35fed040ab53467fc"
-  integrity sha512-X++QG8bpPLHpavUyNfQvAxvtjH3r8fnivxS1PTFZsKL4ZiAJ1V9IVsJi4qltafWJbzhq7IutpZQNYd06uwNkjg==
+react-native-skia-android@154.0.0:
+  version "154.0.0"
+  resolved "https://registry.yarnpkg.com/react-native-skia-android/-/react-native-skia-android-154.0.0.tgz#77fe77fc5b120d9d6488418faf5d522b29f77cb6"
+  integrity sha512-brjJaJcrYguSOwdbvMBlh+tHJdIvzOMUZSjTmIpiIe4/V9x0HsBZM9sy3q32+WGoSPWibylR7hbDmaO12EYAUA==
 
-react-native-skia-apple-ios@152.0.0:
-  version "152.0.0"
-  resolved "https://registry.yarnpkg.com/react-native-skia-apple-ios/-/react-native-skia-apple-ios-152.0.0.tgz#b2bf403f2c0dbb7a99d3f694db7975eb2268362c"
-  integrity sha512-rmnHYWkwvxm7B9fXZCkTRdZVoQwVnNydjytfphxatweQmEqwYE+/g1LOL/emhM/ulmwAFKFT0VNAEzAlvHId2A==
+react-native-skia-apple-ios@154.0.0:
+  version "154.0.0"
+  resolved "https://registry.yarnpkg.com/react-native-skia-apple-ios/-/react-native-skia-apple-ios-154.0.0.tgz#b247ece4784f87b062bf9b43cee6a791bd223f15"
+  integrity sha512-7xq2XYEbcfQYcqyXEnTDXF9GjQzKHuDiUep6wOvOXzoK62108DR8dM3VYgOqJqCTqspPHC9fEJeT52fK3UU5Qg==
 
-react-native-skia-apple-macos@152.0.0:
-  version "152.0.0"
-  resolved "https://registry.yarnpkg.com/react-native-skia-apple-macos/-/react-native-skia-apple-macos-152.0.0.tgz#f05e8141c26ae02f4bfaf1ebf9b7cbc92749d0a1"
-  integrity sha512-boWCDyPPJUuKwcE+DU8X7dop6EwLdrOH+v7pxYAj+43NbOwgfV1wzq4g+kWIQqag5ZOQInq2mVwCc8S1eJjlXw==
+react-native-skia-apple-macos@154.0.0:
+  version "154.0.0"
+  resolved "https://registry.yarnpkg.com/react-native-skia-apple-macos/-/react-native-skia-apple-macos-154.0.0.tgz#2dc0e92e7f2200949b15718e998dfc7481e2dabf"
+  integrity sha512-0BE6/oVMXYOKsxI4JJP1MwwrgmaDnZAl9l6N+7q434MFiT+w0z96a0gTilZukzo1y+35sDi/sA+iAdTz16ElYA==
 
-react-native-skia-apple-tvos@152.0.0:
-  version "152.0.0"
-  resolved "https://registry.yarnpkg.com/react-native-skia-apple-tvos/-/react-native-skia-apple-tvos-152.0.0.tgz#0c56ae838446c7349bc1721e95ef913822293399"
-  integrity sha512-+UnXke4Yz9Jmy3uTcDbYFrVG/+CZMqYbaTV3f52wovaMzf8wWy+iZampZr6dW6rOWLWrsUFiq7yMImg6UGbiFg==
+react-native-skia-apple-tvos@154.0.0:
+  version "154.0.0"
+  resolved "https://registry.yarnpkg.com/react-native-skia-apple-tvos/-/react-native-skia-apple-tvos-154.0.0.tgz#4ab94a2afe9443f98d75809d639a1daf6264a797"
+  integrity sha512-W06tUa+O3TJTYg5G+Lly/pwxE+2zKsmwJ/23yeR+25zSu7VmfdSz3VqFN3BM0jEioN4ASMm/0cMECocV7vxbMQ==
 
 react-native-svg@15.15.4:
   version "15.15.4"

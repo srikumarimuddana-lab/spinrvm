@@ -40,3 +40,32 @@ async def test_missing_durable_insert_is_an_error():
 
         with pytest.raises(RuntimeError, match="durably recorded"):
             await record_operation(operation_type="refund", ride_id="ride1", idempotency_key="refund1")
+
+
+@pytest.mark.asyncio
+async def test_refund_attempt_reuses_pending_operation_without_new_insert():
+    pending = {"id": "op1", "status": "pending", "idempotency_key": "key1"}
+    with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[pending])), patch(
+        "backend.utils.payment_operations.db.insert_one", AsyncMock()
+    ) as insert:
+        from backend.utils.payment_operations import prepare_refund_operation
+
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+
+    assert result == pending
+    insert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_refund_creates_a_distinct_deterministic_retry_key():
+    failed = {"id": "op1", "status": "failed", "idempotency_key": "key1"}
+    created = {"id": "op2", "status": "requested", "idempotency_key": "ride-cancelrefund-ride1-500-a2"}
+    with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[failed])), patch(
+        "backend.utils.payment_operations.db.find_one", AsyncMock(return_value=None)
+    ), patch("backend.utils.payment_operations.db.insert_one", AsyncMock(return_value=created)) as insert:
+        from backend.utils.payment_operations import prepare_refund_operation
+
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+
+    assert result == created
+    assert insert.await_args.args[1]["idempotency_key"] == "ride-cancelrefund-ride1-500-a2"

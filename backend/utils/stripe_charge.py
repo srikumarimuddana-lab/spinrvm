@@ -1257,17 +1257,62 @@ async def refund_excess_capture(
     if refund_cents <= 0:
         return ChargeOutcome(status="not_needed", payment_intent_id=payment_intent_id, charged_amount=Decimal("0.00"))
 
+    # Persist the obligation before calling Stripe. A pending or successful
+    # prior attempt blocks another refund; each confirmed terminal failure
+    # gets a distinct deterministic key so an old Stripe idempotency response
+    # cannot mask a deliberate retry.
+    try:
+        try:
+            from .payment_operations import prepare_refund_operation, update_operation
+        except ImportError:  # pragma: no cover - dual import
+            from utils.payment_operations import prepare_refund_operation, update_operation  # type: ignore
+        operation = await prepare_refund_operation(
+            ride_id=ride_id, payment_intent_id=payment_intent_id, amount_cents=refund_cents
+        )
+    except Exception as e:
+        logger.exception("[CANCEL] could not persist refund obligation ride=%s", ride_id)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    if operation.get("status") in {"pending", "processing", "requires_action", "succeeded"}:
+        provider_id = operation.get("provider_object_id")
+        if provider_id and operation.get("status") != "succeeded":
+            try:
+                prior_refund = await asyncio.to_thread(stripe.Refund.retrieve, provider_id, api_key=secret)
+                prior_status = str(getattr(prior_refund, "status", "pending") or "pending")
+                prior_cents = int(getattr(prior_refund, "amount", refund_cents) or refund_cents)
+                await update_operation(str(operation["id"]), status=prior_status, provider_object_id=provider_id)
+                if prior_status == "succeeded":
+                    return ChargeOutcome(status="refunded", payment_intent_id=payment_intent_id,
+                                         charged_amount=cents_to_dollars(prior_cents),
+                                         raw={"refund_id": provider_id, "refund_status": prior_status,
+                                              "refund_amount_cents": prior_cents})
+                return ChargeOutcome(status=prior_status, payment_intent_id=payment_intent_id,
+                                     charged_amount=cents_to_dollars(prior_cents),
+                                     raw={"refund_id": provider_id, "refund_status": prior_status,
+                                          "refund_amount_cents": prior_cents})
+            except Exception as e:
+                logger.exception("[CANCEL] unable to reconcile existing refund ride=%s", ride_id)
+                return ChargeOutcome(status="pending", payment_intent_id=payment_intent_id,
+                                     error_message=str(e), raw={"refund_id": provider_id,
+                                                              "refund_status": operation.get("status")})
+        return ChargeOutcome(status="refunded" if operation.get("status") == "succeeded" else "pending",
+                             payment_intent_id=payment_intent_id,
+                             charged_amount=cents_to_dollars(refund_cents),
+                             raw={"refund_id": operation.get("provider_object_id"),
+                                  "refund_status": operation.get("status")})
+
     try:
         refund = await asyncio.to_thread(
             lambda: stripe.Refund.create(
                 payment_intent=payment_intent_id,
                 amount=refund_cents,
                 reason="requested_by_customer",
+                metadata={"ride_id": ride_id, "ride_payment_operation_id": str(operation["id"])},
                 api_key=secret,
                 # Amount is part of the key so a later, different-amount refund
                 # (e.g. a subsequent admin dispute refund) gets its own key
                 # rather than an IdempotencyError against this one.
-                idempotency_key=f"ride-cancelrefund-{ride_id}-{refund_cents}",
+                idempotency_key=operation["idempotency_key"],
             )
         )
     except _StripeBaseError as e:
@@ -1287,6 +1332,18 @@ async def refund_excess_capture(
     refund_status = str(getattr(refund, "status", "") or "pending")
     provider_amount = getattr(refund, "amount", None)
     actual_cents = int(provider_amount) if isinstance(provider_amount, int) else refund_cents
+    try:
+        await update_operation(
+            str(operation["id"]), provider_object_id=refund_id,
+            status=refund_status if refund_status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending",
+            collected_cents=actual_cents, next_attempt_at=None if refund_status == "succeeded" else operation.get("next_attempt_at"),
+        )
+    except Exception as e:
+        logger.exception("[CANCEL] Stripe refund created but operation status write failed ride=%s", ride_id)
+        return ChargeOutcome(status="pending", payment_intent_id=payment_intent_id,
+                             charged_amount=cents_to_dollars(actual_cents), error_message=str(e),
+                             raw={"refund_id": refund_id, "refund_status": refund_status,
+                                  "refund_amount_cents": actual_cents})
     logger.info(
         "[CANCEL] excess-capture refund created ride=%s pi=%s refund=%s status=%s amount_cents=%s",
         ride_id,

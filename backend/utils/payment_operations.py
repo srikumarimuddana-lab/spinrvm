@@ -42,6 +42,26 @@ async def record_operation(
     raise RuntimeError("Payment operation could not be durably recorded")
 
 
+async def prepare_refund_operation(*, ride_id: str, payment_intent_id: str, amount_cents: int) -> Dict[str, Any]:
+    """Return the live attempt or durably create the next retry before Stripe."""
+    prior = await db.get_rows(TABLE, {
+        "operation_type": "refund", "ride_id": ride_id,
+        "payment_intent_id": payment_intent_id, "amount_cents": int(amount_cents),
+    }, order="created_at", desc=True, limit=20)
+    prior = prior or []
+    for operation in prior:
+        if operation.get("status") in {"requested", "processing", "pending", "requires_action", "succeeded"}:
+            return operation
+    attempt = len(prior) + 1
+    # Each terminal failed attempt has its own stable key. Replaying a
+    # requested attempt reuses its key; a confirmed failure can safely advance.
+    key = f"ride-cancelrefund-{ride_id}-{amount_cents}-a{attempt}"
+    return await record_operation(
+        operation_type="refund", ride_id=ride_id, payment_intent_id=payment_intent_id,
+        amount_cents=amount_cents, idempotency_key=key, status="requested",
+    )
+
+
 async def update_operation(operation_id: str, **changes: Any) -> Optional[Dict[str, Any]]:
     changes["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.update_one(TABLE, {"id": operation_id}, changes)

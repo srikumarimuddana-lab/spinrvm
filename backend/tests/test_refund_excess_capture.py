@@ -46,6 +46,16 @@ def _patch_secret(secret: str = "sk_test_xxx"):
 @pytest.mark.unit
 @pytest.mark.asyncio
 class TestRefundExcessCapture:
+    @pytest.fixture(autouse=True)
+    def isolate_operation_storage(self):
+        with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[])), patch(
+            "backend.utils.payment_operations.db.find_one", AsyncMock(return_value=None)
+        ), patch(
+            "backend.utils.payment_operations.db.insert_one",
+            AsyncMock(side_effect=lambda _table, row: {"id": "op1", **row}),
+        ), patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})):
+            yield
+
     async def test_no_payment_intent_is_not_needed_and_never_calls_stripe(self):
         outcome = await refund_excess_capture(ride_id="r1", payment_intent_id="", fee_owed=Decimal("0"))
         assert outcome.status == "not_needed"
@@ -126,4 +136,4 @@ class TestRefundExcessCapture:
             await refund_excess_capture(ride_id="ride_xyz", payment_intent_id="pi_1", fee_owed=Decimal("0"))
 
         key = mock_stripe.Refund.create.call_args.kwargs["idempotency_key"]
-        assert key == "ride-cancelrefund-ride_xyz-210"
+        assert key == "ride-cancelrefund-ride_xyz-210-a1"

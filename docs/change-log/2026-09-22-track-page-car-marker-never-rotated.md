@@ -95,9 +95,30 @@ change, no shared-module change.
   (both `CarMarker`s, `RouteLine`, `navigationSteps`, `gpsSmoothing`,
   `markerPlayback`, `markerRouteTracking`, `useVisibleHeatmapCells`,
   `driver/(tabs)/index.tsx`) is affected in any way.
-- `@spinr/shared/utils/...` is an established import path in this app
-  (`ai-console/page.tsx`, `ride-route-map.tsx`, `ride-detail-modal.tsx` all use
-  it), so this introduces no new build-graph edge kind.
+- **CORRECTED — this claim was wrong and the Vercel build caught it.** The
+  original text read "`@spinr/shared/utils/...` is an established import path
+  in this app, so this introduces no new build-graph edge kind." Three existing
+  imports (`ai-console/page.tsx`, `ride-route-map.tsx`,
+  `ride-detail-modal.tsx`) do use that prefix, but `shared/package.json`
+  declares an **`exports` allowlist that enumerates each subpath
+  individually** — `./utils/routeSegments`, `./utils/aiLocationMessages`,
+  `./constants/routeMapStyle` — with **no `./utils/*` wildcard**. I generalised
+  three specific entries into a wildcard that does not exist, and never opened
+  the exports map. `admin-dashboard/tsconfig.json` has no `@spinr/shared/*`
+  path mapping either, so that map is the only resolution gate. The build
+  failed `module-not-found` at the import. Fixed by adding
+  `"./utils/vehicleTracking": "./utils/vehicleTracking.ts"`.
+  - The added entry is **purely additive** and cannot affect the mobile apps:
+    they do not resolve through this package's `exports` at all —
+    `driver-app/components/CarMarker.tsx` imports
+    `@shared/utils/vehicleTracking` (a Metro/babel alias) and
+    `shared/components/CarMarker.tsx` uses the relative
+    `../utils/vehicleTracking`. Only admin-dashboard consumers are affected,
+    and only by gaining a subpath that was previously refused.
+  - All 27 exports subpaths were re-validated against disk after the edit: every
+    non-wildcard target exists.
+  - `shared/utils/vehicleTracking.ts` has **zero imports** (verified), so
+    admitting it to the Next build cannot pull React Native into the bundle.
 - **No ride state, no money, no WebSocket, no background loop, no insurance
   period** is touched. The page is read-only: it polls and renders.
 - **The OSRM fetch cadence is unchanged.** `routeCoordsRef` is populated inside
@@ -135,6 +156,7 @@ not a new risk class.
 |---|---|---|
 | `admin-dashboard/src/app/track/[rideId]/page.tsx` | Keep OSRM geometry in a ref; derive the driver's course (route snap → travel → hold); rotate the car `<img>` via CSS, cancelling the map's own heading; re-apply on `heading_changed` | The car icon was never rotated at all |
 | ″ (same file, second pass) | Reset the course refs when the driver marker is torn down; drop the stale-leg route before deriving a heading; sequence-guard the OSRM fetch; reroute when a driver appears where there was none | Three findings from the pre-merge review — see §12 |
+| `shared/package.json` | Added one `exports` entry: `"./utils/vehicleTracking"` | The exports map is an allowlist with no `./utils/*` wildcard, so the new import was refused and the Vercel build failed `module-not-found`. Additive only; the mobile apps don't resolve through this map (see §4) |
 
 ## 7. Before / after
 

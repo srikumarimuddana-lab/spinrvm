@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - dual import
 
 TABLE = "ride_payment_operations"
 MAX_ATTEMPTS = 8
+CLAIM_LEASE_MINUTES = 10
 RETRY_MINUTES = (1, 5, 15, 60, 240, 720, 1440, 1440)
 
 
@@ -89,6 +90,7 @@ async def claim_due_operation(operation: Dict[str, Any]) -> Optional[Dict[str, A
         "status": operation.get("status"),
     }, {
         "status": "processing", "attempt_count": attempt + 1,
+        "next_attempt_at": (datetime.now(timezone.utc) + timedelta(minutes=CLAIM_LEASE_MINUTES)).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
     return claimed
@@ -100,14 +102,16 @@ async def schedule_retry(operation_id: str, *, attempt_count: int, error: str) -
         return
     delay = RETRY_MINUTES[min(attempt_count - 1, len(RETRY_MINUTES) - 1)]
     next_at = datetime.now(timezone.utc) + timedelta(minutes=delay)
-    await update_operation(operation_id, status="failed", next_attempt_at=next_at.isoformat(), last_error=error[:1000])
+    # A retryable provider/transport error is ambiguous. Keep the same durable
+    # operation and idempotency key, then reconcile its provider object first.
+    await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(), last_error=error[:1000])
 
 
 async def reconcile_due_operations() -> int:
     """Reconcile bounded due operations using provider reads before retries."""
     now = datetime.now(timezone.utc).isoformat()
     due = await db.get_rows(TABLE, {
-        "status": {"$in": ["requested", "pending", "failed", "processing"]},
+        "status": {"$in": ["requested", "pending", "failed", "canceled", "processing"]},
         "next_attempt_at": {"$lte": now},
     }, order="created_at", limit=50)
     processed = 0
@@ -189,15 +193,6 @@ async def reconcile_due_operations() -> int:
                     from .stripe_charge import _resolve_stripe_secret, stripe
                 except ImportError:  # pragma: no cover
                     from utils.stripe_charge import _resolve_stripe_secret, stripe  # type: ignore
-                if prior_status == "failed":
-                    await update_operation(op_id, status="failed", next_attempt_at=now)
-                    operation = await prepare_refund_operation(
-                        ride_id=ride_id, payment_intent_id=str(operation.get("payment_intent_id")),
-                        amount_cents=int(operation.get("amount_cents") or 0),
-                    )
-                    op_id = str(operation["id"])
-                    if operation.get("status") == "exhausted":
-                        continue
                 secret = await _resolve_stripe_secret(ride_id)
                 if stripe is None or not secret:
                     raise RuntimeError("Stripe is not configured for refund reconciliation")
@@ -225,10 +220,22 @@ async def reconcile_due_operations() -> int:
                 status = str(getattr(refund, "status", "pending") or "pending")
                 refund_id = getattr(refund, "id", None)
                 amount = int(getattr(refund, "amount", operation["amount_cents"]) or operation["amount_cents"])
+                if status in {"failed", "canceled"}:
+                    # Advance only after Stripe has confirmed the previous
+                    # object is terminal. A retrieve/list exception leaves the
+                    # same operation pending via schedule_retry().
+                    await update_operation(op_id, provider_object_id=refund_id, status=status,
+                                           collected_cents=amount, next_attempt_at=None,
+                                           last_error=f"Stripe confirmed refund {status}")
+                    operation = await prepare_refund_operation(
+                        ride_id=ride_id, payment_intent_id=str(operation.get("payment_intent_id")),
+                        amount_cents=int(operation.get("amount_cents") or 0),
+                    )
+                    continue
                 stored_status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
                 await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
                                        collected_cents=amount,
-                                       next_attempt_at=None if stored_status == "succeeded" else
+                                       next_attempt_at=None if stored_status in {"succeeded", "requires_action"} else
                                        (datetime.now(timezone.utc) + timedelta(minutes=RETRY_MINUTES[0])).isoformat())
                 await db.update_one("rides", {"id": ride_id}, {
                     "refund_id": refund_id, "refund_status": stored_status,

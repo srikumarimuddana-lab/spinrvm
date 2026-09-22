@@ -29,6 +29,8 @@ async def test_claim_operation_uses_status_and_attempt_count_compare_and_swap():
     assert result == claimed
     update.assert_awaited_once()
     assert update.await_args.args[1] == {"id": "op1", "attempt_count": 0, "status": "pending"}
+    assert update.await_args.args[2]["status"] == "processing"
+    assert "next_attempt_at" in update.await_args.args[2]
 
 
 @pytest.mark.asyncio
@@ -69,6 +71,20 @@ async def test_failed_refund_creates_a_distinct_deterministic_retry_key():
 
     assert result == created
     assert insert.await_args.args[1]["idempotency_key"] == "ride-cancelrefund-ride1-500-a2"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_refund_is_reused_without_advancing_key():
+    ambiguous = {"id": "op1", "status": "pending", "idempotency_key": "key1"}
+    with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[ambiguous])), patch(
+        "backend.utils.payment_operations.db.insert_one", AsyncMock()
+    ) as insert:
+        from backend.utils.payment_operations import prepare_refund_operation
+
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+
+    assert result == ambiguous
+    insert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

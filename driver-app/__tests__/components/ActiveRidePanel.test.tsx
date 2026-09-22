@@ -1,5 +1,26 @@
 import React from 'react';
 import { Animated, AppState, Linking } from 'react-native';
+
+// Mocked as a module, matching indexScreen/driverDashboardScreen/backgroundLocation
+// tests — assigning `currentState` on the real singleton is unreliable, which is
+// why lostAndFoundChatScreen had to reach for Object.defineProperty.
+const appStateListeners: Array<(state: string) => void> = [];
+jest.mock('react-native/Libraries/AppState/AppState', () => ({
+  __esModule: true,
+  default: {
+    addEventListener: (event: string, cb: (state: string) => void) => {
+      if (event === 'change') appStateListeners.push(cb);
+      return { remove: jest.fn() };
+    },
+    currentState: 'active',
+  },
+}));
+
+// The phone's hand-off asks whether a head unit currently owns the session.
+let mockCarSessionActive = false;
+jest.mock('../../lib/androidAuto/carSession', () => ({
+  isCarSessionActive: () => mockCarSessionActive,
+}));
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
@@ -295,14 +316,17 @@ describe('automatic navigation hand-off', () => {
     canOpenURL = jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true as never);
     mockAutoNavigate = true;
     mockNavPrefsLoaded = true;
-    (AppState as any).currentState = 'active';
+    mockCarSessionActive = false;
+    AppState.currentState = 'active';
+    appStateListeners.length = 0;
   });
 
   afterEach(() => {
     mockNavApp = 'default';
     mockAutoNavigate = false;
     mockNavPrefsLoaded = true;
-    (AppState as any).currentState = 'active';
+    mockCarSessionActive = false;
+    AppState.currentState = 'active';
     openURL.mockRestore();
     canOpenURL.mockRestore();
   });
@@ -365,20 +389,65 @@ describe('automatic navigation hand-off', () => {
     expect(openURL).not.toHaveBeenCalled();
   });
 
-  it('stays off the phone screen when the accept came from the car head unit', async () => {
+  it('stays off the phone screen for good when the car head unit owns the session', async () => {
     // lib/androidAuto/register.ts calls acceptRide() on this same singleton
     // store straight off the head unit, so this effect can run with the phone
-    // locked in the driver's pocket. Launching then would throw the phone into
-    // Maps mid-drive for an accept that never touched it.
-    (AppState as any).currentState = 'background';
+    // locked in the driver's pocket. The car has its own navigation.
+    AppState.currentState = 'background';
+    mockCarSessionActive = true;
     renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     await act(async () => {});
     expect(openURL).not.toHaveBeenCalled();
-    // The leg is still spent, so returning to the phone later can't fire it.
+    // Claim spent, so picking the phone up later can't fire it either.
     expect(AsyncStorage.setItem).toHaveBeenCalledWith(
       '@spinr_auto_nav_launched',
       'ride-001:pickup',
     );
+  });
+
+  it('defers rather than cancels for a backgrounded accept with no car session', async () => {
+    // A notification action button also calls acceptRide() while backgrounded
+    // (app/_layout.tsx's Notifee handlers), and then routes the driver into the
+    // app. Spending the claim there would kill the hand-off for that ride.
+    AppState.currentState = 'background';
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+
+    // Driver lands on the dashboard — the deferred hand-off fires now.
+    AppState.currentState = 'active';
+    await act(async () => { appStateListeners.forEach((cb) => cb('active')); });
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+  });
+
+  it('does not launch for a zeroed coordinate', async () => {
+    // Number.isFinite(0) is true, so a failed geocode or a half-written row
+    // would otherwise auto-route the driver into the Gulf of Guinea, with no
+    // tap and no chance to see the destination first.
+    renderWithSafeArea(
+      <ActiveRidePanel
+        {...defaultProps}
+        ride={{ ...mockRide, pickup_lat: 0, pickup_lng: 0 } as any}
+      />,
+    );
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('ignores a half-written snapped pickup rather than mixing the pair', async () => {
+    // Taking lat from the snapped column and lng from the raw pin yields a
+    // point on neither. The backend guards the pair the same way.
+    renderWithSafeArea(
+      <ActiveRidePanel
+        {...defaultProps}
+        ride={{ ...mockRide, pickup_nav_lat: 52.9, pickup_nav_lng: null } as any}
+      />,
+    );
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+    const url = openURL.mock.calls[0][0] as string;
+    expect(url).toContain('52.1333,-106.6667');
+    expect(url).not.toContain('52.9');
   });
 
   it('does not retroactively launch when the toggle is switched on mid-leg', async () => {

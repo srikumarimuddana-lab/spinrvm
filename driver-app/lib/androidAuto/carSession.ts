@@ -330,6 +330,18 @@ async function loadDriverConfig(): Promise<void> {
  * camera and back re-fires didConnect without a disconnect, and that must not
  * stack a second refresh timer or re-run the bootstrap.
  */
+/**
+ * Is a head unit currently driving this app?
+ *
+ * Read by the phone's auto-navigation hand-off to tell two backgrounded accepts
+ * apart: one taken on the car screen (the head unit has its own navigation, so
+ * the phone stays out of the way) versus one taken from a notification action
+ * (the driver is on their way into the app and still wants navigation).
+ */
+export function isCarSessionActive(): boolean {
+  return started;
+}
+
 export async function startCarSession(): Promise<void> {
   if (started) {
     log('session already started — refreshing instead');

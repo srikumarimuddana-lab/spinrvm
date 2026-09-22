@@ -31,7 +31,7 @@ interface NavState {
 // whether the hand-off happens automatically. Persisted to AsyncStorage so both
 // choices survive app restarts and are honoured by ActiveRidePanel (see its
 // launcher call and the auto-launch effect).
-export const useNavStore = create<NavState>((set) => ({
+export const useNavStore = create<NavState>((set, get) => ({
     navApp: 'default',
     autoNavigate: true,
     isLoaded: false,
@@ -61,12 +61,32 @@ export const useNavStore = create<NavState>((set) => ({
 
     loadNavApp: async () => {
         // Hydrates BOTH nav preferences despite the name — kept as `loadNavApp`
-        // because every call site and test mock already refers to it. Each key
-        // is read independently so a failure on one doesn't drop the other.
-        const [storedApp, storedAuto] = await Promise.all([
-            AsyncStorage.getItem(NAV_APP_KEY).catch(() => null),
-            AsyncStorage.getItem(AUTO_NAVIGATE_KEY).catch(() => null),
-        ]);
+        // because every call site and test mock already refers to it.
+        //
+        // Hydrate once per session. ActiveRidePanel calls this on every mount,
+        // and re-reading would race a setAutoNavigate that has updated state but
+        // not yet finished its write: the stale read would silently flip a
+        // just-made opt-out back on, and the next transition would launch Maps
+        // at a driver whose toggle reads OFF.
+        if (get().isLoaded) return;
+
+        // The whole body is guarded, not just the two promises. AsyncStorage
+        // throws *synchronously* when the native module is missing (a bare Expo
+        // Go client, a broken prebuild) — `.catch()` on the returned promise
+        // never sees that, so an unguarded read would reject loadNavApp, leave
+        // `isLoaded` false forever, and take auto-navigation and the Settings
+        // radio down with it. Degrade to defaults instead.
+        let storedApp: string | null = null;
+        let storedAuto: string | null = null;
+        try {
+            [storedApp, storedAuto] = await Promise.all([
+                Promise.resolve(AsyncStorage.getItem(NAV_APP_KEY)).catch(() => null),
+                Promise.resolve(AsyncStorage.getItem(AUTO_NAVIGATE_KEY)).catch(() => null),
+            ]);
+        } catch (error) {
+            console.error('Failed to read navigation preferences:', error);
+        }
+
         // `isLoaded` is what gates the auto-launch effect: firing before this
         // resolves would hand off to the wrong app, or fire at all for a driver
         // who opted out, because the in-memory values are still the defaults.

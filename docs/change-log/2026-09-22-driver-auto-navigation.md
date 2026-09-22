@@ -187,6 +187,35 @@ from a subsystem that imports neither. A component-import grep cannot see a
 store-mediated interaction — for a shared-store change, grep the store's writers
 too, not just the component's importers.
 
+## 4c. Second review pass (/code-review, high effort)
+
+A Codex-style line-anchored pass over the whole branch. Eleven findings, all
+verified against the code before acting. Eight were real and are fixed here.
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | `deepLinkFor` emitted iOS-only schemes on both platforms — on Android a Waze-preferring driver was sent to Google Maps on every leg, and "Default" opened a route *preview* rather than turn-by-turn | **Fixed.** Per-platform URLs mirroring `carRoute.ts`'s `buildHandoffUrl`; `canOpenURL` consulted on iOS only |
+| 2 | The foreground gate also caught the notification-Accept path, permanently killing the hand-off for that ride | **Fixed.** Defers instead of spending the claim unless `isCarSessionActive()` |
+| 3 | `loadNavApp` lost its outer try/catch — a *synchronous* AsyncStorage throw left `isLoaded` false forever, disabling the feature for the session | **Fixed.** Whole body guarded again |
+| 4 | `Number.isFinite(0)` is true, so the "bail rather than navigate to (0,0)" comment described a check that didn't exist | **Fixed.** `isPlausibleCoord` with an explicit Null Island and range check |
+| 5 | The snapped-pickup fallback resolved per-axis, so a half-written pair produced a hybrid coordinate | **Fixed.** `hasSnappedPickup` resolves the pair atomically, matching `ride_flow.py:901` |
+| 6 | `loadNavApp` re-read on every panel mount and could revert a just-made opt-out | **Fixed.** Hydrates once per session |
+| 7 | The new tests set `AppState.currentState` by assignment; every sibling test mocks the module because assignment is unreliable | **Fixed.** Mocks the module |
+| 8 | On Android `defaultUrl` and `googleWebUrl` were the same string, so the chain retried a URL that had just failed | **Fixed.** Candidates deduped |
+| 9 | `openMapsNavigation` discarded `_label`; call site still cast `(ride as any)` for fields this diff had just typed | **Partly fixed.** Casts removed; the thin wrapper kept, as both call sites read better with it |
+| 10 | Architectural: "spend the claim without launching" conflates *skip now* with *never again* | **Partly addressed.** Finding 2's fix separates them for the background case. The level-triggered claim stays, because `ActiveRidePanel` mounts already inside `navigating_to_pickup` and cannot see the accept transition — an edge-trigger would need the trigger to move up into `useDriverDashboard`, where the coordinates do not exist yet |
+| 11 | §7's before/after snippet showed a superseded revision of the effect | **Fixed.** §7 rewritten against the shipped code |
+
+Findings 1 and 2 are the ones that would have shipped a broken feature: 1 meant
+auto-start navigation did not actually start navigation for most Android drivers
+and silently overrode a Waze preference twice a ride; 2 meant the fix for the
+Android Auto blocker had itself disabled the hand-off for every notification
+accept.
+
+Worth noting that finding 1 was pre-existing in the manual button — the
+extraction carried it forward rather than introducing it. It only became urgent
+because a tap the driver chose became a launch that happens on its own.
+
 ## 5. User-experience effect
 
 **Driver-facing, and visible mid-session.** Per the product decision the toggle
@@ -212,6 +241,7 @@ moments; translated to es/fr alongside en.
 | `driver-app/lib/navigation/launchNavigation.ts` | **New.** The launcher, lifted out of `ActiveRidePanel` unchanged | One implementation behind both the manual button and the auto hand-off |
 | `driver-app/lib/navigation/autoNavigate.ts` | **New.** `claimAutoNavLeg` — durable once-per-leg claim | Stops a cold start re-launching a leg already navigated |
 | `driver-app/components/dashboard/ActiveRidePanel.tsx` | Inline launcher replaced with the shared call; added the auto-launch effect; typed `pickup_nav_lat/lng`; dropped the now-orphaned `Platform` import | The change itself |
+| `driver-app/lib/androidAuto/carSession.ts` | Exported `isCarSessionActive()` | Lets the phone tell a head-unit accept from a backgrounded notification accept |
 | `driver-app/app/driver/settings.tsx` | "Auto-Start Navigation" toggle in the Navigation card | Driver-facing off switch |
 | `driver-app/i18n/{en,es,fr}.json` | `settings.autoNavigate`, `settings.autoNavigateDesc` | Copy for the toggle |
 | `driver-app/__tests__/store/navStore.test.ts` | **New.** 9 cases | Default-ON, opt-out, corrupt-value, partial-storage-failure |
@@ -224,30 +254,56 @@ moments; translated to es/fr alongside en.
 ## 7. Before / after
 
 ```tsx
-// Before — ActiveRidePanel: launching was reachable only by tapping.
+// Before — ActiveRidePanel: launching was reachable only by tapping, and the
+// launcher emitted the iOS scheme on both platforms.
 <TouchableOpacity
-  onPress={() => openMapsNavigation(ride.pickup_nav_lat ?? ride.pickup_lat, …, 'Pickup')}
+  onPress={() => openMapsNavigation((ride as any).pickup_nav_lat ?? ride.pickup_lat, …)}
+...
+if (navApp === 'google') {
+  await openWithFallback(`comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`);
+}
 ```
 
 ```tsx
 // After — the same launcher also runs on the two transitions, once per leg.
+const pickupLat = hasSnappedPickup(ride) ? ride!.pickup_nav_lat : ride?.pickup_lat;
 const navLeg = rideState === 'trip_in_progress' ? 'dropoff'
              : rideState === 'navigating_to_pickup' ? 'pickup' : null;
-const navDestLat = navLeg === 'dropoff' ? ride?.dropoff_lat
-                 : (ride?.pickup_nav_lat ?? ride?.pickup_lat);
 useEffect(() => {
-  if (!navPrefsLoaded || !autoNavigate) return;      // prefs hydrated + opted in
-  if (!navLeg || !rideId) return;                    // not a hand-off phase
-  if (!Number.isFinite(navDestLat) || !Number.isFinite(navDestLng)) return;
+  if (!navPrefsLoaded) return;
+  if (!navLeg || !rideId) return;
+  if (!isPlausibleCoord(navDestLat, navDestLng)) return;   // rejects (0,0) too
+
+  // Opted out: spend the claim so turning the toggle on mid-ride doesn't
+  // retroactively launch. It takes effect from the next transition.
+  if (!autoNavigate) { claimAutoNavLeg(rideId, navLeg); return; }
+
+  // Backgrounded: the car owns it (spend the claim) or a notification accept
+  // is routing the driver into the app (defer — re-runs on appActiveTick).
+  if (AppState.currentState !== 'active') {
+    if (isCarSessionActive()) claimAutoNavLeg(rideId, navLeg);
+    return;
+  }
+
   claimAutoNavLeg(rideId, navLeg).then((claimed) => {
-    if (claimed) launchNavigation(navApp, navDestLat as number, navDestLng as number);
+    if (claimed && navMountedRef.current) launchNavigation(navApp, navDestLat, navDestLng);
   });
-}, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp]);
+}, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp, appActiveTick]);
 ```
 
-The effect has no cleanup/cancel guard on purpose: the claim is already spent by
-the time a cleanup could run, so cancelling the launch would burn the leg and it
-would never navigate at all. The claim *is* the dedupe.
+```ts
+// After — launchNavigation.ts, per-platform URLs (was iOS-only on both):
+//   google  → iOS comgooglemaps://   | Android google.navigation:q=
+//   waze    → iOS waze://            | Android https://waze.com/ul?  (universal link)
+//   default → iOS Apple Maps         | Android google.navigation:q=
+// canOpenURL is consulted on iOS only; on Android package-visibility filtering
+// makes it lie, so the intent is opened directly and the rejection picks the
+// next candidate.
+```
+
+Beyond `navMountedRef`, the effect takes no cleanup/cancel guard on purpose: the
+claim is already spent by the time a cleanup could run, so cancelling on a mere
+dependency change would burn a still-live leg and it would never navigate at all.
 
 ## 8. Rollback plan
 

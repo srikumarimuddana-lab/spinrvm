@@ -76,6 +76,35 @@ describe('navStore', () => {
     expect(s.isLoaded).toBe(true);
   });
 
+  it('hydrates once, so a mount-time read cannot revert a just-made opt-out', async () => {
+    // ActiveRidePanel calls loadNavApp on every mount. setAutoNavigate updates
+    // state before its write finishes, so a second read landing in that gap
+    // would flip the driver's opt-out back on and launch Maps at them.
+    getItem.mockResolvedValue(null);
+    await useNavStore.getState().loadNavApp();
+    expect(useNavStore.getState().autoNavigate).toBe(true);
+
+    await useNavStore.getState().setAutoNavigate(false);
+    getItem.mockResolvedValue(null); // storage write not yet visible
+    await useNavStore.getState().loadNavApp();
+    expect(useNavStore.getState().autoNavigate).toBe(false);
+  });
+
+  it('degrades to defaults when AsyncStorage throws synchronously', async () => {
+    // "NativeModule: AsyncStorage is null" on a bare Expo Go client or a broken
+    // prebuild throws before a promise exists, so a per-key .catch never sees
+    // it. Leaving isLoaded false would silently disable auto-navigation for the
+    // whole session and stop Settings hydrating the saved nav app.
+    getItem.mockImplementation(() => { throw new Error('NativeModule: AsyncStorage is null'); });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(useNavStore.getState().loadNavApp()).resolves.toBeUndefined();
+    const st = useNavStore.getState();
+    expect(st.isLoaded).toBe(true);
+    expect(st.autoNavigate).toBe(true);
+    expect(st.navApp).toBe('default');
+    spy.mockRestore();
+  });
+
   it('setAutoNavigate updates state immediately and persists', async () => {
     await useNavStore.getState().setAutoNavigate(false);
     expect(useNavStore.getState().autoNavigate).toBe(false);

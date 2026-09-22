@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS public.ride_payment_operations (
 
 ALTER TABLE public.ride_payment_operations ENABLE ROW LEVEL SECURITY;
 -- Intentionally no client policies. Supabase service_role bypasses RLS.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.ride_payment_operations TO service_role;
 CREATE INDEX IF NOT EXISTS idx_ride_payment_operations_due
     ON public.ride_payment_operations (next_attempt_at, created_at)
     WHERE status IN ('requested', 'pending', 'failed', 'processing');

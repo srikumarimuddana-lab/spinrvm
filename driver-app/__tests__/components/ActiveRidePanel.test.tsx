@@ -3,6 +3,8 @@ import { Animated, Linking } from 'react-native';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { _resetAutoNavClaimForTest } from '../../lib/navigation/autoNavigate';
 
 // react-native-safe-area-context's `useSafeAreaInsets` throws if no provider is
 // in the tree. Wrap every render with a deterministic SafeAreaProvider.
@@ -62,10 +64,20 @@ jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => ({ t: (key: string) => key }),
 }));
 
-// Driver's saved navigation-app choice — mutate `mockNavApp` per test.
+// Driver's saved navigation preferences — mutate these per test.
+// `mockAutoNavigate` defaults OFF here even though production defaults it ON,
+// so the manual-button cases below assert on their own Linking calls and
+// nothing else. The auto-launch suite at the bottom opts back in.
 let mockNavApp = 'default';
+let mockAutoNavigate = false;
+let mockNavPrefsLoaded = true;
 jest.mock('../../store/navStore', () => ({
-  useNavStore: () => ({ navApp: mockNavApp, loadNavApp: jest.fn() }),
+  useNavStore: () => ({
+    navApp: mockNavApp,
+    autoNavigate: mockAutoNavigate,
+    isLoaded: mockNavPrefsLoaded,
+    loadNavApp: jest.fn(),
+  }),
 }));
 
 jest.mock('../../hooks/useToast', () => ({
@@ -269,4 +281,125 @@ it('shows booked pickup and does not count early arrival as waiting', () => {
   expect(view.getByText('0s')).toBeTruthy();
   view.unmount();
   jest.useRealTimers();
+});
+
+describe('automatic navigation hand-off', () => {
+  let openURL: jest.SpyInstance;
+  let canOpenURL: jest.SpyInstance;
+
+  beforeEach(() => {
+    _resetAutoNavClaimForTest();
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(null);
+    (AsyncStorage.setItem as jest.Mock).mockResolvedValue(undefined);
+    openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
+    canOpenURL = jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true as never);
+    mockAutoNavigate = true;
+    mockNavPrefsLoaded = true;
+  });
+
+  afterEach(() => {
+    mockNavApp = 'default';
+    mockAutoNavigate = false;
+    mockNavPrefsLoaded = true;
+    openURL.mockRestore();
+    canOpenURL.mockRestore();
+  });
+
+  it('launches to the pickup when the panel opens on an accepted ride', async () => {
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+    expect(openURL.mock.calls[0][0]).toContain('52.1333,-106.6667');
+  });
+
+  it('launches to the dropoff once the trip starts', async () => {
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} rideState="trip_in_progress" />);
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+    expect(openURL.mock.calls[0][0]).toContain('52.15,-106.65');
+  });
+
+  it('honours the driver\'s chosen app', async () => {
+    mockNavApp = 'waze';
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await waitFor(() =>
+      expect(openURL).toHaveBeenCalledWith('waze://?ll=52.1333,-106.6667&navigate=yes'),
+    );
+  });
+
+  it('routes to the road-snapped pickup when the rider pinned an unreachable spot', async () => {
+    // pickup_nav_lat/lng (migration 133) is the pin snapped to the nearest
+    // drivable road. Sending the driver to the raw pin can mean the middle of a
+    // mall. The manual Navigate button already prefers it; so must this.
+    renderWithSafeArea(
+      <ActiveRidePanel
+        {...defaultProps}
+        ride={{ ...mockRide, pickup_nav_lat: 52.14, pickup_nav_lng: -106.68 } as any}
+      />,
+    );
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+    expect(openURL.mock.calls[0][0]).toContain('52.14,-106.68');
+  });
+
+  it('does nothing when the driver turned auto-navigate off', async () => {
+    mockAutoNavigate = false;
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('waits for the stored preferences before launching', async () => {
+    // Firing before AsyncStorage resolves would send a Waze driver to Apple
+    // Maps, and would fire at all for a driver who had opted out.
+    mockNavPrefsLoaded = false;
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('stays put while the driver waits at the pickup', async () => {
+    // arrived_at_pickup is the one active phase with no hand-off — the driver
+    // is parked and needs the OTP keypad, not a maps app on top of it.
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} rideState="arrived_at_pickup" />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('does not launch again when the same leg re-renders', async () => {
+    const view = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await waitFor(() => expect(openURL).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <SafeAreaProvider initialMetrics={initialMetrics}>
+        <ActiveRidePanel {...defaultProps} routeEtaMinutes={4} />
+      </SafeAreaProvider>,
+    );
+    await act(async () => {});
+    expect(openURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-launch on a cold start mid-leg', async () => {
+    // The process was killed while the driver was in Maps; reopening Spinr
+    // remounts the panel. The durable marker is what stops the remount from
+    // throwing them straight back out.
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue('ride-001:pickup');
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('holds off until the ride payload carries coordinates', async () => {
+    // acceptRide flips the phase and only then fetches the ride, so the panel
+    // can render a beat before pickup_lat/lng exist. Navigating to (0,0) then
+    // would be worse than waiting.
+    const view = renderWithSafeArea(
+      <ActiveRidePanel {...defaultProps} ride={{ ...mockRide, pickup_lat: undefined, pickup_lng: undefined } as any} />,
+    );
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+
+    view.rerender(
+      <SafeAreaProvider initialMetrics={initialMetrics}>
+        <ActiveRidePanel {...defaultProps} />
+      </SafeAreaProvider>,
+    );
+    await waitFor(() => expect(openURL).toHaveBeenCalled());
+  });
 });

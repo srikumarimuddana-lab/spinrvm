@@ -44,6 +44,7 @@ BEGIN
     -- accidentally disagree about ride_id, then lock the ride projection.
     PERFORM pg_advisory_xact_lock(hashtextextended(p_payment_intent_id, 0));
     SELECT id, rider_id, payment_intent_id, refund_amount, payment_status,
+           cancel_fee_payment_intent_id, cancellation_fee_admin, cancellation_fee_driver,
            grand_total, total_fare, tax_amount, tax_breakdown,
            driver_id, driver_earnings
       INTO v_ride
@@ -122,6 +123,16 @@ BEGIN
        SET refund_amount = p_cumulative_refunded_cents::numeric / 100,
            payment_status = CASE
                WHEN p_cumulative_refunded_cents = 0 THEN v_ride.payment_status
+               -- Historical cancellations may have collected their fee on a
+               -- separate PI. Refunding the entire booking capture in that
+               -- case still leaves the separately paid fee with the rider.
+               WHEN p_cumulative_refunded_cents >= p_captured_cents
+                    AND v_ride.payment_status IN ('paid', 'partially_refunded')
+                    AND (COALESCE(v_ride.cancellation_fee_admin, 0) > 0
+                         OR COALESCE(v_ride.cancellation_fee_driver, 0) > 0)
+                    AND v_ride.cancel_fee_payment_intent_id IS NOT NULL
+                    AND v_ride.cancel_fee_payment_intent_id <> p_payment_intent_id
+                   THEN 'partially_refunded'
                WHEN p_cumulative_refunded_cents >= p_captured_cents THEN 'refunded'
                ELSE 'partially_refunded'
            END,

@@ -141,62 +141,91 @@ async def test_refund_attempts_stop_at_bounded_limit():
 
 
 @pytest.mark.asyncio
-async def test_successful_refund_recovery_updates_aggregate_and_exactly_once_ledger():
-    ride = {"id": "ride1", "rider_id": "rider1", "payment_intent_id": "pi1", "refund_amount": "0.00",
-            "grand_total": "20.00", "tax_amount": "1.00"}
+async def test_successful_refund_recovery_sends_only_succeeded_cumulative_to_atomic_projection():
     operation = {"id": "op1", "ride_id": "ride1", "payment_intent_id": "pi1", "provider_object_id": "re1"}
     with (
-        patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=ride)),
-        patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "ride1"})) as update,
         patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value={
-            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 0,
+            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 200,
+            "succeeded_refund_ids": ["re1"],
         })),
-        patch("backend.services.payment_service.refund_booked_cents", AsyncMock(return_value=0)),
-        patch("backend.services.payment_service.record_refund_event", AsyncMock(return_value="ledger1")) as record,
+        patch("backend.services.payment_service.apply_confirmed_stripe_refund", AsyncMock(return_value={"outcome": "applied"})) as apply,
     ):
         from backend.utils.payment_operations import finalize_refund_success
 
         await finalize_refund_success(operation)
 
-    assert update.await_args.args[2]["refund_amount"] == "5.00"
-    assert update.await_args.args[2]["payment_status"] == "partially_refunded"
-    assert record.await_args.kwargs["refund_cents"] == 500
-    assert record.await_args.kwargs["dedupe_key"] == "stripe_refund|pi1|500"
-
-
-@pytest.mark.asyncio
-async def test_refund_finalizer_cas_matches_null_initial_aggregate():
-    ride = {"id": "ride1", "rider_id": "rider1", "payment_intent_id": "pi1", "refund_amount": None,
-            "grand_total": "20.00", "tax_amount": "1.00"}
-    operation = {"id": "op1", "ride_id": "ride1", "payment_intent_id": "pi1", "provider_object_id": "re1"}
-    with (
-        patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=ride)),
-        patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "ride1"})) as update,
-        patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value={
-            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 0,
-        })),
-        patch("backend.services.payment_service.refund_booked_cents", AsyncMock(return_value=0)),
-        patch("backend.services.payment_service.record_refund_event", AsyncMock(return_value="ledger1")),
-    ):
-        from backend.utils.payment_operations import finalize_refund_success
-
-        await finalize_refund_success(operation)
-
-    assert update.await_args.args[1] == {"id": "ride1", "refund_amount": None}
+    apply.assert_awaited_once_with(
+        ride_id="ride1", payment_intent_id="pi1", cumulative_refunded_cents=500, captured_cents=2000
+    )
 
 
 @pytest.mark.asyncio
 async def test_refund_finalizer_keeps_operation_open_when_stripe_aggregate_is_unknown():
     with (
         patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value=None)),
-        patch("backend.utils.payment_operations.db.find_one", AsyncMock()) as find,
+        patch("backend.services.payment_service.apply_confirmed_stripe_refund", AsyncMock()) as apply,
     ):
         from backend.utils.payment_operations import finalize_refund_success
 
         with pytest.raises(RuntimeError, match="aggregate is unavailable"):
             await finalize_refund_success({"ride_id": "ride1", "payment_intent_id": "pi1"})
 
-    find.assert_not_awaited()
+    apply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_atomic_refund_rpc_uses_cumulative_dedupe_id_and_returns_stale_noop():
+    with (
+        patch("backend.services.payment_service.ledger_service.derive_event_id", return_value="event-uuid") as derive,
+        patch("backend.services.payment_service.db_supabase.rpc", AsyncMock(return_value=[{"outcome": "stale"}])) as rpc,
+    ):
+        from backend.services.payment_service import apply_confirmed_stripe_refund
+
+        result = await apply_confirmed_stripe_refund(
+            ride_id="ride1", payment_intent_id="pi1", cumulative_refunded_cents=500, captured_cents=2000,
+        )
+
+    derive.assert_called_once_with("stripe_refund|pi1|500")
+    rpc.assert_awaited_once_with("apply_stripe_refund_cumulative", {
+        "p_ride_id": "ride1", "p_payment_intent_id": "pi1",
+        "p_cumulative_refunded_cents": 500, "p_captured_cents": 2000,
+        "p_event_id": "event-uuid",
+    })
+    assert result == {"outcome": "stale"}
+
+
+@pytest.mark.asyncio
+async def test_pending_only_stripe_refund_never_calls_atomic_accounting_rpc():
+    with (
+        patch("backend.services.payment_service.read_capture_state", AsyncMock(return_value={
+            "captured_cents": 2000, "refunded_cents": 0, "pending_refund_cents": 500,
+        })),
+        patch("backend.services.payment_service.db_supabase.rpc", AsyncMock()) as rpc,
+    ):
+        from backend.services.payment_service import reconcile_confirmed_stripe_refund
+
+        result = await reconcile_confirmed_stripe_refund(ride_id="ride1", payment_intent_id="pi1")
+
+    assert result["outcome"] == "no_succeeded_refunds"
+    rpc.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refund_finalizer_waits_until_succeeded_refund_appears_in_complete_list():
+    with (
+        patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value={
+            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 0,
+            "succeeded_refund_ids": [],
+        })),
+        patch("backend.services.payment_service.apply_confirmed_stripe_refund", AsyncMock()) as apply,
+    ):
+        from backend.utils.payment_operations import finalize_refund_success
+
+        with pytest.raises(RuntimeError, match="has not confirmed"):
+            await finalize_refund_success({"ride_id": "ride1", "payment_intent_id": "pi1",
+                                          "provider_object_id": "re_eventual"})
+
+    apply.assert_not_awaited()
 
 
 @pytest.mark.asyncio

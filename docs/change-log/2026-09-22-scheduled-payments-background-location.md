@@ -43,7 +43,9 @@ For previously affected real rides, use the existing reconciliation script in **
 - 34 rider Jest tests passed across sensor ordering, stale-state display, cancellation payment messages and ride-detail route contracts.
 - Both complete mobile TypeScript checks (`tsc --noEmit`) passed.
 - Migration 445 executed in a local PostgreSQL WASM runtime against a minimal schema: newer/older/stale/future captures, preservation of insurance fields, and denial of client-role execution checked. This is SQL execution, not a live Supabase or multi-replica load test.
-- Payment test totals and final architecture review are recorded in the PR after integration.
+- Combined integrated backend verification: 338 passed, one physical-device-only xfail across 21 targeted payment, cancellation, scheduling, marker, WebSocket and API files.
+- Migration 444 also executed in local PostgreSQL WASM: backend access, unique operation key, nonnegative cents and client-role denial passed.
+- Mobile review found no remaining blockers at integrated commit 60069c8; final payment architecture re-review is recorded in the PR.
 
 No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks.
 

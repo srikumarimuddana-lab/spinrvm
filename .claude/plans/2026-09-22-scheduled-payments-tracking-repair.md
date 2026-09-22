@@ -14,47 +14,47 @@ Use root CLAUDE.md conventions: Decimal money, dual imports, no raw GPS/credenti
 
 Files: backend/utils/stripe_charge.py and focused tests first; then an additive refund-obligation schema/helper, cancellation integration, webhook integration, and existing reconciler wiring in separate <=3-file commits.
 
-- [ ] Failing tests: pending/failed Refund object must not return refunded; pending never duplicated, existing success not repeated.
-- [ ] Only confirmed provider success finalizes refund accounting; save refund identifier and actual status.
-- [ ] Persist cancellation refund obligations before external money movement; process provider status updates and bounded retries safely across replicas.
-- [ ] Historical repair must distinguish pending from success and avoid blind duplicate refunds.
-- [ ] Verify cancellation refund exceptions and provider-success/DB-failure recovery. Commit and architect review.
+- [x] Failing tests: pending/failed Refund object must not return refunded; pending never duplicated, existing success not repeated.
+- [x] Only confirmed provider success finalizes refund accounting; save refund identifier and actual status.
+- [x] Persist cancellation refund obligations before external money movement; process provider status updates and bounded retries safely across replicas.
+- [x] Historical repair must distinguish pending from success and avoid blind duplicate refunds.
+- [x] Verify cancellation refund exceptions and provider-success/DB-failure recovery. Commit and architect review.
 
 ## Task 2: scheduled cancellation and fee outcome
 
 Files: backend/utils/scheduled_rides.py plus tests; backend/routes/rides/cancellation.py plus tests, separated commits.
 
-- [ ] Failing forced-interleaving test: rider cancels while dispatch preauthorizes.
-- [ ] Guard PI attachment by current ride state, compensate cancelled hold, prevent stale searching/push continuation.
-- [ ] Persist notice-fee actual amount/provider status/reference without changing fee eligibility; failed attempts must remain visible/recoverable.
-- [ ] Verify no-driver zero fees, scheduled window flag off/on, partial wallet collection. Commit and review.
+- [x] Failing forced-interleaving test: rider cancels while dispatch preauthorizes.
+- [x] Guard PI attachment by current ride state, compensate cancelled hold, prevent stale searching/push continuation.
+- [x] Persist notice-fee actual amount/provider status/reference without changing fee eligibility; failed attempts must remain visible/recoverable.
+- [x] Verify no-driver zero fees, scheduled window flag off/on, partial wallet collection. Commit and review.
 
 ## Task 3: live marker freshness and ordering
 
 Files: migration445 and repository helper/test; REST ingestion/test; websocket ingestion/test; rider response types/store/tests in separate commits.
 
-- [ ] Failing tests for >60-second history point mutating live marker and delayed old write replacing newer point.
-- [ ] Add nullable location_captured_at; update accepted marker atomically under captured timestamp condition across REST/WS producers.
-- [ ] Retain history and insurance accounting while rejecting stale live-position side effects.
-- [ ] Return capture timestamp; polling must reject stale/older fixes and expose stale state in rider map.
-- [ ] Keep existing fanout rollout flag; document enable/rollback and don't flip production values.
-- [ ] Verify mock ingestion plus local SQL concurrency if runtime available. Commit and review.
+- [x] Failing tests for >60-second history point mutating live marker and delayed old write replacing newer point.
+- [x] Add nullable location_captured_at; update accepted marker atomically under captured timestamp condition across REST/WS producers.
+- [x] Retain history and insurance accounting while rejecting stale live-position side effects.
+- [x] Return capture timestamp; polling must reject stale/older fixes and expose stale state in rider map.
+- [x] Keep existing fanout rollout flag; document enable/rollback and don't flip production values.
+- [x] Verify mock ingestion plus local SQL concurrency if runtime available. Commit and review.
 
 ## Task 4: iOS upload deadline
 
 Files: driver-app/utils/backgroundLocation.ts plus focused helper/test, at most3 per commit.
 
-- [ ] Failing tests for unresolved Firebase preparation and response body.
-- [ ] One total deadline covers preflight/fetch/body, releases reservations, preserves durable outbox, fences late dispatch.
-- [ ] Verify auth/session checks retained and sibling consumers audited. Commit and review.
+- [x] Failing tests for unresolved Firebase preparation and response body.
+- [x] One total deadline covers preflight/fetch/body, releases reservations, preserves durable outbox, fences late dispatch.
+- [x] Verify auth/session checks retained and sibling consumers audited. Commit and review.
 
 ## Task 5: combined verification and PR
 
-- [ ] Review task diffs against report and integrate only reviewed work.
-- [ ] Focused Python/Jest regression tests and lint on changed files; local SQL test when available.
-- [ ] Record unavailable native build/device and live-provider checks without implying they ran.
-- [ ] Impact log: actual files/blast radius, before/after behavior, rollout/rollback, verification boundaries.
-- [ ] Architect reviews whole branch, resolve material findings, push feature branch and open PR.
+- [x] Review task diffs against report and integrate only reviewed work.
+- [x] Focused Python/Jest regression tests and lint on changed files; local SQL test when available.
+- [x] Record unavailable native build/device and live-provider checks without implying they ran.
+- [x] Impact log: actual files/blast radius, before/after behavior, rollout/rollback, verification boundaries.
+- [ ] Final architect re-review after recovery corrections. Draft PR #5717 is open; final CI/provider/device rollout checks are tracked there.
 
 ## Cross-task review focus
 

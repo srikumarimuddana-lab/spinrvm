@@ -1,7 +1,16 @@
--- migration 434: fix agent_action_log's dead admin-read RLS policy (same
--- C107/C123 "unreachable admin-role RLS" pattern as migrations 430/432) and
--- add the two missing indexes flagged by spinr-migration-reviewer during the
--- 2026-09-20 /full-audit review of migration 429.
+-- migration 439 (originally merged as 434, renumbered 2026-09-22 -- #5661
+-- Finding 3: 434 collided with two other files also merged on 2026-09-20,
+-- 434_env_admin_token_version.sql (now 440) and
+-- 434_fix_audit_logs_delete_trigger_conflict.sql (kept at 434, the oldest
+-- of the three) -- a cross-PR race CHECK B's own CI check cannot catch (CR
+-- #4187's documented residual gap: each PR's branch predated the others'
+-- merge). Confirmed via `schema_migrations` in production
+-- (soavhtdhefowwvforzwb) before renumbering that none of the three 434
+-- files had been applied anywhere): fix agent_action_log's dead admin-read
+-- RLS policy (same C107/C123 "unreachable admin-role RLS" pattern as
+-- migrations 430/432) and add the two missing indexes flagged by
+-- spinr-migration-reviewer during the 2026-09-20 /full-audit review of
+-- migration 429.
 -- =============================================================================
 -- What's wrong (RLS): migration 429's `agent_action_log_admin_read` policy
 -- gates SELECT on `(auth.jwt() ->> 'role') = 'admin'`. Per root CLAUDE.md's

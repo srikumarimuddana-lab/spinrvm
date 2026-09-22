@@ -1,5 +1,15 @@
 # Change Impact & Risk Log — `agent_action_log` Dead RLS Policy + Missing Indexes
 
+**Correction (2026-09-22, #5661 Finding 3):** `434_agent_action_log_rls_and_indexes.sql`
+was renumbered to `439_agent_action_log_rls_and_indexes.sql` after merge — it collided
+with two other files also numbered 434 and merged the same day
+(`434_env_admin_token_version.sql`, now `440_...`, and
+`434_fix_audit_logs_delete_trigger_conflict.sql`, kept at 434 as the oldest of the
+three — a cross-PR race CHECK B's CI check cannot catch, see CR #4187's documented
+residual gap). Confirmed via `schema_migrations` in production (`soavhtdhefowwvforzwb`)
+before renumbering that none of the three had been applied anywhere. Every `434` below
+now reads `439`.
+
 **Date:** 2026-09-21
 **Author:** Claude Code (session), on behalf of ittalenthire.ca@gmail.com
 **Surfaces:** backend (migration only)

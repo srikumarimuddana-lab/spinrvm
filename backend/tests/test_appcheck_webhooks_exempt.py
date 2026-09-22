@@ -59,8 +59,26 @@ def test_exemptions_are_exact_webhook_paths_not_the_whole_prefix():
 def test_exempt_paths_are_the_real_webhook_routes():
     # The stub app above can't notice the webhooks router moving; this pins the
     # exempted strings to the paths the real app actually serves.
+    #
+    # `app.routes` no longer holds flat, path-bearing route objects directly —
+    # FastAPI 0.136.1 -> 0.141.1's include_router() wraps a nested router in a
+    # lazy `_IncludedRouter` (see test_documents.py::test_websocket_route_is_
+    # registered and test_appcheck_public_tracking_exempt.py's own
+    # `_effective_route_contexts()` for the same fix elsewhere) — walk its
+    # `effective_route_contexts()` to get the real, fully-prefixed paths.
     from backend.server import app
 
-    served = {getattr(route, "path", None) for route in app.routes}
+    def _served_paths(routes):
+        for r in routes:
+            if type(r).__name__ == "_IncludedRouter":
+                for ctx in r.effective_route_contexts():
+                    if ctx.path_format:
+                        yield ctx.path_format
+            else:
+                path = getattr(r, "path", None)
+                if path:
+                    yield path
+
+    served = set(_served_paths(app.routes))
     assert set(EXEMPT_WEBHOOKS) <= served
     assert "/api/v1/webhooks/ses" in served  # still served, just App-Check-enforced

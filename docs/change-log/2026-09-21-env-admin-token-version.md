@@ -1,5 +1,14 @@
 # Change Impact & Risk Log — the env super admin (`admin-001`) becomes revocable
 
+**Correction (2026-09-22, #5661 Finding 3):** `434_env_admin_token_version.sql` was
+renumbered again, to `440_env_admin_token_version.sql` — 434 turned out to collide with
+two other files also merged the same day (`434_agent_action_log_rls_and_indexes.sql`,
+now `439_...`, and `434_fix_audit_logs_delete_trigger_conflict.sql`, kept at 434 as the
+oldest of the three — a cross-PR race CHECK B's CI check cannot catch, see CR #4187's
+documented residual gap). Confirmed via `schema_migrations` in production
+(`soavhtdhefowwvforzwb`) before renumbering that none of the three had been applied
+anywhere. Every `434` below (including the "Migration numbering" bullet) now reads `440`.
+
 ## Summary
 
 | Field | Value |

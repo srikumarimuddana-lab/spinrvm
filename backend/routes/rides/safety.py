@@ -17,6 +17,7 @@ from ._deps import (  # noqa: F401
     BaseModel,
     Depends,
     Field,
+    Header,
     HTTPException,
     Optional,
     Request,
@@ -519,6 +520,7 @@ class RidelessEmergencyRequest(BaseModel):
 async def trigger_emergency_rideless(
     body: RidelessEmergencyRequest,
     request: Request = None,
+    x_app_platform: Optional[str] = Header(None),
     # Same rationale as trigger_emergency: SOS is never gated behind an auth
     # refresh. There is no ride to check membership against here, so the
     # caller's identity IS the authorization -- current_user is the only
@@ -540,7 +542,26 @@ async def trigger_emergency_rideless(
         # like it doesn't exist, not like a permission the caller lacks.
         raise HTTPException(status_code=404, detail="Not found")
 
-    is_rider = not current_user.get("is_driver", False)
+    # A dual-role user (is_rider AND is_driver both true) resolves ambiguously
+    # from the users-row flags alone -- there's no ride here to check
+    # membership against like trigger_emergency does (ride.rider_id ==
+    # current_user["id"]). Prefer the X-App-Platform header (same header/
+    # values routes/notifications.py's _audience_filter reads, sent by both
+    # apps via shared/api/client.ts's setAppIdentity()) to route the alert
+    # to whichever app the caller is actually using. Falls back to the old
+    # is_driver-based heuristic -- correct for single-role users, and the
+    # backward-compatible path for a build predating setAppIdentity() -- only
+    # when the header is missing or unrecognised.
+    #
+    # Trusted-but-unauthenticated metadata, same posture notifications.py
+    # already gives this header: authorization is current_user["id"] alone,
+    # not this value, so a caller who forges the header only mis-routes
+    # their own incident's role/copy/push target -- it cannot widen who the
+    # alert is filed for or let one user's SOS be attributed to another.
+    if x_app_platform in ("rider", "driver"):
+        is_rider = x_app_platform == "rider"
+    else:
+        is_rider = not current_user.get("is_driver", False)
 
     # Idempotency -- identical logic to trigger_emergency, reusing the same
     # migration-315 UNIQUE index, which has no ride_id component

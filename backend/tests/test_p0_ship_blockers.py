@@ -97,8 +97,10 @@ class TestDriverCancelNotifiesRider:
 
         push_calls = []
 
-        async def _capture_push(user_id, title, body, data=None):
-            push_calls.append({"user_id": user_id, "title": title, "body": body, "data": data})
+        async def _capture_push(user_id, title, body, data=None, target_app=None):
+            push_calls.append(
+                {"user_id": user_id, "title": title, "body": body, "data": data, "target_app": target_app}
+            )
 
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
@@ -139,6 +141,7 @@ class TestDriverCancelNotifiesRider:
 
         rider_pushes = [p for p in push_calls if p["user_id"] == RIDER_ID]
         assert rider_pushes, "Rider did not receive a push notification on driver-cancel"
+        assert rider_pushes[0]["target_app"] == "rider"
 
     async def test_cancel_refuses_to_kill_in_progress_trip(self):
         """A driver must not be able to nuke a trip that's already rolling —

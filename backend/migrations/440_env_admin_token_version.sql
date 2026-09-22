@@ -1,10 +1,18 @@
--- 434: revocation generation for the env-credential super admin (admin-001).
+-- 440: revocation generation for the env-credential super admin (admin-001).
 --
--- Authored as 433, renumbered before merge: 433 was taken by
--- 433_admin_role_rls_unreachable_phase2_safety_insurance.sql (PR #5597), which
--- landed on main while this branch was in flight. Safe to rename because this
--- file has never been applied anywhere — the runner keys on the full filename,
--- so only ALREADY-APPLIED migrations are frozen (CLAUDE.md, migrations).
+-- Authored as 433, renumbered to 434 before merge (433 was taken by
+-- 433_admin_role_rls_unreachable_phase2_safety_insurance.sql / PR #5597,
+-- merged while this branch was in flight), then renumbered again to 440
+-- (2026-09-22, #5661 Finding 3): 434 collided with two other files also
+-- merged on 2026-09-20 (434_agent_action_log_rls_and_indexes.sql, now 439,
+-- and 434_fix_audit_logs_delete_trigger_conflict.sql, kept at 434 as the
+-- oldest of the three) — a cross-PR race CHECK B's own CI check cannot
+-- catch (CR #4187's documented residual gap: each PR's branch predated the
+-- others' merge). Confirmed via `schema_migrations` in production
+-- (soavhtdhefowwvforzwb) before renumbering that none of the three 434
+-- files had been applied anywhere. Safe to rename because this file has
+-- never been applied anywhere — the runner keys on the full filename, so
+-- only ALREADY-APPLIED migrations are frozen (CLAUDE.md, migrations).
 --
 -- admin-001 is defined by ADMIN_EMAIL/ADMIN_PASSWORD in the environment and has
 -- no admin_staff row, so dependencies/__init__.py's _verify_admin_payload

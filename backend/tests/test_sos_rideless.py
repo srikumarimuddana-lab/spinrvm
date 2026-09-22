@@ -12,7 +12,9 @@ These tests pin:
   - Flag off (AppSettings.rideless_sos_enabled=False, the default) -> 404,
     no side effects fire at all
   - Flag on -> incident persisted with ride_id=None, category="sos_button_rideless"
-  - Role derived from current_user["is_driver"], not from any ride
+  - Role derived from X-App-Platform when present (dual-role user fix,
+    #5661 Finding 2); falls back to current_user["is_driver"] otherwise --
+    never from any ride
   - Admin notified via WS (same emergency_alert event as the in-ride path)
   - DB insert failure -> clean 503, no downstream notifications
   - Response contains a unique incident_id
@@ -63,6 +65,7 @@ class TestTriggerEmergencyRideless:
         send_sms_side_effect=None,
         insert_one_side_effect=None,
         body=None,
+        x_app_platform=None,
     ):
         from backend.routes import rides as rides_mod
 
@@ -107,6 +110,7 @@ class TestTriggerEmergencyRideless:
         ):
             result = await rides_mod.trigger_emergency_rideless(
                 body=body or _Req(),
+                x_app_platform=x_app_platform,
                 current_user={"id": sender_user_id, "is_driver": is_driver},
             )
 
@@ -142,6 +146,36 @@ class TestTriggerEmergencyRideless:
         assert row["role"] == "driver"
         assert row["reported_by_user_id"] == DRIVER_USER_ID
         assert row["ride_id"] is None
+
+    async def test_dual_role_user_routes_by_app_platform_header_not_is_driver_flag(self):
+        """#5661 Finding 2: a dual-role user (is_driver=True on the users row,
+        e.g. a driver who also rides) triggering rideless SOS from the RIDER
+        app must be filed with role="rider" -- there's no ride here to check
+        membership against like trigger_emergency does, so is_driver alone
+        mis-routes every dual-role rider's own SOS as a driver incident. The
+        X-App-Platform header (same one routes/notifications.py's
+        _audience_filter reads) disambiguates which app the caller is
+        actually using."""
+        result, persisted, _, _ = await self._trigger(DRIVER_USER_ID, is_driver=True, x_app_platform="rider")
+
+        assert result["success"] is True
+        _, row = persisted[0]
+        assert row["role"] == "rider"
+
+    async def test_dual_role_user_from_driver_app_still_routes_as_driver(self):
+        result, persisted, _, _ = await self._trigger(DRIVER_USER_ID, is_driver=True, x_app_platform="driver")
+
+        _, row = persisted[0]
+        assert row["role"] == "driver"
+
+    async def test_missing_app_platform_header_falls_back_to_is_driver_flag(self):
+        """Backward-compatible path: a build predating setAppIdentity() (or
+        an unrecognised header value) must keep the old behaviour rather than
+        guessing a surface."""
+        result, persisted, _, _ = await self._trigger(RIDER_ID, is_driver=False, x_app_platform=None)
+
+        _, row = persisted[0]
+        assert row["role"] == "rider"
 
     async def test_rider_sos_admin_notified_via_ws(self):
         _, _, ws_calls, _ = await self._trigger(RIDER_ID)
@@ -180,7 +214,9 @@ class TestTriggerEmergencyRideless:
 
         ticket_mock = AsyncMock()
         with (
-            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"rideless_sos_enabled": True})),
+            patch(
+                "backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"rideless_sos_enabled": True})
+            ),
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
@@ -230,7 +266,9 @@ class TestTriggerEmergencyRideless:
 
         contacts = [{"id": "ec-1", "phone": "vault-token-phone", "name": "vault-token-name"}]
         vault_decrypt = _AsyncMock(
-            side_effect=lambda rpc, v, _hint="": v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+            side_effect=lambda rpc, v, _hint="": (
+                v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+            )
         )
         with patch("backend.routes.rides.safety.vault_decrypt", vault_decrypt):
             result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)

@@ -109,29 +109,43 @@ async def test_sibling_rides_routes_still_401_without_token(path: str):
     assert response.status_code == 401
 
 
+def _effective_route_contexts():
+    """Flatten app.routes into real, fully-prefixed leaf routes.
+
+    Same FastAPI 0.136.1 -> 0.141.1 include_router() change documented in
+    test_documents.py::test_websocket_route_is_registered: a nested router is
+    no longer eagerly flattened into app.routes, it's wrapped in a lazy
+    `_IncludedRouter`. That test's simple `.original_router.routes` recursion
+    isn't enough here -- it returns each sub-router's *local* path segment
+    (e.g. "/track/{share_token}"), not the fully-prefixed one this file needs
+    to match against ("/api/v1/rides/track/{share_token}"). FastAPI's own
+    `_IncludedRouter.effective_route_contexts()` does that prefix combination
+    already (it's what real request dispatch uses internally) -- reuse it
+    instead of re-deriving prefix-accumulation logic by hand.
+    """
+    from backend.server import app
+
+    def _walk(routes):
+        for route in routes:
+            if type(route).__name__ == "_IncludedRouter":
+                yield from route.effective_route_contexts()
+
+    return list(_walk(app.routes))
+
+
 def _resolve_endpoint(method: str, path: str):
     """Return the endpoint function the real router resolves (method, path) to.
 
-    Pure Starlette route matching — no DB, no auth, no middleware. This is the
-    same first-full-match-wins walk that decides the live behaviour, so it pins
-    the mechanism instead of assuming it.
+    Walks the fully-prefixed effective route contexts in registration order
+    (first full match wins, same as real dispatch) rather than assuming any
+    particular Starlette/FastAPI internal route representation.
     """
-    from starlette.routing import Match
-
-    from backend.server import app
-
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": path,
-        "headers": [],
-        "query_string": b"",
-        "root_path": "",
-    }
-    for route in app.routes:
-        match, _ = route.matches(scope)
-        if match == Match.FULL:
-            return getattr(route, "endpoint", None)
+    for ctx in _effective_route_contexts():
+        if method not in ctx.methods:
+            continue
+        match = ctx.path_regex.match(path)
+        if match and match.end() == len(path):
+            return ctx.endpoint
     return None
 
 
@@ -200,12 +214,10 @@ def test_track_shared_ride_is_the_only_unauthenticated_rides_route():
     """
     import inspect
 
-    from backend.server import app
-
     unauthenticated: set[str] = set()
 
-    for route in app.routes:
-        endpoint = getattr(route, "endpoint", None)
+    for ctx in _effective_route_contexts():
+        endpoint = ctx.endpoint
         if endpoint is None:
             continue
         module = getattr(endpoint, "__module__", "") or ""

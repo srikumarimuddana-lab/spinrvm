@@ -13702,6 +13702,43 @@ record of what was assumed vs. what was actually true</summary>
        this PR's `.claude/`+`scripts/` scope — left as future backlog here
        rather than expanding scope unilaterally.
 
+### C134. New `spinr-ops-triage-investigator` agent + `/ops-triage` command — live ops-health check (no agent in this repo previously watched live production state)
+- [ ] **Status:** shipped 2026-09-21 (`.claude/agents/spinr-ops-triage-investigator.md`,
+  `.claude/commands/ops-triage.md`), no Routine scheduled yet, no live dry run performed.
+- **What it does:** checks Railway (`cooperative-harmony`/`spinrvm` — health, resource
+  metrics, recent deployments/diagnoses), Sentry (coarse production-error signal, reusing
+  the already-scoped connector), and public vendor status pages (Stripe/Twilio/Google
+  Cloud — no credentials involved) in one pass, correlating across them. Same audit-only
+  posture as every other `spinr-*` agent: never restarts/scales/redeploys/pages anything.
+- **Born from the 2026-09-21 fleet-coverage audit** (`spinr-agent-fleet-strategist`, run via
+  `/fleet-check`), which found that all 27 (now 29) `spinr-*` agents were diff/code-review
+  triggered only — nothing in this repo watched live production state. This is the first
+  such agent; it does NOT duplicate `spinr-sentry-triage-investigator` (that agent does real
+  root-cause work on one issue; this one is a coarse cross-source health signal) or any of
+  the 11 scheduled GitHub Actions workflows (all doc/tracker-freshness checks or scan
+  re-runs, confirmed by research before either this or C129 was built).
+- **Deliberately does NOT investigate Fly.io** (this repo's actual primary backend, per
+  CLAUDE.md's Deployment section) — **not because it lacks the reach.** This agent's `Bash`
+  grant plus this session's ambient, proxy-injected Fly deploy-token make the primary
+  backend technically reachable already; adversarial review caught an earlier draft that
+  incorrectly framed this as "access not yet granted" when the reach already existed via
+  the `Bash` tool grant. Corrected to state this plainly as an accepted risk (same class as
+  the Sentry investigator's Supabase access) with the same "notice it, flag it, don't use
+  it" fallback that agent already has for an unexpectedly-accessible `SENTRY_API_TOKEN`.
+  **Next step, if wanted:** ask the user specifically whether to deliberately extend this
+  agent to use that reach (read-only Fly API calls) for primary-backend health, turning an
+  unused reach into a reviewed capability, rather than leaving it unused-but-present.
+- **Still needed to go live:** no Claude Code Routine created yet (unlike C129's daily/weekly
+  Sentry cadence) — this ships the capability, not a running schedule, pending a decision on
+  cadence (the fleet audit that recommended this didn't specify one).
+- **Adversarial review (`spinr-security-auditor`): FIX BLOCKERS, then re-fixed.** Found 1 real
+  blocker (the Fly.io framing above) and 2 warnings (a Railway environment ID asserted as
+  hardcoded/verified when it wasn't — fixed by removing it and relying on each tool's own
+  documented production-environment default; a minor style-consistency note, left as-is).
+  Confirmed the `get-logs` `types` lock, `limit` cap, and PII-discipline step — all
+  proactively applied from the sibling A-track review before this agent was ever reviewed —
+  were already correctly implemented.
+
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify
   boot log shows "Sentry SDK initialized for error monitoring")

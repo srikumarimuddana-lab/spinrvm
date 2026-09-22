@@ -188,7 +188,7 @@ afterEach(() => {
 describe('RideCompletedScreen', () => {
   it('fetches the ride on mount', async () => {
     await renderScreen();
-    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
   });
 
   it('auto-dismisses (clears ride, goes home) once, when the ride is already paid on first load', async () => {
@@ -650,7 +650,7 @@ describe('RideCompletedScreen', () => {
         btn.props.onPress();
         await flush();
       });
-      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
       expect(mockAttemptRidePayment).not.toHaveBeenCalled();
     });
 
@@ -723,17 +723,46 @@ describe('RideCompletedScreen', () => {
   });
 
   describe('re-entered for a ride this client already finished with', () => {
-    it('leaves immediately instead of stranding the rider on an unloadable receipt', async () => {
-      // _clearedRideId === rideId means clearRide() already ran for this ride,
-      // after which the store's fetchRide discards every response for it — so
-      // currentRide can never load and the auto-dismiss effect (which keys on
-      // currentRide?.payment_status) can never fire. The hardware back button
-      // is blocked, so leaving is the only way out.
+    it('asks the store for it with allowCleared, so it can actually load', async () => {
+      // Without the opt-in the store discards the response (it keeps a
+      // permanent latch for everything that fetches automatically), and the
+      // receipt renders $0.00 forever on a back-blocked route.
+      mockRideState._clearedRideId = 'ride-1';
+      await renderScreen();
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
+    });
+
+    it('offers a plain Done exit while it is still unloaded, and never a retry', async () => {
+      // A retired ride has nothing left to wait for, so "tap to retry" would be
+      // a lie — but the button must still exist: the hardware back button is
+      // blocked and gestureEnabled is false, so this is the only way out.
+      mockRideState.currentRide = null;
+      mockRideState._clearedRideId = 'ride-1';
+      const r = await renderScreen();
+
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Retry loading your trip' })).toThrow();
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      const btn = r.root.findByProps({ accessibilityLabel: 'Done' });
+      expect(btn.props.disabled).toBe(false);
+      expect(allText(r)).not.toContain('$0.00');
+
+      await act(async () => {
+        btn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      expect(mockAttemptRidePayment).not.toHaveBeenCalled();
+    });
+
+    it('does NOT auto-navigate on mount, so a held-for-review alert can still show', async () => {
+      // An earlier draft bounced on mount whenever _clearedRideId matched. That
+      // defeated the store-side opt-in shipped alongside it, and preempted
+      // HELD_FOR_REVIEW_ALERT — handleSubmit's held branch calls clearRide()
+      // with nothing charged, and that ride is still unpaid.
       mockRideState.currentRide = null;
       mockRideState._clearedRideId = 'ride-1';
       await renderScreen();
-      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
-      expect(mockAttemptRidePayment).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
     });
 
     it('stays put when the cleared ride is a different one', async () => {

@@ -208,18 +208,24 @@ function RideCompletedScreenContent() {
   // A custom tip between $0 and the minimum can't be submitted: the rider stays
   // here, sees why, and fixes it (the server rejects it too — never dropped).
   const tipMinimumError = effectiveTip ? null : customTipMinimumError(getCustomTipAmount(customTip), minTip);
+  // This ride has been retired locally (paid, waived, held for review, or
+  // cancelled — every clearRide() caller). It happens on the way out of this
+  // screen, and on a re-entry before the allowCleared re-fetch lands. Either
+  // way there is nothing left to wait for, so the button must not present
+  // itself as a retry — it becomes a plain "Done" that leaves.
+  const rideRetiredLocally = !!rideId && _clearedRideId === rideId;
   // Waiting on the ride row: nothing here is chargeable yet. The button would
   // quote a fare the rider was never shown, while the server charges the real
   // grand_total regardless (attemptRidePayment settles by rideId and sends no
   // amount) — so the figure on the button and the figure on the card statement
   // would disagree. `alreadyPaid` is exempt: that button only rates and leaves.
   //
-  // It becomes a RETRY, not a disabled button. This screen blocks the hardware
-  // back button and sets gestureEnabled:false, so a dead control here is a
-  // trap with no way out — and tapping this button is, today, the only escape
-  // a rider stuck on an unloaded receipt actually has.
-  const awaitingRide = !rideLoaded && !alreadyPaid;
-  const submitDisabled = isSubmitting || sheetLoading || (!awaitingRide && !!tipMinimumError);
+  // Neither state is ever a DISABLED button. This screen blocks the hardware
+  // back button and sets gestureEnabled:false, so a dead control here is a trap
+  // with no way out — which is what a rider on an unloadable receipt hits.
+  const awaitingRide = !rideLoaded && !alreadyPaid && !rideRetiredLocally;
+  const submitDisabled =
+    isSubmitting || sheetLoading || (rideLoaded && !!tipMinimumError);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
@@ -234,7 +240,15 @@ function RideCompletedScreenContent() {
     (currentRide as any)?.auth_status === 'authorized' || (currentRide as any)?.auth_status === 'fare_only';
 
   useEffect(() => {
-    if (rideId) fetchRide(rideId);
+    // allowCleared: this screen names one specific ride from its route param
+    // and means it, including a ride already retired locally — a rider
+    // re-opening the receipt for a trip they paid for (a `ride_completed` push
+    // tap, the in-app notification list). Without it the store refuses the
+    // response, currentRide stays null, and the fare renders $0.00 forever on
+    // a route whose back button is blocked. Automatic fetchers (polls, WS
+    // echoes, foreground resume) must NOT pass this — see the guard in
+    // rideStore.fetchRide.
+    if (rideId) fetchRide(rideId, { allowCleared: true });
     // fetchRide is a zustand store action (stable reference).
   }, [rideId, fetchRide]);
 
@@ -379,26 +393,6 @@ function RideCompletedScreenContent() {
     // fire at most once, so adding these doesn't change that.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- showPaymentAlert is recreated every render (not memoized); including it would refire this effect on every render, defeating the once-only guard it already has via initialPaymentChecked.
   }, [currentRide?.payment_status, clearRide, router]);
-
-  // Leave when this client has already finished with this ride locally.
-  //
-  // `_clearedRideId` is set by clearRide(), which only runs once the ride has
-  // been paid, waived, held for review, or cancelled. So a re-entry to this
-  // screen for that id — a `ride_completed` push tap (_layout.tsx's
-  // routeFromNotificationData), the in-app notification list
-  // (notifications.tsx), or a late WS ride_completed — has nothing to collect
-  // and nothing useful to show. This screen blocks the hardware back button
-  // and disables the back gesture, so leaving is the only correct action.
-  //
-  // Belt-and-braces, not the load-bearing fix. The store's fetchRide no longer
-  // refuses a cleared ride outright (it discards only responses overtaken by a
-  // clear), so the ride does load now and the auto-dismiss effect above would
-  // also catch the paid case a moment later. This just gets there without the
-  // round trip, and keeps the screen out of a dead end if the fetch fails.
-  useEffect(() => {
-    if (!rideId || !_clearedRideId || _clearedRideId !== rideId) return;
-    router.replace('/(tabs)');
-  }, [_clearedRideId, rideId, router]);
 
   const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
@@ -953,14 +947,28 @@ function RideCompletedScreenContent() {
         )}
         <TouchableOpacity
           style={[styles.submitBtn, submitDisabled && { opacity: 0.6 }]}
-          // While the ride is unloaded this retries the fetch instead of
-          // charging — see the awaitingRide note above.
-          onPress={() => (awaitingRide ? rideId && fetchRide(rideId as string) : handleSubmit())}
+          // Three actions, never a charge for an amount we can't see:
+          // retry the load, leave a retired ride, or pay a loaded one.
+          onPress={() => {
+            if (awaitingRide) {
+              if (rideId) fetchRide(rideId as string, { allowCleared: true });
+            } else if (!rideLoaded && !alreadyPaid) {
+              router.replace('/(tabs)');
+            } else {
+              handleSubmit();
+            }
+          }}
           disabled={submitDisabled}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={
-            alreadyPaid ? 'Rate and finish' : awaitingRide ? 'Retry loading your trip' : 'Pay and finish'
+            alreadyPaid
+              ? 'Rate and finish'
+              : awaitingRide
+                ? 'Retry loading your trip'
+                : !rideLoaded
+                  ? 'Done'
+                  : 'Pay and finish'
           }
           accessibilityState={{ disabled: submitDisabled, busy: isSubmitting }}
         >
@@ -985,10 +993,12 @@ function RideCompletedScreenContent() {
                   // the action is the same either way.
                   : awaitingRide
                     ? 'Loading your trip… tap to retry'
-                    : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
+                    : !rideLoaded
+                      ? 'Done'
+                      : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
                 }
               </Text>
-              {!awaitingRide && (
+              {(alreadyPaid || rideLoaded) && (
                 <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
               )}
             </>

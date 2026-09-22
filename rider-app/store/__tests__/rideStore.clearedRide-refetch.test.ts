@@ -113,35 +113,68 @@ describe('fetchRide vs. a cleared ride', () => {
     expect(useRideStore.getState().isLoading).toBe(false);
   });
 
-  it('honours a re-fetch issued AFTER the clear (the receipt-screen re-entry)', async () => {
+  it('honours an allowCleared re-fetch after the clear (the receipt-screen re-entry)', async () => {
     useRideStore.setState({ currentRide: makeRide('completed') as any });
     useRideStore.getState().clearRide();
     expect(useRideStore.getState()._clearedRideId).toBe('ride-789');
 
-    // A fresh mount of /ride-completed asks for the same ride on purpose.
-    // Before the epoch fix this response was thrown away and currentRide
-    // stayed null forever.
+    // A fresh mount of /ride-completed asks for this exact ride on purpose.
+    // Without allowCleared the response is thrown away and currentRide stays
+    // null forever — the $0.00 receipt.
     mockApi.get.mockResolvedValueOnce({
       status: 200,
       data: makeRide('completed', 'ride-789', { payment_status: 'paid' }),
     } as any);
 
-    await useRideStore.getState().fetchRide('ride-789');
+    await useRideStore.getState().fetchRide('ride-789', { allowCleared: true });
 
     expect(useRideStore.getState().currentRide?.id).toBe('ride-789');
     expect(useRideStore.getState().currentRide?.payment_status).toBe('paid');
   });
 
-  it('honours repeated re-fetches, not just the first one after a clear', async () => {
+  it('honours repeated allowCleared re-fetches, not just the first', async () => {
     useRideStore.setState({ currentRide: makeRide('completed') as any });
     useRideStore.getState().clearRide();
 
     for (const _ of [1, 2]) {
       useRideStore.setState({ currentRide: null });
       mockApi.get.mockResolvedValueOnce({ status: 200, data: makeRide('completed') } as any);
-      await useRideStore.getState().fetchRide('ride-789');
+      await useRideStore.getState().fetchRide('ride-789', { allowCleared: true });
       expect(useRideStore.getState().currentRide?.id).toBe('ride-789');
     }
+  });
+
+  it('still discards a post-clear fetch that does NOT opt in', async () => {
+    // The default must stay closed. Nearly everything that reaches fetchRide
+    // does so automatically and would resurrect a retired ride:
+    // ride-status.tsx's poll effect re-runs the instant currentRide?.status
+    // flips to undefined and re-fetches immediately; useRiderSocket's
+    // ride_status_changed handler re-fetches unconditionally and the backend
+    // broadcasts exactly that on the rider's own cancel.
+    useRideStore.setState({ currentRide: makeRide('searching') as any });
+    useRideStore.getState().clearRide();
+
+    mockApi.get.mockResolvedValueOnce({ status: 200, data: makeRide('searching') } as any);
+    await useRideStore.getState().fetchRide('ride-789');
+
+    expect(useRideStore.getState().currentRide).toBeNull();
+  });
+
+  it('discards an allowCleared response overtaken by a clear mid-flight', async () => {
+    // allowCleared opts out of the "already retired before I asked" case only.
+    // A clear that lands while the request is in flight still wins — that
+    // response describes a ride the rider finished with after asking.
+    useRideStore.setState({ currentRide: makeRide('completed') as any });
+
+    let resolveGet: (v: unknown) => void = () => {};
+    mockApi.get.mockReturnValueOnce(new Promise((res) => { resolveGet = res; }) as any);
+    const pending = useRideStore.getState().fetchRide('ride-789', { allowCleared: true });
+
+    useRideStore.getState().clearRide();
+    resolveGet({ status: 200, data: makeRide('completed') });
+    await pending;
+
+    expect(useRideStore.getState().currentRide).toBeNull();
   });
 
   it('is unaffected for a ride that was never cleared', async () => {
@@ -186,16 +219,19 @@ describe('_clearedRideId keeps its permanent meaning for the other consumers', (
   });
 });
 
-describe('cancel-flicker: a post-cancel poll tick', () => {
-  it('can repopulate a cancelled ride, and that stays safe', async () => {
-    // The one behaviour change the epoch fix allows: a poll tick that STARTS
-    // after a cancel (ride-status/driver-arriving/driver-arrived each hold an
-    // interval that can fire between clearRide() and unmount) is no longer
-    // discarded. Pinned deliberately — the only screen that reacts to a
-    // cancelled currentRide is driver-arriving.tsx, which calls clearRide()
-    // and routes home with NO toast. The cancel toast itself comes from
-    // useRiderSocket's ride_cancelled handler, which is guarded by
-    // _clearedRideId directly and is not on this path.
+describe('cancel-flicker: a post-cancel automatic re-fetch', () => {
+  it('cannot resurrect the cancelled ride', async () => {
+    // These are the paths that made an epoch-only guard wrong, so they are
+    // pinned explicitly:
+    //   - ride-status.tsx's poll effect re-runs the moment currentRide?.status
+    //     flips to undefined and calls fetchRide immediately (not a rare race);
+    //   - useRiderSocket's ride_status_changed handler re-fetches
+    //     unconditionally, and backend/routes/rides/cancellation.py broadcasts
+    //     that on the rider's own cancel.
+    // A resurrected ride is not cosmetic: fetchRide calls _persistRide, so it
+    // would be written to ACTIVE_RIDE_KEY and survive a restart, and
+    // fetchActiveRide cannot undo it (its own _clearedRideId check returns
+    // before that function's clearRide() cleanup).
     useRideStore.setState({ currentRide: makeRide('searching') as any });
     mockApi.post.mockResolvedValueOnce({ status: 200, data: {} } as any);
     await useRideStore.getState().cancelRide();
@@ -203,10 +239,20 @@ describe('cancel-flicker: a post-cancel poll tick', () => {
     mockApi.get.mockResolvedValueOnce({ status: 200, data: makeRide('cancelled') } as any);
     await useRideStore.getState().fetchRide('ride-789');
 
-    // Repopulated — but as a terminal 'cancelled' ride, which every screen
-    // that watches status treats as "go home", and _clearedRideId is still set
-    // so the WS echo stays suppressed.
-    expect(useRideStore.getState().currentRide?.status).toBe('cancelled');
+    expect(useRideStore.getState().currentRide).toBeNull();
     expect(useRideStore.getState()._clearedRideId).toBe('ride-789');
+  });
+
+  it('is not resurrected even under read-after-write lag reporting it active', async () => {
+    useRideStore.setState({ currentRide: makeRide('searching') as any });
+    mockApi.post.mockResolvedValueOnce({ status: 200, data: {} } as any);
+    await useRideStore.getState().cancelRide();
+
+    // The server has not committed the cancel yet and still says 'searching'.
+    // Letting this through would put the rider back in a live-ride UI.
+    mockApi.get.mockResolvedValueOnce({ status: 200, data: makeRide('searching') } as any);
+    await useRideStore.getState().fetchRide('ride-789');
+
+    expect(useRideStore.getState().currentRide).toBeNull();
   });
 });

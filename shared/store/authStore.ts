@@ -417,15 +417,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           let expiresIn = typeof expires_in === 'number' && Number.isFinite(expires_in) && expires_in > 0
             ? expires_in
             : null;
+          if (expiresIn !== null && !Number.isFinite(Date.now() + expiresIn * 1000)) expiresIn = null;
           if (expiresIn === null && typeof access_expires_at === 'string') {
             const accessExpiresAtMs = Date.parse(access_expires_at);
             if (Number.isFinite(accessExpiresAtMs)) {
-              // If supplied, the HTTP Date header provides a server-clock
-              // reference; anchor its remaining lifetime to the device clock.
-              const serverNowMs = Date.parse((res.headers as any)?.date ?? '');
-              expiresIn = Math.max(0, (accessExpiresAtMs - (Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) / 1000);
+              // Legacy absolute timestamps use the device clock; clamp to
+              // immediate expiry instead of discarding an already-rotated pair.
+              expiresIn = Math.max(0, (accessExpiresAtMs - Date.now()) / 1000);
             }
           }
+          if (expiresIn !== null && !Number.isFinite(Date.now() + expiresIn * 1000)) expiresIn = null;
           // A malformed/incomplete response must never be persisted as a
           // successful refresh. A valid token pair with a lifetime behind the
           // device clock is still accepted at zero seconds: the refresh token

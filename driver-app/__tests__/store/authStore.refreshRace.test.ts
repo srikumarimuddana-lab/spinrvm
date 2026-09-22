@@ -160,15 +160,25 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
       mockSecureStoreBacking.refresh_token = 'old-refresh';
       mockPost.mockResolvedValueOnce({
         data: { token: 'new-access', refresh_token: 'successor-refresh', access_expires_at: new Date(realNow + 900_000).toISOString() },
-        headers: { date: new Date(realNow).toUTCString() },
       });
       expect(await useAuthStore.getState().refreshTokens()).toBe(true);
       expect(mockSecureStoreBacking.refresh_token).toBe('successor-refresh');
-      expect(Number(mockSecureStoreBacking.token_expires_at)).toBeGreaterThan(Date.now() + 899_000);
-      expect(Number(mockSecureStoreBacking.token_expires_at)).toBeLessThanOrEqual(Date.now() + 901_000);
+      expect(Number(mockSecureStoreBacking.token_expires_at)).toBe(Date.now());
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('ignores an overflowing relative lifetime and falls back to a valid legacy timestamp', async () => {
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+    mockSecureStoreBacking.refresh_token = 'old-refresh';
+    mockPost.mockResolvedValueOnce({ data: {
+      token: 'new-access', refresh_token: 'successor-refresh', expires_in: Number.MAX_VALUE,
+      access_expires_at: futureIso(900),
+    } });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+    expect(mockSecureStoreBacking.refresh_token).toBe('successor-refresh');
+    expect(Number.isFinite(Number(mockSecureStoreBacking.token_expires_at))).toBe(true);
   });
 
   it('changes the capture epoch only on sign-in, preserving it through rotation', async () => {

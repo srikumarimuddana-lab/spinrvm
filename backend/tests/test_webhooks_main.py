@@ -1746,6 +1746,7 @@ class TestStripeWebhookRecurringSubscription:
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch.object(stripe.Subscription, "retrieve", return_value={"metadata": {}}),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),

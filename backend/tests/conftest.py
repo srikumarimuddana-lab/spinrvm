@@ -446,11 +446,12 @@ def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def block_external_network_in_payment_regressions(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail before any external DNS/socket egress from payment regression tests.
+    """Block and report all IP networking attempts in payment regression tests.
 
     These tests use mocked Stripe/Supabase boundaries; a missing mock must fail
-    locally instead of hanging or reaching a live provider. Loopback remains
-    available for tests that intentionally exercise a local server.
+    locally instead of hanging or reaching a live provider. They use in-process
+    ASGI mocks, so no IPv4/IPv6 connection is expected; Unix socketpairs remain
+    available for asyncio internals.
     """
     guarded_modules = {
         "test_payment_retry.py",
@@ -459,25 +460,44 @@ def block_external_network_in_payment_regressions(request: pytest.FixtureRequest
         "test_webhooks_main.py",
     }
     if os.path.basename(getattr(request.module, "__file__", "")) not in guarded_modules:
+        yield
         return
 
-    local_hosts = {"localhost", "127.0.0.1", "::1"}
-    original_getaddrinfo = socket.getaddrinfo
+    attempts: list[str] = []
     original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_sendto = socket.socket.sendto
 
     def _guarded_getaddrinfo(host, *args, **kwargs):
-        if isinstance(host, str) and host not in local_hosts:
-            raise AssertionError(f"payment test attempted external DNS lookup: {host}")
-        return original_getaddrinfo(host, *args, **kwargs)
+        attempts.append(f"DNS lookup: {host!r}")
+        raise socket.gaierror("network disabled in payment regression tests")
 
     def _guarded_connect(sock, address):
-        host = address[0] if isinstance(address, tuple) and address else address
-        if isinstance(host, str) and host not in local_hosts:
-            raise AssertionError(f"payment test attempted external socket connection: {host}")
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            attempts.append(f"socket connect: {address!r}")
+            raise OSError("network disabled in payment regression tests")
         return original_connect(sock, address)
+
+    def _guarded_connect_ex(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            attempts.append(f"socket connect_ex: {address!r}")
+            return 1
+        return original_connect_ex(sock, address)
+
+    def _guarded_sendto(sock, data, *args):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            address = args[-1] if args else None
+            attempts.append(f"socket sendto: {address!r}")
+            raise OSError("network disabled in payment regression tests")
+        return original_sendto(sock, data, *args)
 
     monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, "sendto", _guarded_sendto)
+    yield
+    if attempts:
+        pytest.fail("payment regression attempted network I/O: " + "; ".join(attempts))
 
 
 @pytest.fixture(autouse=True)

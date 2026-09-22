@@ -208,6 +208,26 @@ class TestAlreadyCapturedHoldRefund:
         assert "refund_amount" not in written
         assert written.get("payment_status") != "refunded"
 
+    async def test_pending_refund_is_exposed_without_finalizing_refund_accounting(self):
+        update_ride_mock = AsyncMock()
+        refund_mock = AsyncMock(return_value=ChargeOutcome(
+            status="pending", payment_intent_id="pi_already_captured",
+            charged_amount=Decimal("2.10"),
+            raw={"refund_id": "re_pending_1", "refund_status": "pending"},
+        ))
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.refund_excess_capture", refund_mock),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", AsyncMock()),
+        ):
+            await _run_cancel()
+
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert written["refund_status"] == "pending"
+        assert written["refund_id"] == "re_pending_1"
+        assert "refund_amount" not in written
+        assert written.get("payment_status") != "refunded"
+
     @pytest.mark.parametrize(
         "refund_outcome",
         [

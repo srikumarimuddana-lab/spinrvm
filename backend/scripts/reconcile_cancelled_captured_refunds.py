@@ -92,6 +92,7 @@ OUTCOMES = (
     "not_needed",
     "skipped_db_refund",
     "already_refunded_on_stripe",
+    "pending_refund_on_stripe",
     "captured_nothing",
     "unknown",
     "failed",
@@ -207,6 +208,14 @@ async def reconcile_one(ride: Dict[str, Any], *, apply_changes: bool) -> str:
         return "unknown"
 
     captured_cents = state["captured_cents"]
+    if state.get("pending_refund_cents", 0) > 0:
+        logger.warning(
+            "ride=%s has %s cents in pending/action-required Stripe refunds — no new refund created",
+            ride_id,
+            state["pending_refund_cents"],
+        )
+        return "pending_refund_on_stripe"
+
     if state["refunded_cents"] > 0:
         # Stripe already gave money back but the ride row still says otherwise.
         # Deliberately NOT repaired here: writing refund_amount for a refund this

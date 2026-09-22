@@ -1382,7 +1382,7 @@ async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optiona
     after a first pass is past that key's expiry window — summing the intent's
     existing refunds is the only guard that still holds there.
 
-    Returns ``{"captured_cents", "refunded_cents"}``, or ``None`` when Stripe is
+    Returns ``{"captured_cents", "refunded_cents", "pending_refund_cents"}``, or ``None`` when Stripe is
     unconfigured, the read failed, or the refund list was longer than one page.
     Callers MUST treat ``None`` as "unknown — do not refund", never as zero.
     Never raises.
@@ -1425,14 +1425,22 @@ async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optiona
         return None
 
     refunded_cents = 0
+    pending_refund_cents = 0
     for r in getattr(refunds, "data", None) or []:
         # A failed/cancelled refund never left the account — counting it would
         # understate what is still owed to the rider.
         if getattr(r, "status", None) in ("failed", "canceled"):
             continue
-        refunded_cents += int(getattr(r, "amount", 0) or 0)
+        amount = int(getattr(r, "amount", 0) or 0)
+        if getattr(r, "status", None) == "succeeded":
+            refunded_cents += amount
+        else:
+            # Pending and requires_action prevent a duplicate but are not
+            # represented as a completed refund in reports/accounting.
+            pending_refund_cents += amount
 
     return {
         "captured_cents": int(getattr(intent, "amount_received", 0) or 0),
         "refunded_cents": refunded_cents,
+        "pending_refund_cents": pending_refund_cents,
     }

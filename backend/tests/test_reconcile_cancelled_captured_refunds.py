@@ -95,7 +95,21 @@ async def test_read_capture_state_reports_captured_and_refunded():
     stripe_patch, _ = _patch_stripe(amount_received=254, refunds=[_refund(54)])
     with stripe_patch, _patch_secret():
         state = await read_capture_state(ride_id="r1", payment_intent_id="pi_1")
-    assert state == {"captured_cents": 254, "refunded_cents": 54}
+    assert state == {"captured_cents": 254, "refunded_cents": 54, "pending_refund_cents": 0}
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_read_capture_state_separates_pending_from_succeeded_refunds():
+    stripe_patch, _ = _patch_stripe(
+        amount_received=500,
+        refunds=[_refund(100, status="succeeded"), _refund(200, status="pending"),
+                 _refund(50, status="requires_action")],
+    )
+    with stripe_patch, _patch_secret():
+        state = await read_capture_state(ride_id="r1", payment_intent_id="pi_1")
+    assert state["refunded_cents"] == 100
+    assert state["pending_refund_cents"] == 250
 
 
 @pytest.mark.unit
@@ -247,6 +261,16 @@ async def test_existing_stripe_refund_is_flagged_not_refunded_again():
     with _Deps(state={"captured_cents": 210, "refunded_cents": 210}) as d:
         result = await script.reconcile_one(_ride(), apply_changes=True)
     assert result == "already_refunded_on_stripe"
+    d.refund_excess_capture.assert_not_awaited()
+    d.db.update_one.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_pending_stripe_refund_is_reported_separately_and_never_duplicated():
+    with _Deps(state={"captured_cents": 210, "refunded_cents": 0, "pending_refund_cents": 210}) as d:
+        result = await script.reconcile_one(_ride(), apply_changes=True)
+    assert result == "pending_refund_on_stripe"
     d.refund_excess_capture.assert_not_awaited()
     d.db.update_one.assert_not_awaited()
 

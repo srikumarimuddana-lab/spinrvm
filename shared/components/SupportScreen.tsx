@@ -625,6 +625,8 @@ export default function SupportScreen({
               {!!supportPhone && (
                 <TouchableOpacity
                   style={styles.contactChip}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Call support at ${supportPhone}`}
                   onPress={() => Linking.openURL(telHref(supportPhone))}
                 >
                   <Ionicons name="call-outline" size={14} color={colors.primary} />
@@ -633,6 +635,8 @@ export default function SupportScreen({
               )}
               <TouchableOpacity
                 style={styles.contactChip}
+                accessibilityRole="button"
+                accessibilityLabel={`Email support at ${supportEmail}`}
                 onPress={() => Linking.openURL(`mailto:${supportEmail}`)}
               >
                 <Ionicons name="mail-outline" size={14} color={colors.primary} />

@@ -65,6 +65,7 @@ Regression risk considered and ruled out: the quick-action chip row cannot rende
 | File path | What changed | Why |
 |---|---|---|
 | `shared/components/SupportScreen.tsx` | Removed the `SUPPORT_PHONE_DISPLAY` placeholder; phone chip + card row now conditional on configured value; added `telHref()`; email chip now prefers configured `company_email` | The reported bug — Help advertised an unconfigured, undialable number |
+| `shared/components/SupportScreen.tsx` | Added `accessibilityRole="button"` + `accessibilityLabel` to the two contact chips | Follow-up to the accessibility review below: the phone chip is newly-authored code on a WCAG 2.1 AA customer surface, so it ships with an accessible name rather than relying on RN's default nested-`Text` fallback. Purely additive — no visual or behavioral change |
 | `shared/components/__tests__/SupportScreen.contact.test.tsx` | **New.** Pins empty-phone → nothing rendered, configured-phone → chip + row + correct `tel:` URL, and email-never-a-dead-end | Regression cover; this shared component had no direct test (both apps' existing tests mock it out entirely) |
 
 ## 7. Before / after
@@ -116,6 +117,22 @@ Not feature-flagged — see §9 for the justification.
 - [ ] **Automated tests NOT executed in this environment** — see "What was NOT verified" below. This is the significant caveat on this entry.
 - [ ] Manual repro in staging — not performed (no staging access from this session).
 - [ ] Feature-flagged — **no, deliberately.** Justification: the change is presentational, reversible from the admin dashboard with no deploy (§8), and gating it would mean shipping a flag whose "off" state keeps a number that dials nowhere in front of live users. The `app_settings` Phone field is itself the control surface here.
+
+## 9b. Reviewer pass (CLAUDE.md pre-merge gate 10)
+
+`spinr-accessibility-reviewer` was run against the actual diff. **Verdict: no blockers introduced.** It confirmed the conditional render is the correct removal pattern — when `supportPhone` is falsy the subtree never mounts, so no ghost/blank node is left in the accessibility tree, and focus order (submit → phone chip if present → email chip → company card) still matches visual order.
+
+Acted on from that review:
+
+- Added `accessibilityRole="button"` and a descriptive `accessibilityLabel` to both contact chips, and extended the test to assert the empty-phone case leaves nothing behind in the accessibility tree (`queryByLabelText(/^Call support/)` is null) — a screen reader must not find a call affordance sighted users can't see.
+
+Accepted and deliberately **not** actioned here, to keep the diff surgical (each is pre-existing and untouched by this fix):
+
+- `contactChip` (`paddingVertical: 8` around 13–14px content) likely renders under the ~44×44pt touch-target guideline, with no `hitSlop`. Fixing it changes layout on two apps that have **no visual-regression tooling**, so it belongs in its own reviewed change, not smuggled into a bug fix.
+- The header back button (`SupportScreen.tsx` ~line 364) is icon-only with no accessible-name fallback at all — a harder gap than the chips, and entirely outside this diff.
+- `supportPhone`/`supportEmail` populate after an async `/company-info` fetch with no live-region announcement when the chip appears. Low severity, and it is the same pre-existing pattern the company card already used; this diff extends that pattern consistently rather than introducing an inconsistency.
+
+Product note raised by the review, not a code defect: while `company_phone` is empty, every remaining channel is text-based (email chip, ticket form, AI chat). For users who rely on voice over typing, that is a real reduction in channel modality — an argument for ops configuring a real number in Settings, which is exactly what this change makes visible instead of masking.
 
 ## 10. What was NOT verified
 

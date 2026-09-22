@@ -98,12 +98,15 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
   });
 
   it('renders no phone at all when company_phone is unset in admin settings', async () => {
-    const { queryByText, queryAllByText } = await renderContactTab();
+    const { queryByText, queryAllByText, queryByLabelText } = await renderContactTab();
 
     // The specific regression: the removed placeholder must never appear.
     expect(queryByText('1-800-SPINR')).toBeNull();
     // ...and no phone chip or company-card phone row is rendered in its place.
     expect(queryAllByText('call-outline')).toHaveLength(0);
+    // Nothing is left behind in the accessibility tree either — a screen
+    // reader must not find a call affordance that sighted users can't see.
+    expect(queryByLabelText(/^Call support/)).toBeNull();
   });
 
   it('treats an empty-string phone from /company-info the same as unset', async () => {
@@ -124,18 +127,20 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
 
   it('renders the configured phone in both the chip and the company card', async () => {
     mockCompanyInfo = { phone: '+1 306 555 0100' };
-    const { getAllByText } = await renderContactTab();
+    const { getAllByText, getByLabelText } = await renderContactTab();
 
     expect(getAllByText('call-outline')).toHaveLength(2);
     expect(getAllByText('+1 306 555 0100')).toHaveLength(2);
+    // The chip is reachable by its accessible name, not just its visible text.
+    expect(getByLabelText('Call support at +1 306 555 0100')).toBeTruthy();
   });
 
   it('dials the configured number with separators stripped and the + kept', async () => {
     mockCompanyInfo = { phone: '+1 (306) 555-0100' };
     const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined as any);
 
-    const { getAllByText } = await renderContactTab();
-    fireEvent.press(getAllByText('+1 (306) 555-0100')[0]);
+    const { getByLabelText } = await renderContactTab();
+    fireEvent.press(getByLabelText('Call support at +1 (306) 555-0100'));
 
     expect(openURL).toHaveBeenCalledWith('tel:+13065550100');
   });

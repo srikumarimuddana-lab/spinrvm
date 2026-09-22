@@ -1,5 +1,6 @@
 -- Durable provider operation state for refunds, authorization releases, and
--- scheduled notice fees. Rollback: drop ride_payment_operations and the
+-- scheduled notice fees.
+-- rollback: drop ride_payment_operations and the
 -- additive ride summary columns below; first retain/export unresolved rows.
 ALTER TABLE public.rides
     ADD COLUMN IF NOT EXISTS refund_id text,
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS public.ride_payment_operations (
 );
 
 ALTER TABLE public.ride_payment_operations ENABLE ROW LEVEL SECURITY;
--- Intentionally no client policies. Supabase service_role bypasses RLS.
+-- service-role-only: intentionally no client policies; backend service_role bypasses RLS.
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ride_payment_operations TO service_role;
 CREATE INDEX IF NOT EXISTS idx_ride_payment_operations_due
     ON public.ride_payment_operations (next_attempt_at, created_at)

@@ -1285,7 +1285,8 @@ async def refund_excess_capture(
 
     refund_id = getattr(refund, "id", None)
     refund_status = str(getattr(refund, "status", "") or "pending")
-    actual_cents = int(getattr(refund, "amount", refund_cents) or 0)
+    provider_amount = getattr(refund, "amount", None)
+    actual_cents = int(provider_amount) if isinstance(provider_amount, int) else refund_cents
     logger.info(
         "[CANCEL] excess-capture refund created ride=%s pi=%s refund=%s status=%s amount_cents=%s",
         ride_id,

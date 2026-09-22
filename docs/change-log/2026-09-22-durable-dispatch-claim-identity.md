@@ -36,9 +36,10 @@ Apply migration 444 first; deploy all backend instances with v2-aware routing an
 
 ## Verification performed
 
-- Focused Python regression suites: 155 passed; a second run after adding explicit v2/legacy routing checks: 76 passed.
-- Disposable PGlite SQL matrix: 15 cases passed for cancellation, stale/new claims, late offers, missing periods, NULL period identities, active/historical offers, duplicates, clock offsets, and ACLs. The updated app-clock legacy cutoff signature is being rerun before merge.
-- Migration parsed and applied against the direct-pool fixture schema with PostgreSQL 18.3 via PGlite. Native PostgreSQL is unavailable in this sandbox; production/staging data was not accessed.
+- Focused Python integration suites: 158 passed, covering settings, claim routing, cancellation routing, repository claims, reaper behavior, and dispatch parity.
+- Disposable PGlite SQL matrix: 17/17 cases passed for cancellation, stale/new claims, late offers, missing periods, NULL period identities, active/historical offers, duplicates, clock offsets, and ACLs.
+- Final migration parsed and applied against the direct-pool fixture schema with PostgreSQL 18.3 via PGlite. Native PostgreSQL is unavailable in this sandbox; production/staging data was not accessed.
+- Python command: `python -m pytest --no-cov backend/tests/test_driver_repo_coverage.py backend/tests/test_insurance_periods.py backend/tests/test_driver_claim_reaper.py backend/tests/test_dispatch_claim_parity.py backend/tests/test_dispatch_direct_pool_flag_settings.py backend/tests/test_rides_matching_coverage.py backend/tests/test_dispatch_pool.py -q`.
 - No visual or mobile-device changes.
 
 ## Not verified

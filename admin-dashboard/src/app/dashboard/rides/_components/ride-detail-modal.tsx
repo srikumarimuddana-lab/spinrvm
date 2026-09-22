@@ -18,6 +18,11 @@ import RideFlagForm from "./ride-flag-form";
 import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
 import { normalizeActualRouteSegments, normalizeDecodedPolyline, routeQualityLabel } from "@spinr/shared/utils/routeSegments";
+
+/** route_quality.distance_basis values where the finalizer published the booked
+ *  distance rather than a measured one, so the map must draw the booked path.
+ *  Keep in step with _DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS in route_finalizer.py. */
+const BOOKED_DISTANCE_BASES = new Set(["planned_estimated", "planned_capped", "planned_guess_deviation"]);
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
@@ -811,11 +816,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     ? normalizeActualRouteSegments(ride.actual_route_segments)
                                                         .some((segment) => segment.coordinates.length > 1)
                                                     : false;
-                                                // Finalizer copies planned km when GPS cannot be trusted
-                                                // (`planned_estimated`). A leftover fragment still draws as
-                                                // "actual GPS" and the camera zooms into a few blocks while
-                                                // the card says 8 km. Use the booked road path instead.
-                                                const gpsTooIncomplete = distanceBasis === "planned_estimated"
+                                                // Every basis where the finalizer published the BOOKED
+                                                // distance instead of a measured one. The map has to show the
+                                                // booked path too, or the card and the line disagree: a
+                                                // leftover fragment draws as "actual GPS" and the camera
+                                                // zooms into a few blocks while the card says 8 km.
+                                                // planned_capped had this same gap before
+                                                // planned_guess_deviation was added alongside it.
+                                                const gpsTooIncomplete = BOOKED_DISTANCE_BASES.has(String(distanceBasis))
                                                     || (isV2Route && !hasDrawableGps);
                                                 if (isV2Route && !gpsTooIncomplete && hasDrawableGps) {
                                                     actualSegmentsProp = ride.actual_route_segments;

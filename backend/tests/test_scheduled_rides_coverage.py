@@ -83,6 +83,9 @@ def sr(monkeypatch):
     db_supabase module, per the `db.py` compat shim) ready to patch."""
     from backend.utils import scheduled_rides
 
+    # Dispatch now re-reads the claimed state before searching side effects.
+    monkeypatch.setattr(scheduled_rides.db, "get_rows", AsyncMock(return_value=[{"status": "searching"}]))
+
     return scheduled_rides
 
 
@@ -358,7 +361,7 @@ class TestDispatchScheduledRide:
         assert update_one.await_count == 2
         second_call = update_one.await_args_list[1]
         assert second_call.args[0] == "rides"
-        assert second_call.args[1] == {"id": "ride-1"}
+        assert second_call.args[1] == {"id": "ride-1", "status": "searching", "payment_intent_id": None}
         assert second_call.args[2] == {"$set": outcome.fields}
 
     @pytest.mark.anyio

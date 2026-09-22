@@ -32,7 +32,6 @@ def _patch_stripe(amount_received: int = 210, refund_id: str = "re_test_1", refu
         refund = MagicMock()
         refund.id = refund_id
         refund.status = refund_status
-        refund.amount = amount_received
         mock_stripe.Refund.create.return_value = refund
     return patch("backend.utils.stripe_charge.stripe", mock_stripe), mock_stripe
 

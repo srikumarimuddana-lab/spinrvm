@@ -1284,18 +1284,26 @@ async def refund_excess_capture(
         return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
 
     refund_id = getattr(refund, "id", None)
+    refund_status = str(getattr(refund, "status", "") or "pending")
+    actual_cents = int(getattr(refund, "amount", refund_cents) or 0)
     logger.info(
-        "[CANCEL] refunded excess capture ride=%s pi=%s refund=%s amount_cents=%s",
+        "[CANCEL] excess-capture refund created ride=%s pi=%s refund=%s status=%s amount_cents=%s",
         ride_id,
         payment_intent_id,
         refund_id,
-        refund_cents,
+        refund_status,
+        actual_cents,
     )
     return ChargeOutcome(
-        status="refunded",
+        # Creating a Refund object does not mean money was returned. Pending
+        # and action-required refunds remain open obligations until Stripe
+        # confirms success; unknown future statuses are treated as pending.
+        status="refunded" if refund_status == "succeeded" else (
+            refund_status if refund_status in {"pending", "failed", "canceled", "requires_action"} else "pending"
+        ),
         payment_intent_id=payment_intent_id,
-        charged_amount=cents_to_dollars(refund_cents),
-        raw={"refund_id": refund_id},
+        charged_amount=cents_to_dollars(actual_cents),
+        raw={"refund_id": refund_id, "refund_status": refund_status, "refund_amount_cents": actual_cents},
     )
 
 

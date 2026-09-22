@@ -5,12 +5,17 @@
  * app/support.tsx and driver-app's app/driver/help.tsx both render this one
  * component, so these pins cover the Help screen in both apps).
  *
- * Pins the fix for the reported bug: the Contact tab showed a hardcoded
- * `1-800-SPINR` placeholder even when admin Settings → Company Info had no
- * phone configured, so Help advertised a number that dials nowhere. The
- * phone now comes from `/company-info` only, and is omitted entirely when
- * unset — matching what the FAQ tab, the rider Account screen and the driver
- * Profile screen already did.
+ * Pins the fix for the reported bug and its follow-up: the Contact tab showed
+ * a hardcoded `1-800-SPINR` placeholder even when admin Settings → Company
+ * Info had no phone configured, so Help advertised a number that dials
+ * nowhere. Every company detail on this screen — name, address, email, phone,
+ * website — now comes from `/company-info` only, with NO hardcoded fallback,
+ * and the hardcoded "Mon–Fri 9am–6pm CST" line (never an admin-configurable
+ * setting, so never something the app should assert) is gone.
+ *
+ * The rule these tests enforce: a field the operator left blank renders
+ * nothing. The unconditional ticket form above is what keeps Contact from
+ * becoming a dead end, not a placeholder nobody can correct.
  *
  * `call-outline` is the structural marker used below: on the Contact tab it
  * appears exactly twice when a phone is configured (the quick-action chip and
@@ -64,26 +69,34 @@ jest.mock('@shared/theme/ThemeContext', () => ({
 }));
 
 let mockCompanyInfo: Record<string, string> = {};
+let mockAiEnabled = false;
+const mockApiPost = jest.fn((..._args: any[]) => Promise.resolve({ data: {} as any }));
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: {
     get: (url?: string) => {
       if (url === '/company-info') return Promise.resolve({ data: mockCompanyInfo });
-      if (url === '/ai/config') return Promise.resolve({ data: { enabled: false, mode: 'hidden' } });
+      if (url === '/ai/config') {
+        return Promise.resolve({
+          data: { enabled: mockAiEnabled, mode: mockAiEnabled ? 'enabled' : 'hidden' },
+        });
+      }
       return Promise.resolve({ data: [] });
     },
-    post: jest.fn(() => Promise.resolve({ data: {} })),
+    post: (...args: any[]) => mockApiPost(...args),
   },
 }));
 
-async function renderContactTab() {
+async function renderTab(initialTab: 'contact' | 'chat') {
   let utils!: ReturnType<typeof render>;
   await act(async () => {
-    utils = render(<SupportScreen role="rider" initialTab="contact" />);
+    utils = render(<SupportScreen role="rider" initialTab={initialTab} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return utils;
 }
+
+const renderContactTab = () => renderTab('contact');
 
 describe('SupportScreen Contact tab — phone comes from admin settings', () => {
   beforeEach(() => {
@@ -118,11 +131,49 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     expect(queryAllByText('call-outline')).toHaveLength(0);
   });
 
-  it('still offers the support email so Contact is never a dead end', async () => {
-    const { getAllByText } = await renderContactTab();
+  it('renders no company details at all when nothing is configured', async () => {
+    const { queryByText, queryAllByText, queryByLabelText } = await renderContactTab();
 
-    // Chip + company-card row both fall back to the real support address.
-    expect(getAllByText('support@spinr.ca').length).toBeGreaterThan(0);
+    // No email chip or card row either — every detail is settings-driven now,
+    // so an unconfigured Company Info section shows nothing rather than a
+    // placeholder the operator never entered and cannot correct.
+    expect(queryByText('support@spinr.ca')).toBeNull();
+    expect(queryByLabelText(/^Email support/)).toBeNull();
+    expect(queryAllByText('mail-outline')).toHaveLength(0);
+    // ...and the former hardcoded identity/address/website placeholders.
+    expect(queryByText('SPINR MOBILITY INC.')).toBeNull();
+    expect(queryByText('Saskatoon, SK, Canada')).toBeNull();
+    expect(queryByText('www.spinr.ca')).toBeNull();
+    expect(queryAllByText('location-outline')).toHaveLength(0);
+    expect(queryAllByText('globe-outline')).toHaveLength(0);
+
+    // The ticket form is unconditional, so Contact is still not a dead end.
+    expect(queryByText('Submit Report')).toBeTruthy();
+  });
+
+  it('never renders the removed hardcoded business hours', async () => {
+    // Support hours are not an admin-configurable setting, so the app must
+    // not assert them. Checked with details populated, since the line used to
+    // sit at the foot of the company card.
+    mockCompanyInfo = { name: 'Spinr Mobility Inc.', phone: '+1 306 555 0100' };
+    const { queryByText } = await renderContactTab();
+
+    expect(queryByText(/Mon.*Fri/)).toBeNull();
+    expect(queryByText(/9am/)).toBeNull();
+    expect(queryByText(/CST/)).toBeNull();
+  });
+
+  it('renders the configured company name, and no placeholder when unset', async () => {
+    mockCompanyInfo = { name: 'Acme Rides Ltd.', address: '1 Main St, Saskatoon SK' };
+    const withName = await renderContactTab();
+    expect(withName.getByText('Acme Rides Ltd.')).toBeTruthy();
+    withName.unmount();
+
+    // Address alone still renders — it just gets no invented title above it.
+    mockCompanyInfo = { address: '1 Main St, Saskatoon SK' };
+    const withoutName = await renderContactTab();
+    expect(withoutName.getByText('1 Main St, Saskatoon SK')).toBeTruthy();
+    expect(withoutName.queryByText('SPINR MOBILITY INC.')).toBeNull();
   });
 
   it('renders the configured phone in both the chip and the company card', async () => {
@@ -145,11 +196,63 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     expect(openURL).toHaveBeenCalledWith('tel:+13065550100');
   });
 
-  it('prefers the admin-configured support email over the built-in fallback', async () => {
+  it('renders the configured support email in both the chip and the card', async () => {
     mockCompanyInfo = { email: 'help@spinr.ca' };
-    const { getAllByText, queryByText } = await renderContactTab();
+    const { getAllByText, getByLabelText, queryByText } = await renderContactTab();
 
-    expect(getAllByText('help@spinr.ca').length).toBeGreaterThan(0);
+    expect(getAllByText('help@spinr.ca')).toHaveLength(2);
+    expect(getByLabelText('Email support at help@spinr.ca')).toBeTruthy();
+    // The old built-in address must not appear alongside the configured one.
     expect(queryByText('support@spinr.ca')).toBeNull();
+  });
+});
+
+describe('SupportScreen AI chat — failure copy quotes the configured email', () => {
+  beforeEach(() => {
+    mockCompanyInfo = {};
+    mockAiEnabled = true;
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    mockAiEnabled = false;
+  });
+
+  /** Type a message and send it, letting the rejected POST settle. */
+  async function sendChat(utils: ReturnType<typeof render>) {
+    await act(async () => {
+      fireEvent.changeText(utils.getByPlaceholderText('Ask a question...'), 'hello');
+    });
+    await act(async () => {
+      // The send button's only child is the mocked Ionicons name.
+      fireEvent.press(utils.getByText('send'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('omits the "or contact ..." clause entirely when no email is configured', async () => {
+    // This copy used to hardcode support@spinr.ca. With nothing configured it
+    // must name no address at all rather than one the operator cannot change.
+    mockApiPost.mockRejectedValueOnce(new Error('network down'));
+    const utils = await renderTab('chat');
+    await sendChat(utils);
+
+    expect(
+      utils.getByText("I'm having trouble connecting right now. Please try again."),
+    ).toBeTruthy();
+    expect(utils.queryByText(/support@spinr\.ca/)).toBeNull();
+  });
+
+  it('names the configured email when one is set', async () => {
+    mockCompanyInfo = { email: 'help@spinr.ca' };
+    mockApiPost.mockRejectedValueOnce(new Error('network down'));
+    const utils = await renderTab('chat');
+    await sendChat(utils);
+
+    expect(
+      utils.getByText(
+        "I'm having trouble connecting right now. Please try again or contact help@spinr.ca.",
+      ),
+    ).toBeTruthy();
   });
 });

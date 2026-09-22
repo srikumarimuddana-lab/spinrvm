@@ -50,8 +50,6 @@ interface CompanyInfo {
   website?: string;
 }
 
-const SUPPORT_EMAIL = 'support@spinr.ca';
-
 /** `tel:` target for an admin-configured number.
  *
  * Strips the spaces, dashes and parentheses an admin types into Settings →
@@ -94,6 +92,7 @@ async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
 async function askAssistant(
   message: string,
   conversationId: string | null,
+  fallbackReply: string,
 ): Promise<{ reply: string; conversationId: string | null }> {
   const res = await api.post<{ reply?: string; conversation_id?: string | null }>('/ai/chat', {
     message,
@@ -101,9 +100,7 @@ async function askAssistant(
     stream: false,
   });
   return {
-    reply:
-      res.data?.reply ||
-      "I'm sorry, I couldn't process that. Please try again or contact support@spinr.ca.",
+    reply: res.data?.reply || fallbackReply,
     conversationId: res.data?.conversation_id ?? conversationId,
   };
 }
@@ -245,13 +242,29 @@ export default function SupportScreen({
     );
   }, [faqs, faqSearch]);
 
-  // Contact details on the Contact tab come from admin Settings → Company
-  // Info via /company-info. The email keeps a real fallback because body copy
-  // needs somewhere to send people; the phone deliberately has none — see the
-  // render below. Both are read into locals so the narrowed `supportPhone`
-  // stays narrowed inside the `onPress` closure.
-  const supportEmail = companyInfo.email || SUPPORT_EMAIL;
+  // Every company detail shown on this screen comes from admin Settings →
+  // Company Info via /company-info — there are deliberately NO hardcoded
+  // fallbacks. A field the operator left blank renders nothing rather than a
+  // placeholder they never entered and cannot correct from the dashboard.
+  // Read into locals so the narrowed values stay narrowed inside the
+  // `onPress` closures below.
+  const supportEmail = companyInfo.email;
   const supportPhone = companyInfo.phone;
+
+  // The company card/footer rows, in display order, minus anything unset.
+  const companyRows = [
+    { icon: 'location-outline' as IoniconName, text: companyInfo.address },
+    { icon: 'mail-outline' as IoniconName, text: supportEmail },
+    { icon: 'call-outline' as IoniconName, text: supportPhone },
+    { icon: 'globe-outline' as IoniconName, text: companyInfo.website },
+  ].filter((row): row is { icon: IoniconName; text: string } => !!row.text);
+
+  // Nothing configured at all → the whole block is omitted, not rendered empty.
+  const hasCompanyDetails = !!companyInfo.name || companyRows.length > 0;
+
+  // Where the AI-chat error copy points people when the assistant fails. Drops
+  // the clause entirely rather than naming an address that isn't configured.
+  const contactSuffix = supportEmail ? ` or contact ${supportEmail}` : '';
 
   // ── Handlers ──
   const handleSubmitTicket = async () => {
@@ -309,7 +322,11 @@ export default function SupportScreen({
     setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const { reply, conversationId } = await askAssistant(text, conversationIdRef.current);
+      const { reply, conversationId } = await askAssistant(
+        text,
+        conversationIdRef.current,
+        `I'm sorry, I couldn't process that. Please try again${contactSuffix}.`,
+      );
       conversationIdRef.current = conversationId;
       setChatMessages((prev) => [
         ...prev,
@@ -326,8 +343,7 @@ export default function SupportScreen({
         {
           id: Date.now().toString(),
           role: 'assistant',
-          content:
-            "I'm having trouble connecting right now. Please try again or contact support@spinr.ca.",
+          content: `I'm having trouble connecting right now. Please try again${contactSuffix}.`,
           timestamp: new Date(),
         },
       ]);
@@ -335,7 +351,7 @@ export default function SupportScreen({
       setChatLoading(false);
       setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [chatInput, chatLoading]);
+  }, [chatInput, chatLoading, contactSuffix]);
 
   const renderChatMessage = ({ item }: { item: ChatMessage }) => {
     const isUser = item.role === 'user';
@@ -481,24 +497,16 @@ export default function SupportScreen({
             </TouchableOpacity>
           )}
 
-          {(companyInfo.address ||
-            companyInfo.phone ||
-            companyInfo.email ||
-            companyInfo.website) && (
+          {hasCompanyDetails && (
             <View style={styles.companySection}>
-              <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
-              {!!companyInfo.address && (
-                <Text style={styles.companyLine}>{companyInfo.address}</Text>
+              {!!companyInfo.name && (
+                <Text style={styles.companyName}>{companyInfo.name}</Text>
               )}
-              {!!companyInfo.phone && (
-                <Text style={styles.companyLine}>{companyInfo.phone}</Text>
-              )}
-              {!!companyInfo.email && (
-                <Text style={styles.companyLine}>{companyInfo.email}</Text>
-              )}
-              {!!companyInfo.website && (
-                <Text style={styles.companyLine}>{companyInfo.website}</Text>
-              )}
+              {companyRows.map((row) => (
+                <Text key={row.icon} style={styles.companyLine}>
+                  {row.text}
+                </Text>
+              ))}
             </View>
           )}
         </ScrollView>
@@ -618,54 +626,50 @@ export default function SupportScreen({
               </Text>
             </TouchableOpacity>
 
-            <View style={styles.contactQuickRow}>
-              {/* No phone chip until one is configured: a placeholder number
-                  invites a call nobody answers, which is worse than showing
-                  only the channels we actually staff. */}
-              {!!supportPhone && (
-                <TouchableOpacity
-                  style={styles.contactChip}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Call support at ${supportPhone}`}
-                  onPress={() => Linking.openURL(telHref(supportPhone))}
-                >
-                  <Ionicons name="call-outline" size={14} color={colors.primary} />
-                  <Text style={styles.contactChipText}>{supportPhone}</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                style={styles.contactChip}
-                accessibilityRole="button"
-                accessibilityLabel={`Email support at ${supportEmail}`}
-                onPress={() => Linking.openURL(`mailto:${supportEmail}`)}
-              >
-                <Ionicons name="mail-outline" size={14} color={colors.primary} />
-                <Text style={styles.contactChipText}>{supportEmail}</Text>
-              </TouchableOpacity>
-            </View>
+            {/* Quick-action chips for the channels that are actually
+                configured. Nothing is assumed: with neither a phone nor an
+                email set the row is omitted, and the ticket form above stays
+                the way to reach support. */}
+            {(!!supportPhone || !!supportEmail) && (
+              <View style={styles.contactQuickRow}>
+                {!!supportPhone && (
+                  <TouchableOpacity
+                    style={styles.contactChip}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Call support at ${supportPhone}`}
+                    onPress={() => Linking.openURL(telHref(supportPhone))}
+                  >
+                    <Ionicons name="call-outline" size={14} color={colors.primary} />
+                    <Text style={styles.contactChipText}>{supportPhone}</Text>
+                  </TouchableOpacity>
+                )}
+                {!!supportEmail && (
+                  <TouchableOpacity
+                    style={styles.contactChip}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Email support at ${supportEmail}`}
+                    onPress={() => Linking.openURL(`mailto:${supportEmail}`)}
+                  >
+                    <Ionicons name="mail-outline" size={14} color={colors.primary} />
+                    <Text style={styles.contactChipText}>{supportEmail}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
-            <View style={styles.companyCard}>
-              <Text style={styles.companyTitle}>
-                {companyInfo.name || 'SPINR MOBILITY INC.'}
-              </Text>
-              {([
-                {
-                  icon: 'location-outline',
-                  text: companyInfo.address || 'Saskatoon, SK, Canada',
-                },
-                { icon: 'mail-outline', text: supportEmail },
-                // Same rule as the chip above: the phone row is omitted
-                // entirely rather than falling back to a placeholder.
-                ...(supportPhone ? [{ icon: 'call-outline', text: supportPhone }] : []),
-                { icon: 'globe-outline', text: companyInfo.website || 'www.spinr.ca' },
-              ] as { icon: IoniconName; text: string }[]).map((row) => (
-                <View key={String(row.icon)} style={styles.companyRow}>
-                  <Ionicons name={row.icon} size={16} color={colors.textDim} />
-                  <Text style={styles.companyText}>{row.text}</Text>
-                </View>
-              ))}
-              <Text style={styles.companyHours}>Mon–Fri 9am–6pm CST</Text>
-            </View>
+            {hasCompanyDetails && (
+              <View style={styles.companyCard}>
+                {!!companyInfo.name && (
+                  <Text style={styles.companyTitle}>{companyInfo.name}</Text>
+                )}
+                {companyRows.map((row) => (
+                  <View key={row.icon} style={styles.companyRow}>
+                    <Ionicons name={row.icon} size={16} color={colors.textDim} />
+                    <Text style={styles.companyText}>{row.text}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </ScrollView>
         </KeyboardAvoidingView>
       )}
@@ -935,11 +939,5 @@ function createStyles(colors: ThemeColors) {
     },
     companyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
     companyText: { fontSize: 14, color: colors.textSecondary },
-    companyHours: {
-      fontSize: 12,
-      color: colors.textDim,
-      marginTop: 8,
-      fontStyle: 'italic',
-    },
   });
 }

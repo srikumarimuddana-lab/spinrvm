@@ -156,9 +156,17 @@ runs:
             # `|| true`: pipefail would otherwise abort the script here when
             # the ID does not match, losing the message we are trying to print.
             group=$(grep -oE 'Update [0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' "$log" | head -1 | awk '{print $2}' || true)
-            echo "::error::${platform}:${channel} refused — a rollout is already in progress for this branch, platform and runtime version. End it, then re-run this workflow:"
-            echo "::error::  eas update:edit ${group:-<GROUP_ID>} --rollout-percentage 100 --non-interactive          # ramp the current canary to 100%"
-            echo "::error::  eas update:revert-update-rollout --group ${group:-<GROUP_ID>} --non-interactive          # or roll it back"
+            echo "::error::${platform}:${channel} refused — a rollout is already in progress for this branch, platform and runtime version. End it, then re-run this workflow."
+            # Expo reports a platform-specific UPDATE id here, but update:edit
+            # and revert-update-rollout both take the update GROUP id. Printing
+            # the reported id as a ready-to-run update:edit argument (as this
+            # did until 2026-09-22) hands the operator a command that fails
+            # with "Could not find any updates with group ID". Say which kind
+            # of id it is and how to turn it into the other.
+            echo "::error::Expo names UPDATE ${group:-<UPDATE_ID>}; the commands below need that update's GROUP id, which is not the same id."
+            echo "::error::Easiest: run the 'EAS Rollout Control' workflow (action=ramp-to-100 or revert) with group_id=${group:-<UPDATE_ID>} — it resolves the group for you."
+            echo "::error::Or locally:  eas update:view ${group:-<UPDATE_ID>} --json   # read .group from the output, then"
+            echo "::error::             eas update:edit <GROUP_ID> --rollout-percentage 100 --non-interactive   # or: eas update:revert-update-rollout --group <GROUP_ID> --non-interactive"
             echo "::error::See https://docs.expo.dev/eas-update/rollouts/#publishing-while-a-rollout-is-in-progress"
           fi
           rm -f "$log"

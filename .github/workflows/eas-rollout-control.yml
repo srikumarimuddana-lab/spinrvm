@@ -62,7 +62,7 @@ on:
         type: choice
         options: [list, ramp-to-100, revert]
       group_id:
-        description: "Update group ID — REQUIRED for ramp-to-100 and revert. Get it from an action=list run. Ignored by list."
+        description: "Update GROUP id, or the UPDATE id a failed publish reports (\"Update <id> is currently rolling out\") — either is accepted and resolved to the group. REQUIRED for ramp-to-100 and revert; ignored by list."
         required: false
         default: ""
         type: string
@@ -169,33 +169,75 @@ jobs:
           fi
 
           # ── Mutating actions ────────────────────────────────────────────
-          if [ -z "$GROUP_ID" ]; then
-            echo "::error::action=$ACTION requires group_id. Run action=list first, then paste the group ID from its output. This workflow will not choose a group for you — both mutations change what real devices run."
+          ID_IN="$GROUP_ID"
+          if [ -z "$ID_IN" ]; then
+            echo "::error::action=$ACTION requires group_id. Run action=list first, or copy the update id out of a failed publish. This workflow will not choose an id for you — both mutations change what real devices run."
             exit 1
           fi
-          # Fail closed on a malformed ID rather than handing it to eas.
-          if ! printf '%s' "$GROUP_ID" | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'; then
-            echo "::error::group_id '$GROUP_ID' is not a UUID. Copy it verbatim from an action=list run."
+          # Fail closed on a malformed id rather than handing it to eas.
+          if ! printf '%s' "$ID_IN" | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'; then
+            echo "::error::group_id '$ID_IN' is not a UUID. Copy it verbatim from an action=list run or from a failed publish's error."
             exit 1
           fi
 
-          # A group belongs to exactly one app. With app=both, the other app's
-          # job will not find it — that is expected, and is why fail-fast is
-          # off and why this exits 0 with a notice instead of failing the run.
-          if ! eas update:view "$GROUP_ID" --json >/dev/null 2>&1; then
-            echo "::notice::$APP_DIR does not own group $GROUP_ID — skipping. (Expected when app=both; the other app's job handles it.)"
+          # An id belongs to exactly one app. With app=both, the other app's job
+          # will not find it — expected, which is why fail-fast is off and this
+          # exits 0 with a notice instead of failing the run.
+          if ! VIEW_JSON=$(eas update:view "$ID_IN" --json 2>/dev/null); then
+            echo "::notice::$APP_DIR does not own $ID_IN — skipping. (Expected when app=both; the other app's job handles it.)"
             exit 0
+          fi
+
+          # THE ID EXPO HANDS YOU IS NOT THE ID update:edit WANTS.
+          # A publish refused by a rollout reports "Update <id> is currently
+          # rolling out to N%" — that is a platform-specific UPDATE id. But
+          # `eas update:edit` takes an update GROUP id, and
+          # `revert-update-rollout --group` likewise. Pasting the id from the
+          # error straight in fails with "Could not find any updates with group
+          # ID". `update:view` accepts EITHER (per its own docs: "the ID of an
+          # update group, or the ID of a platform-specific update"), which is
+          # exactly why it cannot be used as a validity check for the others —
+          # it happily accepts an id that update:edit will reject.
+          # So resolve through it and act on whatever group it reports.
+          RESOLVED=$(printf '%s' "$VIEW_JSON" | python3 -c '
+          import json, re, sys
+          UUID = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+          def walk(o):
+              if isinstance(o, dict):
+                  yield o
+                  for v in o.values():
+                      yield from walk(v)
+              elif isinstance(o, list):
+                  for v in o:
+                      yield from walk(v)
+          try:
+              data = json.load(sys.stdin)
+          except Exception:
+              sys.exit(1)
+          for d in walk(data):
+              g = d.get("group")
+              if isinstance(g, str) and UUID.match(g):
+                  print(g)
+                  sys.exit(0)
+          sys.exit(1)
+          ') || {
+            echo "::error::Could not read a group ID out of \`eas update:view $ID_IN --json\`. Run this workflow with action=list and use a group ID from its output."
+            exit 1
+          }
+
+          if [ "$RESOLVED" != "$ID_IN" ]; then
+            echo "::notice::$ID_IN is a platform-specific update; its update GROUP is $RESOLVED. Acting on the group."
           fi
 
           case "$ACTION" in
             ramp-to-100)
-              echo "Promoting $GROUP_ID to 100% on branch $BRANCH — every device on this branch and runtime version will receive it."
-              eas update:edit "$GROUP_ID" --rollout-percentage 100 --non-interactive
+              echo "Promoting group $RESOLVED to 100% on branch $BRANCH — every device on this branch and runtime version will receive it."
+              eas update:edit "$RESOLVED" --rollout-percentage 100 --non-interactive
               ;;
             revert)
-              echo "Reverting the rollout for $GROUP_ID — Expo republishes the PREVIOUS update to 100% of devices on this branch."
-              eas update:revert-update-rollout --group "$GROUP_ID" --non-interactive \
-                --message "Revert stuck rollout $GROUP_ID (EAS Rollout Control)"
+              echo "Reverting the rollout for group $RESOLVED — Expo republishes the PREVIOUS update to 100% of devices on this branch."
+              eas update:revert-update-rollout --group "$RESOLVED" --non-interactive \
+                --message "Revert stuck rollout $RESOLVED (EAS Rollout Control)"
               ;;
             *)
               echo "::error::Unknown action '$ACTION'"; exit 1 ;;

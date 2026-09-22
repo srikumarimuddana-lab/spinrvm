@@ -1,6 +1,7 @@
 """Durable idempotent records for provider operations on a ride."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -186,10 +187,8 @@ async def reconcile_due_operations() -> int:
             if operation.get("operation_type") == "refund":
                 try:
                     from .stripe_charge import _resolve_stripe_secret, stripe
-                    from .money import cents_to_dollars
                 except ImportError:  # pragma: no cover
                     from utils.stripe_charge import _resolve_stripe_secret, stripe  # type: ignore
-                    from utils.money import cents_to_dollars  # type: ignore
                 if prior_status == "failed":
                     await update_operation(op_id, status="failed", next_attempt_at=now)
                     operation = await prepare_refund_operation(
@@ -206,21 +205,23 @@ async def reconcile_due_operations() -> int:
                 if operation.get("provider_object_id"):
                     refund = await asyncio.to_thread(stripe.Refund.retrieve, operation["provider_object_id"], api_key=secret)
                 else:
-                    refunds = await asyncio.to_thread(lambda: stripe.Refund.list(
-                        payment_intent=operation["payment_intent_id"], limit=100, api_key=secret
-                    ))
+                    refunds = await asyncio.to_thread(
+                        stripe.Refund.list,
+                        payment_intent=operation["payment_intent_id"], limit=100, api_key=secret,
+                    )
                     for possible in getattr(refunds, "data", None) or []:
                         metadata = getattr(possible, "metadata", {}) or {}
                         if metadata.get("ride_payment_operation_id") == op_id:
                             refund = possible
                             break
                     if refund is None:
-                        refund = await asyncio.to_thread(lambda: stripe.Refund.create(
+                        refund = await asyncio.to_thread(
+                            stripe.Refund.create,
                             payment_intent=operation["payment_intent_id"],
                             amount=int(operation["amount_cents"]), reason="requested_by_customer",
                             metadata={"ride_id": ride_id, "ride_payment_operation_id": op_id},
                             api_key=secret, idempotency_key=operation["idempotency_key"],
-                        ))
+                        )
                 status = str(getattr(refund, "status", "pending") or "pending")
                 refund_id = getattr(refund, "id", None)
                 amount = int(getattr(refund, "amount", operation["amount_cents"]) or operation["amount_cents"])

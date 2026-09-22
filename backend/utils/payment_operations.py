@@ -52,6 +52,13 @@ async def prepare_refund_operation(*, ride_id: str, payment_intent_id: str, amou
     for operation in prior:
         if operation.get("status") in {"requested", "processing", "pending", "requires_action", "succeeded"}:
             return operation
+    if len(prior) >= MAX_ATTEMPTS:
+        last = prior[0]
+        if last.get("status") != "exhausted":
+            await update_operation(str(last["id"]), status="exhausted", next_attempt_at=None,
+                                   last_error="Refund operation retry limit reached")
+            last = {**last, "status": "exhausted"}
+        return last
     attempt = len(prior) + 1
     # Each terminal failed attempt has its own stable key. Replaying a
     # requested attempt reuses its key; a confirmed failure can safely advance.
@@ -190,6 +197,8 @@ async def reconcile_due_operations() -> int:
                         amount_cents=int(operation.get("amount_cents") or 0),
                     )
                     op_id = str(operation["id"])
+                    if operation.get("status") == "exhausted":
+                        continue
                 secret = await _resolve_stripe_secret(ride_id)
                 if stripe is None or not secret:
                     raise RuntimeError("Stripe is not configured for refund reconciliation")

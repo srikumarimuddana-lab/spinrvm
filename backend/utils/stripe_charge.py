@@ -1274,6 +1274,11 @@ async def refund_excess_capture(
         logger.exception("[CANCEL] could not persist refund obligation ride=%s", ride_id)
         return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
 
+    if operation.get("status") == "exhausted":
+        logger.error("[CANCEL] refund retry limit reached ride=%s; manual review required", ride_id)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id,
+                             error_message="Refund retries exhausted; manual review required")
+
     if operation.get("status") in {"pending", "processing", "requires_action", "succeeded"}:
         provider_id = operation.get("provider_object_id")
         if provider_id and operation.get("status") != "succeeded":

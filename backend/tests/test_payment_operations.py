@@ -89,3 +89,18 @@ async def test_due_authorization_release_is_claimed_and_completed():
 
     assert processed == 1
     cancel.assert_awaited_once_with(ride_id="ride1", payment_intent_id="pi1")
+
+
+@pytest.mark.asyncio
+async def test_refund_attempts_stop_at_bounded_limit():
+    prior = [{"id": f"op{i}", "status": "failed", "attempt_count": 1} for i in range(8, 0, -1)]
+    with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=prior)), patch(
+        "backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op8"})
+    ) as update, patch("backend.utils.payment_operations.db.insert_one", AsyncMock()) as insert:
+        from backend.utils.payment_operations import prepare_refund_operation
+
+        result = await prepare_refund_operation(ride_id="ride1", payment_intent_id="pi1", amount_cents=500)
+
+    assert result["status"] == "exhausted"
+    assert update.await_args.args[2]["status"] == "exhausted"
+    insert.assert_not_awaited()

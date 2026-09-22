@@ -391,6 +391,19 @@ Stated plainly rather than implied:
   specific label. Ride 0c24901f is still caught (2.33 km routed = 33% of a
   6.99 km booking, 28.2% drift). Three CI failures, all three from this
   branch's own work, no infra involvement.
+- **Found in review, fixed 2026-09-22 (commit `7a80e2f`): duplicate connector
+  ids.** The short-gap branch emitted a connector using `connector_attempts + 1`
+  without incrementing the counter, so the next connector sharing its
+  `gap_reason` took the same number and two segments landed in
+  `road_matched_segments` under one `id`. Reachable on an ordinary ride — a stop
+  (time-split gap under `MIN_ROUTED_GAP_M`) followed by a real dropout
+  (distance-split gap over it), which is exactly the pair of failures this work
+  addresses. `shared/utils/routeSegments.ts:95` passes a non-empty id straight
+  through, so the collision reaches every reader. No consumer was observed to
+  crash, but `road_matched_segments` is SGI and dispute evidence and two
+  segments claiming one identity is a defect in the record on its own terms.
+  Reproduced before fixing; regression test added.
+
 - **Pre-existing gap found and fixed in passing:** `planned_capped` was never
   added to the admin map's `gpsTooIncomplete` check, so a ride capped to the
   booking still drew its GPS fragments — card and map disagreeing, exactly what

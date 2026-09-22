@@ -59,10 +59,16 @@ export async function launchNavigation(navApp: NavApp, lat: number, lng: number)
   // URL is the last resort, so a failure there is a dead end for this tap —
   // recoverable, because the driver can still tap Navigate again or open their
   // maps app by hand, so it warns rather than surfacing an error to them.
+  //
+  // The rejection itself is deliberately NOT logged: React Native puts the
+  // failing URL in the message, and that URL carries the ride's raw pickup or
+  // dropoff coordinates, which CLAUDE.md's PIPEDA rules bar from logs outright.
+  // The driver's chosen app is the diagnostic that actually matters and is not
+  // personal information.
   const openDefault = () =>
     Linking.openURL(defaultUrl).catch(() =>
-      Linking.openURL(googleWebUrl).catch((e) =>
-        console.warn('[launchNavigation] no maps handler available:', e),
+      Linking.openURL(googleWebUrl).catch(() =>
+        console.warn(`[launchNavigation] no maps handler available (pref: ${navApp})`),
       ),
     );
 

@@ -112,6 +112,8 @@ export default function TrackRide() {
   // segment can't win the nearest-distance search for one poll).
   const routeCoordsRef = useRef<TrackingLatLng[]>([]);
   const routeSegIndexRef = useRef<number | null>(null);
+  // Monotonic ticket for in-flight OSRM requests — only the newest commits.
+  const routeFetchSeqRef = useRef(0);
   const lastDriverPosRef = useRef<TrackingLatLng | null>(null);
   // Last world-space course applied, and the continuously-accumulated CSS
   // angle — kept un-normalised so a 350°→10° turn animates +20°, not −340°.
@@ -309,8 +311,37 @@ export default function TrackRide() {
     // Priority mirrors the mobile marker: route segment → direction of travel
     // → hold the last known course. It never falls back to a default, because
     // "0" is the bug being fixed, not a safe neutral value.
-    if (d?.lat != null && d?.lng != null) {
-      const here: TrackingLatLng = { latitude: d.lat, longitude: d.lng };
+    //
+    // Computed here, ABOVE the reroute block that also uses them, because the
+    // heading has to know the leg flipped before it reads a route belonging to
+    // the previous one — see the legChanged branch below.
+    const hasDriver = d?.lat != null && d?.lng != null;
+    const currentLeg: 'pickup' | 'dropoff' = EN_ROUTE_TO_PICKUP.has(ride.status) ? 'pickup' : 'dropoff';
+    const legChanged = lastRoutedLegRef.current !== currentLeg;
+
+    if (!hasDriver) {
+      // Driver released (offer timeout sets rides.driver_id = NULL, so the
+      // payload returns driver: null and upsertMarker tore the icon down).
+      // The course refs are about THAT driver — carrying them into whoever is
+      // assigned next would measure a travel bearing between two unrelated
+      // vehicles on the next poll. Reset with the marker.
+      lastDriverPosRef.current = null;
+      carBearingRef.current = null;
+      routeSegIndexRef.current = null;
+      carRotationRef.current = 0;
+      routeCoordsRef.current = [];
+    } else {
+      const here: TrackingLatLng = { latitude: d!.lat!, longitude: d!.lng! };
+      if (legChanged) {
+        // The leg just flipped (driver_arrived → in_progress). The route still
+        // in hand runs driver→pickup and the driver is sitting on its terminus,
+        // so snapping would take the bearing of the ARRIVAL and could point the
+        // car backwards for a whole poll cycle while it drives off toward the
+        // dropoff. Drop it and let travel/hold cover the gap until the
+        // dropoff-leg route lands below.
+        routeCoordsRef.current = [];
+        routeSegIndexRef.current = null;
+      }
       const snap = snapToRoute(
         here, routeCoordsRef.current, MAX_ROUTE_SNAP_M, routeSegIndexRef.current,
       );
@@ -348,23 +379,29 @@ export default function TrackRide() {
     // ── OSRM route: recalculate from driver's current position ─────────────────
     // Route origin = driver (when assigned) or pickup (no driver yet).
     // Route destination = pickup (driver en route to pickup) or dropoff (trip in progress).
-    const hasDriver = d?.lat != null && d?.lng != null;
-    const currentLeg: 'pickup' | 'dropoff' = EN_ROUTE_TO_PICKUP.has(ride.status) ? 'pickup' : 'dropoff';
     // Reroute when: we've never routed yet, OR the leg changed (e.g. the ride
     // flips driver_arrived → in_progress while the driver is stationary, so the
     // destination switches pickup → dropoff), OR the driver moved past the
     // threshold. The leg check fixes the "stuck showing driver→pickup" bug; not
     // re-fetching on an unchanged leg fixes the every-5s identical-request loop
     // when there is no driver (position-based reroute can't fire).
-    const legChanged = lastRoutedLegRef.current !== currentLeg;
+    // `hasDriver`/`currentLeg`/`legChanged` are computed above, with the heading.
     const driverMoved =
       hasDriver &&
       lastRoutedDriverRef.current != null &&
       (Math.abs(d!.lat! - lastRoutedDriverRef.current.lat) > ROUTE_REROUTE_THRESHOLD ||
         Math.abs(d!.lng! - lastRoutedDriverRef.current.lng) > ROUTE_REROUTE_THRESHOLD);
     const neverRouted = lastRoutedLegRef.current === null;
+    // A driver appearing where there was none — first assignment, or a
+    // REPLACEMENT after an offer timeout released the previous one. Without
+    // this, none of the three conditions above can fire for the new driver
+    // (lastRoutedDriverRef was nulled, so driverMoved is false; the leg and
+    // the routed flag are unchanged), so the page kept drawing the released
+    // driver's route line indefinitely. Pre-existing, but it now also starves
+    // the heading, which reads that same geometry.
+    const driverAppeared = hasDriver && lastRoutedDriverRef.current === null;
 
-    if ((neverRouted || legChanged || driverMoved) && ride.pickup_lat != null && ride.dropoff_lat != null) {
+    if ((neverRouted || legChanged || driverMoved || driverAppeared) && ride.pickup_lat != null && ride.dropoff_lat != null) {
       const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
       const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
       const destLat    = currentLeg === 'pickup' ? ride.pickup_lat  : ride.dropoff_lat;
@@ -380,9 +417,18 @@ export default function TrackRide() {
         `${originLng},${originLat};${destLng},${destLat}` +
         `?overview=full&geometries=geojson`;
 
+      // At road speed the move threshold trips on nearly every 5 s poll, so
+      // several OSRM requests can be in flight at once against a public router
+      // with no latency guarantee. Responses are not ordered, so a slow earlier
+      // one could land last and overwrite newer geometry. That was survivable
+      // while this only drew a line; it is not now that the same geometry
+      // orients the car. Only the newest request may commit.
+      const fetchSeq = ++routeFetchSeqRef.current;
+
       fetch(url)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
+          if (fetchSeq !== routeFetchSeqRef.current) return; // superseded
           const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
           if (!coords || !mapRef.current) return;
 

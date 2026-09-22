@@ -134,6 +134,7 @@ not a new risk class.
 | File path | What changed | Why |
 |---|---|---|
 | `admin-dashboard/src/app/track/[rideId]/page.tsx` | Keep OSRM geometry in a ref; derive the driver's course (route snap → travel → hold); rotate the car `<img>` via CSS, cancelling the map's own heading; re-apply on `heading_changed` | The car icon was never rotated at all |
+| ″ (same file, second pass) | Reset the course refs when the driver marker is torn down; drop the stale-leg route before deriving a heading; sequence-guard the OSRM fetch; reroute when a driver appears where there was none | Three findings from the pre-merge review — see §12 |
 
 ## 7. Before / after
 
@@ -303,3 +304,84 @@ driver-app diagnosed and fixed it for itself (see its own comment at
 it. Cheapest fix: `rotateEnabled={false}` on those three rider live maps, which
 makes the north-up invariant the shared component already assumes true by
 construction, in three lines.
+
+## 12. Pre-merge review (Codex-style pass) — 3 findings, all fixed
+
+Codex has not reviewed a PR on this repo since 30 July (`ACTION_ITEMS.md` C9)
+and the Claude audit workflow is off on cost grounds (C7), so this was a manual
+adversarial pass over the actual diff, per `CLAUDE.md`'s instruction to do
+exactly that while both are down. Every finding was verified against the code
+before being actioned — none was taken on trust.
+
+### 12a. Course refs outlived the driver they described — **CONFIRMED, fixed**
+
+`upsertMarker` nulls the marker when the payload carries no driver, but
+`lastDriverPosRef` / `carBearingRef` / `routeSegIndexRef` were left set.
+Reachable in production: `backend/routes/rides/matching.py:1615` sets
+`driver_id: None` on offer timeout, and `track_shared_ride` returns
+`driver: null` whenever `driver_id` is falsy. The next assigned driver's first
+fix would then pair with the **previous** driver's last position in the
+travel-bearing fallback — a bearing measured between two unrelated vehicles.
+
+Fixed by resetting the course refs in the same branch that tears the marker
+down. Verified by replay: driver A reads east, release clears the course,
+driver B's first fix invents no bearing, driver B's second fix reads its own
+travel direction.
+
+### 12b. Stale-leg route pointed the car backwards — **CONFIRMED, worse than reported, fixed**
+
+The heading derivation ran *above* the block that computes `legChanged`, so on
+the `driver_arrived → in_progress` tick it still held the driver→pickup route
+with the driver parked on its terminus.
+
+The review called this "a full poll cycle". Replay shows it is **not**
+time-boxed: the stale route runs back the way the driver came, so as long as
+the car stays within `MAX_ROUTE_SNAP_M` of it, the snap keeps winning and the
+icon keeps pointing backwards while the car drives away. Measured, westbound
+pickup route, car departing east:
+
+| | tick 0 (parked) | +20 m east | +40 m east |
+|---|---|---|---|
+| Before | 270 | 270 | 270 — **backwards while driving east** |
+| After | 270 (holds, correct while stationary) | 90 | 90 |
+
+Fixed by hoisting `hasDriver`/`currentLeg`/`legChanged` above the derivation
+and dropping the route on a leg change, so travel/hold covers the gap until the
+dropoff-leg route lands. Holding `270` at the parked instant is intended: the
+car genuinely has not moved yet, and inventing a departure direction would be
+the guess this design refuses to make.
+
+### 12c. Unordered OSRM responses could commit stale geometry — **CONFIRMED, fixed**
+
+No sequencing on the route fetch. At road speed the move threshold trips on
+nearly every 5 s poll, so several requests run concurrently against a public
+router with no latency guarantee; a slow earlier response could land last and
+overwrite newer geometry. Survivable while that geometry only drew a line —
+not now that it also orients the car. Fixed with a monotonic ticket
+(`routeFetchSeqRef`); only the newest response commits. This also closes the
+same race for the **polyline**, which was pre-existing.
+
+### Also fixed while here (pre-existing, surfaced by 12a)
+
+After a driver was released and a replacement assigned, **no** reroute
+condition could fire (`lastRoutedDriverRef` was nulled so `driverMoved` is
+false; leg and routed-flag unchanged), so the page kept drawing the released
+driver's route line indefinitely. Added a `driverAppeared` condition. Called
+out explicitly because it is a behaviour change slightly outside the reported
+bug: without it, clearing the stale route in 12a would leave the new driver
+with no geometry at all.
+
+### Judged correct, no change
+
+The reviewer independently checked and confirmed: the
+`visualRotationDegrees` sign convention against Google Maps' clockwise-from-
+north heading; `transform-origin: 50% 50%` landing the rotation pivot on the
+GPS anchor given the `marginTop: -size/2` offset; resetting the continuity hint
+on every reroute; the `@spinr/shared/utils/*` alias precedent; `vehicleTracking.ts`
+having zero imports so nothing React-Native leaks into the Next build; both
+effects' dependency arrays against the `useCallback([])`; and that
+`/track/[rideId]` has no visual-regression baseline.
+
+**None of the three was a merge blocker** — the marker's *position* is untouched
+by all of them, and each is strictly better than the always-north bug being
+fixed — but all three were cheap to close, so they were.

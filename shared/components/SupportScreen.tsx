@@ -259,8 +259,11 @@ export default function SupportScreen({
     { icon: 'globe-outline' as IoniconName, text: companyInfo.website },
   ].filter((row): row is { icon: IoniconName; text: string } => !!row.text);
 
-  // Nothing configured at all → the whole block is omitted, not rendered empty.
-  const hasCompanyDetails = !!companyInfo.name || companyRows.length > 0;
+  // At least one real detail is required to show the block. A name on its own
+  // is a caption with nothing to caption — rendering the card for it leaves an
+  // elevated, padded panel containing one line, which reads as broken rather
+  // than minimal. Nothing configured → the block is omitted, not empty.
+  const hasCompanyDetails = companyRows.length > 0;
 
   // Where the AI-chat error copy points people when the assistant fails. Drops
   // the clause entirely rather than naming an address that isn't configured.

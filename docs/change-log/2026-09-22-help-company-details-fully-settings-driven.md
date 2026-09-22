@@ -27,27 +27,53 @@ The design review of the previous commit independently flagged the address/websi
 
 ## 2. Root cause
 
-Same root cause as the phone, applied field by field: the component treated shipped constants as defaults for values whose entire purpose is to be operator-editable without a deploy. `GET /api/company-info` returns `""` for every unset column — the client masked all of them.
+Three distinct causes, not one:
 
-The hours line has a slightly different root cause worth separating: it was never settings-backed in the first place. No amount of correct fallback handling would have fixed it, because there is no field to read.
+1. **Client-side masking** (name/address/website/email, and the phone before it): the component treated shipped constants as defaults for values whose entire purpose is to be operator-editable without a deploy.
+
+2. **A server-side fallback doing the same thing one layer down** — found by the design review of the first attempt at this change, and the reason that attempt would not have worked in production. `GET /api/company-info` returned `""` for four fields but **hardcoded `"Spinr"` for `name`**:
+
+   ```python
+   "name": settings.get("company_name", "Spinr") or "Spinr",   # ← the odd one out
+   "address": settings.get("company_address", "") or "",
+   ```
+
+   So `companyInfo.name` could never be empty at the client, whatever the component did. A blanked-out Company Name was indistinguishable from one deliberately set to "Spinr", and the "omit the block entirely" branch was unreachable outside unit tests that mock the endpoint. **A previous version of this entry asserted the endpoint returned `""` for every unset column. That was wrong** — it was verified for `phone` and generalised without checking `name`.
+
+   `backend/ai/tools_support.py::get_company_info` carried a verbatim copy of the same line, so the in-app AI assistant would also assert an unconfigured company name.
+
+3. **Never settings-backed at all** (the hours line): there is no `company_hours` column, so no amount of correct fallback handling would have fixed it. The app was asserting a staffing commitment nothing in the system could correct.
 
 ## 3. Fix / remediation
 
-**No hardcoded company detail remains in `SupportScreen.tsx`** (verified by grep for `support@spinr`, `spinr.ca`, `SPINR MOBILITY`, `Saskatoon`, `Mon–Fri`, `'Spinr'` — zero hits).
+**Backend (the blocker):** `/company-info` now returns `""` for `name` like its four siblings, and `backend/ai/tools_support.py::get_company_info` is brought back in line with it. Both carry a comment explaining why, so the next person does not "restore" the default. `utils/company_details.py` is deliberately untouched — its `"Spinr"` default feeds email and PDF footers, a different risk class (documents already filed with SGI and airport authorities).
+
+**Client:** **no hardcoded company detail remains in `SupportScreen.tsx`** (verified by grep for `support@spinr`, `spinr.ca`, `SPINR MOBILITY`, `Saskatoon`, `Mon–Fri`, `'Spinr'` — zero hits).
 
 - Both company blocks (FAQ-tab footer and Contact-tab card) now derive from one `companyRows` array that filters out every unset field, with a type-predicate filter so the rendered `text` is `string`, not `string | undefined`.
-- `hasCompanyDetails` gates each block: nothing configured → the block is omitted entirely rather than rendered empty.
+- `hasCompanyDetails` gates each block on **at least one real detail row**, not on the name. A name with nothing to caption would otherwise render an elevated, padded card holding a single line — which reads as broken rather than minimal (design-review finding).
 - The company name renders only when set; no invented title above the rows.
+
+**Sibling screens:** `rider-app/app/(tabs)/account.tsx` and `driver-app/app/driver/(tabs)/profile.tsx` render the same `/company-info` payload and both still carried `companyInfo.name || 'Spinr'`. Both are fixed. This is the sibling-copy failure mode `CLAUDE.md` pre-merge gate 10 names explicitly — a fix proven in one place that never reaches the copies users actually see — and it was flagged by the design review rather than by the original blast-radius grep, which found the files but accepted them as "already correct" on the strength of their phone handling.
 - Both contact chips are individually conditional, and the chip row itself is omitted when neither channel is configured.
 - The hours line and its now-orphaned `companyHours` style are deleted.
 - `askAssistant()` takes its fallback reply as a parameter; the AI-chat failure copy names the configured email and **drops the "or contact …" clause entirely** when none is set, rather than printing a bare address the operator cannot change.
 
 ## 4. Risk & impact on existing functionality
 
-**Blast radius: cross-surface but contained — two apps, one shared component, no backend/DB/state change.**
+**Blast radius: cross-surface — backend endpoint + AI tool + three frontend screens across two apps. No DB, migration, or state-machine change.**
+
+The backend field is the widest part of this change, so its consumers are enumerated in full. `/company-info` is read by exactly three frontends, and nothing else in the repo (grepped):
+
+| Consumer | Effect of `name` now returning `""` |
+|---|---|
+| `shared/components/SupportScreen.tsx` | The intended fix — the block can finally be omitted when nothing is configured |
+| `rider-app/app/(tabs)/account.tsx` | Would have been none (its own `\|\| 'Spinr'` absorbed it) — **also fixed here**, so a blank name now shows nothing |
+| `driver-app/app/driver/(tabs)/profile.tsx` | Same as above — **also fixed here** |
 
 - `SupportScreen` importers remain exactly two (`rider-app/app/support.tsx`, `driver-app/app/driver/help.tsx`), both thin wrappers. Not in `docs/known-forks.md`.
-- `rider-app/app/(tabs)/account.tsx` and `driver-app/app/driver/(tabs)/profile.tsx` render the same `/company-info` payload and are **not touched**. They already hide unset fields, but both still use `companyInfo.name || 'Spinr'` for the heading — see §9b open items.
+- `backend/ai/tools_support.py::get_company_info` is a separate copy of the same handler feeding the in-app AI assistant; changed to match. Its existing test passes `company_name` explicitly, so it was unaffected by the default and keeps passing.
+- **No backend test asserted the old `"Spinr"` default** (checked: `test_server_coverage.py` only pins the deprecation header; nothing else touched the payload). So the change breaks no existing expectation — but it also means this endpoint had no payload coverage at all, which the new `test_public_company_info.py` closes.
 - `backend/utils/company_details.py` (email footers, receipts, invoice PDFs) is **not touched** and keeps its own documented fallbacks. Deliberate: a PDF already filed with SGI or an airport authority is a different risk class than an in-app screen, per the 2026-08-08 change log's reasoning.
 - The 2026-09-15 decision (`ai-chat-preserve-official-contact`) allowlists `company_email`/`company_phone` through `scrub_pii` so the assistant can quote them. This change is aligned with it, not against it: both treat admin Settings as the source of truth for official contact. That decision governs the **backend** reply path; the two strings changed here are **client-side** fallbacks used only when the backend returns nothing or the request fails.
 
@@ -71,7 +97,14 @@ The hours line has a slightly different root cause worth separating: it was neve
 |---|---|---|
 | `shared/components/SupportScreen.tsx` | Removed `SUPPORT_EMAIL` and every hardcoded name/address/website/email fallback; unified both company blocks onto a filtered `companyRows` + `hasCompanyDetails`; chips individually conditional; `askAssistant` takes a `fallbackReply`; chat copy drops the contact clause when unset | User instruction: all details from admin settings |
 | `shared/components/SupportScreen.tsx` | Deleted the `Mon–Fri 9am–6pm CST` line and the `companyHours` style | User instruction; and it was never a configurable setting, so the app should not assert it |
-| `shared/components/__tests__/SupportScreen.contact.test.tsx` | Replaced the two cases that pinned the now-removed email fallback; added pins for the fully-empty state, the removed hours line, name-present/absent, and both AI-chat copy states (driving a real failed send rather than asserting vacuously) | The old cases asserted behavior deliberately removed; leaving them would have failed CI for the wrong reason |
+| `backend/routes/settings.py` | `/company-info` `name` now defaults to `""` like its four siblings, with a comment explaining why | The blocker — the client fix was unreachable in production without it |
+| `backend/ai/tools_support.py` | Same one-line change in the AI assistant's duplicate `get_company_info` | Verbatim copy of the same handler; the assistant must not assert an unconfigured name either |
+| `rider-app/app/(tabs)/account.tsx` | `companyInfo.name \|\| 'Spinr'` → conditional | Sibling copy of the same footer, same bug |
+| `driver-app/app/driver/(tabs)/profile.tsx` | `companyInfo.name \|\| 'Spinr'` → conditional | Sibling copy of the same footer, same bug |
+| `backend/tests/test_public_company_info.py` | **New.** Pins every field empty when unset (key-absent / `""` / `None`), configured values passing through, and partial configuration not backfilling | This endpoint had zero payload coverage |
+| `backend/tests/test_ai_tools_support.py` | Added a case pinning `name == ""` when `company_name` is unset | Keeps the two copies of the handler from drifting again |
+| `rider-app/__tests__/accountScreen.test.tsx` | Rewrote the case that pinned the `'Spinr'` name fallback; added one pinning a configured name | The old case asserted removed behavior — and its `toContain('Spinr')` would have passed vacuously via the unrelated "Spinr Rider" hero subtitle |
+| `shared/components/__tests__/SupportScreen.contact.test.tsx` | Replaced the two cases that pinned the now-removed email fallback; added pins for the fully-empty state, the removed hours line, name-present/absent, name-only (card omitted), row order, and both AI-chat copy states (driving a real failed send rather than asserting vacuously) | The old cases asserted behavior deliberately removed; leaving them would have failed CI for the wrong reason |
 
 ## 7. Before / after
 
@@ -124,15 +157,29 @@ Not feature-flagged — the change is reversible from the dashboard with no depl
 - [ ] Manual repro in staging — not performed.
 - [ ] Feature-flagged — no, justified above.
 
-## 9b. Open items deliberately left
+## 9b. Design-review pass (CLAUDE.md pre-merge gate 10)
 
-- **`account.tsx` / `profile.tsx` still use `companyInfo.name || 'Spinr'`.** Same class, on two screens outside this fix's scope. Lower-stakes than the Contact card's all-caps legal-entity claim, since "Spinr" is the app's own brand name rather than a registered-entity or contact assertion. Worth a follow-up sweep if the rule is to hold everywhere.
+`spinr-design-consistency-reviewer` was run against the diff and returned **FIX BLOCKERS**, not a rubber stamp. Both blockers were real and are fixed above:
+
+1. The `/company-info` `name` fallback, which made the whole client-side fix unreachable in production. This is the finding that mattered — without it the Contact card would have rendered permanently, holding a lone "Spinr" caption, which is worse than what the user reported.
+2. The two sibling screens still carrying `|| 'Spinr'`.
+
+Its warnings, also actioned: the lone-name card chrome (now gated on `companyRows.length > 0`), and the unpinned FAQ row-order change (now asserted by a real order test using render-order text extraction, since `getAllByText` answers presence, not sequence).
+
+Left open, deliberately:
+
+- **`SupportScreen.tsx`'s `WELCOME_MESSAGES`** hardcodes "Spinr's AI assistant". Product/persona copy rather than Company Info, and `company_app_name` (which exists in Settings for exactly this kind of body copy) is not wired to this component at all. Out of scope for "company details", but a genuine gap if the product is ever rebranded via that setting.
+- **The `/company-info` fetch failure is `console.warn`-only** with no error state, so a transient failure is indistinguishable from "nothing configured". Pre-existing on all three screens. Low severity — supplementary footer content, not the screen's primary async action — but now slightly more consequential, since "renders nothing" is a legitimate state rather than always-visible placeholder text.
 - **`backend/routes/support.py`'s `FALLBACK_REPLY` still contains `1-800-SPINR`.** Retired `/support/chat` stub, zero live callers, kept as a reviewed compatibility shim (F04). Unchanged.
 - **Company hours have no settings field.** Flagged above as a feature, not a regression.
 
 ## 10. What was NOT verified
 
-- **The Jest suite was never run.** This environment cannot reach npm (`registry.npmjs.org` returns 403 via the proxy and directly; the local cache lacks `@babel/core`), so no `node_modules` exists and neither `jest` nor `tsc --noEmit` can run. **CI must validate before merge.** Two areas carry the most risk if a detail is wrong: the type-predicate filter on `companyRows`, and the two new AI-chat tests, which drive a real failed send (`changeText` → press the mocked send icon → rejected POST) rather than asserting vacuously — a heavier interaction than the other cases and the most likely to need adjustment.
+- **Neither test suite was run — including the new backend tests.** npm *and* PyPI are both blocked in this environment (`registry.npmjs.org` returns 403 via the proxy and directly; `pip install fastapi` fails with "no versions found"), so there is no `node_modules` and no `pytest`/`fastapi`. `jest`, `tsc --noEmit` and `pytest` are all unavailable. **CI must validate everything here before merge.** Highest-risk spots if a detail is wrong:
+  - the two new AI-chat tests, which drive a real failed send (`changeText` → press the mocked send icon → rejected POST) rather than asserting vacuously — the heaviest interaction in the file;
+  - the row-order test's `textsInRenderOrder` tree walk over `toJSON()`;
+  - the type-predicate filter on `companyRows`;
+  - `test_public_company_info.py`'s patch target (`backend.routes.settings.get_app_settings`), copied from `test_public_settings.py`'s working pattern but never executed.
 - **No production build** was run for either app.
 - **Not screenshotted.** rider-app and driver-app have **no visual-regression tooling**, so the fully-empty Contact tab — now the ticket form alone, with no chips and no company card — was reasoned about, not seen. This is the state the current empty settings will actually produce, so it is the one most worth a human eye before merge.
 - **Not tested against live Supabase** — the empty-column behavior was confirmed by reading `routes/settings.py`, not by querying a real settings row.

@@ -87,6 +87,22 @@ jest.mock('@shared/api/client', () => ({
   },
 }));
 
+/** Every rendered string, flattened depth-first in render order.
+ *
+ * `getAllByText` answers "is it there", not "in what order" — this is what
+ * lets the row-order test below assert sequence rather than presence. */
+function textsInRenderOrder(node: any, out: string[] = []): string[] {
+  if (node == null) return out;
+  if (typeof node === 'string') {
+    out.push(node);
+  } else if (Array.isArray(node)) {
+    node.forEach((child) => textsInRenderOrder(child, out));
+  } else if (node.children) {
+    node.children.forEach((child: any) => textsInRenderOrder(child, out));
+  }
+  return out;
+}
+
 async function renderTab(initialTab: 'contact' | 'chat') {
   let utils!: ReturnType<typeof render>;
   await act(async () => {
@@ -174,6 +190,40 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     const withoutName = await renderContactTab();
     expect(withoutName.getByText('1 Main St, Saskatoon SK')).toBeTruthy();
     expect(withoutName.queryByText('SPINR MOBILITY INC.')).toBeNull();
+  });
+
+  it('omits the card entirely when a name is the only thing configured', async () => {
+    // A name with no details is a caption with nothing to caption. Rendering
+    // the card for it leaves an elevated, padded panel holding one line,
+    // which reads as broken rather than minimal.
+    mockCompanyInfo = { name: 'Acme Rides Ltd.' };
+    const { queryByText, queryAllByText } = await renderContactTab();
+
+    expect(queryByText('Acme Rides Ltd.')).toBeNull();
+    expect(queryAllByText('location-outline')).toHaveLength(0);
+    expect(queryByText('Submit Report')).toBeTruthy();
+  });
+
+  it('orders the company rows address → email → phone → website', async () => {
+    // Both company blocks share one `companyRows` array so they cannot drift
+    // apart. Pinned because unifying them changed the FAQ footer's previous
+    // address/phone/email/website order, and nothing else guards it.
+    mockCompanyInfo = {
+      address: '1 Main St',
+      email: 'help@spinr.ca',
+      phone: '+1 306 555 0100',
+      website: 'https://spinr.ca',
+    };
+    const utils = await renderContactTab();
+    const texts = textsInRenderOrder(utils.toJSON());
+
+    // Phone and email also appear in the chip row ABOVE the card, so compare
+    // last occurrences — those are the card's own rows.
+    const card = (value: string) => texts.lastIndexOf(value);
+    expect(card('1 Main St')).toBeGreaterThan(-1);
+    expect(card('1 Main St')).toBeLessThan(card('help@spinr.ca'));
+    expect(card('help@spinr.ca')).toBeLessThan(card('+1 306 555 0100'));
+    expect(card('+1 306 555 0100')).toBeLessThan(card('https://spinr.ca'));
   });
 
   it('renders the configured phone in both the chip and the company card', async () => {

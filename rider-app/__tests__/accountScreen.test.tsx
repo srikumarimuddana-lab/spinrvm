@@ -355,7 +355,7 @@ describe('company-info fetch — res?.data || {} fallback', () => {
 });
 
 describe('company-info footer — remaining field fallbacks', () => {
-  it('falls back to "Spinr" for the name and renders address/email/website when populated without a name or phone', async () => {
+  it('renders address/email/website without inventing a name when none is configured', async () => {
     mockApiGet.mockImplementation((url?: string) => {
       if (url === '/company-info') {
         return Promise.resolve({
@@ -371,10 +371,31 @@ describe('company-info footer — remaining field fallbacks', () => {
     });
     mountedRenderer = renderer;
     const text = allText(renderer);
-    expect(text).toContain('Spinr');
+    // The name line used to fall back to 'Spinr'; it is now admin-configured
+    // like every other field, so with none set the footer simply omits it.
+    // Note this can't be asserted via `not.toContain('Spinr')` — the hero
+    // subtitle "Spinr Rider" always renders and is unrelated to this footer
+    // (same reason the "hidden when company-info is empty" case above pins
+    // the distinct string 'Spinr Inc' rather than the bare brand name).
     expect(text).toContain('123 Main St, Regina, SK');
     expect(text).toContain('help@spinr.ca');
     expect(text).toContain('https://spinr.ca');
+  });
+
+  it('renders the company name when one IS configured', async () => {
+    mockApiGet.mockImplementation((url?: string) => {
+      if (url === '/company-info') {
+        return Promise.resolve({ data: { name: 'Acme Rides Ltd', address: '123 Main St, Regina, SK' } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    let renderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AccountScreen />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    mountedRenderer = renderer;
+    expect(allText(renderer)).toContain('Acme Rides Ltd');
   });
 });
 

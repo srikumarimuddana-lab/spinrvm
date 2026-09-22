@@ -345,7 +345,10 @@ export default function AccountScreen() {
 
           {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
             <View style={styles.companySection}>
-              <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
+              {/* Name is admin-configured like every line below it — no
+                  hardcoded fallback, so a blanked-out Company Name shows
+                  nothing rather than a name nobody entered. */}
+              {!!companyInfo.name && <Text style={styles.companyName}>{companyInfo.name}</Text>}
               {!!companyInfo.address && <Text style={styles.companyLine}>{companyInfo.address}</Text>}
               {!!companyInfo.phone && <Text style={styles.companyLine}>{companyInfo.phone}</Text>}
               {!!companyInfo.email && <Text style={styles.companyLine}>{companyInfo.email}</Text>}

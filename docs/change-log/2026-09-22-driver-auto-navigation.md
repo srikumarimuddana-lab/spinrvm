@@ -156,6 +156,11 @@ requester rather than silently widened into this PR — it is WS/dispatch
 reliability work on a live-tested surface with its own blast radius, and gate #9
 says escalate rather than ship on a guess.
 
+**Filed as #5696** (requester's call: keep this PR surgical). That issue carries
+the exact line references, the repro, both candidate fixes, and the note that no
+existing test covers the path. It is worth weighing against this feature's
+rollout: the frequency increase lands the moment auto-navigation ships default-ON.
+
 **Warnings acted on:**
 - Cancelled-ride race in the claim's async gap → added an unmount guard
   (`navMountedRef`). Burning a cancelled ride's claim is free; the ride is over.

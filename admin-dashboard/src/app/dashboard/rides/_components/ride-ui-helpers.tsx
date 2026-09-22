@@ -140,6 +140,20 @@ export function fmtKm(v: unknown): string {
 }
 
 /**
+ * Format a ride's grand_total (base + distance + time + booking fee +
+ * area fees + tax − discount, i.e. what Stripe actually captured) for
+ * display / CSV export. Returns "" when the value is missing -- older
+ * rides predate this field -- so the column stays blank rather than
+ * showing a misleading $0.00 (same blank-when-missing pattern as fmtKm).
+ */
+export function fmtGrandTotal(v: unknown): string {
+    if (v == null || v === "") return "";
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n)) return "";
+    return formatCurrency(n);
+}
+
+/**
  * Extract the SGI-relevant per-ride distance breakdown, preferring the
  * GPS-tracked `phase_distances` JSONB (computed at ride completion in
  * backend/routes/drivers.py) and falling back to the older scalar

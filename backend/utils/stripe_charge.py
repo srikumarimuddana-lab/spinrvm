@@ -1297,3 +1297,75 @@ async def refund_excess_capture(
         charged_amount=cents_to_dollars(refund_cents),
         raw={"refund_id": refund_id},
     )
+
+
+async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optional[Dict[str, int]]:
+    """Read what Stripe says was captured and already refunded on ``payment_intent_id``.
+
+    Read-only companion to :func:`refund_excess_capture`, for the operator-run
+    backfill (``backend/scripts/reconcile_cancelled_captured_refunds.py``) that
+    clears rides ALREADY stuck in the already-captured-with-no-refund state the
+    2026-09-21 cancellation fix only prevents going forward.
+
+    Why the refunded side is read at all: ``amount_received`` does **not**
+    decrease when a refund is issued, so on its own it cannot tell "nothing
+    refunded yet" from "already fully refunded". Inside the cancel flow that is
+    harmless (the branch runs once per cancellation, and Stripe's idempotency
+    key dedupes a retry), but a human re-running the backfill more than 24h
+    after a first pass is past that key's expiry window — summing the intent's
+    existing refunds is the only guard that still holds there.
+
+    Returns ``{"captured_cents", "refunded_cents"}``, or ``None`` when Stripe is
+    unconfigured, the read failed, or the refund list was longer than one page.
+    Callers MUST treat ``None`` as "unknown — do not refund", never as zero.
+    Never raises.
+    """
+    if not payment_intent_id:
+        return None
+
+    try:
+        # Inside the try: this reads app_settings from Supabase, so a DB blip
+        # here must produce the documented "unknown" (None), not an exception
+        # that bypasses the caller's do-not-refund-on-unknown contract.
+        secret = await _resolve_stripe_secret(ride_id)
+        if secret is None:
+            return None
+        intent = await asyncio.to_thread(stripe.PaymentIntent.retrieve, payment_intent_id, api_key=secret)
+        refunds = await asyncio.to_thread(
+            lambda: stripe.Refund.list(payment_intent=payment_intent_id, limit=100, api_key=secret)
+        )
+    except _StripeBaseError as e:
+        logger.error(
+            "[RECONCILE] Stripe error reading capture state ride=%s pi=%s: %s",
+            ride_id,
+            payment_intent_id,
+            e,
+        )
+        return None
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("[RECONCILE] unexpected error reading capture state ride=%s: %s", ride_id, e)
+        return None
+
+    # More refunds than one page means the sum below would understate what was
+    # already given back, which would overstate what is still owed. Unknown is
+    # the only safe answer.
+    if getattr(refunds, "has_more", False):
+        logger.error(
+            "[RECONCILE] more than one page of refunds on pi=%s (ride=%s) — treating as unknown",
+            payment_intent_id,
+            ride_id,
+        )
+        return None
+
+    refunded_cents = 0
+    for r in getattr(refunds, "data", None) or []:
+        # A failed/cancelled refund never left the account — counting it would
+        # understate what is still owed to the rider.
+        if getattr(r, "status", None) in ("failed", "canceled"):
+            continue
+        refunded_cents += int(getattr(r, "amount", 0) or 0)
+
+    return {
+        "captured_cents": int(getattr(intent, "amount_received", 0) or 0),
+        "refunded_cents": refunded_cents,
+    }

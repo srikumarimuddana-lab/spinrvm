@@ -186,3 +186,20 @@ def test_database_rejected_marker_is_not_delivered(delivery):
         )
     )
     send.assert_not_awaited()
+
+
+def test_legacy_stale_batch_retains_history_without_poisoning_live_integrity(delivery, monkeypatch):
+    _, _, trusted = delivery
+    persist = AsyncMock(return_value=1)
+    monkeypatch.setattr("utils.breadcrumbs.persist_ride_breadcrumbs", persist)
+    point = {
+        "latitude": 50.45,
+        "longitude": -104.6,
+        "timestamp": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+    }
+    asyncio.run(
+        location.update_location_batch([point], background_tasks=BackgroundTasks(), current_user={"id": "user-1"})
+    )
+    persist.assert_awaited_once()
+    trusted.assert_not_awaited()
+    location._write_marker_if_due.assert_not_awaited()

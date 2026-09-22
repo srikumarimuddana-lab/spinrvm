@@ -840,16 +840,17 @@ async def update_location_batch(
         # GPS spoofing check
         driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
-        trusted, _reason = await check_location_integrity(
-            driver_id,
-            lat,
-            lng,
-            speed=latest.get("speed"),
-            accuracy=latest.get("accuracy"),
-            mocked=latest.get("mocked"),
-        )
-        if not trusted:
-            return {"success": False, "reason": "location_rejected"}
+        fresh = -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60
+        trusted = False
+        if fresh:
+            trusted, _reason = await check_location_integrity(
+                driver_id,
+                lat,
+                lng,
+                speed=latest.get("speed"),
+                accuracy=latest.get("accuracy"),
+                mocked=latest.get("mocked"),
+            )
         # Update via Supabase wrapper which now handles casting. `heading`
         # column added in migration 113 — persist it so rider/admin map
         # markers can rotate the car icon to the real direction of travel
@@ -935,7 +936,9 @@ async def update_location_batch(
         # window keyed on a users.id no other path shares and, worse, counted
         # outcome="written" for a write that never happened, polluting the
         # exact counter the shadow measurement reads.
-        if driver_rows:
+        if driver_rows and (trusted or any(key in update_data for key in _PERIOD1_COLUMNS)):
+            if not trusted:
+                update_data["location_captured_at"] = datetime.fromtimestamp(0, timezone.utc)
             await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(driver_id), "rest_v1")
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
@@ -974,7 +977,7 @@ async def update_location_batch(
         # above) only ever touches lat/lng/updated_at/heading/
         # period1_accum_* -- never `is_online` -- so a second read could not
         # observe a different value than the first.
-        if driver_row and driver_row.get("is_online"):
+        if fresh and trusted and driver_row and driver_row.get("is_online"):
             await _deps.mark_present(driver_row["id"])
 
     return {"success": True}

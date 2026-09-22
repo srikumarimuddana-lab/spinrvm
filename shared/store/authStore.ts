@@ -203,10 +203,11 @@ export interface User {
 interface RefreshTokenResponse {
   token: string;
   refresh_token: string;
-  // /auth/refresh's RefreshResponse (backend/routes/auth.py) never sends
-  // expires_in -- only AuthResponse (login/verify-otp) does. It sends an
-  // absolute ISO timestamp instead.
-  access_expires_at: string;
+  // Prefer the relative lifetime when available: absolute timestamps are
+  // interpreted against the device clock, which may be skewed.
+  expires_in?: number;
+  // Legacy refresh responses send an absolute ISO timestamp instead.
+  access_expires_at?: string;
   csrf_token?: string | null;
 }
 
@@ -412,20 +413,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await api.post('/auth/refresh', { refresh_token: candidate });
-          const { token, refresh_token: newRefresh, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
-          // publishTokensUnlocked wants a relative duration (seconds from now),
-          // matching the convention line ~380 above already uses when reading
-          // a persisted absolute expiry back out of storage.
-          const accessExpiresAtMs = Date.parse(access_expires_at);
+          const { token, refresh_token: newRefresh, expires_in, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
+          let expiresIn = typeof expires_in === 'number' && Number.isFinite(expires_in) && expires_in > 0
+            ? expires_in
+            : null;
+          if (expiresIn === null && typeof access_expires_at === 'string') {
+            const accessExpiresAtMs = Date.parse(access_expires_at);
+            if (Number.isFinite(accessExpiresAtMs)) {
+              // If supplied, the HTTP Date header provides a server-clock
+              // reference; anchor its remaining lifetime to the device clock.
+              const serverNowMs = Date.parse((res.headers as any)?.date ?? '');
+              expiresIn = Math.max(0, (accessExpiresAtMs - (Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) / 1000);
+            }
+          }
           // A malformed/incomplete response must never be persisted as a
-          // successful refresh -- that's exactly the CRIMSON-SMOKE-7445-10F/
-          // 10Y/SE bug class this fix exists to close (silently computing NaN
-          // and reporting success). Mirrors backgroundAuth.ts's validation.
+          // successful refresh. A valid token pair with a lifetime behind the
+          // device clock is still accepted at zero seconds: the refresh token
+          // has already rotated and must be retained for the next request.
           if (typeof token !== 'string' || !token || typeof newRefresh !== 'string' || !newRefresh ||
-              !Number.isFinite(accessExpiresAtMs) || accessExpiresAtMs <= Date.now()) {
+              expiresIn === null) {
             throw new Error('Token refresh returned invalid credentials');
           }
-          const expiresIn = (accessExpiresAtMs - Date.now()) / 1000;
           await publishTokensUnlocked(token, newRefresh, expiresIn, csrf_token, false);
           return true;
         } catch (e: unknown) {

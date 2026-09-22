@@ -127,6 +127,50 @@ beforeEach(() => {
 });
 
 describe('authStore.refreshTokens — rotation-race recovery', () => {
+  it.each([1, -1])('anchors expires_in to the device clock when it is skewed %s days', async skewDays => {
+    const realNow = Date.now();
+    jest.useFakeTimers().setSystemTime(realNow + skewDays * 24 * 60 * 60 * 1000);
+    try {
+      useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+      mockSecureStoreBacking.refresh_token = 'old-refresh';
+      mockPost.mockResolvedValueOnce({ data: {
+        token: 'new-access', refresh_token: 'successor-refresh', expires_in: 900,
+        access_expires_at: new Date(realNow + 900_000).toISOString(),
+      } }).mockResolvedValueOnce({ data: {
+        token: 'next-access', refresh_token: 'next-successor', expires_in: 900,
+      } });
+
+      expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+      expect(mockSecureStoreBacking.refresh_token).toBe('successor-refresh');
+      expect(Number(mockSecureStoreBacking.token_expires_at)).toBe(Date.now() + 900_000);
+      mockSecureStoreBacking.token_expires_at = '1';
+      useAuthStore.setState({ token: 'expired-access' });
+      expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+      expect(mockPost).toHaveBeenLastCalledWith('/auth/refresh', { refresh_token: 'successor-refresh' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the rotated successor and expires immediately for a legacy absolute timestamp behind the device clock', async () => {
+    const realNow = Date.now();
+    jest.useFakeTimers().setSystemTime(realNow + 24 * 60 * 60 * 1000);
+    try {
+      useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+      mockSecureStoreBacking.refresh_token = 'old-refresh';
+      mockPost.mockResolvedValueOnce({
+        data: { token: 'new-access', refresh_token: 'successor-refresh', access_expires_at: new Date(realNow + 900_000).toISOString() },
+        headers: { date: new Date(realNow).toUTCString() },
+      });
+      expect(await useAuthStore.getState().refreshTokens()).toBe(true);
+      expect(mockSecureStoreBacking.refresh_token).toBe('successor-refresh');
+      expect(Number(mockSecureStoreBacking.token_expires_at)).toBeGreaterThan(Date.now() + 899_000);
+      expect(Number(mockSecureStoreBacking.token_expires_at)).toBeLessThanOrEqual(Date.now() + 901_000);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('changes the capture epoch only on sign-in, preserving it through rotation', async () => {
     await useAuthStore.getState().setTokens('access-a', 'refresh-a', 1);
     const epoch = mockSecureStoreBacking['spinr_session_generation'];

@@ -727,6 +727,16 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             // travel → reported GPS heading (cold start only). See
             // selectBearing() / coalescePlaybackBearing() — per-tick chords
             // are often < 3 m even while driving.
+            //
+            // `movementConfirmed` is that same "the chord is short but the car
+            // is really moving" signal coalescePlaybackBearing already trusts
+            // for its spline tangent, handed to selectBearing so the ROUTE
+            // branch gets it too. Without it, 3 m per 500 ms tick meant the
+            // road's own direction was unreachable below ~21.6 km/h and the
+            // icon took the raw-GPS tangent instead — on-road position, but a
+            // heading pointing across the street through every slow stretch.
+            const movementConfirmed =
+                p.mode === 'interpolating' || p.mode === 'extrapolating';
             const selected = coalescePlaybackBearing(
                 selectBearing({
                     snap,
@@ -737,6 +747,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     hasMovementBearing: hasMovementBearingRef.current,
                     minMoveMeters: MIN_BEARING_MOVE_M,
                     courseReference: trackingOptionsRef.current.courseReference,
+                    movementConfirmed,
                 }),
                 { bearing: p.bearing, mode: p.mode },
             );
@@ -746,9 +757,11 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 if (
                     selected.source === 'route' ||
                     selected.source === 'travel' ||
-                    // 'reference' is only ever returned AFTER movement cleared
-                    // minMoveMeters and every movement-derived candidate was
-                    // refused — the same "movement has established a direction"
+                    // 'reference' is only ever returned AFTER movement was
+                    // established — this tick's chord cleared minMoveMeters, or
+                    // `movementConfirmed` said the buffer is mid-playback
+                    // between real fixes — and every movement-derived candidate
+                    // was refused: the same "movement has established a direction"
                     // precondition the two above represent. Leaving the latch
                     // unarmed for it reopens the raw-heading fallback, so a car
                     // that stopped after a vetoed stretch could be spun to north

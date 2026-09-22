@@ -49,6 +49,49 @@ it('renews expired credentials, persists the rotated pair, and supplies App Chec
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith('refresh_token', 'refresh-new', { keychainAccessible: 42 });
 });
 
+it.each([1, -1])('uses expires_in relative to device time when its clock is skewed %s days', async skewDays => {
+  const realNow = Date.now();
+  jest.useFakeTimers().setSystemTime(realNow + skewDays * 24 * 60 * 60 * 1000);
+  try {
+    (fetch as jest.Mock).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+      token: 'access-new', refresh_token: 'successor-refresh', expires_in: 900,
+      access_expires_at: new Date(realNow + 900_000).toISOString(),
+    }) });
+    expect(await renewBackgroundAuthToken()).toBe('access-new');
+    expect(mockStorage.refresh_token).toBe('successor-refresh');
+    expect(Number(mockStorage.token_expires_at)).toBe(Date.now() + 900_000);
+
+    mockStorage.token_expires_at = '1';
+    const restarted = createBackgroundTokenProvider();
+    (fetch as jest.Mock).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+      token: 'access-next', refresh_token: 'next-successor', expires_in: 900,
+    }) });
+    expect(await restarted()).toBe('access-next');
+    expect((fetch as jest.Mock).mock.calls[1][1].body).toBe(JSON.stringify({ refresh_token: 'successor-refresh' }));
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('uses the server Date header for legacy absolute expiry when the device clock is ahead', async () => {
+  const realNow = Date.now();
+  jest.useFakeTimers().setSystemTime(realNow + 24 * 60 * 60 * 1000);
+  try {
+    (fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => name.toLowerCase() === 'date' ? new Date(realNow).toUTCString() : null },
+      json: async () => ({ token: 'access-new', refresh_token: 'successor-refresh', access_expires_at: new Date(realNow + 900_000).toISOString() }),
+    });
+    expect(await renewBackgroundAuthToken()).toBe('access-new');
+    expect(mockStorage.refresh_token).toBe('successor-refresh');
+    expect(Number(mockStorage.token_expires_at)).toBeGreaterThan(Date.now() + 899_000);
+    expect(Number(mockStorage.token_expires_at)).toBeLessThanOrEqual(Date.now() + 901_000);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 it('concurrent callers reuse the winning rotation', async () => {
   expect(await Promise.all([renewBackgroundAuthToken(), renewBackgroundAuthToken()])).toEqual(['access-new', 'access-new']);
   expect(fetch).toHaveBeenCalledTimes(1);

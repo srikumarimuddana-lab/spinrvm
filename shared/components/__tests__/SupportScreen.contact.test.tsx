@@ -104,9 +104,16 @@ function textsInRenderOrder(node: any, out: string[] = []): string[] {
 }
 
 async function renderTab(initialTab: 'contact' | 'chat') {
-  let utils!: ReturnType<typeof render>;
+  // `render()` must stay OUTSIDE `act()`. On its first call RNTL runs
+  // `detectHostComponentNames`, which renders its own probe tree and reads
+  // `.root`; nesting that inside an outer `act()` tears the probe down before
+  // it is read, and every test in this file dies with
+  // "Can't access .root on unmounted test renderer" (all 12 did — see
+  // rider-app-test on 8ca66e69).
+  const utils = render(<SupportScreen role="rider" initialTab={initialTab} />);
+  // Then flush the mount effects' promises (/faqs, /company-info, /ai/config)
+  // so the screen has its settings-driven data before any assertion.
   await act(async () => {
-    utils = render(<SupportScreen role="rider" initialTab={initialTab} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return utils;

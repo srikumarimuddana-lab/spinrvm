@@ -8,7 +8,7 @@ The implementation was reviewed by GPT-6 Luna agents in developer and Spinr arch
 
 | Area | Behavior change | Affected surfaces |
 |---|---|---|
-| Refund lifecycle | Provider acceptance, pending, failure and success are distinct; durable operations support reconciliation | Stripe helpers, cancellation, webhooks, payment retry, manual reconciliation |
+| Refund lifecycle | Provider acceptance, pending, failure and success are distinct; durable operations support reconciliation; confirmed cumulative refunds update the ledger and ride summary atomically | Stripe helpers, cancellation, webhooks, payment retry, manual reconciliation |
 | Scheduled dispatch | Authorization attachment is conditional on current ride state; cancellation-winning paths compensate holds | Scheduled dispatch and cancellation |
 | Notice fee | Persist actual collected amount, outcome and reference separately from normal cancellation fees | Cancellation, operation recovery, rider trip details |
 | Live driver marker | Database row lock accepts only newer captures, no older than 60 seconds and no more than 5 seconds ahead | REST v1/v2, live endpoint, WebSocket, driver repository |
@@ -20,11 +20,13 @@ All money semantics retain the existing fee eligibility policy. No-driver cancel
 
 ## Database and rollout order
 
-1. Apply additive migrations **444** (payment operations and ride outcome columns) and **445** (capture timestamp and privileged atomic marker RPC) before the new backend. Existing backend can coexist with additive schema, but only upgraded writers enforce marker ordering; complete the rollout across both serving backend installations before treating ordering as guaranteed.
+1. Apply additive migrations **444** (payment operations and ride outcome columns) , **445** (capture timestamp and privileged atomic marker RPC), and **446** (atomic cumulative refund accounting) before the new backend. Existing backend can coexist with additive schema, but only upgraded writers enforce marker ordering and atomic refund accounting; complete the rollout across both serving backend installations before treating these guarantees as active. Do not run older manual refund repair scripts during or after the rollout.
 2. Configure the existing Stripe webhook endpoint to deliver `refund.updated` and `refund.failed` as well as its existing events. Keep event signing and deduplication enabled. Validate the updated endpoint in Stripe test mode before production.
 3. Deploy the backend and verify the existing payment-retry worker is healthy. Inspect unresolved operations and alert operational owners to exhausted/action-required rows; a database entry is not proof the customer received money.
 4. Publish compatible rider/driver builds after the normal mobile checks. Driver upload URL/payload/auth contracts remain compatible. Older clients can omit capture timestamps for direct single WebSocket pings; queued untimed history is never promoted to a live marker. Existing driver rows without timestamps become known on the next fresh fix.
 5. Verify the **actual environment value** of `background_location_fanout_enabled`. Migration 427 defaulted it off. This PR does not change production settings or silently enable it. After the device test below, deliberately enable it to obtain background REST-to-rider WebSocket delivery; with it disabled, riders still depend on polling.
+
+Successful provider reads that report a pending refund are polled every 15 minutes without consuming the error budget. Consecutive reconciliation exceptions use bounded backoff and require operational review if exhausted. Requested or pending refunds never count as confirmed refunded money.
 
 No production migrations, webhook settings, feature flags, refunds or mobile releases were executed by this PR preparation.
 
@@ -59,7 +61,7 @@ The timeout bounds each upload request, not native scheduling, the entire multi-
 
 ## Rollback
 
-Disable background REST fanout if delivery causes a problem; polling and durable history remain available. Roll back mobile/backend code together as needed, retaining additive database columns/tables and unresolved payment operations for reconciliation. Do not drop payment obligations or erase timestamps to roll back application code. Stop a faulty retry worker before reviewing unresolved provider actions. Migration 445's function may be removed only after no deployed backend calls it; schema removal is unnecessary for an application rollback.
+Disable background REST fanout if delivery causes a problem; polling and durable history remain available. Roll back mobile/backend code together as needed, retaining additive database columns/tables and unresolved payment operations for reconciliation. Do not drop payment obligations or erase timestamps to roll back application code. Stop a faulty retry worker before reviewing unresolved provider actions. Migration 445/446 functions may be removed only after no deployed backend or repair script calls them; schema removal is unnecessary for an application rollback.
 
 ## External contracts checked
 

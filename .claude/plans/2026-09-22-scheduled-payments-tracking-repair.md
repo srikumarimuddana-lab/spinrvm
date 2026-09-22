@@ -8,7 +8,7 @@ Extend existing cancellation, reconciliation, marker, and upload paths. Separate
 
 Alternative considered: patch only UI labels and increase polling frequency. Rejected because money obligations and stale database coordinates would remain incorrect. Prefer small service helpers and additive migrations over a new payment/tracking subsystem.
 
-Use root CLAUDE.md conventions: Decimal money, dual imports, no raw GPS/credentials in logs, no swallowed DB/payment failures, append-only migrations, service-role-only privileged operations. Split each implementation subtask into at most three files and commit it before starting the next. Each behavior commit carries its impact/validation note in the commit body; aggregate impact log will accompany the PR. Migration numbers reserved: 444 refund lifecycle, 445 location timestamp/order; coordinate any additional migrations with controller.
+Use root CLAUDE.md conventions: Decimal money, dual imports, no raw GPS/credentials in logs, no swallowed DB/payment failures, append-only migrations, service-role-only privileged operations. Split each implementation subtask into at most three files and commit it before starting the next. Each behavior commit carries its impact/validation note in the commit body; aggregate impact log will accompany the PR. Migration numbers reserved: 444 refund lifecycle, 445 location timestamp/order, 446 atomic cumulative refund accounting.
 
 ## Task 1: refund lifecycle and recovery
 

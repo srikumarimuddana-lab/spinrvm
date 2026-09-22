@@ -143,7 +143,11 @@ from ..fares import _fares_for_location_impl, get_fares_for_location
 try:
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.earnings_snapshot import build_earnings_snapshot
-    from ...utils.insurance_periods import record_period_transition, release_driver_and_close_period
+    from ...utils.insurance_periods import (
+        record_period_transition,
+        release_batch_offer_driver_and_close_period,
+        release_driver_and_close_period,
+    )
     from ...utils.live_activity import (
         EVENT_END,
         EVENT_UPDATE,
@@ -158,6 +162,7 @@ except ImportError:
     from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
     from utils.insurance_periods import (  # type: ignore[assignment]
         record_period_transition,
+        release_batch_offer_driver_and_close_period,
         release_driver_and_close_period,
     )
     from utils.live_activity import (  # type: ignore

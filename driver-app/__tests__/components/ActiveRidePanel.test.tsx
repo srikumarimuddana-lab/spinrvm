@@ -311,7 +311,7 @@ describe('automatic navigation hand-off', () => {
   beforeEach(() => {
     _resetAutoNavClaimForTest();
     (AsyncStorage.getItem as jest.Mock).mockResolvedValue(null);
-    (AsyncStorage.setItem as jest.Mock).mockResolvedValue(undefined);
+    (AsyncStorage.setItem as jest.Mock).mockClear().mockResolvedValue(undefined);
     openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
     canOpenURL = jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true as never);
     mockAutoNavigate = true;

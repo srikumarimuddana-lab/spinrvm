@@ -430,6 +430,19 @@ class TestDispatchServiceFindCandidates:
             limit=500,
         )
 
+    async def test_excludes_rider_owned_driver_before_returning_candidates(self):
+        db = _make_db()
+        rows = [
+            {"id": "self-driver", "user_id": "rider-1"},
+            {"id": "other-driver", "user_id": "driver-user-2"},
+        ]
+        db.get_rows = AsyncMock(return_value=rows)
+        svc = DispatchService(db)
+
+        out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "rider_id": "rider-1"})
+
+        assert [row["id"] for row in out] == ["other-driver"]
+
     async def test_required_area_drops_drivers_without_active_subscription(self):
         """A pass-required service area keeps only subscribed drivers."""
         db = _make_db()

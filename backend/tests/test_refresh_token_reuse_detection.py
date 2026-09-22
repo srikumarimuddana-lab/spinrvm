@@ -400,6 +400,7 @@ async def test_replay_seconds_after_a_logout_revoke_does_not_cascade_but_is_reco
 
     row = _revoked_row(audience="admin", user_id="admin-001")
     row["replaced_by"] = None
+    row["revocation_reason"] = "admin_logout_all"
     row["revoked_at"] = _seconds_ago(1.3)
 
     with (
@@ -422,7 +423,7 @@ async def test_replay_seconds_after_a_logout_revoke_does_not_cascade_but_is_reco
         assert audit_docs[0]["action"] == REUSE_AUDIT_ACTION
         details = json.loads(audit_docs[0]["details"])
         assert details["replayed_row_id"] == row["id"]
-        assert details["benign"] == "post_revoke_race"
+        assert details["benign"] == "explicit_revocation_replay"
         assert details["cascade_ok"] is False
 
         # That record must never count as a completed cascade.
@@ -431,10 +432,8 @@ async def test_replay_seconds_after_a_logout_revoke_does_not_cascade_but_is_reco
 
 
 @pytest.mark.asyncio
-async def test_post_revoke_race_window_is_admin_only():
-    """Rider/driver credential theft is the threat model the cascade exists
-    for, and the mobile clients await their logout before navigating, so the
-    same 1.3 s replay on a rider row still cascades."""
+async def test_legacy_post_revoke_replay_without_reason_still_cascades():
+    """Rows without explicit reason keep the conservative legacy behavior."""
     cascade_mock = AsyncMock()
     row = _revoked_row(audience="rider", user_id="user-rider-1")
     row["replaced_by"] = None
@@ -458,6 +457,7 @@ async def test_post_revoke_race_audit_insert_failure_never_reaches_the_auth_path
     cascade_mock = AsyncMock()
     row = _revoked_row(audience="admin", user_id="admin-001")
     row["replaced_by"] = None
+    row["revocation_reason"] = "admin_logout_all"
     row["revoked_at"] = _seconds_ago(2)
 
     with (
@@ -562,9 +562,7 @@ async def test_revoke_all_for_user_keeps_its_count_contract():
 
 @pytest.mark.asyncio
 async def test_recent_revocation_without_rotation_still_cascades():
-    """A token revoked WITHOUT a replacement (explicit logout / a prior
-    cascade) gets only the short same-client race window, never the 10-min
-    rotation grace: five minutes after a logout, a replay MUST still cascade."""
+    """A legacy non-rotation revocation without reason remains a theft signal."""
     cascade_mock = AsyncMock()
     row = _recently_revoked_rotated_row(replaced_by=None, revoked_at=_seconds_ago(5 * 60))
 
@@ -579,6 +577,137 @@ async def test_recent_revocation_without_rotation_still_cascades():
 
     assert result is None
     cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_explicit_logout_all_replay_rejects_only_revoked_session():
+    """A dead refresh token explicitly revoked by sign-out-all cannot be
+    exchanged, but replaying it must not log out a later fresh login."""
+    cascade_mock = AsyncMock()
+    row = _recently_revoked_rotated_row(
+        audience="rider",
+        replaced_by=None,
+        revocation_reason="logout_all",
+        revoked_at=_seconds_ago(60 * 60),
+    )
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        assert await lookup_refresh_token("old-logout-all-token") is None
+
+    cascade_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rotated_predecessor_replay_still_cascades_even_with_logout_reason():
+    """A revocation reason must never hide reuse of a rotated predecessor."""
+    cascade_mock = AsyncMock()
+    from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
+
+    row = _recently_revoked_rotated_row(
+        audience="driver",
+        revocation_reason="logout_all",
+        revoked_at=_seconds_ago(REFRESH_REUSE_GRACE_SECONDS + 1),
+    )
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        assert await lookup_refresh_token("replayed-rotated-token") is None
+
+    cascade_mock.assert_awaited_once_with(row)
+
+
+@pytest.mark.asyncio
+async def test_revoke_helpers_persist_explicit_reason():
+    update_mock = AsyncMock()
+    token_row = {"id": "rtk-single", "revoked_at": None}
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=token_row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[{"id": "rtk-bulk", "revoked_at": None}])),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+    ):
+        from utils.refresh_tokens import revoke_all_for_user_ids, revoke_refresh_token
+
+        assert await revoke_refresh_token("single-raw", reason="user_logout") is True
+        assert await revoke_all_for_user_ids("user-rider-1", reason="logout_all") == ["rtk-bulk"]
+
+    assert update_mock.await_count == 2
+    assert update_mock.await_args_list[0].args[2]["$set"]["revocation_reason"] == "user_logout"
+    assert update_mock.await_args_list[1].args[2]["$set"]["revocation_reason"] == "logout_all"
+
+
+@pytest.mark.asyncio
+async def test_revoke_refresh_token_falls_back_only_for_missing_reason_column():
+    missing_reason = RuntimeError("Could not find revocation_reason in refresh_tokens schema cache")
+    missing_reason.code = "PGRST204"
+    update_mock = AsyncMock(side_effect=[missing_reason, {"id": "rtk-single"}])
+
+    with (
+        patch(
+            "utils.refresh_tokens.db.find_one",
+            AsyncMock(return_value={"id": "rtk-single", "revoked_at": None}),
+        ),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+    ):
+        from utils.refresh_tokens import revoke_refresh_token
+
+        assert await revoke_refresh_token("single-raw", reason="user_logout") is True
+
+    assert update_mock.await_count == 2
+    assert "revocation_reason" in update_mock.await_args_list[0].args[2]["$set"]
+    assert "revocation_reason" not in update_mock.await_args_list[1].args[2]["$set"]
+
+
+@pytest.mark.asyncio
+async def test_revoke_refresh_token_does_not_fallback_for_an_unrelated_error():
+    unrelated = RuntimeError("Could not find another_column in schema cache")
+    unrelated.code = "PGRST204"
+    update_mock = AsyncMock(side_effect=unrelated)
+
+    with (
+        patch(
+            "utils.refresh_tokens.db.find_one",
+            AsyncMock(return_value={"id": "rtk-single", "revoked_at": None}),
+        ),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+    ):
+        from utils.refresh_tokens import revoke_refresh_token
+
+        assert await revoke_refresh_token("single-raw", reason="user_logout") is False
+
+    update_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bulk_revoke_falls_back_for_missing_reason_column_and_counts_success():
+    missing_reason = RuntimeError("column refresh_tokens.revocation_reason does not exist")
+    missing_reason.code = "42703"
+    update_mock = AsyncMock(side_effect=[missing_reason, {"id": "rtk-bulk"}])
+
+    with (
+        patch(
+            "utils.refresh_tokens.db.get_rows",
+            AsyncMock(return_value=[{"id": "rtk-bulk", "revoked_at": None}]),
+        ),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+    ):
+        from utils.refresh_tokens import revoke_all_for_user_ids
+
+        assert await revoke_all_for_user_ids("user-rider-1", reason="logout_all") == ["rtk-bulk"]
+
+    assert update_mock.await_count == 2
+    assert "revocation_reason" in update_mock.await_args_list[0].args[2]["$set"]
+    assert update_mock.await_args_list[1].args[2] == {"$set": {"revoked_at": update_mock.await_args_list[0].args[2]["$set"]["revoked_at"]}}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

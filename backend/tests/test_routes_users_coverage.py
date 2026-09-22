@@ -410,7 +410,7 @@ class TestDeleteAccountPipeda:
             assert result["success"] is True
             assert captured["status"] == "pending_deletion"
             assert captured["token_version"] == 2
-            revoke.assert_awaited_once_with("user-1")
+            revoke.assert_awaited_once_with("user-1", reason="account_deletion")
         finally:
             _stop(patches)
 

@@ -208,6 +208,40 @@ class TestAlreadyCapturedHoldRefund:
         assert "refund_amount" not in written
         assert written.get("payment_status") != "refunded"
 
+    @pytest.mark.parametrize(
+        "refund_outcome",
+        [
+            ChargeOutcome(status="failed", error_message="stripe unavailable"),
+            None,  # Stripe may have accepted the refund even though its response was lost.
+        ],
+        ids=["definite-failure", "ambiguous-response"],
+    )
+    async def test_nonzero_fee_is_not_charged_while_captured_refund_is_unresolved(self, refund_outcome):
+        update_ride_mock = AsyncMock()
+        refund_mock = AsyncMock(return_value=refund_outcome)
+        charge_mock = AsyncMock()
+        set_available = AsyncMock()
+        notify_driver = AsyncMock()
+
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.refund_excess_capture", refund_mock),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", charge_mock),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", set_available),
+            patch("backend.routes.rides._deps.manager.send_personal_message", notify_driver),
+            settings=FEE_SETTINGS,
+        ):
+            result = await _run_cancel()
+
+        assert result["success"] is True
+        refund_mock.assert_awaited_once()
+        charge_mock.assert_not_awaited()
+        set_available.assert_awaited()
+        notify_driver.assert_awaited()
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert "refund_amount" not in written
+        assert written.get("payment_status") != "partially_refunded"
+
     async def test_live_hold_never_takes_the_already_captured_path(self):
         """Sanity check: a ride with a LIVE hold (auth_status="authorized")
         must go through the existing _hold_is_live branch, never this one."""

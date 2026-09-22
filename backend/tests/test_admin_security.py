@@ -261,7 +261,7 @@ class TestLogoutInvalidatesToken:
                 json={"refresh_token": "fake-refresh-token"},
             )
         assert response.status_code == 200
-        mock_revoke.assert_awaited_once_with("fake-refresh-token")
+        mock_revoke.assert_awaited_once_with("fake-refresh-token", reason="admin_logout")
 
     def test_logout_without_token_still_succeeds(self, test_client):
         """Logout with no refresh token is a no-op (clears CSRF cookie)."""

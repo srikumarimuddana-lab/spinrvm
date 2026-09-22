@@ -15,9 +15,30 @@ claim-lost branches.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+
+
+def test_postgrest_conditional_update_returns_representation_without_select():
+    """Pin the installed synchronous PostgREST builder API used by cleanup.
+
+    update() already requests a representation via its returning argument;
+    its filter builder has no select() method, so chaining select would make
+    cancellation silently skip every release after catching AttributeError.
+    """
+    from supabase import create_client
+
+    client = create_client("http://localhost:54321", "test-key")
+    query = (
+        client.table("ride_offers")
+        .update({"status": "cancelled"}, returning="representation")
+        .eq("ride_id", "ride-1")
+        .eq("status", "pending")
+    )
+
+    assert not hasattr(query, "select")
+    assert query.request.headers["Prefer"] == "return=representation"
 
 pytestmark = pytest.mark.anyio
 
@@ -416,7 +437,7 @@ async def test_verify_reread_exception_still_flags_silent_no_op():
     assert exc_info.value.status_code == 500
 
 
-async def test_batch_pending_offers_cancelled_and_drivers_released():
+async def test_batch_cancel_releases_only_offers_it_atomically_cancelled():
     from backend.routes.rides.cancellation import cancel_ride_rider
 
     # Batch dispatch: no driver_id on the ride, offers live in ride_offers.
@@ -434,16 +455,60 @@ async def test_batch_pending_offers_cancelled_and_drivers_released():
         mock_db.find_one = AsyncMock(return_value=searching)
         _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
         mock_supabase.update_one = AsyncMock(return_value=cancelled)
-        mock_supabase.set_driver_available = AsyncMock(return_value=None)
         mock_supabase.get_driver_by_id = AsyncMock(return_value=offer_driver)
-        mock_supabase.run_sync = AsyncMock(
-            side_effect=[MagicMock(data=[{"driver_id": "offer-drv-1"}]), MagicMock(data=[])]
+        # A competing accept has already changed its offer out of pending;
+        # UPDATE ... WHERE status=pending RETURNING yields only this row.
+        offer_query = mock_supabase.supabase.table.return_value.update.return_value
+        offer_query.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"driver_id": "offer-drv-1"}]
         )
-
-        result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
+        mock_supabase.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        with patch(
+            "backend.routes.rides.cancellation._deps.release_batch_offer_driver_and_close_period", AsyncMock()
+        ) as release:
+            result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
 
     assert result["success"] is True
-    mock_supabase.set_driver_available.assert_awaited_once_with("offer-drv-1", True)
+    release.assert_awaited_once_with("offer-drv-1", ride_id=_RIDE_ID)
+    offer_query = mock_supabase.supabase.table.return_value.update.return_value
+    offer_query.eq.assert_called_once_with("ride_id", _RIDE_ID)
+    offer_query.eq.return_value.eq.assert_called_once_with("status", "pending")
+    mock_supabase.supabase.table.return_value.update.assert_called_once_with(
+        {"status": "cancelled", "responded_at": ANY}, returning="representation"
+    )
+
+
+async def test_batch_offer_notification_survives_insurance_release_exception():
+    from backend.routes.rides.cancellation import cancel_ride_rider
+
+    searching = _ride(status="searching", driver_id=None)
+    cancelled = _ride(status="cancelled", driver_id=None)
+    offer_driver = {"id": "offer-drv-1", "user_id": "offer-user-1"}
+    req = _starlette_request()
+
+    with (
+        patch("backend.routes.rides.cancellation._deps.db") as mock_db,
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.find_one = AsyncMock(return_value=searching)
+        _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
+        mock_supabase.get_driver_by_id = AsyncMock(return_value=offer_driver)
+        mock_supabase.run_sync = AsyncMock(return_value=MagicMock(data=[{"driver_id": "offer-drv-1"}]))
+        with patch(
+            "backend.routes.rides.cancellation._deps.release_batch_offer_driver_and_close_period",
+            AsyncMock(side_effect=RuntimeError("unexpected period-close failure")),
+        ) as release:
+            result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
+
+    assert result["success"] is True
+    release.assert_awaited_once_with("offer-drv-1", ride_id=_RIDE_ID)
+    mock_manager.send_personal_message.assert_any_await(
+        {"type": "ride_cancelled", "ride_id": _RIDE_ID, "reason": "Rider cancelled"},
+        "driver_offer-user-1",
+    )
 
 
 async def test_batch_pending_offer_driver_also_gets_push_not_just_ws():

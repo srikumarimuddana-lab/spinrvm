@@ -483,6 +483,23 @@ class DispatchService:
         if not rows:
             return rows
 
+        # ``rides.rider_id`` and ``drivers.user_id`` both reference users.
+        # Enforce after the DB/provider candidate read so every provider and
+        # caller excludes the rider's own driver account before ranking.
+        rider_id = ride.get("rider_id")
+        if rider_id is not None:
+            before = len(rows)
+            rows = [row for row in rows if str(row.get("user_id")) != str(rider_id)]
+            rejected = before - len(rows)
+            if rejected:
+                logger.info(
+                    "dispatch candidate rejection reason=rider_owned_driver rejected=%s remaining=%s",
+                    rejected,
+                    len(rows),
+                )
+            if not rows:
+                return rows
+
         try:
             present = await present_driver_ids([d["id"] for d in rows])
         except Exception as exc:

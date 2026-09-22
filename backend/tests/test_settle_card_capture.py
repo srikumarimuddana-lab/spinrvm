@@ -146,13 +146,108 @@ class TestCaptureOverBuffer:
             ctxs = [st.enter_context(p) for p in patches]
             # capture_ride is the 2nd-to-last patch, charge_ride the last
             charge_mock = ctxs[-1]
+            ledger_mock = ctxs[3]
             result = await settle_card(_held_ride(), RIDE_ID, RIDER_ID, Decimal("45.00"), Decimal("20.00"))
 
         assert result.success is True
         assert result.charged_amount == "45.00"  # 35 captured + 10 overflow
         # overflow charge was for the remainder only
         assert charge_mock.call_args.kwargs["total_amount"] == Decimal("10.00")
+        assert ledger_mock.call_args.kwargs["payment_components"] == {
+            "version": 1,
+            "items": [
+                {"payment_intent_id": "pi_hold", "amount_cents": 3500},
+                {"payment_intent_id": "pi_over", "amount_cents": 1000},
+            ],
+        }
         assert _last(updates, "payment_status") == "paid"
+        assert _last(updates, "paid_at") is not None
+
+    @pytest.mark.parametrize("overflow", ["0.01", "0.49"])
+    async def test_subminimum_overflow_preserves_hold_and_rejects_before_capture(self, overflow):
+        """A separate CAD charge below $0.50 cannot collect the overflow.
+        Keep the authorization intact and let the rider adjust the tip."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        patches, updates = _common_patches(
+            capture=_outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("35.00")),
+            charge=_outcome(status="succeeded", payment_intent_id="pi_over", charged_amount=Decimal(overflow)),
+        )
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            capture_mock, charge_mock = ctxs[-2:]
+            result = await settle_card(
+                _held_ride(), RIDE_ID, RIDER_ID, Decimal("35.00") + Decimal(overflow), Decimal("10.00") + Decimal(overflow)
+            )
+
+        assert result.success is False
+        assert result.error_code == "tip_overflow_below_minimum"
+        assert result.status_code == 400
+        assert result.extra["max_tip_amount"] == "10.00"
+        assert result.extra["min_separate_charge_tip_amount"] == "10.50"
+        assert "increase it to $10.50 or more" in result.error
+        capture_mock.assert_not_awaited()
+        charge_mock.assert_not_awaited()
+        assert _last(updates, "payment_status") == "pending"
+        assert _last(updates, "payment_intent_id") is None
+        assert _last(updates, "auth_status") is None
+
+    async def test_fifty_cent_overflow_can_be_captured_and_charged(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        cap = _outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("35.00"))
+        over = _outcome(status="succeeded", payment_intent_id="pi_over", charged_amount=Decimal("0.50"))
+        patches, updates = _common_patches(capture=cap, charge=over)
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            capture_mock, charge_mock = ctxs[-2:]
+            result = await settle_card(
+                _held_ride(), RIDE_ID, RIDER_ID, Decimal("35.50"), Decimal("10.50")
+            )
+
+        assert result.success is True
+        assert result.charged_amount == "35.50"
+        capture_mock.assert_awaited_once()
+        charge_mock.assert_awaited_once()
+        assert charge_mock.call_args.kwargs["total_amount"] == Decimal("0.50")
+
+    async def test_failed_increment_keeps_original_hold_for_rider_tip_adjustment(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        ride = _held_ride()
+        ride["auth_incrementable"] = True
+        increment = _outcome(status="failed", error_message="increment unsupported")
+        patches, updates = _common_patches(
+            capture=_outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("35.00")),
+            charge=_outcome(status="succeeded", payment_intent_id="pi_over", charged_amount=Decimal("0.49")),
+        )
+        patches.extend(
+            [
+                patch("backend.services.payment_service.increment_authorization", AsyncMock(return_value=increment)),
+                patch("backend.services.payment_service.cancel_authorization", AsyncMock()),
+            ]
+        )
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            increment_mock, release_mock = ctxs[-2:]
+            capture_mock, charge_mock = ctxs[6:8]
+            result = await settle_card(ride, RIDE_ID, RIDER_ID, Decimal("35.49"), Decimal("10.49"))
+
+        assert result.success is False
+        increment_mock.assert_awaited_once()
+        capture_mock.assert_not_awaited()
+        charge_mock.assert_not_awaited()
+        release_mock.assert_not_awaited()
+        assert _last(updates, "payment_status") == "pending"
 
     async def test_over_buffer_overflow_charge_fails_settles_captured_portion(self):
         """Overflow charge declines → fare+buffer captured, excess tip dropped,

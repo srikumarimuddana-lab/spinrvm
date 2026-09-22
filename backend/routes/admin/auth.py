@@ -625,7 +625,7 @@ async def admin_logout(
     takes the whole admin router (and therefore server boot) down.
     """
     if body.refresh_token:
-        await revoke_refresh_token(body.refresh_token)
+        await revoke_refresh_token(body.refresh_token, reason="admin_logout")
 
     if authorization:
         try:
@@ -711,7 +711,14 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
 
         new_version = int(staff.get("token_version") or 0) + 1
         await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
-    revoked = await revoke_all_for_user(user_id)
+    revoked = await revoke_all_for_user(user_id, reason="admin_logout_all")
+    await log_admin_action(
+        {"id": user_id, "role": "admin"},
+        "admin_logged_out_all",
+        "admin_staff",
+        user_id,
+        {"revoked_refresh_tokens": revoked, "token_version": new_version},
+    )
 
     # B-P1-11: kick any live admin WebSocket sockets (live monitoring
     # console, etc.) so the staff member is logged out instantly. See

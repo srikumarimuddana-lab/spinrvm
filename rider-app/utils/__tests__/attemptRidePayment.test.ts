@@ -31,6 +31,43 @@ const makeStripe = (
 });
 
 describe('attemptRidePayment', () => {
+  describe('unchargeable tip overflow', () => {
+    it.each([true, false])('keeps the tip editable without another charge (wrapped=%s)', async (wrapped) => {
+      const message = 'Choose a tip of $0.00 or at least $0.50 to complete payment.';
+      const detail = { code: 'tip_overflow_below_minimum', message };
+      const api = { post: jest.fn().mockRejectedValue({
+        response: { status: 400, data: wrapped ? { detail } : detail },
+      }) };
+      const stripe = makeStripe();
+
+      const result = await attemptRidePayment({ api, stripe, rideId: 'r1', tipAmount: 0.05 });
+
+      expect(result.ok).toBe(false);
+      expect(result.charged).toBeUndefined();
+      expect(result.heldForReview).toBeUndefined();
+      expect(result.alert).toEqual({
+        title: 'Adjust your tip', message, variant: 'warning',
+        buttons: [{ text: 'Edit tip', kind: 'cancel' }, { text: 'Contact Support', kind: 'support' }],
+      });
+      expect(api.post).toHaveBeenCalledTimes(1);
+      expect(api.post).toHaveBeenCalledWith('/rides/r1/process-payment', { tip_amount: 0.05 });
+      expect(stripe.confirmPayment).not.toHaveBeenCalled();
+    });
+
+    it('submits the rider’s adjusted amount on an explicit retry', async () => {
+      const api = { post: jest.fn()
+        .mockRejectedValueOnce({ response: { status: 400, data: { detail: {
+          code: 'tip_overflow_below_minimum', message: 'Choose a supported tip amount.',
+        } } } })
+        .mockResolvedValueOnce({ data: { success: true, charged_amount: 2.61 } }),
+      };
+      const deps = { api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0.05 };
+      expect((await attemptRidePayment(deps)).ok).toBe(false);
+      expect((await attemptRidePayment({ ...deps, tipAmount: 0.50 })).ok).toBe(true);
+      expect(api.post).toHaveBeenNthCalledWith(2, '/rides/r1/process-payment', { tip_amount: 0.50 });
+    });
+  });
+
   describe('success branch', () => {
     it('returns ok when backend says success=true', async () => {
       const api = makeApi(async () => ({

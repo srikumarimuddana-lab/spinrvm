@@ -226,8 +226,10 @@ _MIGRATION_FILES = (
     # line every direct_pool run installs 253's period-only no-op check — the
     # F4 bug itself — so any test asserting ride-identity behaviour would pass
     # against the broken function. Listed last because migrations apply in
-    # filename order and 421 is the highest number in this tuple.
+    # filename order. 442 adds the cancellation/claim serialization and
+    # ownership-checked release RPC exercised by batch cancellation tests.
     "421_insurance_period_ride_identity.sql",
+    "442_release_cancelled_batch_offer.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

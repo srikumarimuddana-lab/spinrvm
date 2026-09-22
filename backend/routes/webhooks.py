@@ -60,6 +60,63 @@ logger = logging.getLogger(__name__)
 # uncollected.
 _SETTLED_PAYMENT_STATUSES = SETTLED_PAYMENT_STATUSES
 
+
+def _verified_split_component(
+    ride: dict,
+    rows: list[dict],
+    *,
+    payment_intent_id: str,
+    received_cents: int,
+    owed_cents: int,
+) -> bool:
+    """Verify one PI against the settlement's explicit aggregate component map.
+
+    Only the aggregate charge row referenced by the ride's primary PI is
+    authoritative. Metadata by itself, a paid/processing flag, or arbitrary
+    ledger totals cannot bypass the ordinary underpayment guard.
+    """
+    primary_pi = ride.get("payment_intent_id")
+    if not primary_pi:
+        return False
+    for row in rows:
+        if row.get("ref") != primary_pi:
+            continue
+        aggregate_cents = row.get("delta_cents")
+        metadata = row.get("metadata") or {}
+        component_map = metadata.get("component_payment_intents") if isinstance(metadata, dict) else None
+        if not isinstance(component_map, dict) or component_map.get("version") != 1:
+            continue
+        items = component_map.get("items")
+        if not isinstance(items, list) or len(items) < 2 or not isinstance(aggregate_cents, int):
+            continue
+        component_amounts: dict[str, int] = {}
+        valid = True
+        for item in items:
+            if not isinstance(item, dict):
+                valid = False
+                break
+            component_pi = item.get("payment_intent_id")
+            component_cents = item.get("amount_cents")
+            if (
+                not isinstance(component_pi, str)
+                or not component_pi
+                or isinstance(component_cents, bool)
+                or not isinstance(component_cents, int)
+                or component_cents <= 0
+                or component_pi in component_amounts
+            ):
+                valid = False
+                break
+            component_amounts[component_pi] = component_cents
+        if (
+            valid
+            and component_amounts.get(primary_pi) is not None
+            and sum(component_amounts.values()) == aggregate_cents == owed_cents
+            and component_amounts.get(payment_intent_id) == received_cents
+        ):
+            return True
+    return False
+
 # metadata.source stamped by utils/stripe_charge.authorize_ride on the
 # booking-time hold. That PaymentIntent is created BEFORE the ride row exists
 # (routes/rides/booking.py pre-authorizes, then calls _insert_ride_with_code),
@@ -868,6 +925,31 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             # the same authoritative captured amount settlement and the nightly
             # reconciler use. Checking grand_total alone would let a fare-only
             # capture settle a ride that also has a persisted driver tip.
+            _payment_source = meta.get("source")
+            _booking_hold_in_flight = (
+                _payment_source == _PREAUTH_METADATA_SOURCE
+                and payment_intent_id == ride.get("payment_intent_id")
+            )
+            _completion_charge_in_flight = (
+                _payment_source == "ride_completion_charge"
+                # charge_ride stamps rider_id, not the generic webhook user_id.
+                and meta.get("rider_id") == ride.get("rider_id")
+            )
+            if (
+                ride.get("payment_status") == "processing"
+                and (_booking_hold_in_flight or _completion_charge_in_flight)
+            ):
+                # The main hold/fresh PI may succeed before the overflow PI
+                # and before process_payment persists the requested tip. Defer
+                # until the app's atomic finalizer has written its ledger proof.
+                if not await unclaim_stripe_event(event_id):
+                    logger.critical(
+                        "Stripe event %s could not be unclaimed while ride %s settlement was processing",
+                        event_id,
+                        ride_id,
+                    )
+                raise HTTPException(status_code=503, detail="Payment settlement is still being finalized; retry")
+
             owed = ride.get("grand_total")
             if owed is None:
                 owed = ride.get("total_fare", 0)
@@ -875,6 +957,65 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             owed_cents = int((owed_d.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP) * 100).to_integral_value())
             received_cents = int(data_object.get("amount_received") or 0)
             if received_cents < owed_cents:
+                # A hold capture plus its separately charged overflow uses one
+                # aggregate settlement ledger row. A component PI may be below
+                # the full fare+tip by itself; accept it only when that row
+                # explicitly binds its exact cents and both components sum to
+                # the exact obligation. Never infer this from payment_status.
+                try:
+                    _component_rows = await db_supabase.get_rows(
+                        "financial_events",
+                        {"ride_id": ride_id, "event_type": "stripe_charge", "ref": ride.get("payment_intent_id")},
+                        limit=1,
+                        columns="ref,delta_cents,metadata",
+                    )
+                except Exception as _component_err:
+                    logger.exception(
+                        "[webhook] split component ledger lookup failed ride=%s PI=%s: %s",
+                        ride_id,
+                        payment_intent_id,
+                        _component_err,
+                    )
+                    _component_rows = None
+                if _component_rows is None:
+                    if not await unclaim_stripe_event(event_id):
+                        logger.critical(
+                            "Stripe event %s could not be unclaimed while split settlement was pending; "
+                            "manual replay required for ride %s PI %s",
+                            event_id,
+                            ride_id,
+                            payment_intent_id,
+                        )
+                    raise HTTPException(status_code=503, detail="Payment settlement is still being recorded; retry")
+                _component_verified = _verified_split_component(
+                    ride,
+                    _component_rows,
+                    payment_intent_id=payment_intent_id,
+                    received_cents=received_cents,
+                    owed_cents=owed_cents,
+                )
+                _payment_status = str(ride.get("payment_status") or "").lower()
+                _settlement_finalized = _payment_status in _SETTLED_PAYMENT_STATUSES
+                _settlement_pending = _payment_status in ("pending", "failed", "processing")
+                if _component_verified and _settlement_finalized:
+                    # The authoritative app settlement already wrote paid and
+                    # the aggregate ledger proof. A component webhook is only
+                    # acknowledgement; do not replace the ride's primary PI or
+                    # append another aggregate charge row.
+                    await mark_stripe_event_processed(event_id)
+                    return {"received": True, "component_payment": True, "event_id": event_id}
+                if _settlement_pending:
+                    # A ledger map proves received funds but cannot finalize a
+                    # ride. Retry while pending/failed/processing until the
+                    # authoritative app settlement completes its paid flip.
+                    if not await unclaim_stripe_event(event_id):
+                        logger.critical(
+                            "Stripe event %s could not be unclaimed before ride %s settlement finished",
+                            event_id,
+                            ride_id,
+                        )
+                    raise HTTPException(status_code=503, detail="Payment settlement is still being finalized; retry")
+
                 # Permanent condition — retrying won't change the amounts.
                 # Leave the ride unpaid (payment_retry / reconciliation own it)
                 # but mark the EVENT processed: the refusal IS this event's

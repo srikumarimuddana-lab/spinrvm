@@ -144,6 +144,10 @@ async def cancel_ride_rider(
     # Non-zero only when the ALREADY-captured-hold branch below issues a real
     # Stripe refund. Feeds refund_amount / payment_status in the final update.
     _excess_refunded = Decimal("0")
+    # An already-captured hold must never fall through to another fee charge
+    # until its refund outcome is known. Keep this separate from the amount
+    # retained: zero retained money does not prove that a refund was rejected.
+    _captured_refund_unresolved = False
 
     # WS-8 (finding 11): the booking-time hold must not sit on the rider's card
     # for up to 7 days after a cancel. Two ways out, and which one we take
@@ -308,6 +312,7 @@ async def cancel_ride_rider(
                 ride_id,
                 getattr(_refund_outcome, "status", "raised"),
             )
+            _captured_refund_unresolved = True
 
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
@@ -330,7 +335,7 @@ async def cancel_ride_rider(
         # would bill the rider twice for one cancellation. That also covers the
         # capped case (fee larger than the hold): the shortfall is deliberately
         # written off rather than chased with a second charge.
-        if total_cancel_fee > 0 and fee_taken_from_hold <= 0:
+        if total_cancel_fee > 0 and fee_taken_from_hold <= 0 and not _captured_refund_unresolved:
             payment_method = (ride.get("payment_method") or "card").lower()
             if payment_method == "wallet":
                 rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": current_user["id"]})
@@ -592,58 +597,61 @@ async def cancel_ride_rider(
     # live in ride_offers. Without this block, drivers keep showing a
     # stale offer panel for a ride the rider already cancelled.
     try:
-        pending_offers = await _deps.db_supabase.run_sync(
+        _cancel_now = datetime.now(timezone.utc).isoformat()
+        # The UPDATE is the claim: only drivers whose pending offers this
+        # request actually changed to cancelled may be released. In particular,
+        # a concurrent accept flips its offer out of pending and retains its
+        # Period 2 obligation. RETURNING avoids a read-then-release race.
+        cancelled_offers = await _deps.db_supabase.run_sync(
             lambda: (
                 _deps.db_supabase.supabase.table("ride_offers")
-                .select("driver_id")
+                .update({"status": "cancelled", "responded_at": _cancel_now}, returning="representation")
                 .eq("ride_id", ride_id)
                 .eq("status", "pending")
                 .execute()
             )
         )
-        if pending_offers.data:
-            _cancel_now = datetime.now(timezone.utc).isoformat()
-            await _deps.db_supabase.run_sync(
-                lambda: (
-                    _deps.db_supabase.supabase.table("ride_offers")
-                    .update({"status": "cancelled", "responded_at": _cancel_now})
-                    .eq("ride_id", ride_id)
-                    .eq("status", "pending")
-                    .execute()
+        for offer_row in (getattr(cancelled_offers, "data", None) or []):
+            _offer_did = offer_row["driver_id"]
+            try:
+                await _deps.release_batch_offer_driver_and_close_period(_offer_did, ride_id=ride_id)
+            except Exception:
+                # A failed period close must be visible, but should not leave
+                # the driver app displaying an offer for an already-cancelled ride.
+                logger.opt(exception=True).error(
+                    "[CANCEL] batch-offer insurance release failed driver_id={} ride_id={}",
+                    _offer_did,
+                    ride_id,
                 )
-            )
-            for offer_row in pending_offers.data:
-                _offer_did = offer_row["driver_id"]
-                await _deps.db_supabase.set_driver_available(_offer_did, True)
-                try:
-                    _drv = await _deps.db_supabase.get_driver_by_id(_offer_did)
-                    _uid = (_drv or {}).get("user_id")
-                    if _uid:
-                        await _deps.manager.send_personal_message(
-                            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
-                            f"driver_{_uid}",
+            try:
+                _drv = await _deps.db_supabase.get_driver_by_id(_offer_did)
+                _uid = (_drv or {}).get("user_id")
+                if _uid:
+                    await _deps.manager.send_personal_message(
+                        {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
+                        f"driver_{_uid}",
+                    )
+                    # N5 follow-up (ACTION_ITEMS.md): same WS-only gap as
+                    # the assigned-driver case above, for the pending-offer
+                    # (batch dispatch) path. A driver with a pending offer
+                    # for this ride is actively deciding whether to accept
+                    # -- if their app is backgrounded when the rider
+                    # cancels, the WS message never reaches them and the
+                    # stale offer panel keeps showing a ride that's gone.
+                    # Same priority/target_app/backgrounding rationale as
+                    # the assigned-driver push above.
+                    _deps.spawn(
+                        _deps.send_push_notification(
+                            _uid,
+                            "Ride Cancelled",
+                            "The rider cancelled this ride.",
+                            data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                            priority="dispatch",
+                            target_app="driver",
                         )
-                        # N5 follow-up (ACTION_ITEMS.md): same WS-only gap as
-                        # the assigned-driver case above, for the pending-offer
-                        # (batch dispatch) path. A driver with a pending offer
-                        # for this ride is actively deciding whether to accept
-                        # -- if their app is backgrounded when the rider
-                        # cancels, the WS message never reaches them and the
-                        # stale offer panel keeps showing a ride that's gone.
-                        # Same priority/target_app/backgrounding rationale as
-                        # the assigned-driver push above.
-                        _deps.spawn(
-                            _deps.send_push_notification(
-                                _uid,
-                                "Ride Cancelled",
-                                "The rider cancelled this ride.",
-                                data={"type": "ride_cancelled", "ride_id": str(ride_id)},
-                                priority="dispatch",
-                                target_app="driver",
-                            )
-                        )
-                except Exception as _e:
-                    logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
+                    )
+            except Exception as _e:
+                logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
     except Exception as _batch_exc:
         logger.opt(exception=True).error(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}")
 

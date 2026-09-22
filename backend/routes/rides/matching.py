@@ -184,6 +184,28 @@ def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
     ]
 
 
+def _exclude_rider_owned_candidates(ride: dict, candidates: list[dict]) -> list[dict]:
+    """Drop a rider's own driver account before it can be ranked or claimed.
+
+    Candidate providers identify a driver row by ``id`` and its account by
+    ``user_id``; ``rides.rider_id`` is also a users.id. Keep this filter after
+    providers so legacy, H3/PostGIS, and fallback queries share the same guard.
+    """
+    rider_id = ride.get("rider_id")
+    if rider_id is None:
+        return candidates
+    kept = [candidate for candidate in candidates if str(candidate.get("user_id")) != str(rider_id)]
+    rejected = len(candidates) - len(kept)
+    if rejected:
+        # Aggregate only: no names, coordinates, or candidate identifiers.
+        logger.info(
+            "[DISPATCH] candidate rejection reason=rider_owned_driver rejected={} remaining={}",
+            rejected,
+            len(kept),
+        )
+    return kept
+
+
 # Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
 # ceiling, same 150 figure) — not imported from there to avoid a new
 # cross-module dependency on a private constant for a single int.
@@ -521,9 +543,10 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 limit=max_candidate_pool,
                 ride_id=ride_id,
             )
+            all_drivers = _exclude_rider_owned_candidates(ride, all_drivers)
 
             logger.info(
-                f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
+                f"[DISPATCH] candidate pool after rider-owned exclusion: {len(all_drivers)} drivers "
                 f"matching vehicle_type_id + online + available within {search_radius}km box"
             )
             if len(all_drivers) >= max_candidate_pool:
@@ -833,6 +856,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             limit=max_candidate_pool,
                             ride_id=ride_id,
                         )
+                        _casc_pool = _exclude_rider_owned_candidates(ride, _casc_pool)
                         # Fix 4: Presence filter using _checked variant so a Redis outage
                         # (configured-but-unavailable) cannot silently empty the cascade pool.
                         # present_driver_ids_checked returns (set, reachable=False) on failure;

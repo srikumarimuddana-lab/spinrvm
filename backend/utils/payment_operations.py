@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -149,53 +148,24 @@ async def finalize_refund_success(operation: Dict[str, Any]) -> None:
     except ImportError:  # pragma: no cover
         from utils.stripe_charge import read_capture_state  # type: ignore
     capture = await read_capture_state(ride_id=ride_id, payment_intent_id=payment_intent_id)
-    if not capture or capture.get("pending_refund_cents", 0):
-        raise RuntimeError("Refund aggregate is unavailable or another refund remains pending")
-    ride = await db.find_one("rides", {"id": ride_id})
-    if not ride:
-        raise RuntimeError("Ride missing while finalizing Stripe refund")
+    if not capture:
+        raise RuntimeError("Refund aggregate is unavailable or paginated; keep operation retryable")
     cumulative = int(capture.get("refunded_cents") or 0)
-    captured = int(capture.get("captured_cents") or 0)
-    if cumulative > captured:
-        raise RuntimeError("Stripe refund aggregate exceeds captured amount; manual review required")
-    previous_raw = ride.get("refund_amount")
-    previous = int((Decimal(str(previous_raw or 0)) * 100).quantize(Decimal("1")))
-    if cumulative < previous:
-        raise RuntimeError("Ride refund aggregate exceeds Stripe confirmed refunds; manual review required")
-    ride_update = {
-        "refund_amount": str((Decimal(cumulative) / 100).quantize(Decimal("0.01"))),
-        "payment_status": "refunded" if cumulative >= captured else "partially_refunded",
-        "refund_status": "succeeded",
-        "refund_id": operation.get("provider_object_id"),
-    }
-    update = await db.update_one("rides", {"id": ride_id, "refund_amount": previous_raw}, ride_update)
-    if not update:
-        current = await db.find_one("rides", {"id": ride_id})
-        current_cents = int((Decimal(str((current or {}).get("refund_amount") or 0)) * 100).quantize(Decimal("1")))
-        if current_cents != cumulative:
-            raise RuntimeError("Ride refund aggregate CAS lost; retry finalization")
-        ride = current or ride
-        if (ride.get("refund_status") != "succeeded" or
-                ride.get("refund_id") != operation.get("provider_object_id")):
-            repaired = await db.update_one("rides", {"id": ride_id}, ride_update)
-            if not repaired:
-                raise RuntimeError("Ride refund status repair failed; retry finalization")
-    else:
-        ride = {**ride, **ride_update}
+    provider_refund_id = operation.get("provider_object_id")
+    if cumulative <= 0 or (provider_refund_id and
+                           provider_refund_id not in (capture.get("succeeded_refund_ids") or [])):
+        raise RuntimeError("Stripe refund list has not confirmed this succeeded refund yet")
     try:
-        from ..services.payment_service import record_refund_event, refund_booked_cents
+        from ..services.payment_service import apply_confirmed_stripe_refund
     except ImportError:  # pragma: no cover
-        from services.payment_service import record_refund_event, refund_booked_cents  # type: ignore
-    already = await refund_booked_cents(payment_intent_id)
-    missing = cumulative - already
-    if missing > 0:
-        ledger_id = await record_refund_event(
-            ride_id=ride_id, user_id=str(ride.get("rider_id") or ""), refund_cents=missing,
-            payment_intent_id=payment_intent_id, ride=ride,
-            dedupe_key=f"stripe_refund|{payment_intent_id}|{cumulative}",
-        )
-        if ledger_id is None:
-            raise RuntimeError("Refund ledger finalization failed")
+        from services.payment_service import apply_confirmed_stripe_refund  # type: ignore
+    result = await apply_confirmed_stripe_refund(
+        ride_id=ride_id, payment_intent_id=payment_intent_id,
+        cumulative_refunded_cents=cumulative,
+        captured_cents=int(capture.get("captured_cents") or 0),
+    )
+    if result.get("outcome") == "stale":
+        raise RuntimeError("Refund accounting is ahead of Stripe; manual review required")
 
 
 async def reconcile_due_operations() -> int:

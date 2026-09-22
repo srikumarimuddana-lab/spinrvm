@@ -1387,7 +1387,7 @@ async def refund_excess_capture(
     )
 
 
-async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optional[Dict[str, int]]:
+async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optional[Dict[str, Any]]:
     """Read what Stripe says was captured and already refunded on ``payment_intent_id``.
 
     Read-only companion to :func:`refund_excess_capture`, for the operator-run
@@ -1447,6 +1447,7 @@ async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optiona
 
     refunded_cents = 0
     pending_refund_cents = 0
+    succeeded_refund_ids: list[str] = []
     for r in getattr(refunds, "data", None) or []:
         # A failed/cancelled refund never left the account — counting it would
         # understate what is still owed to the rider.
@@ -1455,6 +1456,9 @@ async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optiona
         amount = int(getattr(r, "amount", 0) or 0)
         if getattr(r, "status", None) == "succeeded":
             refunded_cents += amount
+            refund_id = getattr(r, "id", None)
+            if refund_id:
+                succeeded_refund_ids.append(str(refund_id))
         else:
             # Pending and requires_action prevent a duplicate but are not
             # represented as a completed refund in reports/accounting.
@@ -1464,4 +1468,5 @@ async def read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optiona
         "captured_cents": int(getattr(intent, "amount_received", 0) or 0),
         "refunded_cents": refunded_cents,
         "pending_refund_cents": pending_refund_cents,
+        "succeeded_refund_ids": succeeded_refund_ids,
     }

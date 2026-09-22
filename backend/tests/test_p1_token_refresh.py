@@ -115,6 +115,43 @@ class TestRefreshAccessToken:
         assert result.refresh_token == new_raw_token
         assert result.access_expires_at is not None
 
+    async def test_response_carries_expires_in_matching_access_ttl(self):
+        """Sentry CRIMSON-SMOKE-7445-10F/10Y/SE: driver-app's backgroundAuth.ts
+        and shared/store/authStore.ts both destructured a response.expires_in
+        that RefreshResponse never actually sent, so every background token
+        refresh (and, more subtly, every foreground one) treated a successful
+        rotation as a failure. RefreshResponse now carries expires_in as a
+        belt-and-suspenders duplicate of access_expires_at, matching
+        AuthResponse's existing field -- pin that it's present and correct so
+        this can't silently regress again."""
+        from backend.core.config import settings
+        from backend.routes import auth as auth_mod
+
+        refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
+
+        with (
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(
+                auth_mod,
+                "issue_refresh_token",
+                AsyncMock(return_value=("new-refresh-raw-xyz", "hashed", refresh_expires)),
+            ),
+            patch.object(auth_mod, "create_jwt_token", return_value="new-access-token-abc"),
+            patch.object(auth_mod, "get_real_client_ip", return_value="127.0.0.1"),
+        ):
+
+            class _Body:
+                refresh_token = "old-refresh-raw"
+
+            result = await auth_mod.refresh_access_token(
+                request=_make_request(user_agent="TestApp/1.0", refresh_token="old-refresh-raw"),
+                response=MagicMock(),
+                body=_Body(),
+            )
+
+        assert result.expires_in == settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+
     async def test_invalid_refresh_token_returns_401(self):
         """Revoked / unknown refresh tokens must return 401 without distinguishing
         between the failure modes (no oracle)."""

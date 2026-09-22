@@ -1749,6 +1749,15 @@ class RefreshResponse(BaseModel):
     access_expires_at: datetime
     refresh_expires_at: datetime
     csrf_token: Optional[str] = None
+    # Belt-and-suspenders duplicate of access_expires_at, matching
+    # AuthResponse's existing expires_in field (schemas.py) -- added after
+    # Sentry CRIMSON-SMOKE-7445-10F/10Y/SE: driver-app/authStore.ts clients
+    # were reading a nonexistent expires_in off this response and silently
+    # treating every refresh as invalid/corrupt. The real fix is on the
+    # client (read access_expires_at, an absolute timestamp, directly), but
+    # this closes the gap for any other consumer that assumes the same
+    # response shape as AuthResponse.
+    expires_in: int
 
 
 class LogoutRequest(BaseModel):
@@ -1895,6 +1904,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 

@@ -26,6 +26,7 @@
     "./utils/motion": "./utils/motion.ts",
     "./utils/routeSegments": "./utils/routeSegments.ts",
     "./utils/aiLocationMessages": "./utils/aiLocationMessages.ts",
+    "./utils/vehicleTracking": "./utils/vehicleTracking.ts",
     "./constants/routeMapStyle": "./constants/routeMapStyle.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",

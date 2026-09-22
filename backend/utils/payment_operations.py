@@ -130,8 +130,19 @@ async def reconcile_due_operations() -> int:
                 # A provider read is the only recovery action. Never charge a
                 # different card or create a second fee during reconciliation.
                 if not operation.get("payment_intent_id"):
-                    await update_operation(op_id, status="requires_action", next_attempt_at=None,
-                                           last_error="Fee has no provider reference; manual review required")
+                    metadata = operation.get("metadata") or {}
+                    outcome = metadata.get("outcome_status")
+                    if outcome:
+                        amount = int(metadata.get("collected_cents") or 0)
+                        await db.update_one("rides", {"id": ride_id}, {
+                            "scheduled_notice_fee_amount": str(__import__("decimal").Decimal(amount) / 100),
+                            "scheduled_notice_fee_status": "paid" if outcome == "succeeded" else outcome,
+                            "scheduled_notice_fee_payment_intent_id": None,
+                        })
+                        await update_operation(op_id, status=outcome, next_attempt_at=None)
+                    else:
+                        await update_operation(op_id, status="requires_action", next_attempt_at=None,
+                                               last_error="Fee has no provider reference; manual review required")
                     continue
                 try:
                     from .stripe_charge import _resolve_stripe_secret, stripe
@@ -144,15 +155,20 @@ async def reconcile_due_operations() -> int:
                 pi_status = str(getattr(pi, "status", "") or "")
                 if pi_status == "succeeded":
                     amount = int(getattr(pi, "amount_received", 0) or 0)
-                    await update_operation(op_id, status="succeeded", collected_cents=amount, next_attempt_at=None)
                     await db.update_one("rides", {"id": ride_id}, {
                         "scheduled_notice_fee_amount": str(__import__("decimal").Decimal(amount) / 100),
                         "scheduled_notice_fee_status": "paid",
                         "scheduled_notice_fee_payment_intent_id": operation["payment_intent_id"],
                     })
+                    await update_operation(op_id, status="succeeded", collected_cents=amount, next_attempt_at=None)
                 elif pi_status in {"requires_action", "requires_payment_method"}:
-                    await update_operation(op_id, status="requires_action", next_attempt_at=None,
-                                           last_error=f"PaymentIntent status: {pi_status}")
+                    await db.update_one("rides", {"id": ride_id}, {
+                        "scheduled_notice_fee_amount": "0.00",
+                        "scheduled_notice_fee_status": "requires_action" if pi_status == "requires_action" else "failed",
+                        "scheduled_notice_fee_payment_intent_id": operation["payment_intent_id"],
+                    })
+                    await update_operation(op_id, status="requires_action" if pi_status == "requires_action" else "failed",
+                                           next_attempt_at=None, last_error=f"PaymentIntent status: {pi_status}")
                 else:
                     await schedule_retry(op_id, attempt_count=int(operation["attempt_count"]), error=f"PaymentIntent status: {pi_status}")
                 continue

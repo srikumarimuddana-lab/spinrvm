@@ -818,17 +818,24 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
                 outcome_status = "failed"
         # Any other payment_method (e.g. company_allowance) is already
         # excluded by calculate_scheduled_cancel_notice_fee returning 0.
+        # Keep the operation due/pending until the ride-facing summary is
+        # persisted. If that write fails, the existing worker can rebuild it
+        # from this durable outcome metadata without charging again.
         await update_operation(
-            str(operation["id"]), status=outcome_status,
+            str(operation["id"]), status="pending",
             payment_intent_id=payment_intent_id, provider_object_id=payment_intent_id,
             collected_cents=_deps.ledger_to_cents(actual),
-            next_attempt_at=None if outcome_status in {"succeeded", "requires_action"} else None,
+            next_attempt_at=datetime.now(timezone.utc).isoformat(),
+            metadata={"outcome_status": outcome_status, "collected_cents": _deps.ledger_to_cents(actual)},
         )
         await _deps.db_supabase.update_one("rides", {"id": ride_id}, {
             "scheduled_notice_fee_amount": str(actual),
             "scheduled_notice_fee_status": "paid" if outcome_status == "succeeded" else outcome_status,
             "scheduled_notice_fee_payment_intent_id": payment_intent_id,
         })
+        await update_operation(
+            str(operation["id"]), status=outcome_status, next_attempt_at=None,
+        )
     except Exception as _fee_exc:
         logger.opt(exception=True).error(
             "[SCHED-CANCEL] notice-window fee charge failed for ride {}; cancellation already "

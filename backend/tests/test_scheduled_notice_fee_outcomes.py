@@ -35,8 +35,9 @@ async def test_wallet_notice_fee_records_only_actual_partial_collection():
 
     assert record.await_args.kwargs["amount_cents"] == 300
     assert wallet_update.await_args.kwargs["clamp_to_floor"] is True
-    assert update_op.await_args.kwargs["collected_cents"] == 50
-    assert update_op.await_args.kwargs["payment_intent_id"] == "txn1"
+    assert update_op.await_args_list[0].kwargs["collected_cents"] == 50
+    assert update_op.await_args_list[0].kwargs["payment_intent_id"] == "txn1"
+    assert update_op.await_args.kwargs["status"] == "succeeded"
     assert ride_update.await_args.args[2]["scheduled_notice_fee_amount"] == "0.50"
     assert ride_update.await_args.args[2]["scheduled_notice_fee_status"] == "paid"
 
@@ -68,8 +69,9 @@ async def test_card_authentication_required_is_saved_without_ledger_success():
     ):
         await _charge_scheduled_cancel_notice_fee(_ride("card"), "rider1")
 
+    assert update_op.await_args_list[0].kwargs["status"] == "pending"
+    assert update_op.await_args_list[0].kwargs["payment_intent_id"] == "pi_fee"
+    assert update_op.await_args_list[0].kwargs["collected_cents"] == 0
     assert update_op.await_args.kwargs["status"] == "requires_action"
-    assert update_op.await_args.kwargs["payment_intent_id"] == "pi_fee"
-    assert update_op.await_args.kwargs["collected_cents"] == 0
     assert ride_update.await_args.args[2]["scheduled_notice_fee_status"] == "requires_action"
     ledger.assert_not_awaited()

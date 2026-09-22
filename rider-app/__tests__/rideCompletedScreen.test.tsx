@@ -188,7 +188,7 @@ afterEach(() => {
 describe('RideCompletedScreen', () => {
   it('fetches the ride on mount', async () => {
     await renderScreen();
-    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
   });
 
   it('auto-dismisses (clears ride, goes home) once, when the ride is already paid on first load', async () => {
@@ -613,5 +613,181 @@ describe('RideCompletedScreen', () => {
     const r = await renderScreen();
     expect(allText(r)).toContain('Charged to the card you chose at booking. Any tip is included in the same charge.');
     expect(() => r.root.findByProps({ accessibilityLabel: 'Pay with Google Pay' })).toThrow();
+  });
+
+  // ── $0.00 payment prompt ────────────────────────────────────────────────
+  // `currentRide` is null in two windows where this screen is still mounted
+  // and painting: before the first fetchRide lands (a push-notification tap
+  // cold-starts into this screen), and right after handleSubmit's clearRide()
+  // during the transition to /(tabs). Both used to render "TRIP TOTAL $0.00"
+  // and a live, tappable "Pay $0.00 & Done".
+  describe('when the ride row has not loaded', () => {
+    it('renders a missing-total placeholder, never a $0.00 total', async () => {
+      mockRideState.currentRide = null;
+      const r = await renderScreen();
+      expect(allText(r)).toContain('—');
+      expect(allText(r)).not.toContain('$0.00');
+    });
+
+    it('quotes no amount on the submit button and turns it into a retry', async () => {
+      mockRideState.currentRide = null;
+      const r = await renderScreen();
+      const btn = r.root.findByProps({ accessibilityLabel: 'Retry loading your trip' });
+      // Deliberately NOT disabled. This screen blocks the hardware back button
+      // and sets gestureEnabled:false, so a dead control here is a trap with
+      // no way out — which is exactly what a rider on an unloaded receipt hits.
+      expect(btn.props.disabled).toBe(false);
+      expect(allText(r)).toContain('Loading your trip… tap to retry');
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+    });
+
+    it('re-fetches the ride rather than charging when that retry is pressed', async () => {
+      mockRideState.currentRide = null;
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const btn = r.root.findByProps({ accessibilityLabel: 'Retry loading your trip' });
+      await act(async () => {
+        btn.props.onPress();
+        await flush();
+      });
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
+      expect(mockAttemptRidePayment).not.toHaveBeenCalled();
+    });
+
+    it('still pays a legitimately $0.00 fully-covered ride', async () => {
+      // The gate keys on "ride loaded", not "fare > 0" — a comp / fully
+      // covered ride has a real $0.00 grand_total (see
+      // _authoritative_ride_charge) and must keep a working receipt + button.
+      mockRideState.currentRide = { ...CURRENT_RIDE, grand_total: '0.00', total_fare: '0.00' };
+      const r = await renderScreen();
+      expect(allText(r)).toContain('$0.00');
+      expect(r.root.findByProps({ accessibilityLabel: 'Pay and finish' }).props.disabled).toBe(false);
+    });
+  });
+
+  describe('after the charge lands', () => {
+    // The real clearRide() nulls currentRide and records the id in
+    // _clearedRideId. The bare jest.fn() does neither, so without this these
+    // tests would only prove the label swap while the ride stayed loaded —
+    // they would not reproduce the window the fix exists for (currentRide
+    // genuinely null while the screen is still mounted). Applied per-test
+    // rather than in beforeEach so the ~30 existing cases keep their
+    // current, deliberately inert clearRide.
+    const clearRideForReal = () =>
+      mockClearRide.mockImplementation(() => {
+        mockRideState.currentRide = null;
+        mockRideState._clearedRideId = 'ride-1';
+      });
+
+    // jest.clearAllMocks() in the shared beforeEach clears calls but NOT
+    // implementations, so without this the impl above would leak into every
+    // later test and start nulling currentRide inside them.
+    afterEach(() => {
+      mockClearRide.mockReset();
+    });
+
+    it('latches PAID so the still-mounted screen stops offering to charge again', async () => {
+      clearRideForReal();
+      const r = await renderScreen();
+      const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+      await act(async () => {
+        submitBtn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      // clearRide() has really nulled currentRide and this screen is still
+      // mounted for the transition — it must read as paid, and must never
+      // re-offer a payment or print a $0.00 total.
+      expect(mockRideState.currentRide).toBeNull();
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      expect(r.root.findByProps({ accessibilityLabel: 'Rate and finish' })).toBeTruthy();
+      expect(allText(r)).toContain('PAID');
+      expect(allText(r)).not.toContain('$0.00');
+    });
+
+    it('latches PAID on the Google Pay path too', async () => {
+      Platform.OS = 'android';
+      clearRideForReal();
+      mockPresentSheet.mockResolvedValue({ ok: true });
+      const r = await renderScreen();
+      const gpayBtn = r.root.findByProps({ accessibilityLabel: 'Pay with Google Pay' });
+      await act(async () => {
+        gpayBtn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      expect(allText(r)).toContain('PAID');
+      expect(allText(r)).not.toContain('$0.00');
+    });
+  });
+
+  describe('re-entered for a ride this client already finished with', () => {
+    it('asks the store for it with allowCleared, so it can actually load', async () => {
+      // Without the opt-in the store discards the response (it keeps a
+      // permanent latch for everything that fetches automatically), and the
+      // receipt renders $0.00 forever on a back-blocked route.
+      mockRideState._clearedRideId = 'ride-1';
+      await renderScreen();
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1', { allowCleared: true });
+    });
+
+    it('offers a plain Done exit while it is still unloaded, and never a retry', async () => {
+      // A retired ride has nothing left to wait for, so "tap to retry" would be
+      // a lie — but the button must still exist: the hardware back button is
+      // blocked and gestureEnabled is false, so this is the only way out.
+      mockRideState.currentRide = null;
+      mockRideState._clearedRideId = 'ride-1';
+      const r = await renderScreen();
+
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Retry loading your trip' })).toThrow();
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      const btn = r.root.findByProps({ accessibilityLabel: 'Done' });
+      expect(btn.props.disabled).toBe(false);
+      expect(allText(r)).not.toContain('$0.00');
+
+      await act(async () => {
+        btn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      expect(mockAttemptRidePayment).not.toHaveBeenCalled();
+    });
+
+    it('does NOT auto-navigate on mount, so a held-for-review alert can still show', async () => {
+      // An earlier draft bounced on mount whenever _clearedRideId matched. That
+      // defeated the store-side opt-in shipped alongside it, and preempted
+      // HELD_FOR_REVIEW_ALERT — handleSubmit's held branch calls clearRide()
+      // with nothing charged, and that ride is still unpaid.
+      mockRideState.currentRide = null;
+      mockRideState._clearedRideId = 'ride-1';
+      await renderScreen();
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it('stays put when the cleared ride is a different one', async () => {
+      mockRideState._clearedRideId = 'ride-OTHER';
+      const r = await renderScreen();
+      expect(mockReplace).not.toHaveBeenCalled();
+      expect(r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toBeTruthy();
+    });
+  });
+
+  describe('change-card escape while the ride is still unloaded', () => {
+    it('still charges the right ride and the carried-over tip', async () => {
+      // The payWithCard auto-retry fires on mount, which can be before
+      // fetchRide lands. This is why handleSubmit is deliberately NOT guarded
+      // on currentRide: the charge is settled server-side by rideId, and the
+      // tip is rehydrated from the URL, so neither depends on currentRide.
+      mockParams = { rideId: 'ride-1', payWithCard: 'pm_new', tip: '4', rated: '1' };
+      mockRideState.currentRide = null;
+      await renderScreen();
+      expect(mockAttemptRidePayment).toHaveBeenCalledWith(
+        expect.objectContaining({ rideId: 'ride-1', tipAmount: 4, paymentMethodId: 'pm_new' }),
+      );
+      // rated=1 was carried back, so the driver is not re-rated (which would
+      // re-accumulate the tip into driver_earnings).
+      expect(mockRateRide).not.toHaveBeenCalled();
+    });
   });
 });

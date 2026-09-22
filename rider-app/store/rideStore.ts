@@ -310,7 +310,16 @@ interface RideState {
     preauthorizedPaymentIntentId?: string,
     opts?: { allowSamePlace?: boolean },
   ) => Promise<Ride | RideRequiresAction>;
-  fetchRide: (rideId: string) => Promise<void>;
+  /**
+   * Load a ride into `currentRide`.
+   *
+   * `allowCleared` is for a caller that is deliberately loading ONE specific
+   * ride it names itself (a screen opening on a route param), and knows that
+   * ride may already have been retired locally by clearRide(). Everything that
+   * fetches automatically — polls, WebSocket echoes, foreground resume — must
+   * NOT pass it: see the guard in fetchRide for what those resurrect.
+   */
+  fetchRide: (rideId: string, opts?: { allowCleared?: boolean }) => Promise<void>;
   cancelRide: (reason?: string) => Promise<void>;
   simulateDriverArrival: () => Promise<void>;
   fetchSavedAddresses: () => Promise<void>;
@@ -367,6 +376,12 @@ interface RideState {
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
   _clearedRideId: string | null;
+  // Bumped every time a ride is retired locally (clearRide / cancelRide).
+  // fetchRide reads it before its request and again after, so it can tell a
+  // response that was *overtaken* by a clear from one the caller deliberately
+  // asked for *after* that clear. See the guard in fetchRide for why the
+  // difference matters.
+  _clearEpoch: number;
   wsConnected: boolean;
   setWsConnected: (v: boolean) => void;
 
@@ -394,6 +409,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   _lastEventVersion: -1,
   chatMessages: [],
   _clearedRideId: null,
+  _clearEpoch: 0,
   wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
@@ -831,19 +847,63 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  fetchRide: async (rideId) => {
+  fetchRide: async (rideId, opts) => {
     const driverFixAtStart = get()._lastDriverFix;
+    // Snapshot before the request goes out — see the guard below.
+    const clearEpochAtStart = get()._clearEpoch;
     try {
       // Only set isLoading on first fetch (when no ride data yet)
       if (!get().currentRide) {
         set({ isLoading: true });
       }
       const response = await api.get<Ride & { driver?: Driver | null }>(`/rides/${rideId}`);
-      // If clearRide() ran while this fetch was in-flight, discard the
-      // response so we don't re-populate the store with the old ride.
+      // Don't let a retired ride come back.
+      //
+      // clearRide() records the ride in `_clearedRideId` when the rider is done
+      // with it (paid, waived, held, cancelled). Two different things can then
+      // put it back, and they need different answers:
+      //
+      //  1. A response to a request that was ALREADY IN FLIGHT when the clear
+      //     landed. Always stale — `_clearEpoch` moves on every clear, so a
+      //     changed epoch means this response was overtaken. Discard, always,
+      //     even for an allowCleared caller.
+      //
+      //  2. A request ISSUED AFTER the clear. Discard by default, because
+      //     almost everything that reaches here does so automatically and would
+      //     resurrect a ride the rider has finished with:
+      //       - ride-status.tsx's poll effect re-runs the moment
+      //         `currentRide?.status` flips to undefined and re-fetches at once;
+      //       - useRiderSocket's `ride_status_changed` handler re-fetches
+      //         unconditionally, and the backend broadcasts exactly that on the
+      //         rider's own cancel (backend/routes/rides/cancellation.py);
+      //       - driver-arriving / driver-arrived / useRideLocationFallback each
+      //         hold an interval that can fire before the screen unmounts.
+      //     A resurrected ride is not cosmetic: fetchRide calls _persistRide, so
+      //     it is written to ACTIVE_RIDE_KEY and survives a restart, and
+      //     fetchActiveRide cannot undo it (its own `_clearedRideId` check
+      //     returns BEFORE the `clearRide()` cleanup at the end of that
+      //     function).
+      //
+      //     `allowCleared` is the opt-out, for a caller that names one specific
+      //     ride from a route param and means it — today only the receipt
+      //     screen, which must be able to re-open a ride it already paid for.
+      //     Without that escape the screen renders a permanent $0.00 fare on a
+      //     back-blocked route (the bug this whole change exists to fix).
+      //
+      // Intent, not timing, is what separates (2) from a legitimate reload —
+      // an earlier draft of this fix inferred it from the epoch alone and got
+      // it wrong, because the poll re-run above fires immediately, not late.
+      //
+      // fetchActiveRide's similar-looking check is deliberately left as a plain
+      // permanent latch: it guards server read-after-write lag (/rides/active
+      // still reporting a just-cancelled ride as active), which is a property of
+      // the server's state, not of who asked or when.
       if (get()._clearedRideId === rideId) {
-        set({ isLoading: false });
-        return;
+        const clearedMidFlight = get()._clearEpoch !== clearEpochAtStart;
+        if (clearedMidFlight || !opts?.allowCleared) {
+          set({ isLoading: false });
+          return;
+        }
       }
       // Don't overwrite a DIFFERENT ride's data. This prevents stale
       // in-flight fetches (from WS reconnect or poll intervals) from
@@ -893,7 +953,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       // server sends back is recognised as already-handled and skipped — without
       // this the echo re-toasts + re-navigates, restarting the toast animation
       // (the cancel-during-search flicker).
-      set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
+      set({
+        currentRide: null,
+        currentDriver: null,
+        isLoading: false,
+        _clearedRideId: currentRide.id,
+        _clearEpoch: get()._clearEpoch + 1,
+      });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {
       // 409 with a terminal current_status means the backend already cancelled/
@@ -905,7 +971,13 @@ export const useRideStore = create<RideState>((set, get) => ({
         error.status === 409 &&
         TERMINAL_STATUSES.has(String(error.details?.current_status ?? ''))
       ) {
-        set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
+        set({
+          currentRide: null,
+          currentDriver: null,
+          isLoading: false,
+          _clearedRideId: currentRide.id,
+          _clearEpoch: get()._clearEpoch + 1,
+        });
         AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
         return;
       }
@@ -1094,6 +1166,14 @@ export const useRideStore = create<RideState>((set, get) => ({
   // so that in-flight fetchRide calls for that ride are ignored. Without
   // this, the race (clearRide → fetchRide response arrives → currentRide
   // re-populated) traps the rider on ride-completed after paying.
+  //
+  // _clearEpoch moves on every clear so fetchRide can tell a response that was
+  // overtaken mid-flight from one issued afterwards; a deliberate later reload
+  // opts in with `allowCleared`. See the guard in fetchRide for why both exist.
+  // Two other consumers read _clearedRideId directly and keep the plain
+  // permanent semantics: fetchActiveRide (server read-after-write lag) and
+  // useRiderSocket's ride_cancelled handler (the server's echo of a cancel the
+  // rider already saw).
   clearRide: () => {
     // Fall back to the existing _clearedRideId when currentRide is already null:
     // performCancel() calls cancelRide() (which nulls currentRide and records
@@ -1107,6 +1187,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       chatMessages: [],
       error: null,
       _clearedRideId: clearedId ?? null,
+      // Marks the boundary an in-flight fetchRide is measured against.
+      _clearEpoch: get()._clearEpoch + 1,
       activeRideRouteCoords: null,
       activeDriverRouteCoords: null,
       lastEtaMin: null,

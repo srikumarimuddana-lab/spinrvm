@@ -50,8 +50,17 @@ interface CompanyInfo {
   website?: string;
 }
 
-const SUPPORT_PHONE_DISPLAY = '1-800-SPINR';
 const SUPPORT_EMAIL = 'support@spinr.ca';
+
+/** `tel:` target for an admin-configured number.
+ *
+ * Strips the spaces, dashes and parentheses an admin types into Settings →
+ * Company Info, keeping a leading `+` so an international number still dials.
+ */
+function telHref(phone: string): string {
+  const trimmed = phone.trim();
+  return `tel:${trimmed.startsWith('+') ? '+' : ''}${trimmed.replace(/\D/g, '')}`;
+}
 
 const WELCOME_MESSAGES: Record<Role, string> = {
   rider: "Hi! I'm Spinr's AI assistant. Ask me anything about your rides, payments, account, or how the app works.",
@@ -235,6 +244,14 @@ export default function SupportScreen({
         f.answer?.toLowerCase().includes(q),
     );
   }, [faqs, faqSearch]);
+
+  // Contact details on the Contact tab come from admin Settings → Company
+  // Info via /company-info. The email keeps a real fallback because body copy
+  // needs somewhere to send people; the phone deliberately has none — see the
+  // render below. Both are read into locals so the narrowed `supportPhone`
+  // stays narrowed inside the `onPress` closure.
+  const supportEmail = companyInfo.email || SUPPORT_EMAIL;
+  const supportPhone = companyInfo.phone;
 
   // ── Handlers ──
   const handleSubmitTicket = async () => {
@@ -602,21 +619,24 @@ export default function SupportScreen({
             </TouchableOpacity>
 
             <View style={styles.contactQuickRow}>
+              {/* No phone chip until one is configured: a placeholder number
+                  invites a call nobody answers, which is worse than showing
+                  only the channels we actually staff. */}
+              {!!supportPhone && (
+                <TouchableOpacity
+                  style={styles.contactChip}
+                  onPress={() => Linking.openURL(telHref(supportPhone))}
+                >
+                  <Ionicons name="call-outline" size={14} color={colors.primary} />
+                  <Text style={styles.contactChipText}>{supportPhone}</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={styles.contactChip}
-                onPress={() =>
-                  Linking.openURL(`tel:${SUPPORT_PHONE_DISPLAY.replace(/-/g, '')}`)
-                }
-              >
-                <Ionicons name="call-outline" size={14} color={colors.primary} />
-                <Text style={styles.contactChipText}>{SUPPORT_PHONE_DISPLAY}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.contactChip}
-                onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}
+                onPress={() => Linking.openURL(`mailto:${supportEmail}`)}
               >
                 <Ionicons name="mail-outline" size={14} color={colors.primary} />
-                <Text style={styles.contactChipText}>{SUPPORT_EMAIL}</Text>
+                <Text style={styles.contactChipText}>{supportEmail}</Text>
               </TouchableOpacity>
             </View>
 
@@ -629,11 +649,10 @@ export default function SupportScreen({
                   icon: 'location-outline',
                   text: companyInfo.address || 'Saskatoon, SK, Canada',
                 },
-                { icon: 'mail-outline', text: companyInfo.email || SUPPORT_EMAIL },
-                {
-                  icon: 'call-outline',
-                  text: companyInfo.phone || SUPPORT_PHONE_DISPLAY,
-                },
+                { icon: 'mail-outline', text: supportEmail },
+                // Same rule as the chip above: the phone row is omitted
+                // entirely rather than falling back to a placeholder.
+                ...(supportPhone ? [{ icon: 'call-outline', text: supportPhone }] : []),
                 { icon: 'globe-outline', text: companyInfo.website || 'www.spinr.ca' },
               ] as { icon: IoniconName; text: string }[]).map((row) => (
                 <View key={String(row.icon)} style={styles.companyRow}>

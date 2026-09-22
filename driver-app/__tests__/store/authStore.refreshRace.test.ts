@@ -98,6 +98,11 @@ const make401 = () => {
 // what production sends to refreshTokens' catch — the retry must detect it.
 const make401RawResponse = () => ({ status: 401, ok: false });
 
+// The real backend's RefreshResponse (backend/routes/auth.py) sends
+// access_expires_at as an absolute ISO timestamp, never expires_in -- fixtures
+// must match that real contract. See Sentry CRIMSON-SMOKE-7445-10F/10Y/SE.
+const futureIso = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+
 beforeEach(() => {
   let tail: Promise<unknown> = Promise.resolve();
   installSessionLock(work => {
@@ -126,11 +131,26 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     await useAuthStore.getState().setTokens('access-a', 'refresh-a', 1);
     const epoch = mockSecureStoreBacking['spinr_session_generation'];
     expect(epoch).toEqual(expect.any(String));
-    mockPost.mockResolvedValue({ data: { token: 'renewed-a', refresh_token: 'renewed-refresh-a', expires_in: 900 } });
+    mockPost.mockResolvedValue({ data: { token: 'renewed-a', refresh_token: 'renewed-refresh-a', access_expires_at: futureIso(900) } });
     expect(await useAuthStore.getState().refreshTokens()).toBe(true);
     expect(mockSecureStoreBacking['spinr_session_generation']).toBe(epoch);
     await useAuthStore.getState().setTokens('access-b', 'refresh-b', 900);
     expect(mockSecureStoreBacking['spinr_session_generation']).not.toBe(epoch);
+  });
+
+  it('rejects a malformed refresh response instead of persisting corrupted state', async () => {
+    // Sentry CRIMSON-SMOKE-7445-10F/10Y/SE class: a response missing/mangling
+    // access_expires_at must never be treated as a successful refresh (the old
+    // bug computed NaN and silently reported success). Covers the foreground
+    // refreshTokens() path, which had no equivalent guard until this fix --
+    // backgroundAuth.ts already validated its own response shape.
+    useAuthStore.setState({ token: 'old-access', refreshToken: 'old-refresh' });
+    mockSecureStoreBacking.refresh_token = 'old-refresh';
+    mockPost.mockResolvedValue({ data: { token: 'new-access', refresh_token: 'new-refresh' /* no access_expires_at */ } });
+    expect(await useAuthStore.getState().refreshTokens()).toBe(false);
+    expect(useAuthStore.getState().token).toBe('old-access');
+    expect(mockSecureStoreBacking.refresh_token).toBe('old-refresh');
+    expect(mockSecureStoreBacking.token_expires_at).toBeUndefined();
   });
 
   it('adopts a fresh background credential without rotating it again', async () => {
@@ -162,7 +182,7 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     const renewal = useAuthStore.getState().refreshTokens();
     await started;
     const ending = useAuthStore.getState().logout();
-    finish({ data: { token: 'new-access', refresh_token: 'new-refresh', expires_in: 900 } });
+    finish({ data: { token: 'new-access', refresh_token: 'new-refresh', access_expires_at: futureIso(900) } });
     await renewal;
     await ending;
     expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'new-refresh' });
@@ -236,7 +256,7 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
       // is accepted. Our fix should read storage first and send the fresh one.
       if (body.refresh_token === 'fresh-from-background') {
         return Promise.resolve({
-          data: { token: 'access-new', refresh_token: 'refresh-next', expires_in: 900 },
+          data: { token: 'access-new', refresh_token: 'refresh-next', access_expires_at: futureIso(900) },
           status: 200,
         });
       }
@@ -274,7 +294,7 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
       }
       if (body.refresh_token === 'rotated-forward') {
         return Promise.resolve({
-          data: { token: 'access-new', refresh_token: 'refresh-final', expires_in: 900 },
+          data: { token: 'access-new', refresh_token: 'refresh-final', access_expires_at: futureIso(900) },
           status: 200,
         });
       }
@@ -323,7 +343,7 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
       }
       if (body.refresh_token === 'winner-rotated') {
         return Promise.resolve({
-          data: { token: 'access-new', refresh_token: 'refresh-final', expires_in: 900 },
+          data: { token: 'access-new', refresh_token: 'refresh-final', access_expires_at: futureIso(900) },
           status: 200,
         });
       }

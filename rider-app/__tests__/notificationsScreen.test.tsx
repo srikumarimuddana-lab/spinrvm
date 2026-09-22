@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, RefreshControl } from 'react-native';
+import { TouchableOpacity, Text, RefreshControl, FlatList } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -209,6 +209,24 @@ describe('NotificationsScreen', () => {
 
     expect(allText(r)).toContain('Promo');
     expect(allText(r)).not.toContain('Ride update');
+  });
+
+  it('renders category tabs without creating a native horizontal list', async () => {
+    const r = await renderScreen();
+    expect(r.root.findAllByType(FlatList).some((list) => list.props.horizontal)).toBe(false);
+    expect(r.root.findAllByType(TouchableOpacity).filter((button) => button.props.accessibilityRole === 'tab')).toHaveLength(5);
+  });
+
+  it('resets the selected category when the screen is remounted', async () => {
+    const r = await renderScreen();
+    act(() => { findCardByTitle(r, 'Promotions').props.onPress(); });
+    expect(allText(r)).not.toContain('Ride update');
+
+    act(() => { r.unmount(); });
+    renderer = null;
+    const remounted = await renderScreen();
+    expect(allText(remounted)).toContain('Ride update');
+    expect(allText(remounted)).toContain('Promo');
   });
 
   it('routes to /lost-and-found-chat with the case id when present', async () => {

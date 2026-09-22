@@ -261,6 +261,21 @@ export async function attemptRidePayment(
       return { ok: false, alert: PROCESSOR_ERROR_ALERT };
     }
 
+    // A separate tip remainder below the processor minimum cannot be
+    // collected. The backend kept the authorization intact; dismissing this
+    // alert lets the rider edit their tip without retrying or changing cards.
+    if (status === 400 && code === 'tip_overflow_below_minimum') {
+      return {
+        ok: false,
+        alert: {
+          title: 'Adjust your tip',
+          message: message || 'Please adjust your tip amount before completing payment.',
+          variant: 'warning',
+          buttons: [{ text: 'Edit tip', kind: 'cancel' }, SUPPORT_BTN],
+        },
+      };
+    }
+
     if (status === 400 && typeof message === 'string' && message.startsWith('Minimum tip is')) {
       return { ok: false, alert: MIN_TIP_ALERT(message) };
     }

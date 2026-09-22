@@ -15,7 +15,7 @@ sb.rpc("record_insurance_period_transition", ...) accordingly.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -70,6 +70,51 @@ async def test_transition_period_1_to_period_2_with_ride() -> None:
         "record_insurance_period_transition",
         {"p_driver_id": "d1", "p_new_period": 2, "p_ride_id": "r99"},
     )
+
+
+@pytest.mark.anyio
+async def test_batch_offer_release_uses_only_transactional_ownership_rpc() -> None:
+    sb = _fake_supabase(rpc_data={"status": "released", "period": 1, "user_id": "u1"})
+    invalidate = AsyncMock()
+
+    async def _run_sync(fn, **kwargs):
+        return fn()
+
+    with (
+        patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(side_effect=_run_sync)),
+        patch("backend.repositories._base.invalidate_driver_cache", invalidate),
+    ):
+        result = await insurance_periods.release_batch_offer_driver_and_close_period("d1", ride_id="r1")
+
+    assert result == 1
+    invalidate.assert_awaited_once_with(driver_id="d1", user_id="u1")
+    sb.rpc.assert_called_once_with(
+        "release_batch_offer_driver_and_close_period",
+        {"p_driver_id": "d1", "p_ride_id": "r1"},
+    )
+    sb.table.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_batch_offer_release_fails_closed_on_ownership_mismatch() -> None:
+    sb = _fake_supabase(rpc_data={"status": "ownership_mismatch"})
+
+    async def _run_sync(fn, **kwargs):
+        return fn()
+
+    with (
+        patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(side_effect=_run_sync)),
+    ):
+        result = await insurance_periods.release_batch_offer_driver_and_close_period("d1", ride_id="r1")
+
+    assert result is None
+    sb.rpc.assert_called_once_with(
+        "release_batch_offer_driver_and_close_period",
+        {"p_driver_id": "d1", "p_ride_id": "r1"},
+    )
+    sb.table.assert_not_called()
 
 
 @pytest.mark.anyio

@@ -256,16 +256,12 @@ export default function NotificationsScreen() {
       </View>
 
       <View style={styles.tabsRow} accessibilityRole="tablist">
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={CATEGORY_TABS}
-          keyExtractor={(t) => t.key}
-          contentContainerStyle={styles.tabsContent}
-          renderItem={({ item }) => {
+        <View style={styles.tabsContent}>
+          {CATEGORY_TABS.map((item) => {
             const active = category === item.key;
             return (
               <TouchableOpacity
+                key={item.key}
                 style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
                 onPress={() => setCategory(item.key)}
                 accessibilityRole="tab"
@@ -274,8 +270,8 @@ export default function NotificationsScreen() {
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>{item.label}</Text>
               </TouchableOpacity>
             );
-          }}
-        />
+          })}
+        </View>
       </View>
 
       {isLoading ? (
@@ -396,10 +392,10 @@ function createStyles(colors: ThemeColors) {
       borderBottomWidth: 1, borderBottomColor: colors.border,
       paddingVertical: SPACING.sm,
     },
-    tabsContent: { paddingHorizontal: SPACING.md, gap: 8 },
+    tabsContent: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: SPACING.md, gap: 8 },
     tab: {
       paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-      backgroundColor: colors.surfaceLight, marginRight: 8,
+      backgroundColor: colors.surfaceLight,
       minHeight: 44, justifyContent: 'center',
     },
     tabText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },

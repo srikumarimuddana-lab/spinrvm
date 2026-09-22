@@ -1749,6 +1749,15 @@ class RefreshResponse(BaseModel):
     access_expires_at: datetime
     refresh_expires_at: datetime
     csrf_token: Optional[str] = None
+    # Belt-and-suspenders duplicate of access_expires_at, matching
+    # AuthResponse's existing expires_in field (schemas.py) -- added after
+    # Sentry CRIMSON-SMOKE-7445-10F/10Y/SE: driver-app/authStore.ts clients
+    # were reading a nonexistent expires_in off this response and silently
+    # treating every refresh as invalid/corrupt. The real fix is on the
+    # client (read access_expires_at, an absolute timestamp, directly), but
+    # this closes the gap for any other consumer that assumes the same
+    # response shape as AuthResponse.
+    expires_in: int
 
 
 class LogoutRequest(BaseModel):
@@ -1895,6 +1904,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 
@@ -2023,10 +2033,10 @@ async def logout(
     # Read refresh token from cookie if present
     refresh_token_from_cookie = request.cookies.get("refresh_token")
     if refresh_token_from_cookie:
-        await revoke_refresh_token(refresh_token_from_cookie)
+        await revoke_refresh_token(refresh_token_from_cookie, reason="user_logout")
     elif body and body.refresh_token:
         # Fallback to body for backwards compatibility
-        await revoke_refresh_token(body.refresh_token)
+        await revoke_refresh_token(body.refresh_token, reason="user_logout")
 
     # Delete the Redis session key so the revocation propagates instantly
     # to all replicas rather than waiting for the access-token TTL.
@@ -2178,7 +2188,17 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
             detail="Could not invalidate sessions",
         ) from e
 
-    revoked = await revoke_all_for_user(user_id)
+    revoked = await revoke_all_for_user(user_id, reason="logout_all")
+    try:
+        await _audit_log_user(
+            current_user,
+            "user_logged_out_all",
+            "users",
+            user_id,
+            {"revoked_refresh_tokens": revoked, "token_version": new_version},
+        )
+    except Exception:
+        logger.error("audit_log write failed for logout-all event", exc_info=True)
 
     # Fold the driver go-offline into this request so the client does not
     # PUT /drivers/{id}/status with a just-revoked token. Best-effort —

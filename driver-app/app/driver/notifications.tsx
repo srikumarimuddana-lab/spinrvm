@@ -297,28 +297,24 @@ function NotificationsScreen() {
                     {unreadCount > 0 && (
                         <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
                     )}
-                    <FlatList
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        data={CATEGORY_TABS}
-                        keyExtractor={(tab) => tab.key}
-                        style={styles.tabsRow}
-                        contentContainerStyle={styles.tabsContent}
-                        accessibilityRole="tablist"
-                        renderItem={({ item: tab }) => {
-                            const active = category === tab.key;
-                            return (
-                                <TouchableOpacity
-                                    style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
-                                    onPress={() => setCategory(tab.key)}
-                                    accessibilityRole="tab"
-                                    accessibilityState={{ selected: active }}
-                                >
-                                    <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
-                                </TouchableOpacity>
-                            );
-                        }}
-                    />
+                    <View style={styles.tabsRow} accessibilityRole="tablist">
+                        <View style={styles.tabsContent}>
+                            {CATEGORY_TABS.map((tab) => {
+                                const active = category === tab.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={tab.key}
+                                        style={[styles.tab, active && { backgroundColor: colors.primaryDark }]}
+                                        onPress={() => setCategory(tab.key)}
+                                        accessibilityRole="tab"
+                                        accessibilityState={{ selected: active }}
+                                    >
+                                        <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    </View>
                 </LinearGradient>
             }
             // Keeps the back button / "Mark All Read" reachable while
@@ -434,10 +430,10 @@ function createStyles(colors: ThemeColors) {
             textAlign: 'center',
         },
         tabsRow: { marginTop: SPACING.sm },
-        tabsContent: { gap: 8, paddingBottom: 2 },
+        tabsContent: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 2 },
         tab: {
             paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-            backgroundColor: colors.surfaceLight, marginRight: 8,
+            backgroundColor: colors.surfaceLight,
             minHeight: 44, justifyContent: 'center',
         },
         tabText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },

@@ -51,8 +51,13 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
             throw new Error(`Background token refresh HTTP ${response.status}`);
           }
           const data = await Promise.race([response.json(), deadline]);
+          // /auth/refresh's RefreshResponse (backend/routes/auth.py) never sends
+          // expires_in -- only AuthResponse (login/verify-otp) does. It sends
+          // access_expires_at as an absolute ISO timestamp instead; read that
+          // directly rather than re-deriving a relative duration.
+          const accessExpiresAtMs = Date.parse(data.access_expires_at);
           if (typeof data.token !== 'string' || !data.token || typeof data.refresh_token !== 'string' ||
-              !data.refresh_token || !Number.isFinite(data.expires_in) || data.expires_in <= 0) {
+              !data.refresh_token || !Number.isFinite(accessExpiresAtMs) || accessExpiresAtMs <= Date.now()) {
             throw new Error('Background token refresh returned invalid credentials');
           }
           // All current writers use the lock. These fences also protect against
@@ -63,7 +68,7 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           // can still renew using the credential the server now recognizes.
           await SecureStore.setItemAsync('refresh_token', data.refresh_token, sessionKeychainOptions);
           await SecureStore.setItemAsync('fg_access_token', data.token, sessionKeychainOptions);
-          await SecureStore.setItemAsync('token_expires_at', String(Date.now() + data.expires_in * 1000), sessionKeychainOptions);
+          await SecureStore.setItemAsync('token_expires_at', String(accessExpiresAtMs), sessionKeychainOptions);
           failedCandidate = null;
           retryAfter = 0;
           return await SecureStore.getItemAsync(SESSION_ENDED_KEY) ? null : data.token;

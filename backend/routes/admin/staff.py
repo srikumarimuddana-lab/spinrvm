@@ -331,7 +331,7 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
             # Bump token_version so the dependency gate rejects all existing
             # access tokens for this staff member immediately (audit [03-2]).
             updates["token_version"] = int(s.get("token_version") or 0) + 1
-            await revoke_all_for_user(staff_id)
+            await revoke_all_for_user(staff_id, reason="admin_action")
     if req.role is not None:
         updates["role"] = req.role
         if req.role in ROLE_PRESETS:
@@ -370,7 +370,7 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
     _modules_changed = "modules" in updates and updates["modules"] != (s.get("modules") or [])
     if (_role_changed or _modules_changed) and "token_version" not in updates:
         updates["token_version"] = int(s.get("token_version") or 0) + 1
-        await revoke_all_for_user(staff_id)
+        await revoke_all_for_user(staff_id, reason="admin_action")
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -432,7 +432,7 @@ async def reset_staff_mfa(staff_id: str, admin: dict = Depends(require_role("sup
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-    await revoke_all_for_user(staff_id)
+    await revoke_all_for_user(staff_id, reason="admin_action")
     await db_supabase.insert_one(
         "audit_logs",
         {
@@ -462,7 +462,7 @@ async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(re
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     # Revoke all refresh tokens before the row is gone so any in-flight
     # session cannot exchange a refresh token after deletion (audit [03-3]).
-    await revoke_all_for_user(staff_id)
+    await revoke_all_for_user(staff_id, reason="admin_action")
     await db_supabase.delete_many("admin_staff", {"id": staff_id})
     await db_supabase.insert_one(
         "audit_logs",

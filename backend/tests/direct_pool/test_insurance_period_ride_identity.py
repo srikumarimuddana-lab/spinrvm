@@ -52,6 +52,13 @@ def f4_driver(pg_cur):
             """,
             (ride_id, lat),
         )
+        # Migration 442 validates that a Period-2 write for a searching ride
+        # belongs to a real live offer. Keep each fixture ride in that valid
+        # state so these tests continue to exercise ride-identity semantics.
+        pg_cur.execute(
+            "INSERT INTO ride_offers (ride_id, driver_id, status) VALUES (%s, 'f4_d', 'pending')",
+            (ride_id,),
+        )
     return "f4_d"
 
 

@@ -292,7 +292,11 @@ class PaymentResult:
 
 
 def _charge_event_metadata(
-    ride: dict | None, tip_amount: Decimal | None, *, source: str = "process_payment"
+    ride: dict | None,
+    tip_amount: Decimal | None,
+    *,
+    source: str = "process_payment",
+    payment_components: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Metadata for a stripe_charge ledger header.
 
@@ -332,6 +336,11 @@ def _charge_event_metadata(
                 "tax_breakdown": ride.get("tax_breakdown") or {},
             }
         )
+    if payment_components:
+        # One aggregate settlement row can represent a fare hold and a
+        # separately charged overflow. Keep those Stripe components explicit
+        # so webhooks can prove the exact funds against the aggregate.
+        meta["component_payment_intents"] = payment_components
     return meta
 
 
@@ -344,6 +353,7 @@ async def record_payment_event(
     ride: dict | None = None,
     tip_amount: Decimal | None = None,
     source: str = "process_payment",
+    payment_components: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Append a stripe_charge row to the financial_events ledger.
 
@@ -358,7 +368,7 @@ async def record_payment_event(
     ledger_projection background loop derives them from the ride row once
     the ``ledger_double_entry_enabled`` app_settings flag is on.
     """
-    meta = _charge_event_metadata(ride, tip_amount, source=source)
+    meta = _charge_event_metadata(ride, tip_amount, source=source, payment_components=payment_components)
     # No legs= here by design: double-entry legs are derived asynchronously by
     # the ledger_projection loop (single-writer invariant — only the projection
     # writes financial_event_entries). It decomposes from the ride row AFTER
@@ -1792,6 +1802,7 @@ async def _finalize_card_settlement(
     tip_collected: Decimal,
     auth_status: Optional[str] = None,
     extra_ride_fields: Optional[Dict[str, Any]] = None,
+    payment_components: Optional[Dict[str, Any]] = None,
 ) -> "PaymentResult":
     """Post-charge finalizer shared by the capture-hold and fresh-charge paths.
 
@@ -1837,7 +1848,7 @@ async def _finalize_card_settlement(
                 amount_cents=amount_cents,
                 payment_intent_id=payment_intent_id,
                 tip_amount=_round(tip_collected),
-                metadata=_charge_event_metadata(ride, tip_collected),
+                metadata=_charge_event_metadata(ride, tip_collected, payment_components=payment_components),
                 auth_status=auth_status,
             )
         except ledger_repo.SettleRpcUnavailable as err:
@@ -1908,6 +1919,7 @@ async def _finalize_card_settlement(
                         payment_intent_id=payment_intent_id,
                         ride=ride,
                         tip_amount=tip_collected,
+                        payment_components=payment_components,
                     )
                 await _send_payment_completed_ws(ride_id, rider_id, settled_amount)
                 return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
@@ -1940,14 +1952,17 @@ async def _finalize_card_settlement(
         payment_intent_id=payment_intent_id,
         ride=ride,
         tip_amount=tip_collected,
+        payment_components=payment_components,
     )
+    _settled_at = datetime.now(timezone.utc).isoformat()
     try:
         await db_supabase.update_ride(
             ride_id,
             {
                 "payment_status": "paid",
                 "payment_intent_id": payment_intent_id,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "paid_at": _settled_at,
+                "updated_at": _settled_at,
                 **({"auth_status": auth_status} if auth_status else {}),
                 **(extra_ride_fields or {}),
                 **_tip_ride_update(ride, tip_collected),
@@ -2040,6 +2055,37 @@ async def _settle_against_hold(
                 inc.error_message,
             )
 
+    # CAD card charges below $0.50 cannot be collected by Stripe. A tip can
+    # leave exactly this unchargeable remainder above the fare-only hold. Do
+    # not capture the hold and then lose that tip: return the payment claim to
+    # pending, leave the original authorization/PI untouched, and let the rider
+    # adjust the tip before retrying. This runs after the optional increment
+    # attempt but before capture, so an accepted increment still covers all.
+    remainder = _round(total_charge - authorized)
+    fare_amount = _round(total_charge - tip_amount)
+    if Decimal("0") < remainder < Decimal("0.50") and tip_amount > 0 and authorized >= fare_amount:
+        max_tip = _round(authorized - fare_amount)
+        min_separate_tip = _round(max_tip + Decimal("0.50"))
+        await db_supabase.update_ride(
+            ride_id,
+            {"payment_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        return PaymentResult(
+            success=False,
+            error_code="tip_overflow_below_minimum",
+            error=(
+                "This tip leaves a separate card charge below $0.50, which cannot be processed. "
+                f"Your authorization is preserved. Reduce the tip to ${_money_str(max_tip)} or less, "
+                f"or increase it to ${_money_str(min_separate_tip)} or more, then retry."
+            ),
+            status_code=400,
+            extra={
+                "suggested_action": "adjust_tip",
+                "max_tip_amount": _money_str(max_tip),
+                "min_separate_charge_tip_amount": _money_str(min_separate_tip),
+            },
+        )
+
     capture_amount = _round(min(total_charge, authorized))
     cap = await capture_ride(ride_id=ride_id, payment_intent_id=held_pi, amount=capture_amount)
 
@@ -2120,6 +2166,7 @@ async def _settle_against_hold(
     remainder = _round(total_charge - capture_amount)
     tip_collected = _round(tip_amount)
     extra_charged = Decimal("0")
+    payment_components: Optional[Dict[str, Any]] = None
     if remainder > 0:
         # Tip exceeded the buffer; charge the overflow on a fresh PaymentIntent.
         over = await charge_ride(
@@ -2131,6 +2178,28 @@ async def _settle_against_hold(
         )
         if over.status == "succeeded":
             extra_charged = remainder
+            # The ledger header is aggregate for both captures. Preserve the
+            # exact Stripe PI/cents pairs before the authoritative paid flip.
+            _capture_pi = cap.payment_intent_id or held_pi
+            if not _capture_pi or not over.payment_intent_id:
+                logger.critical(
+                    "[PAYMENT] split settlement succeeded without both PI references ride={} hold_pi={} overflow_pi={}",
+                    ride_id,
+                    _capture_pi,
+                    over.payment_intent_id,
+                )
+                return PaymentResult(
+                    success=False,
+                    error="Payment was captured but its component references could not be verified. Do not retry.",
+                    status_code=503,
+                )
+            payment_components = {
+                "version": 1,
+                "items": [
+                    {"payment_intent_id": _capture_pi, "amount_cents": ledger_service.to_cents(capture_amount)},
+                    {"payment_intent_id": over.payment_intent_id, "amount_cents": ledger_service.to_cents(remainder)},
+                ],
+            }
         else:
             # Fare + within-buffer tip are captured; only the EXCESS tip failed.
             # Settle what we actually collected rather than stranding a paid
@@ -2158,6 +2227,7 @@ async def _settle_against_hold(
         payment_intent_id=cap.payment_intent_id,
         tip_collected=tip_collected,
         auth_status="captured",
+        payment_components=payment_components,
     )
 
 

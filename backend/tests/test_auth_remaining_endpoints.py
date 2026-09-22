@@ -77,7 +77,7 @@ class TestLogout:
             current_user = {"id": "u1"}
             result = await inner(request, MagicMock(), body=None, current_user=current_user)
 
-        revoke.assert_awaited_once_with("cookie-raw-token")
+        revoke.assert_awaited_once_with("cookie-raw-token", reason="user_logout")
         redis_del.assert_awaited_once_with("session:u1")
         assert result == {"success": True}
 
@@ -97,7 +97,7 @@ class TestLogout:
             body = LogoutRequest(refresh_token="body-raw-token")
             result = await inner(request, MagicMock(), body=body, current_user={"id": "u2"})
 
-        revoke.assert_awaited_once_with("body-raw-token")
+        revoke.assert_awaited_once_with("body-raw-token", reason="user_logout")
         assert result == {"success": True}
 
     @pytest.mark.asyncio

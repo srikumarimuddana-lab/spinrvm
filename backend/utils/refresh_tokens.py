@@ -34,9 +34,11 @@ from loguru import logger
 try:
     from ..core.config import settings
     from ..db import db
+    from ..utils.error_handling import db_error_text, pg_error_code
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
+    from utils.error_handling import db_error_text, pg_error_code
 
 # audiences for which token_version lives on the `users` table; admin
 # audiences live on `admin_staff`. Anything else is rejected at the
@@ -72,18 +74,16 @@ _REFRESH_TOKEN_BYTES = 48
 # escalates.
 REFRESH_REUSE_GRACE_SECONDS = 600
 
-# Grace window for a token revoked WITHOUT rotation (explicit logout, logout-all,
-# a prior cascade) and replayed moments later. Observed 2026-09-12 on the admin
-# dashboard: logout() fires the cookie-clearing BFF call without awaiting it and
-# navigates to /login, whose bootstrap refreshes with the cookie still present —
-# the just-revoked token was replayed 1.3 s after its own logout, classified as
-# theft, and the cascade logged the founder out of every admin session while
-# they were approving driver documents. The credential is dead either way; a
-# cascade here can only kill the user's OTHER live sessions. Kept short — this
-# is a same-client overlap window, not the mobile "lost rotation response"
-# case the 10-min rotation grace above exists for. A replay past it still
-# escalates.
-REFRESH_REVOKE_RACE_GRACE_SECONDS = 60
+_NON_THEFT_REVOCATION_REASONS = frozenset(
+    {
+        "user_logout",
+        "logout_all",
+        "admin_logout",
+        "admin_logout_all",
+        "admin_action",
+        "account_deletion",
+    }
+)
 
 
 def _parse_iso_dt(value) -> Optional[datetime]:
@@ -101,23 +101,26 @@ def _parse_iso_dt(value) -> Optional[datetime]:
     return None
 
 
+def _is_missing_revocation_reason_column(exc: Exception) -> bool:
+    """Match only PostgREST/Postgres missing-column errors for our new field."""
+    code = pg_error_code(exc)
+    error_text = db_error_text(exc)
+    return code in {"PGRST204", "42703"} and "revocation_reason" in error_text
+
+
 def _is_benign_rotation_replay(row: dict) -> bool:
-    """True when a revoked-token replay is a client race, not theft.
+    """True when a revoked-token replay is a known rotation race or sign-out.
 
     Two windows, chosen by HOW the token died:
       • ``replaced_by`` set — rotated forward by a successful refresh. A replay
         within ``REFRESH_REUSE_GRACE_SECONDS`` is a retry after a lost rotation
         response or two near-simultaneous refreshes.
-      • ``replaced_by`` empty — killed by an explicit logout, logout-all or a
-        prior cascade. A replay within ``REFRESH_REVOKE_RACE_GRACE_SECONDS`` is
-        the same client's logout/refresh overlap (see the constant). Admin
-        audience only: that overlap is the admin dashboard's, the mobile
-        clients await their logout before navigating, and rider/driver
-        credential theft (lost phone, SIM swap) is the threat model the
-        cascade exists for — widen only with evidence of a mobile race.
-    A stolen token replayed after its window still escalates. The caller
-    records a post-revoke race (audit row + Sentry warning) even though it
-    does not cascade — see ``_record_post_revoke_race``.
+      • ``replaced_by`` empty — only an allowlisted explicit sign-out reason
+        proves that this specific token was administratively revoked. The
+        token stays dead, but replay cannot kill sessions issued afterward.
+        Missing/unknown reasons (including legacy rows) retain theft handling.
+    Rotated-token grace remains bounded; explicit sign-out classification has
+    no time window because it relies on the persisted reason, not token age.
     """
     revoked_at = _parse_iso_dt(row.get("revoked_at"))
     if not revoked_at:
@@ -125,9 +128,7 @@ def _is_benign_rotation_replay(row: dict) -> bool:
     age = (datetime.now(timezone.utc) - revoked_at).total_seconds()
     if row.get("replaced_by"):
         return 0 <= age <= REFRESH_REUSE_GRACE_SECONDS
-    if row.get("audience") not in _ADMIN_STAFF_AUDIENCES:
-        return False
-    return 0 <= age <= REFRESH_REVOKE_RACE_GRACE_SECONDS
+    return row.get("revocation_reason") in _NON_THEFT_REVOCATION_REASONS
 
 
 def _hash_refresh_token(raw: str) -> str:
@@ -265,20 +266,16 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         # cascades. Either way the client gets a generic 401 (no oracle).
         if _is_benign_rotation_replay(row):
             logger.warning(
-                "refresh: benign {} replay within grace window — "
-                "returning 401 without cascade "
+                "refresh: benign {} replay — returning 401 without cascade "
                 "(row_id={} user_id={} audience={})",
-                "rotation" if row.get("replaced_by") else "post-revoke",
+                "rotation within grace window" if row.get("replaced_by") else "explicit revocation",
                 row.get("id"),
                 row.get("user_id"),
                 row.get("audience"),
             )
             if not row.get("replaced_by"):
-                # The rotation race is routine (two tabs refreshing) and stays
-                # log-only; a replay right after a logout is rare and the revoke
-                # may have been an admin force-logout on a suspected account,
-                # so it keeps its forensic record and alert even without the
-                # cascade.
+                # An explicitly signed-out token cannot be exchanged or harm a
+                # later session, but preserve a forensic record of its replay.
                 await _record_post_revoke_race(row)
             return None
         # One cascade per dead row. The cascade answers the first replay by
@@ -388,14 +385,14 @@ async def _reuse_already_handled(row: dict) -> bool:
 
 
 async def _record_post_revoke_race(row: dict) -> None:
-    """Forensic record + alert for a replay inside the post-revoke race window.
+    """Forensic record + alert for a replay of an explicitly signed-out token.
 
     The cascade is withheld (the credential is dead; only the user's other
     sessions could be hurt), but the event is not silent: the revoke may have
     been an admin force-logout on a suspected account, and the audit trail
     must show that the dead token was presented again. Written with
     ``cascade_ok: False`` so ``_reuse_already_handled`` never treats it as a
-    completed cascade — a replay past the window still escalates in full.
+    completed cascade. Unknown/legacy revocations never call this helper.
     Best-effort; never raises into the auth path.
     """
     _capture_reuse_event(row, repeated=False, benign_race=True)
@@ -416,7 +413,7 @@ async def _record_post_revoke_race(row: dict) -> None:
                         "replayed_ip": row.get("ip"),
                         "original_revoked_at": row.get("revoked_at"),
                         "replaced_by": None,
-                        "benign": "post_revoke_race",
+                        "benign": "explicit_revocation_replay",
                         "cascade_ok": False,
                         "detected_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -614,7 +611,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         logger.error(f"reuse-cascade: audit_logs insert failed (user={user_id}): {e}")
 
 
-async def revoke_refresh_token(raw: str) -> bool:
+async def revoke_refresh_token(raw: str, *, reason: Optional[str] = None) -> bool:
     """Stamp revoked_at on the row for ``raw``. Returns True if a row
     was actually revoked (i.e. the token was valid); False otherwise.
     Safe to call with arbitrary input — unknown hashes are a no-op.
@@ -629,29 +626,43 @@ async def revoke_refresh_token(raw: str) -> bool:
         return False
     if not row or row.get("revoked_at"):
         return False
+    revoked_at = datetime.now(timezone.utc).isoformat()
+    update = {"revoked_at": revoked_at}
+    if reason:
+        update["revocation_reason"] = reason
     try:
         await db.update_one(
             "refresh_tokens",
             {"id": row["id"]},
-            {"$set": {"revoked_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": update},
         )
         return True
     except Exception as e:
+        if reason and _is_missing_revocation_reason_column(e):
+            logger.opt(exception=True).error(
+                "refresh_tokens.revocation_reason unavailable; retrying logout revocation without reason"
+            )
+            try:
+                await db.update_one("refresh_tokens", {"id": row["id"]}, {"$set": {"revoked_at": revoked_at}})
+                return True
+            except Exception as retry_error:
+                logger.opt(exception=True).error(f"revoke_refresh_token fallback update failed: {retry_error}")
+                return False
         logger.opt(exception=True).error(f"revoke_refresh_token update failed: {e}")
         return False
 
 
-async def revoke_all_for_user(user_id: str) -> int:
+async def revoke_all_for_user(user_id: str, *, reason: Optional[str] = None) -> int:
     """Revoke every non-revoked refresh token for a user. Returns count.
 
     This is what /auth/logout-all and the admin "force logout" action
     call. token_version bump does the access-token side; this does the
     refresh-token side. Both are necessary.
     """
-    return len(await revoke_all_for_user_ids(user_id))
+    return len(await revoke_all_for_user_ids(user_id, reason=reason))
 
 
-async def revoke_all_for_user_ids(user_id: str) -> list[str]:
+async def revoke_all_for_user_ids(user_id: str, *, reason: Optional[str] = None) -> list[str]:
     """Revoke every non-revoked refresh token for a user; return the row ids.
 
     The reuse cascade records these ids on its audit row so a later replay
@@ -673,13 +684,29 @@ async def revoke_all_for_user_ids(user_id: str) -> list[str]:
     for row in rows or []:
         if row.get("revoked_at"):
             continue
+        update = {"revoked_at": now_iso}
+        if reason:
+            update["revocation_reason"] = reason
         try:
             await db.update_one(
                 "refresh_tokens",
                 {"id": row["id"]},
-                {"$set": {"revoked_at": now_iso}},
+                {"$set": update},
             )
             revoked.append(str(row["id"]))
-        except Exception as e:  # pragma: no cover
+        except Exception as e:
+            if reason and _is_missing_revocation_reason_column(e):
+                logger.opt(exception=True).error(
+                    "refresh_tokens.revocation_reason unavailable; retrying bulk revocation without reason"
+                )
+                try:
+                    await db.update_one("refresh_tokens", {"id": row["id"]}, {"$set": {"revoked_at": now_iso}})
+                    revoked.append(str(row["id"]))
+                    continue
+                except Exception as retry_error:
+                    logger.opt(exception=True).error(
+                        f"revoke_all_for_user fallback update failed for {row.get('id')}: {retry_error}"
+                    )
+                    continue
             logger.opt(exception=True).error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
     return revoked

@@ -432,7 +432,7 @@ class TestUpdateStaff:
         assert result == {"success": True}
         assert updates_seen["is_active"] is False
         assert updates_seen["token_version"] == 4
-        revoke.assert_awaited_once_with("staff-1")
+        revoke.assert_awaited_once_with("staff-1", reason="admin_action")
 
     @pytest.mark.asyncio
     async def test_role_preset_snaps_modules(self):
@@ -498,7 +498,7 @@ class TestUpdateStaff:
         assert result == {"success": True}
         assert updates_seen["role"] == "finance"
         assert updates_seen["token_version"] == 3
-        revoke.assert_awaited_once_with("staff-1")
+        revoke.assert_awaited_once_with("staff-1", reason="admin_action")
 
     @pytest.mark.asyncio
     async def test_modules_change_bumps_token_version_without_role_change(self):
@@ -525,7 +525,7 @@ class TestUpdateStaff:
 
         assert updates_seen["modules"] == ["dashboard", "support"]
         assert updates_seen["token_version"] == 1
-        revoke.assert_awaited_once_with("staff-1")
+        revoke.assert_awaited_once_with("staff-1", reason="admin_action")
 
     @pytest.mark.asyncio
     async def test_identical_role_and_modules_does_not_bump_token_version(self):
@@ -578,7 +578,7 @@ class TestUpdateStaff:
             await staff_mod.update_staff("staff-1", req, admin=SUPER)
 
         assert updates_seen["token_version"] == 6
-        revoke.assert_awaited_once_with("staff-1")
+        revoke.assert_awaited_once_with("staff-1", reason="admin_action")
 
     @pytest.mark.asyncio
     async def test_no_op_update_skips_db_write(self):
@@ -735,7 +735,7 @@ class TestDeleteStaff:
             result = await staff_mod.delete_staff.__wrapped__(_fake_request(), "staff-1", admin=SUPER)
 
         assert result == {"success": True}
-        revoke.assert_awaited_once_with("staff-1")
+        revoke.assert_awaited_once_with("staff-1", reason="admin_action")
         delete_mock.assert_awaited_once_with("admin_staff", {"id": "staff-1"})
         assert audit_rows and audit_rows[0]["action"] == "staff_deleted"
 

@@ -20,6 +20,12 @@ jest.mock('expo-crypto', () => ({
   digestStringAsync: async (_algorithm: string, value: string) => require('node:crypto').createHash('sha256').update(value).digest('hex'),
 }));
 
+// The real backend's RefreshResponse (backend/routes/auth.py) sends
+// access_expires_at as an absolute ISO timestamp, never expires_in -- fixtures
+// must match that real contract, not the shape the code used to (wrongly)
+// expect. See Sentry CRIMSON-SMOKE-7445-10F/10Y/SE.
+const futureIso = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+
 beforeEach(() => {
   renewBackgroundAuthToken = createBackgroundTokenProvider();
   jest.clearAllMocks();
@@ -28,7 +34,7 @@ beforeEach(() => {
   installSessionLock(work => { const result = tail.then(work, work); tail = result.catch(() => {}); return result; });
   setSessionKeychainOptions({ keychainAccessible: 42 });
   Object.assign(mockStorage, { refresh_token: 'refresh-old', fg_access_token: 'expired-access', token_expires_at: '1' });
-  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: 'access-new', refresh_token: 'refresh-new', expires_in: 900 }) })) as any;
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: 'access-new', refresh_token: 'refresh-new', access_expires_at: futureIso(900) }) })) as any;
 });
 
 it('renews expired credentials, persists the rotated pair, and supplies App Check', async () => {
@@ -52,7 +58,7 @@ it.each(['logout', 'replacement'])('discards a delayed response after session %s
   (fetch as jest.Mock).mockImplementationOnce(async () => {
     if (action === 'logout') mockStorage.spinr_session_ended = '1';
     else mockStorage.refresh_token = 'different-login';
-    return { ok: true, json: async () => ({ token: 'obsolete', refresh_token: 'obsolete-refresh', expires_in: 900 }) };
+    return { ok: true, json: async () => ({ token: 'obsolete', refresh_token: 'obsolete-refresh', access_expires_at: futureIso(900) }) };
   });
   expect(await renewBackgroundAuthToken()).toBeNull();
   expect(mockStorage.refresh_token).toBe(action === 'logout' ? 'refresh-old' : 'different-login');

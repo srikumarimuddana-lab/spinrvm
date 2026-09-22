@@ -78,7 +78,7 @@ async def test_reset_clears_mfa_revokes_sessions_and_audits():
     assert updates["mfa_secret_pending"] is None
     assert updates["mfa_backup_codes"] is None
     assert updates["token_version"] == 3, "existing sessions must be invalidated"
-    revoke.assert_awaited_once_with(TARGET_ID)
+    revoke.assert_awaited_once_with(TARGET_ID, reason="admin_action")
     assert audit_rows and audit_rows[0]["action"] == "staff_mfa_reset"
     assert audit_rows[0]["entity_id"] == TARGET_ID
     # PIPEDA: audit details carry the masked email only, never the raw one

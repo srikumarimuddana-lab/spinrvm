@@ -71,12 +71,14 @@ class TestLogoutAllRiderDriver:
 
         update_one = AsyncMock(return_value={"id": "user-rider-1"})
         revoke_all = AsyncMock(return_value=3)
+        audit_log = AsyncMock()
         kick_user = AsyncMock(return_value=0)
         fb_revoke = MagicMock()
 
         with (
             patch("backend.routes.auth.db.update_one", update_one),
             patch("backend.routes.auth.revoke_all_for_user", revoke_all),
+            patch("backend.routes.auth._audit_log_user", audit_log),
             patch("backend.socket_manager.manager.kick_user", kick_user),
             patch("backend.routes.auth._revoke_firebase_refresh_tokens", fb_revoke),
         ):
@@ -94,7 +96,14 @@ class TestLogoutAllRiderDriver:
         assert set_payload["token_version"] == 8
         assert isinstance(set_payload["sessions_invalid_before"], str) and set_payload["sessions_invalid_before"]
         # refresh tokens revoked for the same user
-        revoke_all.assert_awaited_once_with("user-rider-1")
+        revoke_all.assert_awaited_once_with("user-rider-1", reason="logout_all")
+        audit_log.assert_awaited_once_with(
+            current_user,
+            "user_logged_out_all",
+            "users",
+            "user-rider-1",
+            {"revoked_refresh_tokens": 3, "token_version": 8},
+        )
         # Firebase refresh tokens revoked too (forces Firebase re-sign-in).
         fb_revoke.assert_called_once_with("user-rider-1")
         # B-P1-11: WS sockets kicked for the same user, scoped to
@@ -133,7 +142,7 @@ class TestLogoutAllRiderDriver:
 
         # The durable contract still landed.
         update_one.assert_awaited_once()
-        revoke_all.assert_awaited_once_with("user-rider-x")
+        revoke_all.assert_awaited_once_with("user-rider-x", reason="logout_all")
         # And we still respond success — the operator's "Sign out
         # everywhere" button must not show an error when token_version
         # was successfully bumped.
@@ -463,7 +472,7 @@ class TestAdminLogoutAll:
             result = await inner(request, authorization=f"Bearer {token}")
 
         bump_version.assert_awaited_once()
-        revoke_all.assert_awaited_once_with("admin-001")
+        revoke_all.assert_awaited_once_with("admin-001", reason="admin_logout_all")
         kick_user.assert_awaited_once_with(
             "admin-001",
             client_types=["admin"],
@@ -515,12 +524,14 @@ class TestAdminLogoutAll:
         find_one = AsyncMock(return_value={"id": "staff-real", "token_version": 4})
         update_one = AsyncMock(return_value={"id": "staff-real"})
         revoke_all = AsyncMock(return_value=2)
+        audit_log = AsyncMock()
         kick_user = AsyncMock(return_value=0)
 
         with (
             patch("backend.routes.admin.auth.db.find_one", find_one),
             patch("backend.routes.admin.auth.db.update_one", update_one),
             patch("backend.routes.admin.auth.revoke_all_for_user", revoke_all),
+            patch("backend.routes.admin.auth.log_admin_action", audit_log),
             patch("backend.socket_manager.manager.kick_user", kick_user),
         ):
             inner = _resolve_inner(admin_logout_all)
@@ -532,7 +543,14 @@ class TestAdminLogoutAll:
             {"id": "staff-real"},
             {"$set": {"token_version": 5}},
         )
-        revoke_all.assert_awaited_once_with("staff-real")
+        revoke_all.assert_awaited_once_with("staff-real", reason="admin_logout_all")
+        audit_log.assert_awaited_once_with(
+            {"id": "staff-real", "role": "admin"},
+            "admin_logged_out_all",
+            "admin_staff",
+            "staff-real",
+            {"revoked_refresh_tokens": 2, "token_version": 5},
+        )
         # B-P1-11: admin sockets only — never kick rider/driver sockets
         # for an admin force-logout (different identity space).
         kick_user.assert_awaited_once_with(

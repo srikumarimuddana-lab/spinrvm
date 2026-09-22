@@ -492,7 +492,7 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
         # mirror. Best-effort — the deletion is already recorded above, and the daily
         # purge + the per-request guard remain the durable enforcement.
         try:
-            await revoke_all_for_user(user_id)
+            await revoke_all_for_user(user_id, reason="account_deletion")
             await redis_delete(f"session:{user_id}")
         except Exception:
             logger.error("Account deletion: session/refresh-token revocation failed (non-fatal)", exc_info=True)

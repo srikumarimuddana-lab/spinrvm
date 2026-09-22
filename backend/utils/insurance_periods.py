@@ -224,6 +224,13 @@ async def record_period_transition(
                 "spinr_insurance_period_race_total",
                 {"period": str(new_period)},
             )
+        elif status == "stale_ride":
+            logger.error(
+                "insurance_periods: refused Period 2 for a stale ride driver_id=%s ride_id=%s",
+                driver_id,
+                ride_id,
+            )
+            _metric_inc("spinr_insurance_period_write_failed_total", {"reason": "stale_ride"})
         else:
             _metric_inc(
                 "spinr_insurance_period_recorded_total",
@@ -352,5 +359,70 @@ async def release_driver_and_close_period(
     _metric_inc(
         "spinr_insurance_period_release_total",
         {"reason": reason, "period": str(period)},
+    )
+    return period
+
+
+async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id: str) -> Optional[int]:
+    """Release a batch-offer claim only while this ride still owns the driver.
+
+    The database RPC serializes against claims on the driver row, verifies the
+    open Period-2 ride identity and other active obligations, then updates
+    availability and closes the period in one transaction. On any RPC error
+    or ownership mismatch this fails closed: it never falls back to the
+    unscoped ``set_driver_available`` helper.
+    """
+    params = {"p_driver_id": driver_id, "p_ride_id": ride_id}
+
+    def _rpc_call():
+        sb = db_supabase.supabase
+        if sb is None:
+            return None
+        response = sb.rpc("release_batch_offer_driver_and_close_period", params).execute()
+        data = getattr(response, "data", None)
+        return data[0] if isinstance(data, list) and data else data
+
+    try:
+        result = await db_supabase.run_sync(_rpc_call, retry_policy="write")
+    except Exception:
+        logger.error(
+            "insurance_periods: batch-offer release RPC failed driver_id=%s ride_id=%s; "
+            "leaving driver claim unchanged",
+            driver_id,
+            ride_id,
+            exc_info=True,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "rpc_error"})
+        return None
+
+    if not isinstance(result, dict) or result.get("status") != "released":
+        reason = result.get("status", "no_result") if isinstance(result, dict) else "no_result"
+        logger.warning(
+            "insurance_periods: batch-offer release skipped driver_id=%s ride_id=%s reason=%s",
+            driver_id,
+            ride_id,
+            reason,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": reason})
+        return None
+
+    period = result.get("period")
+    # The RPC changes the driver row outside the repository write helpers;
+    # evict both cached lookup keys so availability reads see the release.
+    try:
+        try:
+            from ..repositories._base import invalidate_driver_cache
+        except ImportError:  # pragma: no cover - dual-import mode
+            from repositories._base import invalidate_driver_cache  # type: ignore
+        await invalidate_driver_cache(driver_id=driver_id, user_id=result.get("user_id"))
+    except Exception:
+        logger.warning(
+            "insurance_periods: driver cache invalidation failed after batch-offer release driver_id=%s",
+            driver_id,
+            exc_info=True,
+        )
+    _metric_inc(
+        "spinr_insurance_period_release_total",
+        {"reason": "rider_cancelled", "period": str(period)},
     )
     return period

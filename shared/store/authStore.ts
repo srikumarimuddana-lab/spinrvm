@@ -203,7 +203,10 @@ export interface User {
 interface RefreshTokenResponse {
   token: string;
   refresh_token: string;
-  expires_in: number;
+  // /auth/refresh's RefreshResponse (backend/routes/auth.py) never sends
+  // expires_in -- only AuthResponse (login/verify-otp) does. It sends an
+  // absolute ISO timestamp instead.
+  access_expires_at: string;
   csrf_token?: string | null;
 }
 
@@ -409,8 +412,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await api.post('/auth/refresh', { refresh_token: candidate });
-          const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
-          await publishTokensUnlocked(token, newRefresh, expires_in, csrf_token, false);
+          const { token, refresh_token: newRefresh, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
+          // publishTokensUnlocked wants a relative duration (seconds from now),
+          // matching the convention line ~380 above already uses when reading
+          // a persisted absolute expiry back out of storage.
+          const accessExpiresAtMs = Date.parse(access_expires_at);
+          // A malformed/incomplete response must never be persisted as a
+          // successful refresh -- that's exactly the CRIMSON-SMOKE-7445-10F/
+          // 10Y/SE bug class this fix exists to close (silently computing NaN
+          // and reporting success). Mirrors backgroundAuth.ts's validation.
+          if (typeof token !== 'string' || !token || typeof newRefresh !== 'string' || !newRefresh ||
+              !Number.isFinite(accessExpiresAtMs) || accessExpiresAtMs <= Date.now()) {
+            throw new Error('Token refresh returned invalid credentials');
+          }
+          const expiresIn = (accessExpiresAtMs - Date.now()) / 1000;
+          await publishTokensUnlocked(token, newRefresh, expiresIn, csrf_token, false);
           return true;
         } catch (e: unknown) {
           // The /auth/refresh path rejects with a raw fetch Response (HTTP

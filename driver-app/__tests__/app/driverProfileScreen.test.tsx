@@ -355,6 +355,7 @@ describe('ProfileScreen (driver)', () => {
     const signOutAllBtn = findByText(r, 'Sign out of all devices')!;
     act(() => { signOutAllBtn.props.onPress(); });
     const alertCall = (Alert.alert as jest.Mock).mock.calls.find((c) => c[0] === 'Sign out of all devices?');
+    expect(alertCall![1]).toContain('Rider and Driver apps');
     const confirm = alertCall![2].find((b: any) => b.text === 'Sign out everywhere');
     await act(async () => { await confirm.onPress(); await flush(); });
     expect(mockLogoutAll).toHaveBeenCalled();

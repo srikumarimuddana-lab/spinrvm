@@ -621,3 +621,53 @@ def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_c
     assert check_cur.fetchone()[0] == 0  # A rolled back; B never touched d1
     check_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'lock-d2' AND status = 'pending'")
     assert check_cur.fetchone()[0] == 1
+
+
+def test_cancelled_target_cannot_commit_a_late_batch_claim(pg_cur):
+    """The pending-offer trigger serializes cancellation with direct claims.
+
+    A stale candidate must not leave the driver claimed when the ride has
+    already been cancelled before the claim RPC attempts to insert its offer.
+    """
+    _insert_user(pg_cur, "late-driver-user")
+    _insert_driver(pg_cur, "late-driver", "late-driver-user")
+    _insert_user(pg_cur, "late-rider")
+    _insert_ride(pg_cur, "late-ride", "late-rider")
+    pg_cur.execute("UPDATE rides SET status = 'cancelled' WHERE id = 'late-ride'")
+
+    with pytest.raises(psycopg2.Error, match="pending ride offer requires a searching ride"):
+        _call_claim_batch(pg_cur, "late-ride", ["late-driver"], [100], max_offers=1)
+    pg_cur.connection.rollback()
+    pg_cur.connection.autocommit = True
+
+    pg_cur.execute("SELECT is_available, availability_claimed_at FROM drivers WHERE id = 'late-driver'")
+    assert pg_cur.fetchone() == (True, None)
+    pg_cur.execute("SELECT count(*) FROM ride_offers WHERE ride_id = 'late-ride'")
+    assert pg_cur.fetchone()[0] == 0
+
+
+def test_cancelled_batch_offer_release_closes_only_its_current_period(pg_cur):
+    _insert_user(pg_cur, "cancel-driver-user")
+    _insert_driver(pg_cur, "cancel-driver", "cancel-driver-user")
+    _insert_user(pg_cur, "cancel-rider")
+    _insert_ride(pg_cur, "cancel-ride", "cancel-rider")
+    claimed = _call_claim_batch(pg_cur, "cancel-ride", ["cancel-driver"], [100], max_offers=1)
+    assert claimed[0][1] is True
+
+    pg_cur.execute("UPDATE rides SET status = 'cancelled' WHERE id = 'cancel-ride'")
+    pg_cur.execute(
+        "UPDATE ride_offers SET status = 'cancelled', responded_at = %s "
+        "WHERE ride_id = 'cancel-ride' AND driver_id = 'cancel-driver' AND status = 'pending'",
+        (_NOW + timedelta(seconds=1),),
+    )
+    pg_cur.execute(
+        "SELECT release_batch_offer_driver_and_close_period('cancel-driver', 'cancel-ride')->>'status'"
+    )
+    assert pg_cur.fetchone()[0] == "released"
+    pg_cur.execute(
+        "SELECT period, ride_id, ended_at FROM driver_insurance_periods "
+        "WHERE driver_id = 'cancel-driver' ORDER BY started_at DESC LIMIT 1"
+    )
+    assert pg_cur.fetchone() == (1, None, None)
+    pg_cur.execute("SELECT is_available, availability_claimed_at FROM drivers WHERE id = 'cancel-driver'")
+    assert pg_cur.fetchone() == (True, None)

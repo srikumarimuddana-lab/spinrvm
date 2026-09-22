@@ -309,7 +309,7 @@ function ProfileScreenInner() {
   const handleLogoutAll = () => {
     Alert.alert(
       'Sign out of all devices?',
-      'You will be signed out everywhere this driver account is logged in. Use this if your phone was lost or you suspect someone else has access.',
+      'You will be signed out on every device using this Spinr account, including the Rider and Driver apps. Use this if your phone was lost or you suspect someone else has access.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

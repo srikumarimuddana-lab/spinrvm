@@ -31,6 +31,11 @@ jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));
 
+// The real backend's RefreshResponse (backend/routes/auth.py) sends
+// access_expires_at as an absolute ISO timestamp, never expires_in -- fixtures
+// must match that real contract. See Sentry CRIMSON-SMOKE-7445-10F/10Y/SE.
+const futureIso = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+
 // Firebase config must expose an `auth` object without `onAuthStateChanged`
 // so initialize()'s Firebase branch is skipped (the else path sets the
 // logged-out state synchronously).
@@ -185,7 +190,7 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
     expect(useAuthStore.getState()).toMatchObject({ isInitialized: true, isLoading: false, sessionRecoverable: true });
     expect(errorLog).toHaveBeenCalled();
 
-    mockPost.mockResolvedValueOnce({ data: { token: 'access', refresh_token: 'rotated', expires_in: 900 } });
+    mockPost.mockResolvedValueOnce({ data: { token: 'access', refresh_token: 'rotated', access_expires_at: futureIso(900) } });
     mockGet.mockResolvedValueOnce({ data: { id: 'user', is_driver: false } });
     await useAuthStore.getState().initialize();
     expect(useAuthStore.getState()).toMatchObject({ token: 'access', sessionRecoverable: false });
@@ -221,7 +226,7 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
           data: {
             token: 'new-access-xyz',
             refresh_token: 'new-refresh-abc',
-            expires_in: 900,
+            access_expires_at: futureIso(900),
           },
           status: 200,
         });

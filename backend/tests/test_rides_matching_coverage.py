@@ -498,6 +498,56 @@ async def test_eta_ranking_timeout_falls_back_to_haversine():
     mock_db.claim_driver_atomic.assert_awaited_once_with("drv-1")
 
 
+async def test_rider_owned_driver_is_rejected_before_dispatch_claim():
+    ride = _make_ride(service_area_id=None, rider_id="rider-1")
+    driver = {**_make_driver("drv-self"), "user_id": "rider-1"}
+
+    result, mock_db = await _run_full_dispatch(ride, driver)
+
+    assert result is None
+    mock_db.claim_driver_atomic.assert_not_awaited()
+
+
+async def test_rider_owned_driver_is_rejected_from_vehicle_cascade():
+    ride = _make_ride(vehicle_type_id="vt-suv")
+    self_driver = {**_make_driver("drv-xl-self", "vt-xl"), "user_id": "rider-1"}
+    area = {
+        "id": "area-1",
+        "parent_service_area_id": None,
+        "vehicle_cascade_map": [{"from": "vt-suv", "to": ["vt-xl"]}],
+    }
+
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=({"drv-xl-self"}, True)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None])),
+        patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.find_one = AsyncMock(return_value=area)
+        mock_db.get_rows = AsyncMock(side_effect=[[], [self_driver]])
+        mock_db.claim_driver_atomic = AsyncMock(return_value=False)
+
+        result = await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert result is None
+    mock_db.claim_driver_atomic.assert_not_awaited()
+
+
 async def test_earnings_label_falls_back_on_bad_driver_earnings():
     ride = _make_ride(service_area_id=None, driver_earnings="not-a-number")
     driver = _make_driver("drv-1")

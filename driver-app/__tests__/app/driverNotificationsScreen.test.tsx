@@ -227,8 +227,8 @@ it('shows the loading spinner while isPending', () => {
 it('pull-to-refresh calls refetch', () => {
   mockNotifData = { unread_count: 0, notifications: [] };
   const screen = render(<NotificationsScreen />);
-  // Two FlatLists now render (the outer inbox list + the category tabs row
-  // inside its ListHeaderComponent) — find the one with a refreshControl.
+  // The inbox is the only FlatList on this screen — find the one with a
+  // refreshControl to verify the pull-to-refresh handler.
   const lists = screen.UNSAFE_getAllByType(require('react-native').FlatList);
   const list = lists.find((l: any) => l.props.refreshControl);
   expect(list).toBeDefined();
@@ -278,6 +278,7 @@ describe('category tabs', () => {
       ],
     };
     const screen = render(<NotificationsScreen />);
+    expect(screen.UNSAFE_getAllByType(require('react-native').FlatList).some((list: any) => list.props.horizontal)).toBe(false);
     expect(screen.getByText('Ride Title')).toBeTruthy();
     expect(screen.getByText('Promo Title')).toBeTruthy();
 
@@ -285,5 +286,23 @@ describe('category tabs', () => {
 
     expect(screen.getByText('Promo Title')).toBeTruthy();
     expect(screen.queryByText('Ride Title')).toBeNull();
+  });
+
+  it('returns to All after the notification screen is remounted', () => {
+    mockNotifData = {
+      unread_count: 2,
+      notifications: [
+        notif({ id: 'n-ride', title: 'Ride Title', type: 'ride_offer' }),
+        notif({ id: 'n-promo', title: 'Promo Title', type: 'promotion' }),
+      ],
+    };
+    const screen = render(<NotificationsScreen />);
+    fireEvent.press(screen.getByText('Promotions'));
+    expect(screen.queryByText('Ride Title')).toBeNull();
+    screen.unmount();
+
+    const remountedScreen = render(<NotificationsScreen />);
+    expect(remountedScreen.getByText('Ride Title')).toBeTruthy();
+    expect(remountedScreen.getByText('Promo Title')).toBeTruthy();
   });
 });

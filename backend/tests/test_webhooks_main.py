@@ -619,9 +619,10 @@ class TestStripeWebhookPaymentIntentSucceeded:
         assert result.get("underpaid") is True
         mock_update.assert_not_awaited()
 
-    @pytest.mark.parametrize("payment_status", ["pending", "failed"])
-    def test_valid_split_components_are_acknowledged_without_paid_flip_when_not_inflight(self, payment_status):
+    @pytest.mark.parametrize("payment_status", ["pending", "failed", "processing"])
+    def test_valid_split_components_do_not_finalize_unsettled_ride(self, payment_status):
         import stripe
+        from fastapi import HTTPException
 
         from backend.routes import webhooks as wh
 
@@ -638,23 +639,21 @@ class TestStripeWebhookPaymentIntentSucceeded:
                 {"payment_intent_id": "pi_tip", "amount_cents": 50},
             ],
         }}}]
-        processed = AsyncMock()
-        update_ride = AsyncMock()
+        unclaim = AsyncMock(return_value=True)
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", processed),
+            patch("backend.routes.webhooks.unclaim_stripe_event", unclaim),
             patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=ledger)),
-            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride),
+            patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock()),
         ):
-            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(wh.stripe_webhook(request=self._mock_req()))
 
-        assert result.get("component_payment") is True
-        assert result.get("unsettled") is True
-        processed.assert_awaited_once()
-        update_ride.assert_not_awaited()
+        assert exc.value.status_code == 503
+        unclaim.assert_awaited_once()
 
     def test_invalid_split_manifest_on_pending_ride_is_terminal_underpayment(self):
         import stripe

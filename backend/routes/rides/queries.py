@@ -98,9 +98,12 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
                 "vehicle_color": driver.get("vehicle_color"),
                 "vehicle_year": driver.get("vehicle_year"),
                 "license_plate": driver.get("license_plate"),
-                "lat": driver.get("lat"),
-                "lng": driver.get("lng"),
-                "heading": driver.get("heading"),
+                "lat": None if ride.get("status") in RideStatus.terminal_statuses() else driver.get("lat"),
+                "lng": None if ride.get("status") in RideStatus.terminal_statuses() else driver.get("lng"),
+                "heading": None if ride.get("status") in RideStatus.terminal_statuses() else driver.get("heading"),
+                "location_captured_at": None
+                if ride.get("status") in RideStatus.terminal_statuses()
+                else driver.get("location_captured_at"),
             }
 
     def serialize_doc(doc):

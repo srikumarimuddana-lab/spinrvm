@@ -9,6 +9,7 @@ import importlib.abc
 import importlib.machinery
 import inspect
 import os
+import socket
 import sys
 from typing import Any, Dict, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -441,6 +442,42 @@ def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
     except RuntimeError:
         asyncio.set_event_loop(policy.new_event_loop())
     yield
+
+
+@pytest.fixture(autouse=True)
+def block_external_network_in_payment_regressions(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail before any external DNS/socket egress from payment regression tests.
+
+    These tests use mocked Stripe/Supabase boundaries; a missing mock must fail
+    locally instead of hanging or reaching a live provider. Loopback remains
+    available for tests that intentionally exercise a local server.
+    """
+    guarded_modules = {
+        "test_payment_retry.py",
+        "test_payment_retry_coverage.py",
+        "test_stripe_reconcile.py",
+        "test_webhooks_main.py",
+    }
+    if os.path.basename(getattr(request.module, "__file__", "")) not in guarded_modules:
+        return
+
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    original_getaddrinfo = socket.getaddrinfo
+    original_connect = socket.socket.connect
+
+    def _guarded_getaddrinfo(host, *args, **kwargs):
+        if isinstance(host, str) and host not in local_hosts:
+            raise AssertionError(f"payment test attempted external DNS lookup: {host}")
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    def _guarded_connect(sock, address):
+        host = address[0] if isinstance(address, tuple) and address else address
+        if isinstance(host, str) and host not in local_hosts:
+            raise AssertionError(f"payment test attempted external socket connection: {host}")
+        return original_connect(sock, address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
 
 
 @pytest.fixture(autouse=True)

@@ -24,6 +24,7 @@ import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { launchNavigation } from '../../lib/navigation/launchNavigation';
 import { claimAutoNavLeg } from '../../lib/navigation/autoNavigate';
+import { isCarSessionActive } from '../../lib/androidAuto/carSession';
 import { showAlert } from '../AlertDialog';
 import CancelReasonSheet from '../CancelReasonSheet';
 
@@ -89,6 +90,23 @@ interface ActiveRidePanelProps {
   /** Projected platform-funded bonus for this ride, from the active-ride
       payload's `total_bonus`. Null/0 when no incentive applies. */
   totalBonus?: number | null;
+}
+
+/** Both snapped-pickup columns are present (migration 133 writes them as a pair). */
+function hasSnappedPickup(ride: Ride | null): boolean {
+  return ride?.pickup_nav_lat != null && ride?.pickup_nav_lng != null;
+}
+
+/**
+ * A coordinate worth auto-navigating to. Rejects (0, 0) explicitly: it is finite,
+ * so `Number.isFinite` waves it through, and it is what a failed geocode or a
+ * half-written row looks like.
+ */
+function isPlausibleCoord(lat?: number | null, lng?: number | null): boolean {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  return !(lat === 0 && lng === 0);
 }
 
 // Haversine distance between two points in meters
@@ -261,9 +279,16 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // drivable road (migration 133): a rider can drop their pin inside a mall or
   // a building, and routing to the raw pin sends the driver somewhere no car
   // can stop. Dropoff has no snapped variant, so it uses the plain coords.
+  //
+  // The snapped pair is resolved together, never per-axis. Taking lat from one
+  // source and lng from the other yields a point on neither the road nor the
+  // pin — the backend guards the pair the same way (routes/drivers/ride_flow.py
+  // checks both columns are non-null before using either).
+  const pickupLat = hasSnappedPickup(ride) ? (ride!.pickup_nav_lat as number) : ride?.pickup_lat;
+  const pickupLng = hasSnappedPickup(ride) ? (ride!.pickup_nav_lng as number) : ride?.pickup_lng;
   const navLeg = rideState === 'trip_in_progress' ? 'dropoff' : rideState === 'navigating_to_pickup' ? 'pickup' : null;
-  const navDestLat = navLeg === 'dropoff' ? ride?.dropoff_lat : (ride?.pickup_nav_lat ?? ride?.pickup_lat);
-  const navDestLng = navLeg === 'dropoff' ? ride?.dropoff_lng : (ride?.pickup_nav_lng ?? ride?.pickup_lng);
+  const navDestLat = navLeg === 'dropoff' ? ride?.dropoff_lat : pickupLat;
+  const navDestLng = navLeg === 'dropoff' ? ride?.dropoff_lng : pickupLng;
   const rideId = ride?.id;
   // Cleared on unmount so a ride cancelled during the claim's storage round-trip
   // can't still pull the driver into Maps: resetRideState() drops this panel out
@@ -271,32 +296,53 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // over. This is the one case the claim-is-the-dedupe rule below doesn't cover.
   const navMountedRef = useRef(true);
   useEffect(() => () => { navMountedRef.current = false; }, []);
+  // Bumped on every foreground transition purely to re-run the effect below, so
+  // a hand-off deferred while backgrounded fires when the driver reaches the app.
+  const [appActiveTick, setAppActiveTick] = useState(0);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') setAppActiveTick((n) => n + 1);
+    });
+    return () => sub.remove();
+  }, []);
   useEffect(() => {
     if (!navPrefsLoaded) return;
     if (!navLeg || !rideId) return;
     // Coords arrive with the active-ride payload, which lands a beat after the
     // phase flips (acceptRide sets the state, then fetches). Bail rather than
-    // navigate to (0,0); the effect re-runs once the payload populates them.
-    if (!Number.isFinite(navDestLat) || !Number.isFinite(navDestLng)) return;
+    // navigate somewhere absurd; the effect re-runs once the payload populates.
+    // Null Island is checked explicitly because Number.isFinite(0) is true, and
+    // a zeroed coordinate is what a failed geocode or a partial row looks like —
+    // under the old manual-button design a human saw the destination before
+    // tapping, and there is no such check left now.
+    if (!isPlausibleCoord(navDestLat, navDestLng)) return;
 
-    // Two cases spend the leg's claim WITHOUT launching, so that neither can
-    // fire late for a leg the driver is already part-way through:
-    //
-    // 1. Opted out. Otherwise flipping the Settings toggle on mid-ride would
-    //    launch immediately, which contradicts the copy on that toggle ("when
-    //    you accept a ride and when the trip starts") — it should take effect
-    //    from the next transition, not retroactively.
-    // 2. App not in the foreground. `acceptRide` is also called straight off
-    //    the Android Auto head unit (lib/androidAuto/register.ts), against this
-    //    same singleton store, while the phone sits locked in the driver's
-    //    pocket — so this effect can run with the phone backgrounded and would
-    //    otherwise throw it into Maps mid-drive for an accept that never
-    //    touched it. The car has its own navigation surface; the phone stays
-    //    out of the way. Same reasoning as this screen's pendingMapRemountRef
-    //    (app/driver/(tabs)/index.tsx), which parks background side effects
-    //    after a background remount killed the process in live testing.
-    if (!autoNavigate || AppState.currentState !== 'active') {
+    // Opted out: spend the leg's claim without launching, so that flipping the
+    // Settings toggle on mid-ride doesn't launch immediately — that would
+    // contradict the copy on the toggle itself ("when you accept a ride and
+    // when the trip starts"). It takes effect from the next transition.
+    if (!autoNavigate) {
       claimAutoNavLeg(rideId, navLeg);
+      return;
+    }
+
+    // Not the surface the driver is looking at. `acceptRide` reaches this same
+    // singleton store from two places that can run with the phone backgrounded,
+    // and they want opposite things:
+    //
+    //  - Android Auto's head unit (lib/androidAuto/register.ts). The car has its
+    //    own navigation, and the phone is in the driver's pocket. Spend the
+    //    claim so it stays out of the way for good.
+    //  - A notification action button (app/_layout.tsx's Notifee handlers, whose
+    //    own comment notes they fire while backgrounded). That driver tapped
+    //    Accept and is being routed into the app — they still want navigation.
+    //    Leave the claim unspent and let the foreground transition re-run this.
+    //
+    // iOS transiently reports 'inactive' for a pulled-down notification shade or
+    // an incoming-call banner, which falls in the second bucket too — spending
+    // the claim there would silently kill the feature for that ride.
+    if (AppState.currentState !== 'active') {
+      if (isCarSessionActive()) claimAutoNavLeg(rideId, navLeg);
       return;
     }
 
@@ -309,7 +355,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         launchNavigation(navApp, navDestLat as number, navDestLng as number);
       }
     });
-  }, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp]);
+  }, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp, appActiveTick]);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.
@@ -738,7 +784,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.actionPrimary, styles.actionNeutral]}
-              onPress={() => openMapsNavigation((ride as any).pickup_nav_lat ?? ride.pickup_lat, (ride as any).pickup_nav_lng ?? ride.pickup_lng, 'Pickup')}
+              onPress={() => openMapsNavigation(pickupLat as number, pickupLng as number, 'Pickup')}
               accessibilityRole="button"
               accessibilityLabel={t('activeRide.navigateToPickup')}
             >

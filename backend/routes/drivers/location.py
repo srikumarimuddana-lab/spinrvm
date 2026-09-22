@@ -815,9 +815,9 @@ async def update_location_batch(
         return await _persist_v2_location_batch(v2_request, current_user, background_tasks)
 
     try:
-        from ...utils.location_integrity import check_location_integrity
+        from ...utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
     except ImportError:
-        from utils.location_integrity import check_location_integrity  # type: ignore
+        from utils.location_integrity import check_location_integrity, evaluate_gps_plausibility  # type: ignore
 
     points = []
     if isinstance(batch, list):
@@ -874,7 +874,7 @@ async def update_location_batch(
         # v2-shaped points (sequence_number markers) belong to the v2 idle
         # session path, which feeds this same accumulator — never both.
         _has_v2_markers = any(isinstance(p, dict) and "sequence_number" in p for p in points)
-        if driver_row is not None and driver_row.get("is_online") and not _has_v2_markers:
+        if driver_row is not None and driver_row.get("is_online") and not _has_v2_markers and (trusted or not fresh):
             try:
                 from ...settings_loader import get_app_settings
                 from ...utils.breadcrumbs import resolve_active_ride
@@ -921,6 +921,19 @@ async def update_location_batch(
                             _ts = point_epoch_seconds(p)
                             if _ts is not None and _ts < _boundary_epoch:
                                 _p1_points.append(p)
+                # History never mutates the live integrity cache. Exclude
+                # explicit mock/speed/accuracy failures before distance filters.
+                _p1_points = [
+                    p
+                    for p in _p1_points
+                    if evaluate_gps_plausibility(
+                        p.get("latitude", p.get("lat")),
+                        p.get("longitude", p.get("lng")),
+                        speed=p.get("speed"),
+                        accuracy=p.get("accuracy"),
+                        mocked=p.get("mocked"),
+                    )[0]
+                ]
                 if _p1_points:
                     _p1_delta = batch_incremental_distance_km(_p1_points)
                     if _p1_delta > 0:

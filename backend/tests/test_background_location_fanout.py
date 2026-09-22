@@ -203,3 +203,29 @@ def test_legacy_stale_batch_retains_history_without_poisoning_live_integrity(del
     persist.assert_awaited_once()
     trusted.assert_not_awaited()
     location._write_marker_if_due.assert_not_awaited()
+
+
+@pytest.mark.parametrize("age", [0, 3600])
+def test_legacy_untrusted_points_do_not_inflate_period1(delivery, monkeypatch, age):
+    delivery[2].return_value = (False, "mock_location")
+    monkeypatch.setattr(
+        "settings_loader.get_app_settings", AsyncMock(return_value={"period1_distance_tracking_enabled": True})
+    )
+    monkeypatch.setattr("utils.breadcrumbs.resolve_active_ride", AsyncMock(return_value=None))
+    monkeypatch.setattr("utils.breadcrumbs.persist_ride_breadcrumbs", AsyncMock(return_value=0))
+    distance = AsyncMock()  # must never reach distance computation
+    monkeypatch.setattr("utils.period1_distance.batch_incremental_distance_km", distance)
+    points = [
+        {
+            "latitude": 50.45 + i * 0.001,
+            "longitude": -104.6,
+            "mocked": True,
+            "timestamp": (datetime.now(timezone.utc) - timedelta(seconds=age + i)).isoformat(),
+        }
+        for i in range(2)
+    ]
+    asyncio.run(
+        location.update_location_batch(points, background_tasks=BackgroundTasks(), current_user={"id": "user-1"})
+    )
+    distance.assert_not_called()
+    location._write_marker_if_due.assert_not_awaited()

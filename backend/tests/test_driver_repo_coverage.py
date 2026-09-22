@@ -454,6 +454,41 @@ class TestClaimDriverAtomic:
         # Only the pre-claim invalidation happened, not the post-claim one.
         assert mock_invalidate.await_count == 1
 
+    async def test_identity_flag_uses_db_claim_rpc(self):
+        from backend.repositories import driver_repo
+
+        sb = MagicMock()
+        sb.rpc.return_value.execute.return_value = _mk_result([{"id": "d1", "availability_claim_id": "c1"}])
+        with (
+            patch.object(driver_repo, "supabase", sb),
+            patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+            patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
+        ):
+            claimed = await driver_repo.claim_driver_atomic("d1", claim_identity_enabled=True)
+        assert claimed == {"id": "d1", "availability_claim_id": "c1"}
+        sb.rpc.assert_called_once_with("claim_driver_with_identity_v2", {"p_driver_id": "d1"})
+        sb.table.assert_not_called()
+
+    async def test_flag_off_keeps_legacy_app_clock_claim_write(self):
+        from backend.repositories import driver_repo
+
+        payloads = []
+        sb = MagicMock()
+        sb.table.return_value.update.side_effect = lambda payload: payloads.append(payload) or sb.table.return_value.update.return_value
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = _mk_result(
+            [{"id": "d1"}]
+        )
+        with (
+            patch.object(driver_repo, "supabase", sb),
+            patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+            patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
+        ):
+            await driver_repo.claim_driver_atomic("d1")
+        assert payloads[0]["is_available"] is False
+        assert payloads[0]["availability_claimed_at"]
+        assert "availability_claim_id" not in payloads[0]
+        sb.rpc.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # update_acceptance_rate

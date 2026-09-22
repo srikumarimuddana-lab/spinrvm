@@ -865,6 +865,22 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 }
                                             }
 
+                                            // A GPS view with no geometry of its own must not fall back to
+                                            // the pickup→dropoff straight line. On the Pickup tab that draws
+                                            // the *trip's* crow-flies line under a "Driver → Pickup" heading,
+                                            // on the exact screen used for SGI and dispute review, and it
+                                            // contradicts the pickup distance on the card above it. Same
+                                            // reasoning as importedNoGps above, which only ever covered
+                                            // imported rides. The planned view is exempt — there the straight
+                                            // line is the content, and it is labelled as such.
+                                            const hasGeometryForPhase =
+                                                (pickupProp?.length ?? 0) > 1
+                                                || (tripProp?.length ?? 0) > 1
+                                                || (plannedProp?.length ?? 0) > 1
+                                                || (trailForMap?.length ?? 0) > 1
+                                                || actualSegmentsProp != null;
+                                            const noGeometryForPhase = selectedPhase !== "planned" && !hasGeometryForPhase;
+
                                             return (
                                                 <div className="pt-3 border-t">
                                                     <div className="flex items-center justify-between mb-2">
@@ -884,7 +900,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             plannedTrail={plannedProp}
                                                             locationTrail={trailForMap}
                                                             actualSegments={actualSegmentsProp}
-                                                            suppressStraightFallback={importedNoGps}
+                                                            suppressStraightFallback={importedNoGps || noGeometryForPhase}
                                                         />
                                                     </div>
                                                 </div>

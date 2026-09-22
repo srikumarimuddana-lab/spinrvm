@@ -601,3 +601,174 @@ async def test_completed_gap_route_rejects_implausible_detour():
     }
     with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload))):
         assert await rd.compute_gap_route_via_osrm([50.45, -104.62], [50.4501, -104.6201], "http://osrm:5000") is None
+
+
+# --- gap-fill connectors: bearings + detour slack -----------------------------
+# A gap connector stands in for missing GPS on a finalized, audited, billed
+# route, so both guards below exist to stop a router's fastest-path answer
+# becoming distance the rider and the insurer are charged for.
+
+_GAP_START = [50.4520, -104.6210]
+_GAP_END = [50.4555, -104.6210]  # ~389 m due north of _GAP_START
+
+
+def _route_payload(distance_m: float):
+    return {
+        "code": "Ok",
+        "routes": [
+            {
+                "distance": distance_m,
+                "duration": 60,
+                "geometry": {"coordinates": [[-104.6210, 50.4520], [-104.6180, 50.4530], [-104.6210, 50.4555]]},
+            }
+        ],
+    }
+
+
+def test_gap_bearings_builds_osrm_value_and_omits_when_unknown():
+    assert rd._gap_bearings(0, 180) == f"0,{rd._GAP_BEARING_RANGE_DEG};180,{rd._GAP_BEARING_RANGE_DEG}"
+    # One known side still constrains that endpoint; the other stays empty.
+    assert rd._gap_bearings(90, None) == f"90,{rd._GAP_BEARING_RANGE_DEG};"
+    assert rd._gap_bearings(None, 90) == f";90,{rd._GAP_BEARING_RANGE_DEG}"
+    assert rd._gap_bearings(370, None) == f"10,{rd._GAP_BEARING_RANGE_DEG};"  # wrapped
+    # Neither side known -> parameter omitted entirely, not sent as ";".
+    assert rd._gap_bearings(None, None) is None
+
+
+@pytest.mark.asyncio
+async def test_gap_route_pins_osrm_to_the_observed_direction_of_travel():
+    """Without a heading, a gap spanning a divided road can be answered with a
+    drive to the next legal turnaround and back."""
+    capture = {}
+    with patch.object(
+        rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(420)), capture=capture)
+    ):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, _GAP_END, "http://osrm:5000", start_bearing=0, end_bearing=0
+        )
+
+    assert result is not None
+    assert capture["params"]["bearings"] == f"0,{rd._GAP_BEARING_RANGE_DEG};0,{rd._GAP_BEARING_RANGE_DEG}"
+    assert "/route/v1/driving/" in capture["url"]
+
+
+@pytest.mark.asyncio
+async def test_gap_route_omits_bearings_when_no_heading_is_known():
+    capture = {}
+    with patch.object(
+        rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(420)), capture=capture)
+    ):
+        result = await rd.compute_gap_route_via_osrm(_GAP_START, _GAP_END, "http://osrm:5000")
+
+    assert result is not None
+    assert "bearings" not in capture["params"]
+
+
+@pytest.mark.asyncio
+async def test_gap_route_retries_unconstrained_when_bearings_make_it_unroutable():
+    """A heading hint must never be able to lose a gap outright: if OSRM cannot
+    honour it, the gap is re-asked without the constraint."""
+    attempts = []
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def get(self, url, params=None):
+            attempts.append(params or {})
+            if "bearings" in (params or {}):
+                return _FakeResp(payload={"code": "NoRoute", "routes": []})
+            return _FakeResp(payload=_route_payload(420))
+
+    with patch.object(rd.httpx, "AsyncClient", lambda *a, **kw: _Client()):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, _GAP_END, "http://osrm:5000", start_bearing=0, end_bearing=0
+        )
+
+    assert result is not None and result[0] == 0.42
+    assert len(attempts) == 2
+    assert "bearings" in attempts[0] and "bearings" not in attempts[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_extra_km", "accepted"),
+    [
+        # Regression for ride 0c24901f. The gap is ~389 m; the router answered
+        # 2.33 km. The ratio gate (5x -> 1.945 km) rejects that, but the old
+        # absolute slack raised the ceiling to 2.389 km and let it through --
+        # ~2 km of phantom distance on a finalized trip.
+        (rd._GAP_MAX_EXTRA_KM_DEFAULT, True),
+        (0.5, False),
+    ],
+)
+async def test_absolute_slack_is_what_admits_a_short_gap_detour(max_extra_km, accepted):
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(2330)))):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, _GAP_END, "http://osrm:5000", max_extra_km=max_extra_km
+        )
+
+    assert (result is not None) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("max_extra_km", "accepted"), [(rd._GAP_MAX_EXTRA_KM_DEFAULT, True), (0.5, False)])
+async def test_google_gap_route_honours_the_same_slack(max_extra_km, accepted):
+    """Tier 2 must not become the way an over-long connector gets in.
+
+    Patches the provider call itself rather than the transport: the live
+    Directions helper is Redis-cached and budget-gated, neither of which this
+    gate depends on.
+    """
+    routed = {
+        "distance_km": 2.33,
+        "eta_seconds": 60,
+        "polyline": [[50.4520, -104.6210], [50.4530, -104.6180], [50.4555, -104.6210]],
+    }
+    with patch.object(rd, "_compute_route_via_google", AsyncMock(return_value=routed)):
+        result = await rd.compute_gap_route_via_google(_GAP_START, _GAP_END, "key", max_extra_km=max_extra_km)
+
+    assert (result is not None) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_detour_ratio", "accepted"),
+    [
+        # 1.8 km of road across a ~389 m gap. Over 120 s that is only ~54 km/h,
+        # so the reconstruction speed gate would wave it through -- the ratio is
+        # the only thing that can catch a detour driven slowly.
+        (rd._GAP_MAX_DETOUR_RATIO_DEFAULT, True),
+        (3.0, False),
+    ],
+)
+async def test_detour_ratio_catches_a_detour_slow_enough_to_look_plausible(max_detour_ratio, accepted):
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(1800)))):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, _GAP_END, "http://osrm:5000", max_extra_km=0.5, max_detour_ratio=max_detour_ratio
+        )
+
+    assert (result is not None) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gap_m", "road_m"),
+    [(100, 350), (200, 600), (1000, 2500)],
+)
+async def test_ordinary_around_the_block_routing_survives_the_tighter_ratio(gap_m, road_m):
+    """The tighter ratio must not start refusing real one-way / block routing.
+
+    Short gaps are protected by the absolute slack rather than the ratio, which
+    is why both terms exist.
+    """
+    end = [_GAP_START[0] + gap_m / 111132.0, _GAP_START[1]]
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_route_payload(road_m)))):
+        result = await rd.compute_gap_route_via_osrm(
+            _GAP_START, end, "http://osrm:5000", max_extra_km=0.5, max_detour_ratio=3.0
+        )
+
+    assert result is not None

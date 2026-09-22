@@ -949,6 +949,9 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 matched_route,
                 {"lat": ride.get("pickup_lat"), "lng": ride.get("pickup_lng")},
                 completion_anchor,
+                # Lifecycle bounds are the only clock an anchor connector has;
+                # without them a start/tail connector is judged on distance alone.
+                ride,
             )
         display_segments = (
             reconstructed["segments"] if reconstructed is not None else _matched_projection(segmented, matched_route)

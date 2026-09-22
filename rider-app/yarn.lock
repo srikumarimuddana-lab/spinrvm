@@ -2927,22 +2927,22 @@
   dependencies:
     playwright "1.62.1"
 
-"@posthog/core@^1.54.4":
-  version "1.55.0"
-  resolved "https://registry.yarnpkg.com/@posthog/core/-/core-1.55.0.tgz#8b97b38fb9f970664b4a1893aed834eed8a1a8d2"
-  integrity sha512-x+0FR+uHsK3uJeofd5X4S2YS7hjaWkzkPN0X1GROHm9SvKw2RJ91kfQ7gT1bPtFwZSHNiRtteB7fX/xEMRN0IQ==
+"@posthog/core@^1.55.0":
+  version "1.55.1"
+  resolved "https://registry.yarnpkg.com/@posthog/core/-/core-1.55.1.tgz#d0d794d113155ae7ecb8107d93ad02f877e5e3ce"
+  integrity sha512-S76bSbCHGVC8oQa1zyue6A6WzkNf1Ue4oRvfvBNLRnFM3UoWnpWnQ4T/4IzrIEtVCQYv1OI7gk8uL8/U6Tuu7w==
   dependencies:
-    "@posthog/types" "^1.412.2"
+    "@posthog/types" "^1.412.3"
 
 "@posthog/react-native-plugin@2.9.4":
   version "2.9.4"
   resolved "https://registry.yarnpkg.com/@posthog/react-native-plugin/-/react-native-plugin-2.9.4.tgz#bd6e4c7465bc67981abb0c348c3ee66057b3a609"
   integrity sha512-afx538fHBSEkiRxJZFwBqa0BeE9iOutEnULDq9OfCE/2peq5GcjbK0222R5MwkiFeQqOA2yhvRkcAgIMdgLLFQ==
 
-"@posthog/types@^1.412.1", "@posthog/types@^1.412.2":
-  version "1.412.2"
-  resolved "https://registry.yarnpkg.com/@posthog/types/-/types-1.412.2.tgz#5148fdc9f9b54e02b57141baae4f7fa09ea57520"
-  integrity sha512-taxTh8o6n7ZVlC8qBypZvF+6w7/18yNkS9XDiGCbutGTKqIljfzYi/7pumgwN3mcnl/n0e9A+JhF05+nLd4Xaw==
+"@posthog/types@^1.412.2", "@posthog/types@^1.412.3":
+  version "1.412.4"
+  resolved "https://registry.yarnpkg.com/@posthog/types/-/types-1.412.4.tgz#169da1c1a55275a27dd318b038c2e627179858e0"
+  integrity sha512-Q7lV9O9TbLngjOYw1ucm3bS3tn48xb1B4ZQdDy8gv7yfKe99hCTeWYG4xZ36nJM80VxpTF9TriiJt5hngDOkBg==
 
 "@protobufjs/aspromise@^1.1.1", "@protobufjs/aspromise@^1.1.2":
   version "1.1.2"
@@ -9327,13 +9327,13 @@ postcss@>=8.5.18, postcss@^8.5.14:
     picocolors "^1.1.1"
     source-map-js "^1.2.1"
 
-posthog-react-native@4.74.2:
-  version "4.74.2"
-  resolved "https://registry.yarnpkg.com/posthog-react-native/-/posthog-react-native-4.74.2.tgz#56e9528eb3291692d45107d9d15f64033271c8ec"
-  integrity sha512-8WK2PeeyffBekBTsXIvw1+Quh8qQOJQPQ7ETn3Wiz8XodeGWT9S3Ntb/0jMRHGuZ3O8as3zEoE2xCSt2+Kudug==
+posthog-react-native@4.75.0:
+  version "4.75.0"
+  resolved "https://registry.yarnpkg.com/posthog-react-native/-/posthog-react-native-4.75.0.tgz#da76ee6eecd5efa8bf145dc78cd585a2c6c5abf3"
+  integrity sha512-B+g+pNB8aPxTQ4AlHHQkwRQT2K+9DOV7KmBJdeSdGMYwR9X4TRVFPU1mwojqdIGqhOEZtT9sUY4EvbBjU589FQ==
   dependencies:
-    "@posthog/core" "^1.54.4"
-    "@posthog/types" "^1.412.1"
+    "@posthog/core" "^1.55.0"
+    "@posthog/types" "^1.412.2"
 
 prelude-ls@^1.2.1:
   version "1.2.1"

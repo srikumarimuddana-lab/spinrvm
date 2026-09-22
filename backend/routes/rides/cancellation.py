@@ -267,24 +267,20 @@ async def cancel_ride_rider(
                 _excess_refunded,
                 total_cancel_fee,
             )
-            _refund_cents = _deps.ledger_to_cents(_excess_refunded)
-            # F1 replay-safety (matches routes/webhooks.py's two record_refund_event
-            # call sites): keyed on PI + amount so a retried cancellation call
-            # books this refund's ledger row exactly once.
-            _refund_ledger_id = await _deps.record_refund_event(
-                ride_id=ride_id,
-                user_id=current_user["id"],
-                refund_cents=_refund_cents,
-                payment_intent_id=_refund_outcome.payment_intent_id,
-                ride=ride,
-                dedupe_key=f"stripe_refund|{_refund_outcome.payment_intent_id}|{_refund_cents}",
-            )
-            if _refund_ledger_id is None:
+            try:
+                _projection = await _deps.reconcile_confirmed_stripe_refund(
+                    ride_id=ride_id, payment_intent_id=_refund_outcome.payment_intent_id,
+                )
+                if _projection.get("outcome") in {"stale", "no_succeeded_refunds"}:
+                    logger.error(
+                        "[CANCEL] Stripe refund is confirmed but cumulative accounting needs reconciliation "
+                        "ride_id={} outcome={}", ride_id, _projection.get("outcome"),
+                    )
+            except Exception as _refund_accounting_exc:
                 logger.error(
-                    "[CANCEL] excess-capture refund succeeded on Stripe but the ledger write "
-                    "failed ride_id={} refunded={} — money moved, needs reconciliation",
-                    ride_id,
-                    _excess_refunded,
+                    "[CANCEL] Stripe refund succeeded but atomic accounting failed ride_id={} — "
+                    "durable refund operation will retry: {}",
+                    ride_id, _refund_accounting_exc,
                 )
         elif _refund_outcome is not None and _refund_outcome.status == "not_needed":
             # Whatever was captured already covers (or falls short of) the fee
@@ -500,14 +496,9 @@ async def cancel_ride_rider(
         # for audit and preventing payment_retry from chasing the wrong PI.
         _base_update["payment_status"] = cancel_fee_payment_status
         _base_update["cancel_fee_payment_intent_id"] = cancel_fee_payment_intent_id
-    if _excess_refunded > 0:
-        # An already-captured hold (the elif branch above) got a real Stripe
-        # refund. "refunded" when nothing was owed (a fully free cancel),
-        # "partially_refunded" when a fee was legitimately kept out of it —
-        # matches the vocabulary routes/webhooks.py already uses for
-        # charge.refunded / charge.refund.updated.
-        _base_update["refund_amount"] = _f(_excess_refunded)
-        _base_update["payment_status"] = "refunded" if total_cancel_fee <= 0 else "partially_refunded"
+    # Migration 446 owns the monotonic cumulative ride summary together with
+    # its append-only ledger header. Do not replace that aggregate here with
+    # this one refund object's amount; the atomic RPC already applied it.
     if _refund_lifecycle_status:
         _base_update["refund_status"] = _refund_lifecycle_status
         if _refund_provider_id:

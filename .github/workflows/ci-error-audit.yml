@@ -13,8 +13,20 @@ on:
       # steps so its jobs always report success. workflow_run will never fire
       # for genuine test-env failures until those suppressions are removed.
       # Tracked in CR-2026-008 — requires approval before modifying test-env.yml.
+      # ⚠ BLIND SPOT: no workflow is named "Deploy Backend". The real names are
+      # "Deploy Backend to Fly.io" (primary), "Deploy Backend to Railway"
+      # (standby) and "Deploy Backend to Fly.io (Staging)". workflow_run
+      # matches on exact name, so this entry has never fired. Left as-is here
+      # rather than guessed at — which of the three to watch is a call for
+      # whoever owns the deploy pipeline.
       - Deploy Backend
-      - EAS Mobile (Build + Update)   # H1: was missing
+      # Was "EAS Mobile (Build + Update)" (added by H1 as "was missing"), a
+      # name no workflow has ever carried — so the entry meant to cover the OTA
+      # pipeline never fired either. Corrected 2026-09-22 to eas-build.yml's
+      # actual `name:` after 20 consecutive production-OTA failures went
+      # unaudited for two days. Note eas-native-build.yml ("EAS Native Build
+      # (iOS/Android)") is a separate workflow and is still not watched.
+      - EAS Mobile Update
     types:
       - completed
 

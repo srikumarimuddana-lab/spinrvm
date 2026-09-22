@@ -152,6 +152,8 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "payment_intent.payment_failed",
         "checkout.session.completed",
         "charge.refunded",
+        "refund.updated",
+        "refund.failed",
         "charge.dispute.created",
         "charge.dispute.updated",
         "charge.dispute.closed",
@@ -1404,6 +1406,27 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
                 f"status={data_object.get('payment_status')} subscription={subscription_id}"
             )
+
+    elif event_type in {"refund.updated", "refund.failed"}:
+        refund = data_object
+        refund_id = refund.get("id")
+        status = str(refund.get("status") or ("failed" if event_type == "refund.failed" else "pending"))
+        status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
+        operation = await db_supabase.find_one("ride_payment_operations", {"provider_object_id": refund_id}) if refund_id else None
+        operation_id = str((operation or {}).get("id") or (refund.get("metadata") or {}).get("ride_payment_operation_id") or "")
+        ride_id = str((operation or {}).get("ride_id") or (refund.get("metadata") or {}).get("ride_id") or "")
+        if operation_id:
+            await db_supabase.update_one("ride_payment_operations", {"id": operation_id}, {
+                "status": status,
+                "provider_object_id": refund_id,
+                "collected_cents": int(refund.get("amount") or 0),
+                "next_attempt_at": None if status == "succeeded" else datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        if ride_id:
+            await db_supabase.update_one("rides", {"id": ride_id}, {
+                "refund_id": refund_id, "refund_status": status,
+            })
 
     elif event_type == "charge.refunded":
         charge = data_object

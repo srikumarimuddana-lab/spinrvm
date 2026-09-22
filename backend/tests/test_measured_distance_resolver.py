@@ -141,3 +141,74 @@ class TestImplausibilityCeiling:
         )
         assert km == 9.981
         assert basis == "reconstructed"
+
+
+# --- part-measurement, part-guess is not a measurement -----------------------
+# Owner decision (2026-09-22): when gap fill contributed distance AND the result
+# has drifted more than 10% from the booking, publish the booking. A number that
+# is partly invented should not be the number a rider, a driver or an insurer is
+# billed against.
+
+
+def test_a_part_guessed_distance_past_10_percent_publishes_the_booking():
+    """Regression for ride 0c24901f.
+
+    6.63 km of real GPS plus a 2.33 km routed connector published 8.96 km
+    against a 6.99 km booking -- 28.2% over. It cleared every guard at the time,
+    including the 1.3x ceiling (8.96 < 9.09).
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.63, routed=2.33), coverage=0.74, planned_km=6.99, straight_line_km=5.0, gps_km=6.6
+    )
+
+    assert basis == "planned_guess_deviation"
+    assert distance_km == 6.99
+
+
+def test_a_real_detour_with_no_guess_is_never_clamped():
+    """The rule is gated on routed > 0 on purpose.
+
+    With a complete GPS trail a large deviation from the booking is a REAL
+    detour. Clamping it to the booking would under-report the trip and, on a
+    0%-commission product where the driver keeps the fare, underpay the driver.
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(9.10, routed=0.0), coverage=0.98, planned_km=7.0, straight_line_km=5.0, gps_km=9.05
+    )
+
+    assert basis == "observed"
+    assert distance_km == 9.10
+
+
+def test_a_small_guess_inside_the_band_still_publishes_the_measurement():
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.50, routed=0.20), coverage=0.95, planned_km=6.99, straight_line_km=5.0, gps_km=6.6
+    )
+
+    assert basis == "observed"
+    assert distance_km == 6.70
+
+
+def test_the_guess_deviation_rule_is_symmetric():
+    """Under-reporting is as wrong as over-reporting: the deviation is absolute."""
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(5.0, routed=0.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
+    )
+
+    assert basis == "planned_guess_deviation"
+    assert distance_km == 6.99
+
+
+def test_the_guess_deviation_ratio_is_tunable():
+    """The knob is the no-deploy lever if 10% proves too tight in the field."""
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.63, routed=2.33),
+        coverage=0.74,
+        planned_km=6.99,
+        straight_line_km=5.0,
+        gps_km=6.6,
+        max_guess_deviation_ratio=1.0,
+    )
+
+    assert basis != "planned_guess_deviation"
+    assert distance_km == 8.96

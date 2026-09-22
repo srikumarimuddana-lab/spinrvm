@@ -119,7 +119,30 @@ would be defensible either.
    surfaces on a dashboard instead of in a rider's complaint, which is exactly
    how this bug was found.
 
-6. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
+6. **Stop a part-guessed number being the billed number** (owner decision,
+   2026-09-22). Everything above makes the guess *better*; this stops the guess
+   being money. `resolve_measured_distance_km` summed
+   `observed + routed_connector` into `actual_distance_km` — the field the
+   per-km insurance charge reads — while its own docstring said the value was
+   for display and "never bill". Intent and wiring disagreed.
+
+   Now: when a trip contains routed gap fill **and** the result deviates from
+   the booking by more than `max_guess_deviation_ratio` (10%), the booked
+   distance is published instead, under a new
+   `planned_guess_deviation` basis. The reported ride was 28.2% over, so it
+   would now publish 6.99 km rather than 8.96 km.
+
+   **Deliberately gated on `routed > 0`.** With a complete GPS trail a large
+   deviation is a real detour; clamping that to the booking would under-report
+   the trip and, on a 0%-commission product where the driver keeps the fare,
+   underpay the driver. The owner's instruction was "if a trip's distance is
+   part guess" — this is that precondition, made explicit.
+
+   The ratio reads from `app_settings.route_guess_deviation_max_ratio` when
+   present, defaulting to 0.10 — a no-deploy tuning lever, and no migration
+   needed for the default to hold.
+
+7. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
    no drawable geometry of its own now suppresses the straight-line fallback and
    shows the two pins plus its existing empty hint.
 
@@ -180,7 +203,8 @@ What could regress:
 | `backend/utils/route_reconstruction_projection.py` | Added `bearing_deg()` | Pure geometry helper, beside the existing `distance_m()` |
 | `backend/tests/test_route_reconstruction.py` | 5 tests: refusal, control, cap boundary, bearings+slack plumbing, anchor connectors not speed-gated | Regression cover for the reported ride |
 | `backend/tests/test_route_distance_osrm.py` | 6 tests incl. a parametrized one proving the old `+2.0` slack admits 2.33 km and `0.5` rejects it | Pins the exact hole that caused this |
-| `admin-dashboard/.../ride-detail-modal.tsx` | `hasGeometryForPhase`/`noGeometryForPhase`; widened `suppressStraightFallback` | Stop a geometry-less phase borrowing the trip's chord |
+| `backend/utils/route_finalizer.py` | `max_guess_deviation_ratio` + the `planned_guess_deviation` basis, its trigger label, a `logger.warning` naming the drift, and the settings read | Stop a part-guessed distance reaching the billed field |
+| `admin-dashboard/.../ride-detail-modal.tsx` | `hasGeometryForPhase`/`noGeometryForPhase`; widened `suppressStraightFallback`; `BOOKED_DISTANCE_BASES` | Stop a geometry-less phase borrowing the trip's chord; keep the map in step with a card showing booked km |
 | `admin-dashboard/.../ride-route-map.test.ts` | 2 source-contract tests | Matches the existing convention in that file |
 | `backend/scripts/flag_implausible_route_connectors.sql` | New, read-only | Identify already-finalized rides with the same signature, for review — not correction |
 
@@ -341,6 +365,18 @@ Stated plainly rather than implied:
   alone. Lower risk than the anchor case that was closed (see below): matchings
   within one segment are chunks of a trace whose points exist, not a dropout.
   The `max_extra_km` tightening is what covers it.
+- **A trip with a tiny guess and a large genuine deviation is clamped to the
+  booking.** If a 50 m routed connector exists on a trip that really did detour
+  30%, the `routed > 0` gate fires and the booking is published, losing a real
+  detour. Judged the safer error — the booking is the contracted number — but
+  it is a false positive, not a case the rule handles gracefully. Tightening it
+  (e.g. requiring the guess itself to be material) is the obvious follow-up if
+  it shows up in practice.
+- **Pre-existing gap found and fixed in passing:** `planned_capped` was never
+  added to the admin map's `gpsTooIncomplete` check, so a ride capped to the
+  booking still drew its GPS fragments — card and map disagreeing, exactly what
+  the comment above that line warns about. `BOOKED_DISTANCE_BASES` now covers
+  all three booked bases.
 - **A detour under 3x the straight line and slow enough to be plausible is
   still accepted.** That is the intended envelope, not an oversight — a real
   detour looks exactly like this — but it means the guards bound the damage

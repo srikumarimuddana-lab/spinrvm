@@ -255,9 +255,21 @@ async def test_get_user_by_phone_db_error_raises_503():
 
 
 @pytest.mark.asyncio
-async def test_session_update_failure_does_not_block_login():
-    """A failed current_session_id write is logged but must not prevent
-    login — the user still gets a valid token pair."""
+async def test_session_update_failure_blocks_login_with_specific_error_code():
+    """A failed current_session_id write must fail loud, not hand back a
+    half-valid session.
+
+    Deliberately changed from the old silently-swallowing behavior (see the
+    in-code comment above the `except Exception as e:` block in
+    routes/auth.py's verify_otp): without a persisted current_session_id,
+    single-device login/logout tombstoning can never work for this session,
+    and by this point the OTP has already been consumed — so a generic 503
+    would get auto-retried by shared/api/client.ts with the same body,
+    burning one of the user's 5 OTP_MAX_FAILURES/hour on a code that can
+    never work again. AUTH_SESSION_SETUP_FAILED lets both clients prompt for
+    a fresh code instead."""
+    from backend.utils.error_handling import ErrorCode, SpinrException
+
     user = {
         "id": "u1",
         "phone": PHONE,
@@ -278,9 +290,10 @@ async def test_session_update_failure_does_not_block_login():
             AsyncMock(return_value=("raw-refresh", "row-1", datetime.now(timezone.utc) + timedelta(days=30))),
         ),
     ]
-    result = await _call_verify_otp(patches)
-    assert result.is_new_user is False
-    assert result.token
+    with pytest.raises(SpinrException) as exc:
+        await _call_verify_otp(patches)
+    assert exc.value.status_code == 503
+    assert exc.value.error_code == ErrorCode.AUTH_SESSION_SETUP_FAILED
 
 
 # ─────────────────────────────────────────────────────────────────────────────

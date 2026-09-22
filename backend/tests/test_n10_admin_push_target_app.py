@@ -150,7 +150,7 @@ async def test_broadcast_to_drivers_targets_driver_app():
 
 
 async def test_broadcast_to_all_leaves_target_app_unset():
-    """"all" spans both roles with no per-user role lookup in this branch, so
+    """ "all" spans both roles with no per-user role lookup in this branch, so
     it can't map to a single target_app — matches the precedent
     routes/admin/messaging.py's own "all" audience already established
     (legacy fcm_token fallback, not a gap)."""
@@ -177,11 +177,12 @@ async def test_broadcast_to_all_leaves_target_app_unset():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def test_account_status_push_targets_rider_app():
-    """admin_update_user_status's own docstring scopes it to rider moderation
-    ("Suspend, ban, or reactivate a rider account" / "cannot request a
-    ride") — target_app="rider" is not a guess, it's what the endpoint is
-    documented to do."""
+async def test_account_status_push_targets_no_specific_app():
+    """admin_update_user_status operates on the generic `users` table with no
+    is_rider/is_driver filter (its own docstring was corrected 2026-09-21 to
+    say so) — commit 0c769c98f removed the hardcoded target_app="rider" that
+    would have silently hidden a driver's own ban notice from the only app
+    they use. target_app is deliberately unset (audience 'both') now."""
     import routes.admin.users as admin_users
 
     user = {"id": "usr-1", "status": "active"}
@@ -201,7 +202,7 @@ async def test_account_status_push_targets_rider_app():
 
     push.assert_awaited_once()
     assert push.await_args.args[0] == "usr-1"
-    assert push.await_args.kwargs.get("target_app") == "rider"
+    assert push.await_args.kwargs.get("target_app") is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

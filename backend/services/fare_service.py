@@ -465,7 +465,15 @@ def recalculate_fare_for_distance(
                 area_fees_total += _d(af.get("calculated_value", 0))
     tax_amount = _d(ride.get("tax_amount", 0))
     discount = _d(ride.get("discount_amount", 0))
-    new_grand_total = _round(new_total_fare + area_fees_total + tax_amount - discount)
+    # Floor at zero: discount is capped against the BOOKING-time ride portion
+    # (routes/rides/booking.py), not the completion-time one computed above, so
+    # a promo-discounted ride whose actual distance comes in shorter than
+    # planned (shortcut, skipped stop) can otherwise drive this negative and
+    # reach settlement unclamped (routes/rides/payments.py has no floor guard
+    # either) -- mirrors the clamp already shipped in
+    # routes/rides/_shared.py's _reestimate_fare_for_stops for the same class
+    # of bug on mid-trip stop edits (2026-09-05, N3).
+    new_grand_total = max(Decimal("0"), _round(new_total_fare + area_fees_total + tax_amount - discount))
 
     return {
         "distance_km": round(actual_distance_km, 2),

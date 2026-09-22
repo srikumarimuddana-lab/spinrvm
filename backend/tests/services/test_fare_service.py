@@ -538,6 +538,29 @@ class TestRecalculateFareForDistance:
         assert out["total_fare"] == 10.00
         assert out["driver_earnings"] == 8.00  # 10.00 − booking 2.00
 
+    def test_recalc_promo_discount_never_takes_grand_total_negative(self):
+        """2026-09-22 audit finding: discount_amount is capped against the
+        BOOKING-time ride portion (routes/rides/booking.py), not the
+        completion-time one computed here — so a promo-discounted ride whose
+        actual distance comes in much shorter than planned (shortcut, a stop
+        skipped) could previously drive grand_total negative and reach
+        settlement unclamped. Mirrors the clamp already shipped in
+        routes/rides/_shared.py's _reestimate_fare_for_stops for the same bug
+        class on mid-trip stop edits (2026-09-05, N3)."""
+        # Unclamped at booking (total_fare == sum of its own components) with
+        # a $25 flat discount against a $25.50 ride — planned 10 km, actual
+        # only 0.1 km, so the recomputed ride portion collapses well below
+        # the discount already promised.
+        ride = _completed_ride(
+            distance_fare=15.00,
+            time_fare=5.00,
+            distance_km=10,
+            total_fare=25.50,
+            discount_amount=25.00,
+        )
+        out = recalculate_fare_for_distance(ride, actual_distance_km=0.1)
+        assert out["grand_total"] == "0.00"
+
     def test_falls_back_to_default_per_km_rate_when_planned_distance_missing(self):
         """A ride row with no stored planned distance (e.g. a corrupted/legacy
         row) must not divide by zero — fall back to the default per-km rate,

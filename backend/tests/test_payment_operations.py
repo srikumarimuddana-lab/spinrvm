@@ -1,0 +1,42 @@
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_record_operation_returns_existing_idempotency_winner():
+    existing = {"id": "op1", "status": "pending"}
+    with patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=existing)) as find, patch(
+        "backend.utils.payment_operations.db.insert_one", AsyncMock()
+    ) as insert:
+        from backend.utils.payment_operations import record_operation
+
+        result = await record_operation(operation_type="refund", ride_id="ride1", idempotency_key="refund1")
+
+    assert result == existing
+    find.assert_awaited_once()
+    insert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_operation_uses_status_and_attempt_count_compare_and_swap():
+    claimed = {"id": "op1", "status": "processing", "attempt_count": 1}
+    with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value=claimed)) as update:
+        from backend.utils.payment_operations import claim_due_operation
+
+        result = await claim_due_operation({"id": "op1", "status": "pending", "attempt_count": 0})
+
+    assert result == claimed
+    update.assert_awaited_once()
+    assert update.await_args.args[1] == {"id": "op1", "attempt_count": 0, "status": "pending"}
+
+
+@pytest.mark.asyncio
+async def test_missing_durable_insert_is_an_error():
+    with patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=None)), patch(
+        "backend.utils.payment_operations.db.insert_one", AsyncMock(return_value=None)
+    ):
+        from backend.utils.payment_operations import record_operation
+
+        with pytest.raises(RuntimeError, match="durably recorded"):
+            await record_operation(operation_type="refund", ride_id="ride1", idempotency_key="refund1")

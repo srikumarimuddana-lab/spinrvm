@@ -810,7 +810,18 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
 
       const userId = useAuthStore.getState().user?.id ?? 'anon';
-      const idempotencyKey = `ride-${userId}-${Date.now()}`;
+      // Bucketed on request content + a coarse time window, not Date.now() per
+      // call: a fresh key on every call meant a client retry after a genuine
+      // network timeout (not a 4xx/5xx) could mint a second Stripe hold for the
+      // same booking attempt if the original request was still in flight
+      // server-side -- that hold then has no automated release path (2026-09-22
+      // audit finding). A 2-minute bucket is long enough to cover a manual
+      // retry of the same attempt, short enough that a genuinely new booking
+      // a few minutes later still gets its own key.
+      const idempotencyBucket = Math.floor(Date.now() / 120_000);
+      const idempotencyKey =
+        `ride-${userId}-${pickup.lat.toFixed(5)}-${pickup.lng.toFixed(5)}-` +
+        `${dropoff.lat.toFixed(5)}-${dropoff.lng.toFixed(5)}-${idempotencyBucket}`;
       const response = await api.post<Ride | RideRequiresAction>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });

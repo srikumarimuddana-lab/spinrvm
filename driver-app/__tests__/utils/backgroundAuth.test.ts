@@ -92,6 +92,16 @@ it('uses the server Date header for legacy absolute expiry when the device clock
   }
 });
 
+it('ignores an overflowing relative lifetime and falls back to a valid legacy timestamp', async () => {
+  (fetch as jest.Mock).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+    token: 'access-new', refresh_token: 'successor-refresh', expires_in: Number.MAX_VALUE,
+    access_expires_at: futureIso(900),
+  }) });
+  expect(await renewBackgroundAuthToken()).toBe('access-new');
+  expect(mockStorage.refresh_token).toBe('successor-refresh');
+  expect(Number.isFinite(Number(mockStorage.token_expires_at))).toBe(true);
+});
+
 it('concurrent callers reuse the winning rotation', async () => {
   expect(await Promise.all([renewBackgroundAuthToken(), renewBackgroundAuthToken()])).toEqual(['access-new', 'access-new']);
   expect(fetch).toHaveBeenCalledTimes(1);

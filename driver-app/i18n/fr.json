@@ -355,6 +355,8 @@
     "wavNotSavedMsg": "Le réglage VAF n'a pas pu être mis à jour. Veuillez réessayer.",
     "version": "Spinr Chauffeur v1.0.0",
     "navApple": "Plans (Apple)",
+    "autoNavigate": "Démarrer la navigation automatiquement",
+    "autoNavigateDesc": "Ouvrir votre application de cartes à l’acceptation d’une course et au début du trajet",
     "destinationModeTitle": "Mode Destination",
     "destinationModeDesc": "Définir une destination de fin de service"
   },

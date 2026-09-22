@@ -41,7 +41,7 @@ export default function SettingsScreen() {
     const insets = useSafeAreaInsets();
     const { logout } = useAuthStore();
     const { language, setLanguage, loadLanguage, t } = useLanguageStore();
-    const { navApp, setNavApp, loadNavApp } = useNavStore();
+    const { navApp, setNavApp, autoNavigate, setAutoNavigate, loadNavApp } = useNavStore();
     const { colors, colorScheme, setTheme } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -326,6 +326,16 @@ export default function SettingsScreen() {
                                 </TouchableOpacity>
                             </React.Fragment>
                         ))}
+                        <View style={styles.cardDivider} />
+                        {/* Sits under the app picker because it decides WHEN the
+                            hand-off happens; the radios above decide WHERE to. */}
+                        {renderToggle(
+                            t('settings.autoNavigate'),
+                            t('settings.autoNavigateDesc'),
+                            autoNavigate,
+                            (value) => { setAutoNavigate(value); },
+                            'navigate-circle',
+                        )}
                     </View>
                 </View>
 

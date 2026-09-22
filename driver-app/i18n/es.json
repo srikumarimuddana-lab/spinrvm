@@ -292,6 +292,8 @@
     "wavNotSavedMsg": "No se pudo actualizar el ajuste WAV. Inténtelo de nuevo.",
     "version": "Spinr Conductor v1.0.0",
     "navApple": "Apple Maps",
+    "autoNavigate": "Iniciar navegación automáticamente",
+    "autoNavigateDesc": "Abrir tu app de mapas al aceptar un viaje y al iniciar el trayecto",
     "destinationModeTitle": "Modo Destino",
     "destinationModeDesc": "Establece un destino de fin de turno"
   },

@@ -7,7 +7,7 @@ import {
   Animated,
   Linking,
   PanResponder,
-  Platform,
+  AppState,
   BackHandler,
   ScrollView,
   Dimensions,
@@ -22,6 +22,8 @@ import { shakeHorizontal } from '@shared/utils/motion';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
+import { launchNavigation } from '../../lib/navigation/launchNavigation';
+import { claimAutoNavLeg } from '../../lib/navigation/autoNavigate';
 import { showAlert } from '../AlertDialog';
 import CancelReasonSheet from '../CancelReasonSheet';
 
@@ -42,6 +44,11 @@ interface Ride {
   dropoff_address: string;
   pickup_lat: number;
   pickup_lng: number;
+  /** Pickup snapped to the nearest drivable road at booking (migration 133).
+   *  Null/absent when snapping was unavailable or the pin was already on a
+   *  road — readers fall back to pickup_lat/lng. */
+  pickup_nav_lat?: number | null;
+  pickup_nav_lng?: number | null;
   dropoff_lat: number;
   dropoff_lng: number;
   total_fare?: number;
@@ -121,7 +128,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { t } = useLanguageStore();
-  const { navApp, loadNavApp } = useNavStore();
+  const { navApp, autoNavigate, isLoaded: navPrefsLoaded, loadNavApp } = useNavStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [reasonVisible, setReasonVisible] = useState(false);
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -234,6 +241,75 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     // this mount-only effect's firing.
     loadNavApp();
   }, [loadNavApp]);
+
+  // Auto-launch turn-by-turn on the two phases where the driver starts moving
+  // toward somewhere new: accepting a ride (→ pickup) and starting the trip
+  // (→ dropoff). `arrived_at_pickup` is deliberately absent — the driver is
+  // parked and waiting, and throwing them into Maps there would bury the OTP
+  // keypad they actually need.
+  //
+  // Gated on navPrefsLoaded because the store's in-memory values are still the
+  // defaults until AsyncStorage resolves: firing early would send a Waze driver
+  // to Apple Maps, and would fire at all for a driver who had opted out.
+  //
+  // claimAutoNavLeg is what keeps this to one launch per leg. The effect re-runs
+  // on every ride/phase change and remounts on a cold start, so a bare "fire on
+  // render" would re-launch each time.
+  //
+  // Pickup resolves through `pickup_nav_lat/lng` first, exactly as the manual
+  // Navigate button does. That column is the pickup snapped to the nearest
+  // drivable road (migration 133): a rider can drop their pin inside a mall or
+  // a building, and routing to the raw pin sends the driver somewhere no car
+  // can stop. Dropoff has no snapped variant, so it uses the plain coords.
+  const navLeg = rideState === 'trip_in_progress' ? 'dropoff' : rideState === 'navigating_to_pickup' ? 'pickup' : null;
+  const navDestLat = navLeg === 'dropoff' ? ride?.dropoff_lat : (ride?.pickup_nav_lat ?? ride?.pickup_lat);
+  const navDestLng = navLeg === 'dropoff' ? ride?.dropoff_lng : (ride?.pickup_nav_lng ?? ride?.pickup_lng);
+  const rideId = ride?.id;
+  // Cleared on unmount so a ride cancelled during the claim's storage round-trip
+  // can't still pull the driver into Maps: resetRideState() drops this panel out
+  // of the tree, and burning that ride's claim costs nothing because the ride is
+  // over. This is the one case the claim-is-the-dedupe rule below doesn't cover.
+  const navMountedRef = useRef(true);
+  useEffect(() => () => { navMountedRef.current = false; }, []);
+  useEffect(() => {
+    if (!navPrefsLoaded) return;
+    if (!navLeg || !rideId) return;
+    // Coords arrive with the active-ride payload, which lands a beat after the
+    // phase flips (acceptRide sets the state, then fetches). Bail rather than
+    // navigate to (0,0); the effect re-runs once the payload populates them.
+    if (!Number.isFinite(navDestLat) || !Number.isFinite(navDestLng)) return;
+
+    // Two cases spend the leg's claim WITHOUT launching, so that neither can
+    // fire late for a leg the driver is already part-way through:
+    //
+    // 1. Opted out. Otherwise flipping the Settings toggle on mid-ride would
+    //    launch immediately, which contradicts the copy on that toggle ("when
+    //    you accept a ride and when the trip starts") — it should take effect
+    //    from the next transition, not retroactively.
+    // 2. App not in the foreground. `acceptRide` is also called straight off
+    //    the Android Auto head unit (lib/androidAuto/register.ts), against this
+    //    same singleton store, while the phone sits locked in the driver's
+    //    pocket — so this effect can run with the phone backgrounded and would
+    //    otherwise throw it into Maps mid-drive for an accept that never
+    //    touched it. The car has its own navigation surface; the phone stays
+    //    out of the way. Same reasoning as this screen's pendingMapRemountRef
+    //    (app/driver/(tabs)/index.tsx), which parks background side effects
+    //    after a background remount killed the process in live testing.
+    if (!autoNavigate || AppState.currentState !== 'active') {
+      claimAutoNavLeg(rideId, navLeg);
+      return;
+    }
+
+    // No cleanup/cancel guard beyond navMountedRef: claimAutoNavLeg has already
+    // spent the claim by the time a cleanup could run, so cancelling on a mere
+    // dependency change would burn a still-live leg and it would never navigate
+    // at all. The claim IS the dedupe.
+    claimAutoNavLeg(rideId, navLeg).then((claimed) => {
+      if (claimed && navMountedRef.current) {
+        launchNavigation(navApp, navDestLat as number, navDestLng as number);
+      }
+    });
+  }, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp]);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.
@@ -374,47 +450,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     return m > 0 ? `${m}m ${sec.toString().padStart(2, '0')}s` : `${sec}s`;
   };
 
-  const openMapsNavigation = async (lat: number, lng: number, _label: string) => {
-    // The Google Maps web URL is the universal fallback — it works on every
-    // device whether or not a native app is installed. On devices WITH the
-    // Google Maps app it auto-redirects; without it (or in Expo Go) it opens
-    // the browser which still provides turn-by-turn.
-    const googleWebUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
-    const appleUrl = `http://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`;
-    // If the chosen app isn't installed, fall back to the phone's built-in
-    // maps (Apple Maps on iOS, Google Maps web on Android) — always present
-    // and always gives driving directions.
-    const defaultUrl = Platform.OS === 'ios' ? appleUrl : googleWebUrl;
-
-    // Try a dedicated app's deep link, falling back when it isn't installed.
-    // canOpenURL is the reliable cross-platform check: on iOS the `waze` and
-    // `comgooglemaps` schemes are whitelisted in app.config's
-    // LSApplicationQueriesSchemes, so canOpenURL returns false (not a system
-    // error) when the app is absent; on Android it reflects installed intents.
-    const openWithFallback = async (appUrl: string) => {
-      try {
-        if (await Linking.canOpenURL(appUrl)) {
-          await Linking.openURL(appUrl);
-          return;
-        }
-      } catch {
-        // canOpenURL/openURL threw — fall through to the default maps app.
-      }
-      Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
-    };
-
-    // Honour the driver's saved choice (Settings → Navigation).
-    if (navApp === 'waze') {
-      await openWithFallback(`waze://?ll=${lat},${lng}&navigate=yes`);
-      return;
-    }
-    if (navApp === 'google') {
-      await openWithFallback(`comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`);
-      return;
-    }
-
-    // 'default' — use the platform's native maps app.
-    Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
+  const openMapsNavigation = (lat: number, lng: number, _label: string) => {
+    void launchNavigation(navApp, lat, lng);
   };
 
   const showConfirm = (

@@ -355,6 +355,8 @@
     "wavNotSavedMsg": "WAV setting could not be updated. Please try again.",
     "version": "Spinr Driver v1.0.0",
     "navApple": "Apple Maps",
+    "autoNavigate": "Auto-Start Navigation",
+    "autoNavigateDesc": "Open your maps app when you accept a ride and when the trip starts",
     "destinationModeTitle": "Destination Mode",
     "destinationModeDesc": "Set a heading-home destination"
   },

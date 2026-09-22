@@ -36,10 +36,13 @@ async def test_wallet_notice_fee_records_only_actual_partial_collection():
     assert record.await_args.kwargs["amount_cents"] == 300
     assert wallet_update.await_args.kwargs["clamp_to_floor"] is True
     assert update_op.await_args_list[0].kwargs["collected_cents"] == 50
-    assert update_op.await_args_list[0].kwargs["payment_intent_id"] == "txn1"
+    assert update_op.await_args_list[0].kwargs["payment_intent_id"] is None
+    assert update_op.await_args_list[0].kwargs["provider_object_id"] == "txn1"
+    assert update_op.await_args_list[0].kwargs["metadata"]["provider_reference"] == "txn1"
     assert update_op.await_args.kwargs["status"] == "succeeded"
     assert ride_update.await_args.args[2]["scheduled_notice_fee_amount"] == "0.50"
     assert ride_update.await_args.args[2]["scheduled_notice_fee_status"] == "paid"
+    assert ride_update.await_args.args[2]["scheduled_notice_fee_payment_intent_id"] == "txn1"
 
 
 @pytest.mark.asyncio

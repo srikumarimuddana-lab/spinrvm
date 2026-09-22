@@ -750,6 +750,7 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
         actual = Decimal("0")
         outcome_status = "failed"
         payment_intent_id = None
+        provider_reference = None
         if payment_method == "wallet":
             rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": rider_id})
             if rider_wallet:
@@ -766,7 +767,7 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
                 )
                 actual = abs(_d((wallet_result or {}).get("applied_delta") or "0"))
                 outcome_status = "succeeded" if actual > 0 else "failed"
-                payment_intent_id = (wallet_result or {}).get("transaction_id")
+                provider_reference = (wallet_result or {}).get("transaction_id")
         elif payment_method == "card":
             rider_user = await _deps.db_supabase.get_user_by_id(rider_id)
             stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
@@ -823,15 +824,17 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
         # from this durable outcome metadata without charging again.
         await update_operation(
             str(operation["id"]), status="pending",
-            payment_intent_id=payment_intent_id, provider_object_id=payment_intent_id,
+            payment_intent_id=payment_intent_id,
+            provider_object_id=payment_intent_id or provider_reference,
             collected_cents=_deps.ledger_to_cents(actual),
             next_attempt_at=datetime.now(timezone.utc).isoformat(),
-            metadata={"outcome_status": outcome_status, "collected_cents": _deps.ledger_to_cents(actual)},
+            metadata={"outcome_status": outcome_status, "collected_cents": _deps.ledger_to_cents(actual),
+                      "provider_reference": provider_reference},
         )
         await _deps.db_supabase.update_one("rides", {"id": ride_id}, {
             "scheduled_notice_fee_amount": str(actual),
             "scheduled_notice_fee_status": "paid" if outcome_status == "succeeded" else outcome_status,
-            "scheduled_notice_fee_payment_intent_id": payment_intent_id,
+            "scheduled_notice_fee_payment_intent_id": payment_intent_id or provider_reference,
         })
         await update_operation(
             str(operation["id"]), status=outcome_status, next_attempt_at=None,

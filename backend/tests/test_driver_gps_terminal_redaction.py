@@ -20,6 +20,7 @@ _DRIVER = {
     "rating": 4.9,
     "lat": 52.13,
     "lng": -106.67,
+    "location_captured_at": "2026-09-22T12:00:00+00:00",
     "vehicle_make": "Toyota",
     "license_plate": "ABC123",
 }
@@ -58,12 +59,14 @@ class TestDriverGpsTerminalRedaction:
         driver = result["driver"]
         assert driver["lat"] == 52.13
         assert driver["lng"] == -106.67
+        assert driver["location_captured_at"] == _DRIVER["location_captured_at"]
 
     async def test_completed_ride_redacts_location(self):
         result = await _call("completed")
         driver = result["driver"]
         assert driver["lat"] is None
         assert driver["lng"] is None
+        assert driver["location_captured_at"] is None
         # Non-location identity fields still present.
         assert driver["license_plate"] == "ABC123"
 
@@ -72,3 +75,4 @@ class TestDriverGpsTerminalRedaction:
         driver = result["driver"]
         assert driver["lat"] is None
         assert driver["lng"] is None
+        assert driver["location_captured_at"] is None

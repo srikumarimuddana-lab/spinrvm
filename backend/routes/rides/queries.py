@@ -395,6 +395,7 @@ async def get_ride(
                 vehicle_year=assigned_driver.get("vehicle_year"),
                 lat=None if _terminal else assigned_driver.get("lat"),
                 lng=None if _terminal else assigned_driver.get("lng"),
+                location_captured_at=None if _terminal else assigned_driver.get("location_captured_at"),
             ).dict()
 
     # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).

@@ -199,9 +199,6 @@ export default function ChatDriverScreen() {
 
         {/* No call button: rider↔driver contact is chat-only — phone numbers
             are never shared between parties (backend /call endpoint removed). */}
-        <View style={styles.toggleContainer}>
-          <View style={styles.toggleDot} />
-        </View>
       </View>
 
       {/* Messages */}
@@ -354,21 +351,6 @@ function createStyles(colors: ThemeColors) {
       fontSize: FONT.bodySm,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-    },
-    toggleContainer: {
-      width: 36,
-      height: 22,
-      backgroundColor: colors.border,
-      borderRadius: 11,
-      justifyContent: 'center',
-      alignItems: 'flex-end',
-      paddingHorizontal: 3,
-    },
-    toggleDot: {
-      width: 18,
-      height: 18,
-      borderRadius: 9,
-      backgroundColor: colors.textDim,
     },
     messagesContainer: {
       flex: 1,

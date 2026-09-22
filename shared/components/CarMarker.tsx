@@ -655,8 +655,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             // road's own direction was unreachable below ~21.6 km/h and the
             // icon took the raw-GPS tangent instead — on-road position, but a
             // heading pointing across the street through every slow stretch.
+            //
+            // The `p.bearing != null` half is load-bearing, not a tidy-up:
+            // playbackPosition reports mode 'interpolating' WITH a null bearing
+            // whenever the two real fixes bracketing render time are under
+            // MIN_SEGMENT_MOVE_M apart — i.e. a stopped car. Mode alone would
+            // therefore confirm "movement" purely from elapsed time, with zero
+            // GPS-corroborated displacement, and a car stopped AT A TURN (where
+            // the pre- and post-turn segments are both inside the forward
+            // search window and both within MAX_ROUTE_SNAP_M) would flap
+            // between their two bearings every tick for as long as it sat
+            // there — and on driver-app that feeds the course-up camera, so
+            // the whole map would rock back and forth. This is exactly
+            // coalescePlaybackBearing's own condition; 'extrapolating' needs no
+            // such guard because that branch always carries a computed bearing
+            // (a null one falls through to 'holding' instead).
             const movementConfirmed =
-                p.mode === 'interpolating' || p.mode === 'extrapolating';
+                (p.mode === 'interpolating' && p.bearing != null) ||
+                p.mode === 'extrapolating';
             const selected = coalescePlaybackBearing(
                 selectBearing({
                     snap,

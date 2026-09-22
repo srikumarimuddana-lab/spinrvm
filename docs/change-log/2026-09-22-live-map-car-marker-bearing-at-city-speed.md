@@ -122,16 +122,50 @@ so any caller that omits it behaves exactly as before.
   `movedMeters ≈ 4 m` already cleared the floor before this change, so that tick
   is untouched.
 
-**One deliberate behaviour change worth naming.** `playbackPosition` reports
-`mode: 'interpolating'` for a car **stopped at a light** (verified by execution:
-`speedMps: 0.14`, `bearing: null`), so `movementConfirmed` is true there too.
-Previously the icon froze at its last heading in that state; now it aligns to
-the road segment it is snapped to. This is intended and is the correct
-rendering — a car waiting at a light is facing along its road — and it matches
-what the ≥ 3 m path already did a moment earlier. It also cannot cause rotation
-churn: the route bearing is constant while snapped to the same segment, and
-both `animateRotationTo` (iOS) and the Android branch early-return when the
-target equals the current rotation.
+**CORRECTED after adversarial review — a stopped car does NOT get a route
+bearing.** The first version of this change computed `movementConfirmed` from
+`p.mode` alone. That was wrong, and the review caught it: `playbackPosition`
+reports `mode: 'interpolating'` with a **null bearing** for a stationary car
+(verified: `speedMps: 0.14`, `bearing: null`), because elapsed time — not
+displacement — is what puts render time between two fixes. Mode alone would
+therefore have confirmed "movement" with zero GPS-corroborated displacement.
+
+The failure that makes it a blocker rather than a nicety: a car stopped **at a
+turn**, where the pre-turn and post-turn segments are both inside the forward
+search window and both within `MAX_ROUTE_SNAP_M`. `snapToRoute`'s own module
+doc already notes that the continuity hint is a forward bias, not a
+turn-disambiguator, so the bearing could flap between the two **every tick for
+as long as the car sat there** — an unbounded-duration glitch, not the one-tick
+blip the ≥ 3 m path already risks. On driver-app it would be worse still: that
+fork feeds `onBearingChange`, which drives the **course-up camera**, so the
+whole map would rock back and forth while the driver is stationary.
+
+The gate is now `(p.mode === 'interpolating' && p.bearing != null) ||
+p.mode === 'extrapolating'` — exactly `coalescePlaybackBearing`'s own
+condition. `extrapolating` needs no guard: that branch always returns a
+computed bearing, and a null one falls through to `'holding'` instead
+(verified in `markerPlayback.ts`).
+
+Measured against the real module, this keeps the fix and closes the hole:
+
+| Speed (2 s fix cadence) | mode | bearing | `movementConfirmed` |
+|---|---|---|---|
+| stopped (0.3 m jitter) | interpolating | null | **no** — holds last heading |
+| ~3.6 km/h (walking) | interpolating | null | **no** — holds last heading |
+| ~9 km/h | interpolating | 90 | yes — route bearing |
+| ~15 km/h | interpolating | 90 | yes — route bearing |
+| ~30 km/h | interpolating | 90 | yes — route bearing |
+
+The whole originally-broken band is still fixed. What is given up is below
+~3.6 km/h, where displacement is genuinely under the GPS noise floor and
+holding the last heading is the honest answer rather than a regression.
+
+A second, related finding from the same review is closed by the same gate: the
+`hasMovementBearingRef` latch could previously arm at **trip start, before the
+vehicle had moved at all** (any ride phase that loads a route while the car is
+stationary within 35 m of it), permanently shutting out the raw-heading
+cold-start fallback for that mount. With the gate, a never-moved car never
+reaches the route branch, so the latch cannot arm early.
 
 **What could still regress, honestly stated:** a car that is *barely* moving
 while snapped to a wrong-but-nearby segment (opposing carriageway, out-and-back
@@ -265,7 +299,14 @@ parameter declared but unread.
       CarMarker parity guard is untouched, and both fork sides changed together
       per `docs/known-forks.md`.
 - [x] **Adversarial review** — `spinr-edge-case-reviewer` run against the actual
-      diff before commit, per `CLAUDE.md` gate 10.
+      diff, per `CLAUDE.md` gate 10. It returned **FIX BLOCKERS** and was
+      right: the `movementConfirmed` derivation checked `p.mode` without
+      `p.bearing`. Fixed in a follow-up commit (see the CORRECTED subsection in
+      §4), with the gate's speed behaviour re-measured against the real
+      `markerPlayback` and the load-bearing property pinned by two new tests in
+      `rider-app/__tests__/markerPlayback.test.ts`. **Disclosure:** the review
+      landed after the first commit was already pushed, so the blocker was live
+      on the branch briefly; it was never merged.
 - [x] **Not feature-flagged, justified:** rider-app/driver-app have no
       `app_settings`-style runtime flag plumbed to this component, the change is
       a correction of wrong behaviour rather than new UX, and it is inert by

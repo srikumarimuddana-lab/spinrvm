@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Script from 'next/script';
 import {
@@ -9,6 +9,14 @@ import {
   ROUTE_STROKE_WIDTH,
   type RoutePinKind,
 } from '@spinr/shared/constants/routeMapStyle';
+import {
+  bearingDegrees,
+  distanceMeters,
+  shortestArcRotationTarget,
+  snapToRoute,
+  visualRotationDegrees,
+  type TrackingLatLng,
+} from '@spinr/shared/utils/vehicleTracking';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -66,6 +74,15 @@ const EN_ROUTE_TO_PICKUP = new Set(['driver_assigned', 'driver_accepted', 'drive
 // the OSRM route — avoids hammering the public router on every poll tick.
 const ROUTE_REROUTE_THRESHOLD = 0.0001;
 
+// Beyond this from the OSRM line the driver is off-route (detour, stale route)
+// — fall back to the travel bearing rather than lying about which way the car
+// faces. Same value the mobile CarMarker uses for the same decision.
+const MAX_ROUTE_SNAP_M = 35;
+// How far the driver must move between 5 s polls before the straight-line
+// travel bearing is trusted. Urban GPS error is 5–20 m, so a smaller floor
+// would spin the car on noise while it sits at a light.
+const MIN_TRAVEL_BEARING_MOVE_M = 10;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type G = any;
 
@@ -89,6 +106,45 @@ export default function TrackRide() {
   // whether to re-fetch from OSRM when the driver moves.
   const lastRoutedDriverRef = useRef<{ lat: number; lng: number } | null>(null);
   const lastRoutedLegRef = useRef<'pickup' | 'dropoff' | null>(null);
+  // ── Car heading state ──────────────────────────────────────────────────────
+  // The OSRM geometry kept in a form snapToRoute can consume, plus the segment
+  // the car last snapped to (a continuity hint, so a nearby wrong-direction
+  // segment can't win the nearest-distance search for one poll).
+  const routeCoordsRef = useRef<TrackingLatLng[]>([]);
+  const routeSegIndexRef = useRef<number | null>(null);
+  const lastDriverPosRef = useRef<TrackingLatLng | null>(null);
+  // Last world-space course applied, and the continuously-accumulated CSS
+  // angle — kept un-normalised so a 350°→10° turn animates +20°, not −340°.
+  const carBearingRef = useRef<number | null>(null);
+  const carRotationRef = useRef(0);
+
+  // Point the car icon along its last known course.
+  //
+  // An AdvancedMarkerElement's content is ordinary DOM and the map does NOT
+  // rotate it, so this is a SCREEN-space transform and the map's own heading
+  // has to be subtracted — the same correction driver-app applies for Apple
+  // Maps, and the reason visualRotationDegrees() exists in the shared util.
+  // This map is north-up in practice (disableDefaultUI hides the rotate
+  // control), but a two-finger rotate on a vector map still moves it, and a
+  // transform that ignored that would be wrong by exactly the rotation angle.
+  const applyCarRotation = useCallback(() => {
+    const marker = driverMarkerRef.current;
+    const bearing = carBearingRef.current;
+    if (!marker || bearing == null) return;
+    const img: HTMLImageElement | null = marker.content?.querySelector?.('img') ?? null;
+    if (!img) return;
+    const rawHeading = mapRef.current?.getHeading?.();
+    const mapHeading = typeof rawHeading === 'number' && Number.isFinite(rawHeading) ? rawHeading : 0;
+    carRotationRef.current = shortestArcRotationTarget(
+      carRotationRef.current,
+      visualRotationDegrees(bearing, mapHeading),
+    );
+    img.style.transformOrigin = '50% 50%';
+    // Turn visibly rather than snapping. Poll cadence is 5 s, so a short tween
+    // reads as the car rounding a corner instead of teleporting its angle.
+    img.style.transition = 'transform 600ms ease-out';
+    img.style.transform = `rotate(${carRotationRef.current}deg)`;
+  }, []);
 
   // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
@@ -128,7 +184,12 @@ export default function TrackRide() {
 
     // Route gradient lines are created dynamically per-segment; nothing to
     // initialise here — routePolylinesRef starts as an empty array.
-  }, [mapsReady]);
+
+    // The car's rotation is screen-space (see applyCarRotation), so a camera
+    // rotation has to re-derive it — otherwise a rider who twists the map
+    // leaves the car pointing wrong until the next position update.
+    mapRef.current.addListener?.('heading_changed', applyCarRotation);
+  }, [mapsReady, applyCarRotation]);
 
   // ── Sync markers + OSRM route whenever ride data changes ────────────────────
   useEffect(() => {
@@ -231,6 +292,44 @@ export default function TrackRide() {
     // round puck so it centre-anchors on the driver's GPS position.
     upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
 
+    // ── Which way the car faces ────────────────────────────────────────────────
+    // The car SVG above is drawn nose-up and nothing ever rotated it, so every
+    // driver on this page pointed due north for the whole trip regardless of
+    // travel direction — reported from a live trip on Jim Cairns Blvd, car
+    // drawn facing north while the route ran east.
+    //
+    // The bearing is DERIVED here rather than read from the API, deliberately.
+    // `drivers.heading` exists and is populated, but Android reports a
+    // placeholder 0 on a fix that carries no bearing (see selectBearing's own
+    // doc comment for the incident history) — shipping that here would trade
+    // "always north" for "sometimes wrongly north". It would also mean adding
+    // a field to a PUBLIC, unauthenticated share-token payload, which is a
+    // privacy decision this rendering fix has no need to make.
+    //
+    // Priority mirrors the mobile marker: route segment → direction of travel
+    // → hold the last known course. It never falls back to a default, because
+    // "0" is the bug being fixed, not a safe neutral value.
+    if (d?.lat != null && d?.lng != null) {
+      const here: TrackingLatLng = { latitude: d.lat, longitude: d.lng };
+      const snap = snapToRoute(
+        here, routeCoordsRef.current, MAX_ROUTE_SNAP_M, routeSegIndexRef.current,
+      );
+      routeSegIndexRef.current = snap?.segmentIndex ?? null;
+      const prev = lastDriverPosRef.current;
+      if (snap) {
+        carBearingRef.current = snap.bearing;
+      } else if (prev) {
+        const moved = distanceMeters(prev.latitude, prev.longitude, here.latitude, here.longitude);
+        if (moved >= MIN_TRAVEL_BEARING_MOVE_M) {
+          carBearingRef.current = bearingDegrees(
+            prev.latitude, prev.longitude, here.latitude, here.longitude,
+          );
+        }
+      }
+      lastDriverPosRef.current = here;
+      applyCarRotation();
+    }
+
     // Pan to driver after initial fit.
     if (d?.lat != null && didFitRef.current) {
       map.panTo({ lat: d.lat, lng: d.lng! });
@@ -287,6 +386,27 @@ export default function TrackRide() {
           const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
           if (!coords || !mapRef.current) return;
 
+          // Keep the geometry for the heading derivation above. OSRM is
+          // [lng, lat]; snapToRoute works in {latitude, longitude}.
+          routeCoordsRef.current = coords.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
+          // A segment index only means anything against the array it came
+          // from, and this route is re-anchored AT the driver on every
+          // reroute, so carrying the old index forward would restrict the
+          // search to segments already behind the car.
+          routeSegIndexRef.current = null;
+          // A freshly anchored route is the best heading evidence available —
+          // re-snap now rather than waiting out the next 5 s poll, so the car
+          // is already pointing correctly when the new line is drawn.
+          const dp = lastDriverPosRef.current;
+          if (dp) {
+            const snapped = snapToRoute(dp, routeCoordsRef.current, MAX_ROUTE_SNAP_M, null);
+            if (snapped) {
+              routeSegIndexRef.current = snapped.segmentIndex;
+              carBearingRef.current = snapped.bearing;
+              applyCarRotation();
+            }
+          }
+
           // Clear previous gradient segments.
           routePolylinesRef.current.forEach(l => l.setMap(null));
           routePolylinesRef.current = [];
@@ -312,7 +432,7 @@ export default function TrackRide() {
         })
         .catch(() => { /* silent — markers remain visible without a route line */ });
     }
-  }, [ride, mapsReady]);
+  }, [ride, mapsReady, applyCarRotation]);
 
   const statusCfg    = STATUS_LABEL[ride?.status ?? ''] ?? STATUS_LABEL.searching;
   const isActive     = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);

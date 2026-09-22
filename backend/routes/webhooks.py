@@ -84,6 +84,25 @@ _SETTLED_PAYMENT_STATUSES = SETTLED_PAYMENT_STATUSES
 # is a genuine failure whose only rider/driver notification is emitted further
 # down this handler. So the ack below additionally requires the ride row to be
 # ABSENT; see the `current is None` branch.
+
+# Ride states in which a booking-authorization PaymentIntent failure cannot be a
+# settlement or fee-collection event, so it is safe to treat as a pre-auth-stage
+# non-failure. Deliberately an ALLOWLIST rather than `status != COMPLETED`: the
+# guard must fail toward RECORDING for anything it does not positively
+# recognise, because the cost of wrongly recording is one redundant push while
+# the cost of wrongly acking is a swallowed payment failure that admin replay
+# then refuses (the event is already marked processed).
+#
+# Two states are excluded on purpose, and both are real capture sites against
+# this same source on this same PI:
+#   completed — a capture declined at settlement
+#               (services/payment_service.py::_settle_against_hold)
+#   cancelled — a cancellation-fee partial capture declined
+#               (routes/rides/cancellation.py's capture_cancellation_fee, which
+#               runs AFTER the atomic claim has already written 'cancelled')
+# A missing, empty, or unrecognised status is likewise not in this set and so
+# records, rather than defaulting to "safe to swallow".
+_PRE_SETTLEMENT_RIDE_STATUSES = frozenset({RideStatus.SCHEDULED}) | RideStatus.active_statuses()
 _PREAUTH_METADATA_SOURCE = "ride_booking_authorization"
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -1085,18 +1104,22 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             # payment_failure_reason is wrong, and so is the "Payment Failed"
             # push to the rider (and the driver) further down this handler.
             #
-            # `status != completed` is what makes this safe to key on, and is
-            # the same discriminator utils/payment_retry.py's requires_capture
-            # branch uses. metadata.source alone cannot decide it: the source is
-            # stamped once at PaymentIntent creation and never updated, so a
-            # capture declined at settlement (payment_service's
-            # _settle_against_hold) carries the SAME source on the SAME PI —
-            # that one IS a real failure. A completed ride therefore falls
-            # through to the CAS below exactly as before. This is the row-
-            # PRESENT counterpart of the `current is None` orphan ack above,
-            # which only ever fires for the booking-time insert race and so
-            # never covered a scheduled ride (its row is inserted at booking,
-            # minutes-to-days before the hold is placed at dispatch).
+            # The ride's own state is what makes this safe to key on, via the
+            # _PRE_SETTLEMENT_RIDE_STATUSES allowlist above. metadata.source
+            # alone cannot decide it: the source is stamped once at
+            # PaymentIntent creation and never updated, so both a capture
+            # declined at settlement and a declined cancellation-fee capture
+            # carry the SAME source on the SAME PI — those ARE real failures,
+            # and `completed`/`cancelled` are excluded from the allowlist so
+            # they still fall through to the CAS below exactly as before. An
+            # absent or unrecognised status also falls through, for the same
+            # fail-toward-recording reason the allowlist exists.
+            #
+            # This is the row-PRESENT counterpart of the `current is None`
+            # orphan ack above, which only ever fires for the booking-time
+            # insert race and so never covered a scheduled ride (its row is
+            # inserted at booking, minutes-to-days before the hold is placed at
+            # dispatch — utils/scheduled_rides.py).
             #
             # Found 2026-09-22 from two real scheduled rides (2026-09-15,
             # 2026-09-16) marked payment_status='failed' while their holds were
@@ -1105,7 +1128,7 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             # are fixed separately (2026-09-21) — this removes the trigger.
             _preauth_stage_failure = (data_object.get("metadata") or {}).get(
                 "source"
-            ) == _PREAUTH_METADATA_SOURCE and current.get("status") != RideStatus.COMPLETED
+            ) == _PREAUTH_METADATA_SOURCE and current.get("status") in _PRE_SETTLEMENT_RIDE_STATUSES
             if _preauth_stage_failure:
                 # Same app_settings kill switch as the orphan ack above —
                 # revertible without a deploy.

@@ -54,6 +54,7 @@ CAD, hardcoded. See P0-5 scoping doc §9 for the multi-currency question.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
@@ -1286,7 +1287,11 @@ async def refund_excess_capture(
                 prior_refund = await asyncio.to_thread(stripe.Refund.retrieve, provider_id, api_key=secret)
                 prior_status = str(getattr(prior_refund, "status", "pending") or "pending")
                 prior_cents = int(getattr(prior_refund, "amount", refund_cents) or refund_cents)
-                await update_operation(str(operation["id"]), status=prior_status, provider_object_id=provider_id)
+                await update_operation(
+                    str(operation["id"]), status="pending" if prior_status == "succeeded" else prior_status,
+                    provider_object_id=provider_id,
+                    next_attempt_at=datetime.now(timezone.utc).isoformat() if prior_status == "succeeded" else operation.get("next_attempt_at"),
+                )
                 if prior_status == "succeeded":
                     return ChargeOutcome(status="refunded", payment_intent_id=payment_intent_id,
                                          charged_amount=cents_to_dollars(prior_cents),
@@ -1341,8 +1346,11 @@ async def refund_excess_capture(
     try:
         await update_operation(
             str(operation["id"]), provider_object_id=refund_id,
-            status=refund_status if refund_status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending",
-            collected_cents=actual_cents, next_attempt_at=None if refund_status == "succeeded" else operation.get("next_attempt_at"),
+            status="pending" if refund_status == "succeeded" else (
+                refund_status if refund_status in {"pending", "failed", "canceled", "requires_action"} else "pending"
+            ),
+            collected_cents=actual_cents,
+            next_attempt_at=datetime.now(timezone.utc).isoformat() if refund_status == "succeeded" else operation.get("next_attempt_at"),
         )
     except Exception as e:
         logger.exception("[CANCEL] Stripe refund created but operation status write failed ride=%s", ride_id)

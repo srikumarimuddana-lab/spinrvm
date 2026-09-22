@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -107,6 +108,70 @@ async def schedule_retry(operation_id: str, *, attempt_count: int, error: str) -
     await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(), last_error=error[:1000])
 
 
+async def finalize_refund_success(operation: Dict[str, Any]) -> None:
+    """Rebuild ride refund totals and ledger from Stripe's confirmed aggregate.
+
+    The ride update and append-only ledger are separate writes. Re-entry repairs
+    either crash window: it CASes the ride total, then compares ledger cents to
+    the total and writes only the missing amount under the canonical cumulative
+    Stripe dedupe key.
+    """
+    ride_id = str(operation["ride_id"])
+    payment_intent_id = str(operation["payment_intent_id"])
+    try:
+        from .stripe_charge import read_capture_state
+    except ImportError:  # pragma: no cover
+        from utils.stripe_charge import read_capture_state  # type: ignore
+    capture = await read_capture_state(ride_id=ride_id, payment_intent_id=payment_intent_id)
+    if not capture or capture.get("pending_refund_cents", 0):
+        raise RuntimeError("Refund aggregate is unavailable or another refund remains pending")
+    ride = await db.find_one("rides", {"id": ride_id})
+    if not ride:
+        raise RuntimeError("Ride missing while finalizing Stripe refund")
+    cumulative = int(capture.get("refunded_cents") or 0)
+    captured = int(capture.get("captured_cents") or 0)
+    if cumulative > captured:
+        raise RuntimeError("Stripe refund aggregate exceeds captured amount; manual review required")
+    previous_raw = ride.get("refund_amount") or "0"
+    previous = int((Decimal(str(previous_raw)) * 100).quantize(Decimal("1")))
+    if cumulative < previous:
+        raise RuntimeError("Ride refund aggregate exceeds Stripe confirmed refunds; manual review required")
+    ride_update = {
+        "refund_amount": str((Decimal(cumulative) / 100).quantize(Decimal("0.01"))),
+        "payment_status": "refunded" if cumulative >= captured else "partially_refunded",
+        "refund_status": "succeeded",
+        "refund_id": operation.get("provider_object_id"),
+    }
+    update = await db.update_one("rides", {"id": ride_id, "refund_amount": previous_raw}, ride_update)
+    if not update:
+        current = await db.find_one("rides", {"id": ride_id})
+        current_cents = int((Decimal(str((current or {}).get("refund_amount") or 0)) * 100).quantize(Decimal("1")))
+        if current_cents != cumulative:
+            raise RuntimeError("Ride refund aggregate CAS lost; retry finalization")
+        ride = current or ride
+        if (ride.get("refund_status") != "succeeded" or
+                ride.get("refund_id") != operation.get("provider_object_id")):
+            repaired = await db.update_one("rides", {"id": ride_id}, ride_update)
+            if not repaired:
+                raise RuntimeError("Ride refund status repair failed; retry finalization")
+    else:
+        ride = {**ride, **ride_update}
+    try:
+        from ..services.payment_service import record_refund_event, refund_booked_cents
+    except ImportError:  # pragma: no cover
+        from services.payment_service import record_refund_event, refund_booked_cents  # type: ignore
+    already = await refund_booked_cents(payment_intent_id)
+    missing = cumulative - already
+    if missing > 0:
+        ledger_id = await record_refund_event(
+            ride_id=ride_id, user_id=str(ride.get("rider_id") or ""), refund_cents=missing,
+            payment_intent_id=payment_intent_id, ride=ride,
+            dedupe_key=f"stripe_refund|{payment_intent_id}|{cumulative}",
+        )
+        if ledger_id is None:
+            raise RuntimeError("Refund ledger finalization failed")
+
+
 async def reconcile_due_operations() -> int:
     """Reconcile bounded due operations using provider reads before retries."""
     now = datetime.now(timezone.utc).isoformat()
@@ -149,7 +214,7 @@ async def reconcile_due_operations() -> int:
                         await db.update_one("rides", {"id": ride_id}, {
                             "scheduled_notice_fee_amount": str(__import__("decimal").Decimal(amount) / 100),
                             "scheduled_notice_fee_status": "paid" if outcome == "succeeded" else outcome,
-                            "scheduled_notice_fee_payment_intent_id": None,
+                            "scheduled_notice_fee_payment_intent_id": metadata.get("provider_reference"),
                         })
                         await update_operation(op_id, status=outcome, next_attempt_at=None)
                     else:
@@ -209,6 +274,8 @@ async def reconcile_due_operations() -> int:
                         if metadata.get("ride_payment_operation_id") == op_id:
                             refund = possible
                             break
+                    if refund is None and getattr(refunds, "has_more", False):
+                        raise RuntimeError("Refund history exceeds one page; refusing unsafe create")
                     if refund is None:
                         refund = await asyncio.to_thread(
                             stripe.Refund.create,
@@ -233,6 +300,15 @@ async def reconcile_due_operations() -> int:
                     )
                     continue
                 stored_status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
+                if stored_status == "succeeded":
+                    await update_operation(op_id, provider_object_id=refund_id, status="pending",
+                                           collected_cents=amount,
+                                           next_attempt_at=datetime.now(timezone.utc).isoformat())
+                    operation = {**operation, "provider_object_id": refund_id}
+                    await finalize_refund_success(operation)
+                    await update_operation(op_id, status="succeeded", next_attempt_at=None,
+                                           collected_cents=amount, last_error=None)
+                    continue
                 await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
                                        collected_cents=amount,
                                        next_attempt_at=None if stored_status in {"succeeded", "requires_action"} else

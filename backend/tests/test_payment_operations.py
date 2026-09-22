@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -120,3 +120,70 @@ async def test_refund_attempts_stop_at_bounded_limit():
     assert result["status"] == "exhausted"
     assert update.await_args.args[2]["status"] == "exhausted"
     insert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_refund_recovery_updates_aggregate_and_exactly_once_ledger():
+    ride = {"id": "ride1", "rider_id": "rider1", "payment_intent_id": "pi1", "refund_amount": "0.00",
+            "grand_total": "20.00", "tax_amount": "1.00"}
+    operation = {"id": "op1", "ride_id": "ride1", "payment_intent_id": "pi1", "provider_object_id": "re1"}
+    with (
+        patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=ride)),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "ride1"})) as update,
+        patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value={
+            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 0,
+        })),
+        patch("backend.services.payment_service.refund_booked_cents", AsyncMock(return_value=0)),
+        patch("backend.services.payment_service.record_refund_event", AsyncMock(return_value="ledger1")) as record,
+    ):
+        from backend.utils.payment_operations import finalize_refund_success
+
+        await finalize_refund_success(operation)
+
+    assert update.await_args.args[2]["refund_amount"] == "5.00"
+    assert update.await_args.args[2]["payment_status"] == "partially_refunded"
+    assert record.await_args.kwargs["refund_cents"] == 500
+    assert record.await_args.kwargs["dedupe_key"] == "stripe_refund|pi1|500"
+
+
+@pytest.mark.asyncio
+async def test_wallet_notice_fee_recovery_never_treats_transaction_id_as_stripe_pi():
+    operation = {
+        "id": "op-wallet", "ride_id": "ride1", "operation_type": "scheduled_notice_fee",
+        "payment_intent_id": None, "status": "pending", "attempt_count": 0,
+        "metadata": {"outcome_status": "succeeded", "collected_cents": 50, "provider_reference": "txn1"},
+    }
+    claimed = {**operation, "status": "processing", "attempt_count": 1}
+    with (
+        patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(side_effect=[claimed, {"id": "ride1"}, {"id": "op-wallet"}])) as update,
+        patch("backend.utils.stripe_charge.stripe") as stripe,
+    ):
+        from backend.utils.payment_operations import reconcile_due_operations
+
+        await reconcile_due_operations()
+
+    assert update.await_args_list[1].args[2]["scheduled_notice_fee_payment_intent_id"] == "txn1"
+    stripe.PaymentIntent.retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refund_reconciliation_does_not_create_when_refund_history_is_paginated():
+    operation = {
+        "id": "op-refund", "ride_id": "ride1", "operation_type": "refund", "payment_intent_id": "pi1",
+        "amount_cents": 500, "idempotency_key": "key1", "status": "requested", "attempt_count": 0,
+    }
+    claimed = {**operation, "status": "processing", "attempt_count": 1}
+    stripe_mock = MagicMock()
+    stripe_mock.Refund.list.return_value = MagicMock(data=[], has_more=True)
+    with (
+        patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(side_effect=[claimed, {"id": "op-refund"}])),
+        patch("backend.utils.stripe_charge.stripe", stripe_mock),
+        patch("backend.utils.stripe_charge._resolve_stripe_secret", AsyncMock(return_value="sk_test")),
+    ):
+        from backend.utils.payment_operations import reconcile_due_operations
+
+        await reconcile_due_operations()
+
+    stripe_mock.Refund.create.assert_not_called()

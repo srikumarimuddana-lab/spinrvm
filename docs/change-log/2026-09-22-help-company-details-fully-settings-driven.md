@@ -173,6 +173,24 @@ Left open, deliberately:
 - **`backend/routes/support.py`'s `FALLBACK_REPLY` still contains `1-800-SPINR`.** Retired `/support/chat` stub, zero live callers, kept as a reviewed compatibility shim (F04). Unchanged.
 - **Company hours have no settings field.** Flagged above as a feature, not a regression.
 
+## 9c. Post-merge CI outcome (added after the fact)
+
+PR #5691 was merged at 13:36:22Z, roughly two minutes after it was opened, while its test jobs were still queued — so the code reached `main` before any of the validation this entry said it needed. Results, once they landed on head `8ca66e69`:
+
+| Job | Result |
+|---|---|
+| `backend-test` | ✅ success — the endpoint change, `test_public_company_info.py` and the new `tools_support` case all pass |
+| `Run backend test suite with coverage` | ✅ success |
+| `Rider/Driver app E2E (Playwright)`, `expo export` (both apps), Semgrep, Bandit, Gitleaks, all coverage floors | ✅ success |
+| `rider-app-test` | ❌ **failure — this change's fault** |
+| `driver-app-test` | ❌ failure — **not** this change's (see below) |
+
+**`rider-app-test`: all 12 tests in `SupportScreen.contact.test.tsx` failed, one root cause.** The suite's `renderTab` helper called React Native Testing Library's `render()` *inside* `await act(...)`. On its first call RNTL runs `detectHostComponentNames`, which renders its own probe tree and reads `.root`; nesting that inside an outer `act()` tears the probe down first, so every test died with `Can't access .root on unmounted test renderer`. Fixed by rendering outside `act()` and flushing the mount effects inside it — the conventional RNTL order. The rest of the suite is unaffected: the failures were all at the `render()` call, which proves imports, module mocks and collection were fine (1 suite failed, 159 passed; 12 tests failed, 2191 passed).
+
+This is exactly the risk §10 named — and it landed on the one item flagged as most likely to need adjustment. Worth recording plainly: the test file was the part of this change that had never been executed, and it was the part that broke.
+
+**`driver-app-test` is not this change's failure.** One test failed — `driver-app/utils/__tests__/locationIntegrity.test.ts`, `createLocationIntegrityChecker › rejects mocked, impossible-speed, and teleport fixes` (expected `'mock_location_detected'`, got `undefined`). Nothing in this change touches `locationIntegrity.ts` or its test; the only driver-app file modified was one line in `app/driver/(tabs)/profile.tsx`. `git log` confirms that file's last change was PR #5533. Left alone as pre-existing, per `CLAUDE.md`'s rule that a check red for reasons unrelated to the diff is not this change's job to force green.
+
 ## 10. What was NOT verified
 
 - **Neither test suite was run — including the new backend tests.** npm *and* PyPI are both blocked in this environment (`registry.npmjs.org` returns 403 via the proxy and directly; `pip install fastapi` fails with "no versions found"), so there is no `node_modules` and no `pytest`/`fastapi`. `jest`, `tsc --noEmit` and `pytest` are all unavailable. **CI must validate everything here before merge.** Highest-risk spots if a detail is wrong:

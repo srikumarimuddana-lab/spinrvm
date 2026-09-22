@@ -120,7 +120,16 @@ Not feature-flagged — see §9 for the justification.
 
 ## 9b. Reviewer pass (CLAUDE.md pre-merge gate 10)
 
-`spinr-accessibility-reviewer` was run against the actual diff. **Verdict: no blockers introduced.** It confirmed the conditional render is the correct removal pattern — when `supportPhone` is falsy the subtree never mounts, so no ghost/blank node is left in the accessibility tree, and focus order (submit → phone chip if present → email chip → company card) still matches visual order.
+Two reviewers were run against the actual diff. **Neither found a blocker.**
+
+`spinr-design-consistency-reviewer` — verdict **ON-BRAND & COMPLETE (this diff, as scoped)**. No new color literal, font size or icon; the `${colors.primary}15/30` tokens in `contactChip`/`companyCard` are pre-existing and unchanged. It independently confirmed the two structural questions this fix turns on:
+
+- **The quick-action chip row can never render empty.** `supportEmail` always resolves to a non-empty string, so the email chip is unconditional; the row degrades 2 chips → 1, never 0. `contactQuickRow`/`contactChip` use `flexWrap`/`gap` with no fixed widths and no shared borders, so the 1-chip state renders cleanly rather than lopsided.
+- **Dropping the company-card phone row leaves no layout artifact.** `companyRow` spaces with `marginBottom` only — no shared or bottom border — so 4 rows → 3 produces no dangling divider.
+
+It also re-derived this entry's blast-radius claims from the code (2 importers, both thin wrappers; not in `docs/known-forks.md`; `account.tsx`/`profile.tsx` untouched and already matching the new convention) and confirmed they hold, and hand-traced all 6 test cases against the component's real logic — including `telHref`'s digit-stripping/leading-`+` behavior and the empty-string-vs-unset distinction — reporting them as statically correct but unrun, consistent with §10 below.
+
+`spinr-accessibility-reviewer` — verdict **no blockers introduced**. It confirmed the conditional render is the correct removal pattern: when `supportPhone` is falsy the subtree never mounts, so no ghost/blank node is left in the accessibility tree, and focus order (submit → phone chip if present → email chip → company card) still matches visual order.
 
 Acted on from that review:
 
@@ -132,7 +141,17 @@ Accepted and deliberately **not** actioned here, to keep the diff surgical (each
 - The header back button (`SupportScreen.tsx` ~line 364) is icon-only with no accessible-name fallback at all — a harder gap than the chips, and entirely outside this diff.
 - `supportPhone`/`supportEmail` populate after an async `/company-info` fetch with no live-region announcement when the chip appears. Low severity, and it is the same pre-existing pattern the company card already used; this diff extends that pattern consistently rather than introducing an inconsistency.
 
-Product note raised by the review, not a code defect: while `company_phone` is empty, every remaining channel is text-based (email chip, ticket form, AI chat). For users who rely on voice over typing, that is a real reduction in channel modality — an argument for ops configuring a real number in Settings, which is exactly what this change makes visible instead of masking.
+Product note raised by the accessibility review, not a code defect: while `company_phone` is empty, every remaining channel is text-based (email chip, ticket form, AI chat). For users who rely on voice over typing, that is a real reduction in channel modality — an argument for ops configuring a real number in Settings, which is exactly what this change makes visible instead of masking.
+
+### Open items the design review raised, left for a separate decision
+
+All three are pre-existing, none is introduced by this diff, and each is recorded here rather than silently folded into a bug fix:
+
+1. **The same `companyCard` still hard-codes address (`'Saskatoon, SK, Canada'`) and website (`'www.spinr.ca'`) fallbacks.** This is the *same failure class* as the phone bug — an operator clears a field expecting nothing to show and gets a specific placeholder asserted instead — and every other rendering of this payload (this file's own FAQ tab, `account.tsx`, `profile.tsx`) hides those fields entirely. Lower-stakes than the phone (both strings are currently true, and neither is a tappable action that fails), which is why they are not swept in here, but the diff's own stated rationale does argue for carrying it through. **Recommended follow-up; needs a product call on whether an address-less card is acceptable.**
+2. **`companyInfo.name || 'SPINR MOBILITY INC.'`** on this card, vs. `|| 'Spinr'` for the same field in the FAQ tab and both sibling screens. Possibly deliberate — `ACTION_ITEMS.md` A42 records "Spinr Mobility Inc." as the correct registered legal name, so the all-caps legal treatment may be intentional on a formal contact card. Flagged as a design decision, not resolved here.
+3. **`backend/routes/support.py`'s `FALLBACK_REPLY` still contains the literal `1-800-SPINR`.** Confirmed out of scope: that route is the retired `/support/chat` stub with zero live callers in any current build, deliberately kept as a compatibility shim under an already-reviewed decision (F04, `docs/change-log/2026-09-08-f04-f10-legacy-ai-endpoint-and-evals.md`). It is a static string, not `company_phone`-driven. Noted only so a future purge of the vanity number knows where the last instance lives.
+
+Known edge case in `telHref()`, accepted: a non-numeric value typed into Settings → Company Info → Phone renders a chip whose `tel:` URL carries no digits, and `Linking.openURL` has no `.catch()` on either chip (pre-existing on the `mailto:` path too), so the tap fails silently. Guarding it would mean diverging the display row from the dial chip for malformed input on a field whose placeholder already guides numeric entry — more complexity than the case earns. Depends on bad admin data entry, not on this change.
 
 ## 10. What was NOT verified
 

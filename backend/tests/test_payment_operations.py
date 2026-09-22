@@ -162,6 +162,41 @@ async def test_successful_refund_recovery_updates_aggregate_and_exactly_once_led
 
 
 @pytest.mark.asyncio
+async def test_refund_finalizer_cas_matches_null_initial_aggregate():
+    ride = {"id": "ride1", "rider_id": "rider1", "payment_intent_id": "pi1", "refund_amount": None,
+            "grand_total": "20.00", "tax_amount": "1.00"}
+    operation = {"id": "op1", "ride_id": "ride1", "payment_intent_id": "pi1", "provider_object_id": "re1"}
+    with (
+        patch("backend.utils.payment_operations.db.find_one", AsyncMock(return_value=ride)),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "ride1"})) as update,
+        patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value={
+            "captured_cents": 2000, "refunded_cents": 500, "pending_refund_cents": 0,
+        })),
+        patch("backend.services.payment_service.refund_booked_cents", AsyncMock(return_value=0)),
+        patch("backend.services.payment_service.record_refund_event", AsyncMock(return_value="ledger1")),
+    ):
+        from backend.utils.payment_operations import finalize_refund_success
+
+        await finalize_refund_success(operation)
+
+    assert update.await_args.args[1] == {"id": "ride1", "refund_amount": None}
+
+
+@pytest.mark.asyncio
+async def test_refund_finalizer_keeps_operation_open_when_stripe_aggregate_is_unknown():
+    with (
+        patch("backend.utils.stripe_charge.read_capture_state", AsyncMock(return_value=None)),
+        patch("backend.utils.payment_operations.db.find_one", AsyncMock()) as find,
+    ):
+        from backend.utils.payment_operations import finalize_refund_success
+
+        with pytest.raises(RuntimeError, match="aggregate is unavailable"):
+            await finalize_refund_success({"ride_id": "ride1", "payment_intent_id": "pi1"})
+
+    find.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_wallet_notice_fee_recovery_never_treats_transaction_id_as_stripe_pi():
     operation = {
         "id": "op-wallet", "ride_id": "ride1", "operation_type": "scheduled_notice_fee",

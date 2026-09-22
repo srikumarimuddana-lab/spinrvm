@@ -142,8 +142,8 @@ async def finalize_refund_success(operation: Dict[str, Any]) -> None:
     captured = int(capture.get("captured_cents") or 0)
     if cumulative > captured:
         raise RuntimeError("Stripe refund aggregate exceeds captured amount; manual review required")
-    previous_raw = ride.get("refund_amount") or "0"
-    previous = int((Decimal(str(previous_raw)) * 100).quantize(Decimal("1")))
+    previous_raw = ride.get("refund_amount")
+    previous = int((Decimal(str(previous_raw or 0)) * 100).quantize(Decimal("1")))
     if cumulative < previous:
         raise RuntimeError("Ride refund aggregate exceeds Stripe confirmed refunds; manual review required")
     ride_update = {

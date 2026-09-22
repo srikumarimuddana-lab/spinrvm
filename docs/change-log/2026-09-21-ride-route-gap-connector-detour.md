@@ -119,7 +119,37 @@ would be defensible either.
    surfaces on a dashboard instead of in a rider's complaint, which is exactly
    how this bug was found.
 
-6. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
+6. **Stop a part-guessed number being the billed number** (owner decision,
+   2026-09-22). Everything above makes the guess *better*; this stops the guess
+   being money. `resolve_measured_distance_km` summed
+   `observed + routed_connector` into `actual_distance_km` — the field the
+   per-km insurance charge reads — while its own docstring said the value was
+   for display and "never bill". Intent and wiring disagreed.
+
+   Now: when a trip contains routed gap fill **and** the result deviates from
+   the booking by more than `max_guess_deviation_ratio` (10%), the booked
+   distance is published instead, under a new
+   `planned_guess_deviation` basis. The reported ride was 28.2% over, so it
+   would now publish 6.99 km rather than 8.96 km.
+
+   **Deliberately gated on `routed > 0`.** With a complete GPS trail a large
+   deviation is a real detour; clamping that to the booking would under-report
+   the trip and, on a 0%-commission product where the driver keeps the fare,
+   underpay the driver. The owner's instruction was "if a trip's distance is
+   part guess" — this is that precondition, made explicit.
+
+   The ratio reads from `app_settings.route_guess_deviation_max_ratio` when
+   present, defaulting to 0.10 — a no-deploy tuning lever, and no migration
+   needed for the default to hold. The same ratio governs both conditions: the
+   guess must exceed it as a share of the booking, and the published number
+   must drift past it.
+
+   **Ordering matters and is deliberate.** `planned_capped` (the 1.3x
+   catastrophic ceiling) is evaluated first; this rule only covers what slips
+   under it. Reversing the two swallows the ceiling's own test cases and, worse,
+   swallows real detours — see section 11.
+
+7. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
    no drawable geometry of its own now suppresses the straight-line fallback and
    shows the two pins plus its existing empty hint.
 
@@ -180,8 +210,12 @@ What could regress:
 | `backend/utils/route_reconstruction_projection.py` | Added `bearing_deg()` | Pure geometry helper, beside the existing `distance_m()` |
 | `backend/tests/test_route_reconstruction.py` | 5 tests: refusal, control, cap boundary, bearings+slack plumbing, anchor connectors not speed-gated | Regression cover for the reported ride |
 | `backend/tests/test_route_distance_osrm.py` | 6 tests incl. a parametrized one proving the old `+2.0` slack admits 2.33 km and `0.5` rejects it | Pins the exact hole that caused this |
-| `admin-dashboard/.../ride-detail-modal.tsx` | `hasGeometryForPhase`/`noGeometryForPhase`; widened `suppressStraightFallback` | Stop a geometry-less phase borrowing the trip's chord |
+| `backend/utils/route_finalizer.py` | `max_guess_deviation_ratio` + the `planned_guess_deviation` basis, its trigger label, a `logger.warning` naming the drift, and the settings read | Stop a part-guessed distance reaching the billed field |
+| `admin-dashboard/.../ride-detail-modal.tsx` | `hasGeometryForPhase`/`noGeometryForPhase`; widened `suppressStraightFallback`; `BOOKED_DISTANCE_BASES` | Stop a geometry-less phase borrowing the trip's chord; keep the map in step with a card showing booked km |
 | `admin-dashboard/.../ride-route-map.test.ts` | 2 source-contract tests | Matches the existing convention in that file |
+| `shared/utils/routeQualityLabel` (`routeSegments.ts`) | Added a `planned_guess_deviation` branch before the ratio fallback | Without it the new basis fell through and captioned the booked figure with the REJECTED reconstruction's observed/inferred percentages |
+| `shared/utils/__tests__/routeSegments.test.ts` | 1 test pinning that caption | The `planned_capped` branch beside it already had one |
+| `backend/tests/test_measured_distance_resolver.py` | 2 tests: guess materiality measured against the trip, and the inverse | Regression cover for the denominator defect below |
 | `backend/scripts/flag_implausible_route_connectors.sql` | New, read-only | Identify already-finalized rides with the same signature, for review — not correction |
 
 ## 7. Before / after
@@ -291,6 +325,78 @@ revert to stop the new behaviour:
 - [x] No silent behaviour change — the UX field (section 5) is filled in for
       both the distance change and the admin map change.
 
+## 10b. Review round — four defects found in this diff's own code
+
+Run against the diff after it was pushed: `spinr-money-auditor`,
+`spinr-insurance-period-auditor`, plus a self-review. Four findings were real
+and are fixed here; two more are real but belong outside this PR (below).
+
+**(a) The materiality gate used the wrong denominator — the worst of the four.**
+`resolve_measured_distance_km` asked whether the routed gap fill exceeded 10% of
+the *booking*. It should have asked whether it exceeded 10% of *the number about
+to be published*. The booking is precisely the value under suspicion when a
+driver detours, so measuring the guess against it let a stale booking masquerade
+as evidence of guessing. Executed repro, against the real function body:
+
+```
+observed 14.3 + routed 0.71 = 15.01 km,  booking 7.0 km,  gps_km 15.0
+  before: (7.0,   'planned_guess_deviation')   <- 8.01 km taken off the driver
+  after:  (15.01, 'observed')
+```
+
+0.71 km of fill is 4.7% of that trip and 10.1% of that booking. The GPS chord sum
+independently corroborated 15.0 km and was ignored. This is the same failure
+class CI caught on `d2fc341` — the fix there narrowed it rather than closing it.
+Now gated on `routed > ratio * candidate`. Ride `0c24901f` is still caught (its
+2.33 km connector is 26% of its own 8.96 km reconstruction) and the pre-existing
+`test_real_detour_passes_because_the_gps_sum_grows_with_it` still passes.
+
+**(b) The new basis had no approved copy.** `shared/utils/routeSegments.ts`'s
+`routeQualityLabel` — the single label function behind the admin "Actual Trip"
+card and its map captions — had branches for `planned_estimated` and
+`planned_capped` but not for the `planned_guess_deviation` this PR introduced, so
+it fell through to the ratio copy: *"Route reconstructed · 74% GPS observed · 26%
+inferred"* printed beside a distance that is the booking. Those percentages
+describe the 8.96 km reconstruction that was thrown away. The comment directly
+above the fallthrough already warned against exactly this. So the geometry half
+of this PR was fixed while the caption half still lied — on the very card the
+reported ride's complaint was about. rider-app and driver-app are unaffected:
+both have tests asserting they do not call this function.
+
+**(c) The settings read obeyed admins inconsistently by JSON type.**
+`.get(key) or 0.10` discards a deliberate JSON `0` (the strictest setting) while
+honouring the string `"0"`. The three sibling reads one line above all use the
+two-arg form; this line was the odd one out. **(d)** and it was unbounded — a
+negative ratio makes both conditions trivially true for every ride, so one
+mistyped `app_settings` row would publish the booking platform-wide. Now clamped
+to `[0, 1]`, the way surge is clamped at its call sites.
+
+### Escalated rather than fixed here
+
+Both are real, both were verified against the code, and both are outside what
+this PR should be widened to cover:
+
+1. **`driver_period_distances` records a booking as if it were GPS-measured.**
+   `route_finalizer.py` calls `record_period_distance_revision(...)` without
+   `source=`, so every row is stamped `late_tail_rederivation` regardless of
+   basis. That table is the 7-year SGI / Saskatchewan Transportation Act audit
+   trail, and `routes/admin/compliance.py` bills insurers off it at
+   `$0.11/km` (SGI) and `$0.011/km` (Knight Archer) — the exported report
+   selects the `source` column and then never renders it, so an auditor cannot
+   tell a measured row from a booking-substituted one. **This is pre-existing**:
+   `planned_capped` and `planned_estimated` have done it since before this
+   branch, so today's exports may already contain unlabelled substituted rows.
+   This PR adds a third trigger and improves the *number* without touching the
+   provenance. Fixing it means threading the basis into `source` and adding a
+   column to a live insurer-facing export — a separate change with its own gate.
+2. **`MIN_ROUTED_GAP_M` shifts distance from the routed bucket to the straight
+   bucket, which raises `straight_share`.** On a trip with several sub-150 m
+   gaps that can cross the pre-existing 0.25 share cap and fall back to
+   `planned_estimated` — publishing a stale booking over a `gps_km`-corroborated
+   measurement. Arithmetically confirmed. The fix would mean teaching that
+   pre-existing fallback to weigh `gps_km`, which is a policy call on a
+   live-tested money-adjacent surface, not a mechanical correction.
+
 ## 11. What was NOT verified
 
 Stated plainly rather than implied:
@@ -323,6 +429,17 @@ Stated plainly rather than implied:
   74% observed / 26% inferred → 2.33 km inferred, against a 6.99 km booking).
   The specific claim that this ride's connector was an opposite-carriageway
   turnaround is **inference from the reported shape, not a verified row.**
+- **The review-round fixes were verified the same constrained way.** All 21
+  tests in `test_measured_distance_resolver.py` were executed against the
+  patched function body through the stdlib harness (AST-extracted, real code,
+  no stubs of the logic itself), and the new test was confirmed to FAIL against
+  the old denominator — so it discriminates. The `routeSegments.ts` change has
+  **not** been run at all: vitest needs `node_modules`, which does not exist
+  here. Its test is written to the file's existing convention and reasoned
+  through, not executed.
+- **Neither escalated finding above is fixed**, by deliberate scope decision.
+  The insurer-export provenance gap in particular is live today, independent of
+  whether this PR merges.
 - **`flag_implausible_route_connectors.sql` has never been executed.** Its
   column names are grounded in what `route_finalizer.py` actually writes and its
   haversine matches `route_reconstruction_projection.distance_m` numerically,
@@ -341,6 +458,43 @@ Stated plainly rather than implied:
   alone. Lower risk than the anchor case that was closed (see below): matchings
   within one segment are chunks of a trace whose points exist, not a dropout.
   The `max_extra_km` tightening is what covers it.
+- ~~A trip with a tiny guess and a large genuine deviation is clamped to the
+  booking.~~ **Fixed 2026-09-22 — CI caught this, and it was a real defect, not
+  a tolerable false positive.** The first cut of the rule fired on `routed > 0`
+  and was placed ahead of the `planned_capped` ceiling. The existing
+  `test_real_detour_passes_because_the_gps_sum_grows_with_it` failed on it:
+  13.0 km observed + 0.5 km routed against a 9.21 km booking, with the
+  spike-filtered GPS sum at 13.2 km independently corroborating the number, was
+  being clamped to 9.21 km — **under-reporting a genuine detour by 4.3 km,
+  which on a 0%-commission product is 4.3 km of the driver's own fare.** That
+  test existed because a prior incident taught the lesson; the new rule walked
+  straight into it.
+
+  Two corrections: the rule now also requires the **guess itself** to be
+  material (`routed > max_guess_deviation_ratio * planned`), so a short
+  connector inside an honestly-long trip cannot clamp it; and it is checked
+  **after** `planned_capped`, so a catastrophic overshoot keeps its more
+  specific label. Ride 0c24901f is still caught (2.33 km routed = 33% of a
+  6.99 km booking, 28.2% drift). Three CI failures, all three from this
+  branch's own work, no infra involvement.
+- **Found in review, fixed 2026-09-22 (commit `7a80e2f`): duplicate connector
+  ids.** The short-gap branch emitted a connector using `connector_attempts + 1`
+  without incrementing the counter, so the next connector sharing its
+  `gap_reason` took the same number and two segments landed in
+  `road_matched_segments` under one `id`. Reachable on an ordinary ride — a stop
+  (time-split gap under `MIN_ROUTED_GAP_M`) followed by a real dropout
+  (distance-split gap over it), which is exactly the pair of failures this work
+  addresses. `shared/utils/routeSegments.ts:95` passes a non-empty id straight
+  through, so the collision reaches every reader. No consumer was observed to
+  crash, but `road_matched_segments` is SGI and dispute evidence and two
+  segments claiming one identity is a defect in the record on its own terms.
+  Reproduced before fixing; regression test added.
+
+- **Pre-existing gap found and fixed in passing:** `planned_capped` was never
+  added to the admin map's `gpsTooIncomplete` check, so a ride capped to the
+  booking still drew its GPS fragments — card and map disagreeing, exactly what
+  the comment above that line warns about. `BOOKED_DISTANCE_BASES` now covers
+  all three booked bases.
 - **A detour under 3x the straight line and slow enough to be plausible is
   still accepted.** That is the intended envelope, not an oversight — a real
   detour looks exactly like this — but it means the guards bound the damage

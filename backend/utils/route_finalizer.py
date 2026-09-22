@@ -81,6 +81,7 @@ _DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS = {
     "reconstructed": "reconstructed_distance",
     "planned_estimated": "coverage_fallback",
     "planned_capped": "implausible_distance_cap",
+    "planned_guess_deviation": "guess_deviation_cap",
     "gps_measured": "late_tail_refinalization",
 }
 
@@ -605,6 +606,7 @@ def resolve_measured_distance_km(
     min_vs_straight: float = 0.8,
     gps_km: float = 0.0,
     max_vs_reference: float = 1.3,
+    max_guess_deviation_ratio: float = 0.10,
 ) -> "tuple[float, str]":
     """Decide the measured distance a completed ride should DISPLAY (never bill).
 
@@ -621,6 +623,14 @@ def resolve_measured_distance_km(
         connectors dominate) OR the candidate is physically impossible (below
         ``min_vs_straight`` × the crow-flies endpoints distance) → keep the
         planned/booked distance rather than publish a wrong GPS number.
+      * ``planned_guess_deviation`` — the routed gap fill is itself larger
+        than ``max_guess_deviation_ratio`` of the booking AND the resulting
+        number has drifted past that same ratio from it. A number that is part
+        measurement and part guess is not a measurement, so the booking is
+        published instead. Checked AFTER ``planned_capped`` so a catastrophic
+        overshoot keeps its more specific label, and gated on the guess being
+        material so a real detour with a short connector in it is still
+        published as measured.
       * ``planned_capped`` — the candidate is implausibly LONG: more than
         ``max_vs_reference`` × the larger of the booked distance and the
         spike-filtered GPS sum (``gps_km``). Map matching over a dense
@@ -661,6 +671,41 @@ def resolve_measured_distance_km(
         reference = max(planned, float(gps_km or 0))
         if candidate > max_vs_reference * reference:
             return round(planned, 3), "planned_capped"
+
+        # Part-measurement, part-guess is not a measurement. Below the ceiling
+        # above, a number can still be well off the booking purely because gap
+        # fill invented the difference: ride 0c24901f published 8.96 km against
+        # a 6.99 km booking (28.2% over) on the strength of a 2.33 km routed
+        # connector, and 1.282x slipped under the 1.3x ceiling.
+        #
+        # Two conditions, and BOTH are load-bearing:
+        #   * the guess itself is material -- routed distance exceeds the same
+        #     ratio of THE NUMBER ABOUT TO BE PUBLISHED. A trip whose GPS
+        #     genuinely wandered is not a guess just because a short connector
+        #     exists somewhere in it.
+        #   * the published number has drifted past that ratio from the booking.
+        #
+        # Without the first condition this swallows real detours. 13.0 km
+        # observed + 0.5 km routed against a 9.21 km booking is a driver who
+        # took the long way round -- the spike-filtered GPS sum (13.2 km)
+        # corroborates it independently -- and clamping that to the booking
+        # under-reports the trip by 4.3 km. On a 0%-commission product that is
+        # the driver's own fare. test_real_detour_passes_because_the_gps_sum_
+        # grows_with_it pins exactly that case.
+        #
+        # The denominator must be the candidate, not the booking. "How much of
+        # this is guess" is a question about the number being published; the
+        # booking is precisely the value under suspicion when a driver detours,
+        # so measuring against it makes a STALE booking look like evidence of
+        # guessing. 0.71 km of fill on a 15.01 km trip is 4.7% of the trip but
+        # 10.1% of a 7 km booking -- and against the booking that clamped a
+        # real, gps_km-corroborated 15 km drive down to 7 km, losing the driver
+        # 8 km. test_material_guess_is_measured_against_the_trip_not_the_booking
+        # pins that input.
+        if routed > max_guess_deviation_ratio * candidate:
+            deviation_ratio = abs(candidate - planned) / planned
+            if deviation_ratio > max_guess_deviation_ratio:
+                return round(planned, 3), "planned_guess_deviation"
 
     if candidate > 0 and straight_share <= max_straight_share:
         if coverage >= min_coverage:
@@ -709,12 +754,24 @@ async def _recompute_ride_distance_stats(
     min_coverage = 0.6
     fallback_enabled = True
     max_vs_reference = 1.3
+    max_guess_deviation_ratio = 0.10
     try:
         _settings = (await get_app_settings()) or {}
         fare_lock = _settings.get("fare_lock_enabled", False)
         min_coverage = float(_settings.get("route_min_observed_coverage_ratio", 0.6))
         fallback_enabled = bool(_settings.get("route_distance_fallback_enabled", True))
         max_vs_reference = float(_settings.get("route_distance_max_vs_reference_ratio", 1.3))
+        # Tunable without a deploy once the column exists; absent, .get() returns
+        # the default and nothing changes. Two-arg .get() like the three reads
+        # above, NOT `.get(k) or default` -- `or` throws away a deliberate JSON
+        # 0 (the strictest setting: refuse any guess at all) while honouring the
+        # string "0", so the knob would obey admins inconsistently by JSON type.
+        # Clamped because this is the one knob here that inverts the rule when
+        # negative: with a negative ratio both conditions below are trivially
+        # true for every ride, so a single mistyped app_settings row would
+        # publish the booking platform-wide. Surge is clamped at its call sites
+        # for the same reason.
+        max_guess_deviation_ratio = min(1.0, max(0.0, float(_settings.get("route_guess_deviation_max_ratio", 0.10))))
     except Exception:
         logger.debug("distance-resolution settings read failed during recompute; using defaults", exc_info=True)
 
@@ -735,8 +792,26 @@ async def _recompute_ride_distance_stats(
             # measured figure that does not depend on map matching.
             gps_km=float(distances.actual_distance_km_haversine or 0),
             max_vs_reference=max_vs_reference,
+            max_guess_deviation_ratio=max_guess_deviation_ratio,
         )
         new_actual = float(new_actual)
+        if distance_basis == "planned_guess_deviation":
+            logger.warning(
+                "ride %s: distance was part guess and drifted %.1f%% from the booking — publishing booked %.2fkm "
+                "instead of observed %.2f + routed %.2f (limit %.0f%%)",
+                ride_id,
+                abs(
+                    float(reconstructed.get("observed_distance_km") or 0)
+                    + float(reconstructed.get("routed_connector_distance_km") or 0)
+                    - float(planned_distance or 0)
+                )
+                / float(planned_distance or 1)
+                * 100.0,
+                float(planned_distance or 0),
+                float(reconstructed.get("observed_distance_km") or 0),
+                float(reconstructed.get("routed_connector_distance_km") or 0),
+                max_guess_deviation_ratio * 100.0,
+            )
         if distance_basis == "planned_capped":
             logger.warning(
                 "ride %s: reconstructed distance %.2fkm exceeds %.2fx the larger of planned %.2fkm / GPS sum %.2fkm "

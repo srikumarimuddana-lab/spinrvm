@@ -99,6 +99,22 @@ GAP_MAX_DETOUR_RATIO = 3.0
 # worth watching -- it is counted separately so the next bad case shows up on a
 # dashboard rather than in a rider's complaint.
 GAP_DETOUR_WATCH_RATIO = 2.0
+# Below this separation a gap is connected directly and never routed.
+#
+# A STOPPED CAR produces exactly this shape. Tracking goes quiet while the
+# vehicle is not moving (the driver app emits on a 5 m distance interval), the
+# segmenter sees an interval longer than MAX_CONTINUOUS_GAP_SECONDS and splits,
+# and the two sides end up a few tens of metres apart through nothing but
+# stationary drift. A router cannot express "did not move" -- asked to connect
+# two such points it returns the shortest legal DRIVE, and on a one-way street
+# that is a lap of the block. Ride 649d0b9c: 73 m apart, 460 m drawn, 11
+# invented points, in a stretch where the driver had simply stopped.
+#
+# Over this distance a straight line is wrong by at most a few tens of metres
+# and its length is already excluded from measured distance; a routed answer
+# can be wrong by several hundred and is counted. Cutting a corner is the
+# accepted cost.
+MIN_ROUTED_GAP_M = 150.0
 # Physics gate on a routed connector: whatever road path is substituted for the
 # missing GPS must be drivable in the time the gap actually took. A router
 # answering a short gap with a drive to the next legal turnaround and back
@@ -343,7 +359,28 @@ async def reconstruct_completed_route(
             _count_connector("refused_time_cap")
             return
 
+        # Counted before any connector is emitted, including the short-gap one
+        # below. Segment ids are f"inferred-{reason}-{attempt}", so an emitted
+        # connector that does not consume an attempt hands its number to the
+        # next one and both end up with the same id -- a real case on a ride
+        # that both stops (short gap) and loses GPS (long gap), which is
+        # exactly the pair of failures this branch exists for.
         connector_attempts += 1
+
+        # Short-gap direct connect — before any routing tier. See
+        # MIN_ROUTED_GAP_M: over this distance a router's answer is not a
+        # better guess than the straight line, and can be far worse.
+        if gap_distance < MIN_ROUTED_GAP_M:
+            logger.info(
+                "gap fill connected directly for %s: %.0f m is below the %.0f m routing threshold",
+                reason,
+                gap_distance,
+                MIN_ROUTED_GAP_M,
+            )
+            straight_connector_km += gap_distance / 1000.0
+            output.append(_straight_line_segment(start, end, gap_distance, reason, connector_attempts))
+            _count_connector("straight_short_gap")
+            return
 
         # If we've exceeded max connectors, use haversine (always succeeds).
         if connector_attempts > MAX_INFERRED_CONNECTORS:

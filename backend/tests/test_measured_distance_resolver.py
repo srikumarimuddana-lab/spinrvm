@@ -107,6 +107,29 @@ class TestImplausibilityCeiling:
         assert km == 13.5
         assert basis == "observed"
 
+    def test_material_guess_is_measured_against_the_trip_not_the_booking(self):
+        # The sibling case above with the booking left stale. 0.71 km of fill on
+        # a 15.01 km trip is 4.7% of what is about to be published -- immaterial
+        # -- but 10.1% of a 7.0 km booking. Measuring the guess against the
+        # booking made a stale booking look like evidence of guessing and
+        # clamped a real, gps_km-corroborated 15 km drive to 7 km, costing the
+        # driver 8 km on a product where they keep the whole fare.
+        km, basis = resolve_measured_distance_km(
+            _recon(14.3, routed=0.71), coverage=0.95, planned_km=7.0, straight_line_km=5.0, gps_km=15.0
+        )
+        assert km == 15.01
+        assert basis == "observed"
+
+    def test_material_guess_still_clamps_when_the_fill_is_large(self):
+        # The inverse, so the test above cannot be satisfied by deleting the
+        # rule: ride 0c24901f's 2.33 km connector is 26% of its own 8.96 km
+        # reconstruction, material by either denominator.
+        km, basis = resolve_measured_distance_km(
+            _recon(6.63, routed=2.33), coverage=0.9, planned_km=6.99, straight_line_km=4.0, gps_km=6.7
+        )
+        assert km == 6.99
+        assert basis == "planned_guess_deviation"
+
     def test_ceiling_uses_the_larger_of_the_two_references(self):
         km, basis = resolve_measured_distance_km(
             _recon(11.0), coverage=0.95, planned_km=5.0, straight_line_km=3.0, gps_km=9.0
@@ -141,3 +164,95 @@ class TestImplausibilityCeiling:
         )
         assert km == 9.981
         assert basis == "reconstructed"
+
+
+# --- part-measurement, part-guess is not a measurement -----------------------
+# Owner decision (2026-09-22): when gap fill contributed distance AND the result
+# has drifted more than 10% from the booking, publish the booking. A number that
+# is partly invented should not be the number a rider, a driver or an insurer is
+# billed against.
+
+
+def test_a_part_guessed_distance_past_10_percent_publishes_the_booking():
+    """Regression for ride 0c24901f.
+
+    6.63 km of real GPS plus a 2.33 km routed connector published 8.96 km
+    against a 6.99 km booking -- 28.2% over. It cleared every guard at the time,
+    including the 1.3x ceiling (8.96 < 9.09).
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.63, routed=2.33), coverage=0.74, planned_km=6.99, straight_line_km=5.0, gps_km=6.6
+    )
+
+    assert basis == "planned_guess_deviation"
+    assert distance_km == 6.99
+
+
+def test_a_real_detour_with_no_guess_is_never_clamped():
+    """The rule is gated on routed > 0 on purpose.
+
+    With a complete GPS trail a large deviation from the booking is a REAL
+    detour. Clamping it to the booking would under-report the trip and, on a
+    0%-commission product where the driver keeps the fare, underpay the driver.
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(9.10, routed=0.0), coverage=0.98, planned_km=7.0, straight_line_km=5.0, gps_km=9.05
+    )
+
+    assert basis == "observed"
+    assert distance_km == 9.10
+
+
+def test_a_small_guess_inside_the_band_still_publishes_the_measurement():
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.50, routed=0.20), coverage=0.95, planned_km=6.99, straight_line_km=5.0, gps_km=6.6
+    )
+
+    assert basis == "observed"
+    assert distance_km == 6.70
+
+
+def test_the_guess_deviation_rule_is_symmetric():
+    """Under-reporting is as wrong as over-reporting: the deviation is absolute.
+
+    The guess must still be material -- 1.5 km of gap fill against a 6.99 km
+    booking -- or this is a short GPS trail, not an invented one, and the
+    measurement stands.
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(4.0, routed=1.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
+    )
+
+    assert basis == "planned_guess_deviation"
+    assert distance_km == 6.99
+
+
+def test_a_short_connector_cannot_clamp_a_trip_that_merely_ran_long():
+    """The materiality gate, from the other side.
+
+    0.5 km of gap fill cannot account for a 1.5 km gap between the measurement
+    and the booking, so the measurement is what gets published. This is the
+    same protection test_real_detour_passes_because_the_gps_sum_grows_with_it
+    asserts for an over-reporting trip.
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(5.0, routed=0.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
+    )
+
+    assert basis == "observed"
+    assert distance_km == 5.5
+
+
+def test_the_guess_deviation_ratio_is_tunable():
+    """The knob is the no-deploy lever if 10% proves too tight in the field."""
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(6.63, routed=2.33),
+        coverage=0.74,
+        planned_km=6.99,
+        straight_line_km=5.0,
+        gps_km=6.6,
+        max_guess_deviation_ratio=1.0,
+    )
+
+    assert basis != "planned_guess_deviation"
+    assert distance_km == 8.96

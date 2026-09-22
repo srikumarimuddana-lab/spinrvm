@@ -86,6 +86,27 @@ class TestRefundExcessCapture:
         assert outcome.status == expected
         assert outcome.raw["refund_status"] == provider_status
 
+    async def test_existing_pending_operation_retrieves_provider_object_without_duplicate_create(self):
+        stripe_patch, mock_stripe = _patch_stripe(amount_received=210)
+        prior = MagicMock()
+        prior.id = "re_pending"
+        prior.status = "pending"
+        prior.amount = 210
+        mock_stripe.Refund.retrieve.return_value = prior
+        operation = {
+            "id": "op1", "status": "pending", "provider_object_id": "re_pending",
+            "idempotency_key": "ride-cancelrefund-r1-210-a1",
+        }
+        with _patch_secret(), stripe_patch, patch(
+            "backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])
+        ):
+            outcome = await refund_excess_capture(ride_id="r1", payment_intent_id="pi_1", fee_owed=Decimal("0"))
+
+        assert outcome.status == "pending"
+        assert outcome.raw["refund_id"] == "re_pending"
+        mock_stripe.Refund.create.assert_not_called()
+        mock_stripe.Refund.retrieve.assert_called_once_with("re_pending", api_key="sk_test_xxx")
+
     async def test_partial_fee_refunds_only_the_excess(self):
         stripe_patch, mock_stripe = _patch_stripe(amount_received=210)
         with _patch_secret(), stripe_patch:

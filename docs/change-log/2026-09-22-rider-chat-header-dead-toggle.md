@@ -19,13 +19,30 @@ and controlled nothing. A rider reading the screen reasonably assumed it was a s
 
 ## 2. Root cause
 
-Vestigial layout filler from the removed call button. Rider↔driver contact is chat-only —
-phone numbers are never shared between parties and the backend `/call` endpoint was removed.
-When the call button came out of the header, rider-app left a spacer `<View>` in its slot,
-styled as a 36×22 pill containing an 18×18 dot. The sibling screen
-`driver-app/app/driver/chat.tsx` carries the *same* explanatory comment about the removed call
-button but has **no leftover element** — it ends the header row there. So this is one-sided
-fork drift between the two chat screens, not an intentional rider-only affordance.
+**Verified, code-level facts.** The element was two plain `<View>`s — no `Switch`, no
+`TouchableOpacity`, no `onPress`, no state, no handler — rendered in the header's right slot as
+a 36×22 pill containing an 18×18 dot. It was therefore non-operable regardless of how it got
+there. Its styling was also self-contradictory: `alignItems: 'flex-end'` pushed the dot right
+(reads "ON") while `colors.border` / `colors.textDim` grey reads "OFF", implying some unnamed
+rider setting was disabled.
+
+**Verified convention.** Three other places in the codebase carry the same "no call button"
+comment with **no** decorative element beside it: `driver-app/app/driver/chat.tsx` (the direct
+sibling of this screen) and `rider-app/app/ride-status.tsx` twice (lines 363, 470). So
+comment-only is the established pattern, and `chat-driver.tsx` was the single outlier.
+
+**Inferred, NOT verified.** The natural explanation is that the `<View>` is vestigial filler
+left in the call button's slot when that button was removed (rider↔driver contact is chat-only,
+phone numbers are never shared between parties, and the backend `/call` endpoint was removed).
+Per this template's own instruction to say so rather than guess: **this causal story could not be
+confirmed.** This working copy is a shallow clone (`git rev-parse --is-shallow-repository` →
+`true`), so `git blame` attributes the whole header block to the shallow boundary commit
+(`d3fb3ff`, an unrelated CI-hardening chore) rather than to a real originating commit. The
+history is simply not reachable here. Treat the backstory as plausible and unfalsified —
+corroborated by the three-instance convention above — but not as established fact.
+
+None of this changes the decision: the removal rests on the verified code-level facts, not on
+the backstory.
 
 Two details confirm it was never a control:
 
@@ -121,8 +138,10 @@ ways and is why this is safe: a bad outcome cannot propagate to live sessions wi
 - [x] **Reviewed against `CLAUDE.md` conventions** — surgical-change rule (only the orphaned
       styles this change created were removed; no adjacent cleanup), and the
       "no silent behavior change to a live-tested flow" gate (UX field above is filled in).
-- [x] **Reviewer agents run against the actual diff** — `spinr-design-consistency-reviewer`
-      and `spinr-accessibility-reviewer`.
+- [x] **Reviewer agent run against the actual diff** — `spinr-design-consistency-reviewer`
+      returned **no blockers and no warnings** (verdict: on-brand and complete), independently
+      confirming the flexbox reasoning and surfacing the three-instance comment-only convention
+      cited in §2. A `spinr-accessibility-reviewer` pass was also started; see §10 for its status.
 - [ ] Feature-flagged — **not** flagged. Justification: the element is non-interactive dead
       code with zero other consumers, so the shared-component/3+-page flag trigger in
       CLAUDE.md's gate 3 does not apply, and there is no behavior to ship dark.
@@ -141,6 +160,9 @@ Stated explicitly rather than implied:
   `admin-dashboard` has the CI-wired Playwright job, and this diff does not touch it). The
   header layout conclusion in §4 is reasoned from the flexbox styles, not observed in a
   rendered screen.
+- **Origin history could not be checked.** Shallow clone (see §2) — `git blame` / `git log -L`
+  cannot reach the commit that introduced the element, so the "leftover from the call button"
+  explanation is inference, not confirmed history.
 - **Not exercised on a device or simulator**, so no confirmation of the rendered header at
   small screen widths or with an unusually long driver name / vehicle string.
 

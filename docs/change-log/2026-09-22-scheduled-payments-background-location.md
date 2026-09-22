@@ -20,7 +20,7 @@ All money semantics retain the existing fee eligibility policy. No-driver cancel
 
 ## Database and rollout order
 
-1. Apply additive migrations **444** (payment operations and ride outcome columns) , **445** (capture timestamp and privileged atomic marker RPC), and **446** (atomic cumulative refund accounting) before the new backend. Existing backend can coexist with additive schema, but only upgraded writers enforce marker ordering and atomic refund accounting; complete the rollout across both serving backend installations before treating these guarantees as active. Do not run older manual refund repair scripts during or after the rollout.
+1. Apply additive migrations **444** (payment operations and ride outcome columns), **445** (capture timestamp and privileged atomic marker RPC), and **446** (atomic cumulative refund accounting) before the new backend. Existing backend can coexist with additive schema, but only upgraded writers enforce marker ordering and atomic refund accounting; complete the rollout across both serving backend installations before treating these guarantees as active. Do not run older manual refund repair scripts during or after the rollout.
 2. Configure the existing Stripe webhook endpoint to deliver `refund.updated` and `refund.failed` as well as its existing events. Keep event signing and deduplication enabled. Validate the updated endpoint in Stripe test mode before production.
 3. Deploy the backend and verify the existing payment-retry worker is healthy. Inspect unresolved operations and alert operational owners to exhausted/action-required rows; a database entry is not proof the customer received money.
 4. Publish compatible rider/driver builds after the normal mobile checks. Driver upload URL/payload/auth contracts remain compatible. Older clients can omit capture timestamps for direct single WebSocket pings; queued untimed history is never promoted to a live marker. Existing driver rows without timestamps become known on the next fresh fix.
@@ -46,10 +46,12 @@ For previously affected real rides, use the existing reconciliation script in **
 - Both complete mobile TypeScript checks (`tsc --noEmit`) passed.
 - Migration 445 executed in a local PostgreSQL WASM runtime against a minimal schema: newer/older/stale/future captures, preservation of insurance fields, and denial of client-role execution checked. This is SQL execution, not a live Supabase or multi-replica load test.
 - Combined integrated backend verification: 338 passed, one physical-device-only xfail across 21 targeted payment, cancellation, scheduling, marker, WebSocket and API files.
+- Migration 446 executed in local PostgreSQL WASM: cumulative 100→200 cents books two 100-cent deltas; stale and duplicate calls do not book more; zero confirmed refunds preserve paid status; tax metadata, amount/PI validation, rollback on conflicting ledger UUID, full-refund status and client-role denial passed. This validates SQL transactions sequentially, not concurrent production replicas.
+- The repository migration safety check passes for all three new migrations.
 - Migration 444 also executed in local PostgreSQL WASM: backend access, unique operation key, nonnegative cents and client-role denial passed.
 - Mobile review found no remaining blockers at integrated commit 60069c8; final payment architecture re-review is recorded in the PR.
 
-No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks.
+No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. Hosted rider tests have three failures in unchanged `shared/components/__tests__/SupportScreen.contact.test.tsx`; the same three failures were reproduced locally on base commit `0b6689b`. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and its full-suite comparison is tracked in the PR. These checks are not represented as green.
 
 ## Guarantees and remaining boundaries
 

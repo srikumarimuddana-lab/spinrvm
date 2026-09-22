@@ -222,7 +222,7 @@ class TestLogoutAllRevokesTheEnvAdmin:
         result = await inner(_make_request(), authorization=f"Bearer {token}")
 
         bump.assert_awaited_once()
-        revoke.assert_awaited_once_with("admin-001")
+        revoke.assert_awaited_once_with("admin-001", reason="admin_logout_all")
         # Same response shape as the staff branch — admin-dashboard's
         # lib/api/auth.ts types this as {success, revoked_refresh_tokens}.
         assert result == {"success": True, "revoked_refresh_tokens": 2}

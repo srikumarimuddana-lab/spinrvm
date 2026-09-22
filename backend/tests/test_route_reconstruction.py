@@ -619,3 +619,68 @@ async def test_an_accepted_but_stretched_connector_is_counted_separately(monkeyp
 
     outcomes = [labels.get("outcome") for _, labels in emitted]
     assert outcomes == ["routed_high_detour"]
+
+
+@pytest.mark.asyncio
+async def test_a_short_gap_is_connected_directly_and_never_routed(monkeypatch):
+    """A stopped car looks exactly like a short gap, and must not be routed.
+
+    Ride 649d0b9c: the driver stopped. Tracking went quiet (the app emits on a
+    5 m distance interval), the segmenter split on the time interval, and the
+    two sides ended up 73 m apart through stationary drift alone. A router
+    cannot express "did not move" — asked to connect them it returned the
+    shortest legal DRIVE, a 460 m lap of the block across 11 invented points.
+    """
+    completion = {"lat": 50.410538, "lng": -104.655749, "accuracy": 8}
+    segmented = segment_route(
+        [
+            _point(0, 0, 50.410907, -104.655748),
+            _point(10, 1, 50.410373, -104.655751),
+            # 90 s later, 73 m north — the stop.
+            _point(100, 2, 50.411026, -104.655771),
+            _point(110, 3, 50.410538, -104.655749),
+        ],
+        _lifecycle(),
+        completion,
+    )
+    matched = {
+        "segments": [
+            {
+                "segment_index": 0,
+                "matched_segments": [
+                    {
+                        "provider": "osrm_match",
+                        "distance_km": 0.060,
+                        "polyline": [[50.410907, -104.655748], [50.410373, -104.655751]],
+                    }
+                ],
+            },
+            {
+                "segment_index": 1,
+                "matched_segments": [
+                    {
+                        "provider": "osrm_match",
+                        "distance_km": 0.054,
+                        "polyline": [[50.411026, -104.655771], [50.410538, -104.655749]],
+                    }
+                ],
+            },
+        ],
+        "failures": [],
+    }
+    gap_route = AsyncMock(return_value=(0.460, [[50.410373, -104.655751], [50.410538, -104.655749]]))
+    _patch_providers(monkeypatch, gap_route)
+
+    result = await reconstruction.reconstruct_completed_route(
+        segmented, matched, {"lat": 50.410907, "lng": -104.655748}, completion
+    )
+
+    gap_route.assert_not_awaited()
+    inferred = [section for section in result["segments"] if section["geometry_kind"] == "inferred"]
+    assert len(inferred) == 1
+    assert len(inferred[0]["coordinates"]) == 2
+    assert inferred[0]["provider"] == "haversine_interpolated"
+    # The 460 m never enters the number, and the direct hop's length is already
+    # excluded from measured distance.
+    assert result["routed_connector_distance_km"] == 0.0
+    assert result["straight_connector_distance_km"] == pytest.approx(0.073, abs=0.01)

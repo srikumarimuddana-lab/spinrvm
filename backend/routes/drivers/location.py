@@ -881,7 +881,6 @@ async def update_location_batch(
             except ImportError:
                 from settings_loader import get_app_settings  # type: ignore
                 from utils.breadcrumbs import resolve_active_ride  # type: ignore
-                from utils.gps_filtering import point_epoch_seconds  # type: ignore
                 from utils.period1_distance import batch_incremental_distance_km  # type: ignore
             try:
                 _p1_on = bool((await get_app_settings() or {}).get("period1_distance_tracking_enabled"))

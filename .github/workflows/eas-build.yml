@@ -9,9 +9,17 @@ name: EAS Mobile Update
 # On workflow_dispatch:
 #   → profile=test | preview — ungated publish to that channel.
 #   → profile=production     — behind the `production-ota` GitHub Environment
-#                              (required reviewer), as a percentage ROLLOUT
-#                              (default 10%). This is the ONLY path that
-#                              publishes a production OTA.
+#                              (required reviewer). Defaults to 100%: no
+#                              rollout state, so nothing has to be cleaned up
+#                              afterwards and the next publish is never
+#                              blocked. This is the ONLY path that publishes
+#                              a production OTA.
+#
+# The rollout default was 10% from 2026-09-20 to 2026-09-22. In that window
+# production OTA shipped exactly once, then blocked every later publish for
+# two days because ending a rollout is manual and nobody did it. A canary
+# nobody watches is not a safety feature, it is an outage. Pass 10 explicitly
+# when someone is genuinely going to watch Sentry and then ramp it.
 #
 # Either way the exported source maps are uploaded to Sentry after each
 # publish so post-OTA crashes symbolicate (see .github/actions/eas-ota-publish).
@@ -84,9 +92,9 @@ on:
         type: choice
         options: [test, preview, production]
       rollout_percentage:
-        description: "Production only: share of devices that receive the update (1-100). Ignored for preview/test."
+        description: "Production only, ignored for preview/test. 100 = publish to everyone, leaves no rollout state. Below 100 starts a canary you MUST end before the next production publish (see EAS Rollout Control) — only pick that if someone is actually going to watch it."
         required: false
-        default: "10"
+        default: "100"
         type: string
 
 # Channel routing background:

@@ -90,3 +90,35 @@ eas update:edit "$RESOLVED" --rollout-percentage 100 --non-interactive
 - **No workflow run was executed** (no Actions-dispatch access — confirmed again this session by a `403 Resource not accessible by integration` on `run_workflow`), and no Expo credential exists here.
 - **`eas update:view --json`'s exact shape is still unverified.** The resolver walks the whole document for a UUID-shaped `group` rather than indexing a fixed path, and fails loudly pointing at `action=list` if it finds none — but that a `group` field exists in that output at all is an assumption this fix rests on. The next real run is what proves it.
 - Whether the Android rollouts (rider 2.2.0, driver 2.8.0) are also open remains unobserved; the publish loop still aborts on iOS before reaching Android.
+
+---
+
+# Addendum — remove the complexity instead of documenting it
+
+Added the same day, after the operator asked why publishing latest `main` to production takes this many steps.
+
+## Issue
+
+Fair question. Publishing is one dispatch; **everything else exists only because production published at a 10% rollout.** A rollout is state that a human must clear before the next publish, and at this repo's merge rate nobody was going to. In the two days that default was in place, production OTA shipped exactly **once** and then blocked every subsequent publish. A canary nobody watches is not a safety feature — it is an outage.
+
+The first two attempts to clear it by hand also both failed on copying an id, which is the strongest possible argument for not making a human copy ids.
+
+## Fix
+
+1. **`eas-build.yml`: `rollout_percentage` default 10 → 100.** Production now publishes to everyone and leaves no rollout state, so nothing needs cleaning up and the next publish is never blocked. `10` is still accepted — pass it explicitly when someone is actually going to watch Sentry and ramp it afterwards.
+2. **`eas-rollout-control.yml`: new `action=end-all-rollouts`, now the default action.** Reads the open rollouts off `update:list` and ramps each to 100%. **No group_id, no ids shown to a human at all.** Bounded deliberately: it only ever sets 100% on the named branch — never deletes, never reverts — so the worst case is an update reaching everyone slightly sooner than a canary would have.
+
+## Risk
+
+Losing the canary is a real tradeoff, stated plainly: an OTA now reaches every production handset at once. Weighed against a canary that delivered one update in two days and blocked all others, and against `eas update:revert-update-rollout` remaining available as the kill switch, 100% is the better default. The 10% path is unchanged for anyone who wants it.
+
+`end-all-rollouts` mutates without a per-group confirmation, which is a deliberate reversal of this workflow's original "never pick a group for you" stance — justified because the action names exactly what it does, is capped at ramping, and the id-copying it replaces is empirically the step that keeps failing.
+
+## Two defects caught by running it, not by reading it
+
+- **A nested heredoc inside a process substitution** (`mapfile -t X < <(python3 - <<'PY' … PY)`) died with `BrokenPipeError` on *valid* input, surfacing as "could not parse" — it would have masked real rollout data. Replaced with a plain temp file.
+- **`mapfile -t GROUPS` fails because `GROUPS` is a read-only special variable in bash** (the caller's group IDs). Under `set -e` the step died with *no output whatsoever* — exit 1, empty stdout, empty stderr. An isolated repro using `G` passed, which is exactly why reading the code could never have found it. Renamed to `OPEN_GROUPS`.
+
+## Verification
+
+`actionlint` clean on both workflows; `bash -n`; step body executed against a stubbed `eas` for: two open rollouts among one already at 100% (both cleared, in order, no ids from the operator), nothing open (clean exit 0), unparseable JSON (fails loudly rather than silently no-op'ing), and a regression check that single-group `ramp-to-100` still resolves an update id to its group. Still no real workflow run and no Expo credential — the `group`-field assumption in `update:list --json` is unchanged and unproven.

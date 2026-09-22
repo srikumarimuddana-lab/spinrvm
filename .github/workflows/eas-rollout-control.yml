@@ -56,11 +56,11 @@ on:
         type: choice
         options: [production, preview, test]
       action:
-        description: "list = read-only. ramp-to-100 / revert need group_id and change what real devices run."
+        description: "end-all-rollouts = clear every open rollout on the branch, no group_id needed (the usual choice). list = read-only. ramp-to-100 / revert act on one group_id."
         required: true
-        default: "list"
+        default: "end-all-rollouts"
         type: choice
-        options: [list, ramp-to-100, revert]
+        options: [end-all-rollouts, list, ramp-to-100, revert]
       group_id:
         description: "Update GROUP id, or the UPDATE id a failed publish reports (\"Update <id> is currently rolling out\") — either is accepted and resolved to the group. REQUIRED for ramp-to-100 and revert; ignored by list."
         required: false
@@ -168,7 +168,68 @@ jobs:
             exit 0
           fi
 
-          # ── Mutating actions ────────────────────────────────────────────
+          # ── end-all-rollouts: no ids for the operator to handle ─────────
+          # Copying an id by hand is what broke the first two attempts at this
+          # (Expo's error reports an UPDATE id, update:edit needs the GROUP
+          # id). This action never shows an id to a human: it reads the groups
+          # off update:list and ramps each one. Bounded on purpose — it only
+          # ever sets 100% on the named branch, never deletes and never
+          # reverts, so the worst case is "an update reaches everyone slightly
+          # sooner than a canary would have".
+          if [ "$ACTION" = "end-all-rollouts" ]; then
+            eas update:list --branch "$BRANCH" --json --non-interactive > /tmp/updates.json
+            # Writes to a file rather than feeding `mapfile` through a process
+            # substitution: a heredoc inside <(...) had the reader close early
+            # and killed the writer with BrokenPipeError even on valid input,
+            # which read as "could not parse" and would have masked real data.
+            if ! python3 - > /tmp/groups.txt <<'PY'
+          import json, re, sys
+          UUID = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+          def walk(o):
+              if isinstance(o, dict):
+                  yield o
+                  for v in o.values():
+                      yield from walk(v)
+              elif isinstance(o, list):
+                  for v in o:
+                      yield from walk(v)
+          try:
+              data = json.load(open("/tmp/updates.json"))
+          except Exception:
+              sys.exit(1)
+          out = []
+          for d in walk(data):
+              pct = d.get("rolloutPercentage")
+              if not isinstance(pct, (int, float)) or isinstance(pct, bool) or pct >= 100:
+                  continue
+              g = d.get("group")
+              if isinstance(g, str) and UUID.match(g) and g not in out:
+                  out.append(g)
+          for g in out:
+              print(g)
+          PY
+            then
+              echo "::error::Could not parse eas update:list --json for $APP_DIR. Run action=list, read the raw output, and clear each group with action=ramp-to-100."
+              exit 1
+            fi
+            # NOT `GROUPS`: that is a read-only special variable in bash (the
+            # caller's group IDs), so `mapfile -t GROUPS` fails and, under
+            # `set -e`, kills the step with no message at all.
+            mapfile -t OPEN_GROUPS < /tmp/groups.txt
+            if [ "${#OPEN_GROUPS[@]}" -eq 0 ] || [ -z "${OPEN_GROUPS[0]:-}" ]; then
+              echo "No open rollout found on branch $BRANCH for $APP_DIR — nothing to clear."
+              exit 0
+            fi
+            echo "Clearing ${#OPEN_GROUPS[@]} open rollout(s) on $BRANCH for $APP_DIR — each goes to 100% of devices on its platform and runtime version."
+            for g in "${OPEN_GROUPS[@]}"; do
+              echo "  → $g"
+              eas update:edit "$g" --rollout-percentage 100 --non-interactive
+            done
+            echo "Done. Dispatch 'EAS Mobile Update' with profile=production and rollout_percentage=100."
+            exit 0
+          fi
+
+          # ── Single-group actions ────────────────────────────────────────
           ID_IN="$GROUP_ID"
           if [ -z "$ID_IN" ]; then
             echo "::error::action=$ACTION requires group_id. Run action=list first, or copy the update id out of a failed publish. This workflow will not choose an id for you — both mutations change what real devices run."

@@ -120,26 +120,42 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
     return await run_sync(_fn)
 
 
-async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None):
+async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None, *, captured_at=None, extra_fields=None):
+    """Commit a live marker under a DB capture-time guard (migration 445).
+
+    Missing timestamps are permitted for legacy live-ping callers only. History
+    producers must pass their sensor timestamp, never their upload time.
+    """
     if not supabase:
         _write_skipped("update_driver_location", "drivers")
         return None
+    capture = captured_at if captured_at is not None else datetime.now(timezone.utc)
+    if isinstance(capture, datetime):
+        capture = capture.isoformat()
+    data = {"lat": lat, "lng": lng}
+    if heading is not None:
+        try:
+            import math
+            value = float(heading)
+            if math.isfinite(value):
+                data["heading"] = value % 360
+        except (TypeError, ValueError):
+            pass
+    for key in ("period1_accum_km", "period1_accum_since"):
+        if key in (extra_fields or {}):
+            value = extra_fields[key]
+            data[key] = value.isoformat() if isinstance(value, datetime) else value
 
     def _update():
-        data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
-        # Persist heading (migration 113) so /drivers/nearby can rotate the
-        # rider map marker. Normalise to 0–359 and only write when the device
-        # sent a usable number, so a fix with no bearing doesn't wipe the last
-        # good heading. Mirrors the REST /location-batch path.
-        if heading is not None:
-            try:
-                data["heading"] = float(heading) % 360
-            except (TypeError, ValueError):
-                pass
-        supabase.table("drivers").update(data).eq("id", str(driver_id)).execute()
-        return True
+        result = supabase.rpc("update_live_driver_marker", {
+            "p_driver_id": str(driver_id), "p_captured_at": capture, "p_values": data,
+        }).execute()
+        return result.data is True
 
-    return await run_sync(_update)
+    accepted = await run_sync(_update)
+    if accepted:
+        await invalidate_driver_cache(driver_id=driver_id)
+    return accepted
 
 
 async def set_driver_available(driver_id: str, available: bool = True, total_rides_inc: int = 0):

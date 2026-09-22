@@ -11,19 +11,19 @@ try:
     from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.datetime_utils import parse_iso_utc
-    from ..utils.gps_filtering import point_epoch_seconds
     from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from ..utils.gps_filtering import point_epoch_seconds
     from ..utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
     from ..utils.session_revocation import is_session_revoked
 except ImportError:
     from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.gps_filtering import point_epoch_seconds
     from utils.firebase_identity import (  # type: ignore
         FirebaseIdentityRejected,
         enforce_customer_eligibility,
     )
+    from utils.gps_filtering import point_epoch_seconds
     from utils.location_integrity import check_location_integrity, evaluate_gps_plausibility  # type: ignore
     from utils.session_revocation import is_session_revoked  # type: ignore
 

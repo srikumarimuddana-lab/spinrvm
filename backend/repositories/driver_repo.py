@@ -120,7 +120,9 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
     return await run_sync(_fn)
 
 
-async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None, *, captured_at=None, extra_fields=None):
+async def update_driver_location(
+    driver_id: str, lat: float, lng: float, heading=None, *, captured_at=None, extra_fields=None
+):
     """Commit a live marker under a DB capture-time guard (migration 445).
 
     Missing timestamps are permitted for legacy live-ping callers only. History
@@ -136,6 +138,7 @@ async def update_driver_location(driver_id: str, lat: float, lng: float, heading
     if heading is not None:
         try:
             import math
+
             value = float(heading)
             if math.isfinite(value):
                 data["heading"] = value % 360
@@ -147,9 +150,14 @@ async def update_driver_location(driver_id: str, lat: float, lng: float, heading
             data[key] = value.isoformat() if isinstance(value, datetime) else value
 
     def _update():
-        result = supabase.rpc("update_live_driver_marker", {
-            "p_driver_id": str(driver_id), "p_captured_at": capture, "p_values": data,
-        }).execute()
+        result = supabase.rpc(
+            "update_live_driver_marker",
+            {
+                "p_driver_id": str(driver_id),
+                "p_captured_at": capture,
+                "p_values": data,
+            },
+        ).execute()
         return result.data is True
 
     accepted = await run_sync(_update)

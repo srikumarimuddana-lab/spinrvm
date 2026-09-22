@@ -914,6 +914,7 @@ async def test_stuck_stripe_events_ignores_row_processed_between_query_and_check
 def _full_processing_ride(*, grand_total="25.00", tip_amount="0.00", pi_id="pi_x", authorized_amount=None) -> dict:
     return {
         "id": "stuck",
+        "rider_id": "rider_1",
         "payment_status": "processing",
         "payment_intent_id": pi_id,
         "grand_total": grand_total,
@@ -931,13 +932,31 @@ def _heal_stripe_mock(status: str = "succeeded", amount_received: int = 2500) ->
     return m
 
 
+def _heal_ledger_proof(*, delta_cents: int = 2500, tip_amount: str = "0.00", components=None) -> list[dict]:
+    metadata = {"tip_amount": tip_amount}
+    if components is not None:
+        metadata["component_payment_intents"] = components
+    return [{
+        "ride_id": "stuck",
+        "user_id": "rider_1",
+        "event_type": "stripe_charge",
+        "ref": "pi_x",
+        "delta_cents": delta_cents,
+        "metadata": metadata,
+    }]
+
+
 @pytest.mark.asyncio
 async def test_auto_heal_disabled_by_default_is_noop():
     """Flag absent → no Stripe lookup, no DB write; rides stay detection-only."""
     db_mock = AsyncMock()
     stripe_mock = _heal_stripe_mock()
 
-    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+    receipt = AsyncMock(return_value=True)
+    with (
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch("services.outbox_receipts.maybe_send_auto_receipt", receipt),
+    ):
         from utils.stripe_reconcile import _maybe_heal_stuck_processing
 
         stats = await _maybe_heal_stuck_processing([{"ride_id": "stuck"}], stripe_mock, {})
@@ -951,13 +970,18 @@ async def test_auto_heal_disabled_by_default_is_noop():
 
 @pytest.mark.asyncio
 async def test_auto_heal_marks_paid_when_stripe_succeeded():
-    """Flag ON + PI succeeded for the expected amount → atomic processing→paid."""
+    """Flag ON + exact ledger/Stripe proof → atomic processing→paid."""
     db_mock = AsyncMock()
     db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = _heal_ledger_proof()
     db_mock.update_one.return_value = {"id": "stuck"}  # claim won
     stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2500)
 
-    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+    receipt = AsyncMock(return_value=True)
+    with (
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch("services.outbox_receipts.maybe_send_auto_receipt", receipt),
+    ):
         from utils.stripe_reconcile import _maybe_heal_stuck_processing
 
         stats = await _maybe_heal_stuck_processing(
@@ -970,6 +994,8 @@ async def test_auto_heal_marks_paid_when_stripe_succeeded():
     filt, update = db_mock.update_one.call_args[0][1], db_mock.update_one.call_args[0][2]
     assert filt == {"id": "stuck", "payment_status": "processing"}
     assert update["payment_status"] == "paid"
+    assert update["paid_at"]
+    receipt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -977,9 +1003,13 @@ async def test_auto_heal_skips_when_pi_not_succeeded():
     """Flag ON but the charge never succeeded → never mark paid."""
     db_mock = AsyncMock()
     db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = _heal_ledger_proof()
     stripe_mock = _heal_stripe_mock(status="requires_action")
 
-    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+    with (
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch("services.outbox_receipts.maybe_send_auto_receipt", AsyncMock(return_value=True)),
+    ):
         from utils.stripe_reconcile import _maybe_heal_stuck_processing
 
         stats = await _maybe_heal_stuck_processing(
@@ -995,6 +1025,7 @@ async def test_auto_heal_skips_when_amount_short():
     """Flag ON, PI succeeded but amount_received < expected → leave for review."""
     db_mock = AsyncMock()
     db_mock.get_ride.return_value = _full_processing_ride(grand_total="25.00")
+    db_mock.get_rows.return_value = _heal_ledger_proof()
     stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2400)  # expected 2500
 
     with patch("utils.stripe_reconcile.db_supabase", db_mock):
@@ -1014,6 +1045,7 @@ async def test_auto_heal_idempotent_when_claim_lost():
     or another replica won the race) → counted as not healed, no error."""
     db_mock = AsyncMock()
     db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = _heal_ledger_proof()
     db_mock.update_one.return_value = None  # zero rows — already finalised
     stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2500)
 
@@ -1025,6 +1057,95 @@ async def test_auto_heal_idempotent_when_claim_lost():
         )
 
     assert stats["healed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_heal_requires_exact_existing_ledger_proof():
+    """A succeeded PI without the finalizer's durable ledger row stays unpaid."""
+    db_mock = AsyncMock()
+    db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = []
+    stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2500)
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _maybe_heal_stuck_processing
+
+        stats = await _maybe_heal_stuck_processing(
+            [{"ride_id": "stuck"}], stripe_mock, {"stripe_auto_heal_processing": True}
+        )
+
+    assert stats["healed"] == 0
+    db_mock.update_one.assert_not_awaited()
+    stripe_mock.PaymentIntent.retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_heal_rejects_ledger_for_different_rider():
+    db_mock = AsyncMock()
+    db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = [{**_heal_ledger_proof()[0], "user_id": "someone_else"}]
+    stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2500)
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _maybe_heal_stuck_processing
+
+        stats = await _maybe_heal_stuck_processing(
+            [{"ride_id": "stuck"}], stripe_mock, {"stripe_auto_heal_processing": True}
+        )
+
+    assert stats["healed"] == 0
+    db_mock.update_one.assert_not_awaited()
+    stripe_mock.PaymentIntent.retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_heal_uses_frozen_ledger_tip_not_stale_ride_tip():
+    db_mock = AsyncMock()
+    db_mock.get_ride.return_value = _full_processing_ride(tip_amount="0.00")
+    db_mock.get_rows.return_value = _heal_ledger_proof(delta_cents=2600, tip_amount="1.00")
+    db_mock.update_one.return_value = {"id": "stuck"}
+    stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2600)
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock), patch(
+        "services.outbox_receipts.maybe_send_auto_receipt", AsyncMock(return_value=True)
+    ):
+        from utils.stripe_reconcile import _maybe_heal_stuck_processing
+
+        stats = await _maybe_heal_stuck_processing(
+            [{"ride_id": "stuck"}], stripe_mock, {"stripe_auto_heal_processing": True}
+        )
+
+    assert stats["healed"] == 1
+    update = db_mock.update_one.call_args[0][2]
+    assert update["tip_amount"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_auto_heal_split_requires_each_exact_component_succeeded():
+    db_mock = AsyncMock()
+    db_mock.get_ride.return_value = _full_processing_ride()
+    db_mock.get_rows.return_value = _heal_ledger_proof(
+        delta_cents=2500,
+        components={"version": 1, "items": [
+            {"payment_intent_id": "pi_x", "amount_cents": 2000},
+            {"payment_intent_id": "pi_overflow", "amount_cents": 500},
+        ]},
+    )
+    stripe_mock = _heal_stripe_mock(status="succeeded", amount_received=2000)
+    stripe_mock.PaymentIntent.retrieve.side_effect = [
+        {"id": "pi_x", "status": "succeeded", "amount_received": 2000},
+        {"id": "pi_overflow", "status": "succeeded", "amount_received": 499},
+    ]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _maybe_heal_stuck_processing
+
+        stats = await _maybe_heal_stuck_processing(
+            [{"ride_id": "stuck"}], stripe_mock, {"stripe_auto_heal_processing": True}
+        )
+
+    assert stats["healed"] == 0
+    db_mock.update_one.assert_not_awaited()
 
 
 # ── Fare attribution invariant (total_fare == driver + admin, tip-adjusted) ──

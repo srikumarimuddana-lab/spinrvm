@@ -117,23 +117,26 @@ async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeyp
         "missing_tail",
     ]
     assert result["observed_distance_km"] == 0.4
-    assert result["inferred_distance_km"] == 1.15
-    # All three connectors were routed via OSRM (road-following), so the routed
-    # split carries the whole inferred distance and none is blind straight-line.
-    assert result["routed_connector_distance_km"] == 1.15
-    assert result["straight_connector_distance_km"] == 0.0
+    # The missing_start gap is 131.8 m — below MIN_ROUTED_GAP_M, so it is
+    # connected directly and the router is never asked about it. That leaves
+    # two routed connectors, which consume the first two canned returns
+    # (0.15 for the internal gap, 0.45 for the tail).
+    assert result["inferred_distance_km"] == 0.732
+    assert result["routed_connector_distance_km"] == 0.60
+    assert result["straight_connector_distance_km"] == 0.132
     assert (
         result["routed_connector_distance_km"] + result["straight_connector_distance_km"]
         == result["inferred_distance_km"]
     )
-    assert result["distance_km"] == 1.55
-    assert result["observed_distance_ratio"] == pytest.approx(0.258, abs=0.001)
-    assert result["inferred_distance_ratio"] == pytest.approx(0.742, abs=0.001)
+    assert result["distance_km"] == 1.132
+    assert result["observed_distance_ratio"] == pytest.approx(0.353, abs=0.001)
+    assert result["inferred_distance_ratio"] == pytest.approx(0.647, abs=0.001)
+    # Still three inferred sections in order — one of them is now a direct hop.
     assert result["inferred_gap_count"] == 3
     assert result["endpoint_start_verified"] is True
     assert result["endpoint_end_verified"] is True
     assert result["failed_gaps"] == []
-    assert gap_route.await_count == 3
+    assert gap_route.await_count == 2
     # The whole-segment capture-timestamp fields used internally to time-gate
     # connectors are stripped before segments reach the public output — they
     # aren't part of the persisted/rendered segment shape.

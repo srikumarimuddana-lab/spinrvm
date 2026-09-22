@@ -623,13 +623,14 @@ def resolve_measured_distance_km(
         connectors dominate) OR the candidate is physically impossible (below
         ``min_vs_straight`` × the crow-flies endpoints distance) → keep the
         planned/booked distance rather than publish a wrong GPS number.
-      * ``planned_guess_deviation`` — the trip contains routed gap fill AND
-        the resulting number is more than ``max_guess_deviation_ratio`` away
-        from the booking. A number that is part measurement and part guess is
-        not a measurement, so the booked distance is published instead of
-        measurement-plus-guess. Gated on ``routed > 0`` deliberately: with a
-        complete GPS trail a large deviation is a REAL detour, and clamping it
-        to the booking would under-report the trip and underpay the driver.
+      * ``planned_guess_deviation`` — the routed gap fill is itself larger
+        than ``max_guess_deviation_ratio`` of the booking AND the resulting
+        number has drifted past that same ratio from it. A number that is part
+        measurement and part guess is not a measurement, so the booking is
+        published instead. Checked AFTER ``planned_capped`` so a catastrophic
+        overshoot keeps its more specific label, and gated on the guess being
+        material so a real detour with a short connector in it is still
+        published as measured.
       * ``planned_capped`` — the candidate is implausibly LONG: more than
         ``max_vs_reference`` × the larger of the booked distance and the
         spike-filtered GPS sum (``gps_km``). Map matching over a dense
@@ -660,18 +661,6 @@ def resolve_measured_distance_km(
     if straight_line_km and candidate < min_vs_straight * float(straight_line_km):
         return round(float(planned_km or 0), 3), "planned_estimated"
 
-    # Part-measurement, part-guess is not a measurement. When gap fill
-    # contributed distance and the result has drifted from the booking by more
-    # than the allowed ratio, publish the booking rather than a number nobody
-    # can stand behind. Ride 0c24901f published 8.96 km against a 6.99 km
-    # booking (28.2% over) on the strength of a 2.33 km routed connector; that
-    # is the case this closes, and it sat under the 1.3x ceiling below.
-    planned_for_guess = float(planned_km or 0)
-    if planned_for_guess > 0 and routed > 0:
-        deviation_ratio = abs(candidate - planned_for_guess) / planned_for_guess
-        if deviation_ratio > max_guess_deviation_ratio:
-            return round(planned_for_guess, 3), "planned_guess_deviation"
-
     # Implausibility ceiling (see docstring). Anchored on the booked distance:
     # the GPS chord sum alone is a LOWER bound (a hole contributes one chord,
     # shorter than the road through it), so without a booking there is nothing
@@ -682,6 +671,30 @@ def resolve_measured_distance_km(
         reference = max(planned, float(gps_km or 0))
         if candidate > max_vs_reference * reference:
             return round(planned, 3), "planned_capped"
+
+        # Part-measurement, part-guess is not a measurement. Below the ceiling
+        # above, a number can still be well off the booking purely because gap
+        # fill invented the difference: ride 0c24901f published 8.96 km against
+        # a 6.99 km booking (28.2% over) on the strength of a 2.33 km routed
+        # connector, and 1.282x slipped under the 1.3x ceiling.
+        #
+        # Two conditions, and BOTH are load-bearing:
+        #   * the guess itself is material -- routed distance exceeds the same
+        #     ratio of the booking. A trip whose GPS genuinely wandered is not
+        #     a guess just because a short connector exists somewhere in it.
+        #   * the published number has drifted past that ratio from the booking.
+        #
+        # Without the first condition this swallows real detours. 13.0 km
+        # observed + 0.5 km routed against a 9.21 km booking is a driver who
+        # took the long way round -- the spike-filtered GPS sum (13.2 km)
+        # corroborates it independently -- and clamping that to the booking
+        # under-reports the trip by 4.3 km. On a 0%-commission product that is
+        # the driver's own fare. test_real_detour_passes_because_the_gps_sum_
+        # grows_with_it pins exactly that case.
+        if routed > max_guess_deviation_ratio * planned:
+            deviation_ratio = abs(candidate - planned) / planned
+            if deviation_ratio > max_guess_deviation_ratio:
+                return round(planned, 3), "planned_guess_deviation"
 
     if candidate > 0 and straight_share <= max_straight_share:
         if coverage >= min_coverage:

@@ -190,13 +190,34 @@ def test_a_small_guess_inside_the_band_still_publishes_the_measurement():
 
 
 def test_the_guess_deviation_rule_is_symmetric():
-    """Under-reporting is as wrong as over-reporting: the deviation is absolute."""
+    """Under-reporting is as wrong as over-reporting: the deviation is absolute.
+
+    The guess must still be material -- 1.5 km of gap fill against a 6.99 km
+    booking -- or this is a short GPS trail, not an invented one, and the
+    measurement stands.
+    """
     distance_km, basis = resolve_measured_distance_km(
-        _recon(5.0, routed=0.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
+        _recon(4.0, routed=1.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
     )
 
     assert basis == "planned_guess_deviation"
     assert distance_km == 6.99
+
+
+def test_a_short_connector_cannot_clamp_a_trip_that_merely_ran_long():
+    """The materiality gate, from the other side.
+
+    0.5 km of gap fill cannot account for a 1.5 km gap between the measurement
+    and the booking, so the measurement is what gets published. This is the
+    same protection test_real_detour_passes_because_the_gps_sum_grows_with_it
+    asserts for an over-reporting trip.
+    """
+    distance_km, basis = resolve_measured_distance_km(
+        _recon(5.0, routed=0.5), coverage=0.6, planned_km=6.99, straight_line_km=4.0, gps_km=5.0
+    )
+
+    assert basis == "observed"
+    assert distance_km == 5.5
 
 
 def test_the_guess_deviation_ratio_is_tunable():

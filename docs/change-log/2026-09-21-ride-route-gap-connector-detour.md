@@ -140,7 +140,14 @@ would be defensible either.
 
    The ratio reads from `app_settings.route_guess_deviation_max_ratio` when
    present, defaulting to 0.10 — a no-deploy tuning lever, and no migration
-   needed for the default to hold.
+   needed for the default to hold. The same ratio governs both conditions: the
+   guess must exceed it as a share of the booking, and the published number
+   must drift past it.
+
+   **Ordering matters and is deliberate.** `planned_capped` (the 1.3x
+   catastrophic ceiling) is evaluated first; this rule only covers what slips
+   under it. Reversing the two swallows the ceiling's own test cases and, worse,
+   swallows real detours — see section 11.
 
 7. **Stop the pickup tab borrowing the trip's chord.** A non-planned phase with
    no drawable geometry of its own now suppresses the straight-line fallback and
@@ -365,13 +372,25 @@ Stated plainly rather than implied:
   alone. Lower risk than the anchor case that was closed (see below): matchings
   within one segment are chunks of a trace whose points exist, not a dropout.
   The `max_extra_km` tightening is what covers it.
-- **A trip with a tiny guess and a large genuine deviation is clamped to the
-  booking.** If a 50 m routed connector exists on a trip that really did detour
-  30%, the `routed > 0` gate fires and the booking is published, losing a real
-  detour. Judged the safer error — the booking is the contracted number — but
-  it is a false positive, not a case the rule handles gracefully. Tightening it
-  (e.g. requiring the guess itself to be material) is the obvious follow-up if
-  it shows up in practice.
+- ~~A trip with a tiny guess and a large genuine deviation is clamped to the
+  booking.~~ **Fixed 2026-09-22 — CI caught this, and it was a real defect, not
+  a tolerable false positive.** The first cut of the rule fired on `routed > 0`
+  and was placed ahead of the `planned_capped` ceiling. The existing
+  `test_real_detour_passes_because_the_gps_sum_grows_with_it` failed on it:
+  13.0 km observed + 0.5 km routed against a 9.21 km booking, with the
+  spike-filtered GPS sum at 13.2 km independently corroborating the number, was
+  being clamped to 9.21 km — **under-reporting a genuine detour by 4.3 km,
+  which on a 0%-commission product is 4.3 km of the driver's own fare.** That
+  test existed because a prior incident taught the lesson; the new rule walked
+  straight into it.
+
+  Two corrections: the rule now also requires the **guess itself** to be
+  material (`routed > max_guess_deviation_ratio * planned`), so a short
+  connector inside an honestly-long trip cannot clamp it; and it is checked
+  **after** `planned_capped`, so a catastrophic overshoot keeps its more
+  specific label. Ride 0c24901f is still caught (2.33 km routed = 33% of a
+  6.99 km booking, 28.2% drift). Three CI failures, all three from this
+  branch's own work, no infra involvement.
 - **Pre-existing gap found and fixed in passing:** `planned_capped` was never
   added to the admin map's `gpsTooIncomplete` check, so a ride capped to the
   booking still drew its GPS fragments — card and map disagreeing, exactly what

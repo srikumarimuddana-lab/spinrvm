@@ -680,8 +680,9 @@ def resolve_measured_distance_km(
         #
         # Two conditions, and BOTH are load-bearing:
         #   * the guess itself is material -- routed distance exceeds the same
-        #     ratio of the booking. A trip whose GPS genuinely wandered is not
-        #     a guess just because a short connector exists somewhere in it.
+        #     ratio of THE NUMBER ABOUT TO BE PUBLISHED. A trip whose GPS
+        #     genuinely wandered is not a guess just because a short connector
+        #     exists somewhere in it.
         #   * the published number has drifted past that ratio from the booking.
         #
         # Without the first condition this swallows real detours. 13.0 km
@@ -691,7 +692,17 @@ def resolve_measured_distance_km(
         # under-reports the trip by 4.3 km. On a 0%-commission product that is
         # the driver's own fare. test_real_detour_passes_because_the_gps_sum_
         # grows_with_it pins exactly that case.
-        if routed > max_guess_deviation_ratio * planned:
+        #
+        # The denominator must be the candidate, not the booking. "How much of
+        # this is guess" is a question about the number being published; the
+        # booking is precisely the value under suspicion when a driver detours,
+        # so measuring against it makes a STALE booking look like evidence of
+        # guessing. 0.71 km of fill on a 15.01 km trip is 4.7% of the trip but
+        # 10.1% of a 7 km booking -- and against the booking that clamped a
+        # real, gps_km-corroborated 15 km drive down to 7 km, losing the driver
+        # 8 km. test_material_guess_is_measured_against_the_trip_not_the_booking
+        # pins that input.
+        if routed > max_guess_deviation_ratio * candidate:
             deviation_ratio = abs(candidate - planned) / planned
             if deviation_ratio > max_guess_deviation_ratio:
                 return round(planned, 3), "planned_guess_deviation"
@@ -751,8 +762,16 @@ async def _recompute_ride_distance_stats(
         fallback_enabled = bool(_settings.get("route_distance_fallback_enabled", True))
         max_vs_reference = float(_settings.get("route_distance_max_vs_reference_ratio", 1.3))
         # Tunable without a deploy once the column exists; absent, .get() returns
-        # the default and nothing changes.
-        max_guess_deviation_ratio = float(_settings.get("route_guess_deviation_max_ratio") or 0.10)
+        # the default and nothing changes. Two-arg .get() like the three reads
+        # above, NOT `.get(k) or default` -- `or` throws away a deliberate JSON
+        # 0 (the strictest setting: refuse any guess at all) while honouring the
+        # string "0", so the knob would obey admins inconsistently by JSON type.
+        # Clamped because this is the one knob here that inverts the rule when
+        # negative: with a negative ratio both conditions below are trivially
+        # true for every ride, so a single mistyped app_settings row would
+        # publish the booking platform-wide. Surge is clamped at its call sites
+        # for the same reason.
+        max_guess_deviation_ratio = min(1.0, max(0.0, float(_settings.get("route_guess_deviation_max_ratio", 0.10))))
     except Exception:
         logger.debug("distance-resolution settings read failed during recompute; using defaults", exc_info=True)
 

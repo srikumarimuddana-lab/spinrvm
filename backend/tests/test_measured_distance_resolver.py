@@ -107,6 +107,29 @@ class TestImplausibilityCeiling:
         assert km == 13.5
         assert basis == "observed"
 
+    def test_material_guess_is_measured_against_the_trip_not_the_booking(self):
+        # The sibling case above with the booking left stale. 0.71 km of fill on
+        # a 15.01 km trip is 4.7% of what is about to be published -- immaterial
+        # -- but 10.1% of a 7.0 km booking. Measuring the guess against the
+        # booking made a stale booking look like evidence of guessing and
+        # clamped a real, gps_km-corroborated 15 km drive to 7 km, costing the
+        # driver 8 km on a product where they keep the whole fare.
+        km, basis = resolve_measured_distance_km(
+            _recon(14.3, routed=0.71), coverage=0.95, planned_km=7.0, straight_line_km=5.0, gps_km=15.0
+        )
+        assert km == 15.01
+        assert basis == "observed"
+
+    def test_material_guess_still_clamps_when_the_fill_is_large(self):
+        # The inverse, so the test above cannot be satisfied by deleting the
+        # rule: ride 0c24901f's 2.33 km connector is 26% of its own 8.96 km
+        # reconstruction, material by either denominator.
+        km, basis = resolve_measured_distance_km(
+            _recon(6.63, routed=2.33), coverage=0.9, planned_km=6.99, straight_line_km=4.0, gps_km=6.7
+        )
+        assert km == 6.99
+        assert basis == "planned_guess_deviation"
+
     def test_ceiling_uses_the_larger_of_the_two_references(self):
         km, basis = resolve_measured_distance_km(
             _recon(11.0), coverage=0.95, planned_km=5.0, straight_line_km=3.0, gps_km=9.0

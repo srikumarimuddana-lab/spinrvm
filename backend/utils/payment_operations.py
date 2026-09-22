@@ -93,3 +93,123 @@ async def schedule_retry(operation_id: str, *, attempt_count: int, error: str) -
     delay = RETRY_MINUTES[min(attempt_count - 1, len(RETRY_MINUTES) - 1)]
     next_at = datetime.now(timezone.utc) + timedelta(minutes=delay)
     await update_operation(operation_id, status="failed", next_attempt_at=next_at.isoformat(), last_error=error[:1000])
+
+
+async def reconcile_due_operations() -> int:
+    """Reconcile bounded due operations using provider reads before retries."""
+    now = datetime.now(timezone.utc).isoformat()
+    due = await db.get_rows(TABLE, {
+        "status": {"$in": ["requested", "pending", "failed", "processing"]},
+        "next_attempt_at": {"$lte": now},
+    }, order="created_at", limit=50)
+    processed = 0
+    for candidate in due or []:
+        prior_status = candidate.get("status")
+        operation = await claim_due_operation(candidate)
+        if not operation:
+            continue
+        processed += 1
+        op_id = str(operation["id"])
+        try:
+            ride_id = str(operation["ride_id"])
+            if operation.get("operation_type") == "authorization_release":
+                try:
+                    from .stripe_charge import cancel_authorization
+                except ImportError:  # pragma: no cover
+                    from utils.stripe_charge import cancel_authorization  # type: ignore
+                ok = await cancel_authorization(
+                    ride_id=ride_id, payment_intent_id=str(operation.get("payment_intent_id") or "")
+                )
+                if ok:
+                    await update_operation(op_id, status="succeeded", next_attempt_at=None, last_error=None)
+                else:
+                    await schedule_retry(op_id, attempt_count=int(operation["attempt_count"]), error="Authorization release not confirmed")
+                continue
+
+            if operation.get("operation_type") == "scheduled_notice_fee":
+                # A provider read is the only recovery action. Never charge a
+                # different card or create a second fee during reconciliation.
+                if not operation.get("payment_intent_id"):
+                    await update_operation(op_id, status="requires_action", next_attempt_at=None,
+                                           last_error="Fee has no provider reference; manual review required")
+                    continue
+                try:
+                    from .stripe_charge import _resolve_stripe_secret, stripe
+                except ImportError:  # pragma: no cover
+                    from utils.stripe_charge import _resolve_stripe_secret, stripe  # type: ignore
+                secret = await _resolve_stripe_secret(ride_id)
+                if stripe is None or not secret:
+                    raise RuntimeError("Stripe is not configured for fee reconciliation")
+                pi = await asyncio.to_thread(stripe.PaymentIntent.retrieve, operation["payment_intent_id"], api_key=secret)
+                pi_status = str(getattr(pi, "status", "") or "")
+                if pi_status == "succeeded":
+                    amount = int(getattr(pi, "amount_received", 0) or 0)
+                    await update_operation(op_id, status="succeeded", collected_cents=amount, next_attempt_at=None)
+                    await db.update_one("rides", {"id": ride_id}, {
+                        "scheduled_notice_fee_amount": str(__import__("decimal").Decimal(amount) / 100),
+                        "scheduled_notice_fee_status": "paid",
+                        "scheduled_notice_fee_payment_intent_id": operation["payment_intent_id"],
+                    })
+                elif pi_status in {"requires_action", "requires_payment_method"}:
+                    await update_operation(op_id, status="requires_action", next_attempt_at=None,
+                                           last_error=f"PaymentIntent status: {pi_status}")
+                else:
+                    await schedule_retry(op_id, attempt_count=int(operation["attempt_count"]), error=f"PaymentIntent status: {pi_status}")
+                continue
+
+            # Refund: retrieve the saved object first. If the create response
+            # was lost, the stable key makes repeating create safe. A terminal
+            # failed attempt advances to a new persisted attempt.
+            if operation.get("operation_type") == "refund":
+                try:
+                    from .stripe_charge import _resolve_stripe_secret, stripe
+                    from .money import cents_to_dollars
+                except ImportError:  # pragma: no cover
+                    from utils.stripe_charge import _resolve_stripe_secret, stripe  # type: ignore
+                    from utils.money import cents_to_dollars  # type: ignore
+                if prior_status == "failed":
+                    await update_operation(op_id, status="failed", next_attempt_at=now)
+                    operation = await prepare_refund_operation(
+                        ride_id=ride_id, payment_intent_id=str(operation.get("payment_intent_id")),
+                        amount_cents=int(operation.get("amount_cents") or 0),
+                    )
+                    op_id = str(operation["id"])
+                secret = await _resolve_stripe_secret(ride_id)
+                if stripe is None or not secret:
+                    raise RuntimeError("Stripe is not configured for refund reconciliation")
+                refund = None
+                if operation.get("provider_object_id"):
+                    refund = await asyncio.to_thread(stripe.Refund.retrieve, operation["provider_object_id"], api_key=secret)
+                else:
+                    refunds = await asyncio.to_thread(lambda: stripe.Refund.list(
+                        payment_intent=operation["payment_intent_id"], limit=100, api_key=secret
+                    ))
+                    for possible in getattr(refunds, "data", None) or []:
+                        metadata = getattr(possible, "metadata", {}) or {}
+                        if metadata.get("ride_payment_operation_id") == op_id:
+                            refund = possible
+                            break
+                    if refund is None:
+                        refund = await asyncio.to_thread(lambda: stripe.Refund.create(
+                            payment_intent=operation["payment_intent_id"],
+                            amount=int(operation["amount_cents"]), reason="requested_by_customer",
+                            metadata={"ride_id": ride_id, "ride_payment_operation_id": op_id},
+                            api_key=secret, idempotency_key=operation["idempotency_key"],
+                        ))
+                status = str(getattr(refund, "status", "pending") or "pending")
+                refund_id = getattr(refund, "id", None)
+                amount = int(getattr(refund, "amount", operation["amount_cents"]) or operation["amount_cents"])
+                stored_status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
+                await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
+                                       collected_cents=amount,
+                                       next_attempt_at=None if stored_status == "succeeded" else
+                                       (datetime.now(timezone.utc) + timedelta(minutes=RETRY_MINUTES[0])).isoformat())
+                await db.update_one("rides", {"id": ride_id}, {
+                    "refund_id": refund_id, "refund_status": stored_status,
+                })
+                continue
+            await update_operation(op_id, status="exhausted", next_attempt_at=None,
+                                   last_error="Unsupported operation type")
+        except Exception as exc:
+            await schedule_retry(op_id, attempt_count=int(operation.get("attempt_count") or 1), error=str(exc))
+    return processed

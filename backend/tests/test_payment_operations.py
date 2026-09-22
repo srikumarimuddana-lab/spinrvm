@@ -69,3 +69,23 @@ async def test_failed_refund_creates_a_distinct_deterministic_retry_key():
 
     assert result == created
     assert insert.await_args.args[1]["idempotency_key"] == "ride-cancelrefund-ride1-500-a2"
+
+
+@pytest.mark.asyncio
+async def test_due_authorization_release_is_claimed_and_completed():
+    operation = {
+        "id": "op-release", "ride_id": "ride1", "operation_type": "authorization_release",
+        "payment_intent_id": "pi1", "status": "requested", "attempt_count": 0,
+    }
+    claimed = {**operation, "status": "processing", "attempt_count": 1}
+    with (
+        patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(side_effect=[claimed, {"id": "op-release"}])),
+        patch("backend.utils.stripe_charge.cancel_authorization", AsyncMock(return_value=True)) as cancel,
+    ):
+        from backend.utils.payment_operations import reconcile_due_operations
+
+        processed = await reconcile_due_operations()
+
+    assert processed == 1
+    cancel.assert_awaited_once_with(ride_id="ride1", payment_intent_id="pi1")

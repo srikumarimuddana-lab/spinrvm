@@ -857,6 +857,14 @@ async def payment_retry_loop():
             await sweep_guest_corporate_settlements()
         except Exception as e:
             logger.error(f"Guest settlement sweep error: {e}", exc_info=True)
+        try:
+            try:
+                from .payment_operations import reconcile_due_operations
+            except ImportError:
+                from utils.payment_operations import reconcile_due_operations  # type: ignore
+            await reconcile_due_operations()
+        except Exception as e:
+            logger.error(f"Payment operation reconciliation error: {e}", exc_info=True)
         _record_heartbeat("payment_retry (5min)")
         # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
         # and create a thundering herd against Stripe + Supabase. Tested

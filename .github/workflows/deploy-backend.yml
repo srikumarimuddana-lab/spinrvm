@@ -10,6 +10,15 @@ on:
       - 'deploy/backend-required-env.txt'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
+    inputs:
+      standby:
+        description: "update = deploy main, keep the standby on/off as it is · start = deploy main and leave it running (fail-over) · stop = switch it off"
+        type: choice
+        options:
+          - update
+          - start
+          - stop
+        default: update
 
 # Serialize deploys, mirroring deploy-fly.yml: queue, never cancel an in-flight
 # rollout, never skip a commit's deploy.
@@ -17,11 +26,19 @@ concurrency:
   group: deploy-railway-${{ github.ref }}
   cancel-in-progress: false
 
-# Railway is the WARM STANDBY for the Fly.io primary (ADR-007). This workflow
-# is the only thing that keeps it in sync with main — when it fails, Railway
-# silently drifts and a fail-over lands on a stale build (ACTION_ITEMS.md C5).
-# It therefore fails LOUDLY and EARLY on the three things that actually broke
-# it historically, before spending a build:
+# Railway is the COLD STANDBY for the Fly.io primary (ADR-017, amending
+# ADR-007). Every backend change is deployed to it here, so it builds, boots
+# and passes Railway's healthcheck on the current commit, and it is then
+# switched back OFF so it stops billing for RAM/CPU while Fly serves traffic.
+# It is left running only when it was already running before the deploy
+# (someone switched it on for a fail-over or a test) or the run asked for
+# `start`. Switch it on/off by hand: Actions → "Deploy Backend to Railway" →
+# Run workflow → standby = start | stop.
+#
+# This workflow is the only thing that keeps the standby in sync with main —
+# when it fails, Railway silently drifts and a fail-over lands on a stale build
+# (ACTION_ITEMS.md C5). It therefore fails LOUDLY and EARLY on the three things
+# that actually broke it historically, before spending a build:
 #   1. RAILWAY_TOKEN missing or INVALID (revoked/expired/wrong scope) — every
 #      run from at least 2026-09-04 back failed at `railway up` with
 #      "Invalid RAILWAY_TOKEN", ~30 s per push, unnoticed for weeks because
@@ -49,16 +66,20 @@ concurrency:
 #                         BACKEND_HEALTH_URL, also enables the "is the new SHA
 #                         actually serving" check via /deploy-info.
 #
-# Alternative (no tokens needed at all):
-#   Connect Railway directly to this repo via:
-#   Railway Dashboard → Service → Settings → Source → Connect Repo → main
-#   Railway will auto-deploy on every push to main, making this workflow
-#   file unnecessary for deployments. (You would lose checks 2 and 3 above —
-#   the standby-parity-monitor workflow still runs them daily.)
+# Railway's own GitHub autodeploy must stay DISABLED on the service (Railway →
+# spinrvm → Settings → Disable automatic deployments). It deploys every push to
+# main — frontend-only merges included — and leaves the standby running, which
+# defeats the cold standby and double-deploys each backend change.
+
+# jq over `railway deployment list --json`: how many deployments are live or on
+# their way to live. 0 = the standby is switched off.
+env:
+  LIVE_JQ: '[(if type == "array" then . else .deployments end)[] | select((.status // "") | test("^(SUCCESS|SLEEPING|DEPLOYING|INITIALIZING|BUILDING|QUEUED|WAITING)$"))] | length'
 
 jobs:
   deploy:
     name: Deploy to Railway
+    if: inputs.standby != 'stop'
     runs-on: ubuntu-latest
     env:
       RAILWAY_SERVICE: spinrvm
@@ -150,7 +171,37 @@ jobs:
             > backend/build_info.json
           cat backend/build_info.json
 
+      # Cold standby: remember whether it was live BEFORE this deploy. A standby
+      # someone switched on (fail-over, test) must stay on and take the update;
+      # one that was off goes back off afterwards. If the state can't be read,
+      # leave it running — an unneeded bill beats switching off a live fail-over.
+      - name: Read standby state (before deploy)
+        id: state
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          REQUESTED: ${{ inputs.standby }}
+        run: |
+          set -uo pipefail
+          keep() { echo "keep_running=true" >> "$GITHUB_OUTPUT"; }
+          if [ "${REQUESTED}" = "start" ]; then
+            echo "standby=start requested — the standby will be left running."
+            keep; exit 0
+          fi
+          err="${RUNNER_TEMP}/deployment-list.err"
+          if ! deps="$(railway deployment list --service "${RAILWAY_SERVICE}" --json 2>"${err}")" \
+             || ! live="$(printf '%s' "${deps}" | jq -er "${LIVE_JQ}" 2>>"${err}")"; then
+            echo "::warning title=Standby state unknown::Could not read Railway deployments ($(head -c 300 "${err}")). Leaving the standby RUNNING after this deploy. Switch it off: Actions → Deploy Backend to Railway → Run workflow → stop."
+            keep; exit 0
+          fi
+          if [ "${live}" -gt 0 ]; then
+            echo "::notice title=Standby is on::It was running before this deploy, so it stays on. Switch it off when done: Actions → Deploy Backend to Railway → Run workflow → stop."
+            keep; exit 0
+          fi
+          echo "Standby is off — it will be switched back off after the deploy."
+          echo "keep_running=false" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to Railway
+        id: deploy
         run: railway up --service "${RAILWAY_SERVICE}"
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -207,3 +258,61 @@ jobs:
         run: |
           echo "::warning::Health check failed — rolling back to previous deployment."
           railway rollback --service "${RAILWAY_SERVICE}" || true
+
+      # Cold standby: the new build has built, booted and passed Railway's
+      # healthcheck (`railway up` exits 0 only on SUCCESS), so switch it back
+      # off. Also runs when a later verification step failed, so a broken
+      # standby is never left billing — the job stays red from that failure.
+      - name: Switch the standby back off
+        if: always() && steps.deploy.outcome == 'success' && steps.state.outputs.keep_running == 'false'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          railway down --service "${RAILWAY_SERVICE}" --yes
+          for i in $(seq 1 12); do
+            live="$(railway deployment list --service "${RAILWAY_SERVICE}" --json | jq -r "${LIVE_JQ}")"
+            if [ "${live}" = "0" ]; then
+              echo "Railway standby updated to ${GITHUB_SHA} and switched off." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "  attempt ${i}/12 → ${live} live deployment(s)"
+            sleep 5
+          done
+          echo "::error title=Standby still running::railway down ran but a deployment is still live, so it is still billing. Check Railway → spinrvm → Deployments (is Railway's own GitHub autodeploy still enabled?)."
+          exit 1
+
+  # Manual switch-off: Actions → "Deploy Backend to Railway" → Run workflow →
+  # standby = stop. (standby = start deploys main and leaves it running.)
+  stop:
+    name: Switch the Railway standby off
+    if: inputs.standby == 'stop'
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_SERVICE: spinrvm
+    steps:
+      - name: Install Railway CLI v4
+        run: npm i -g @railway/cli@4.40.2
+
+      - name: Remove the live deployment
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          live="$(railway deployment list --service "${RAILWAY_SERVICE}" --json | jq -r "${LIVE_JQ}")"
+          if [ "${live}" = "0" ]; then
+            echo "Railway standby is already off." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          railway down --service "${RAILWAY_SERVICE}" --yes
+          for i in $(seq 1 12); do
+            live="$(railway deployment list --service "${RAILWAY_SERVICE}" --json | jq -r "${LIVE_JQ}")"
+            if [ "${live}" = "0" ]; then
+              echo "Railway standby switched off." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "  attempt ${i}/12 → ${live} live deployment(s)"
+            sleep 5
+          done
+          echo "::error title=Standby still running::railway down ran but a deployment is still live. Check Railway → spinrvm → Deployments."
+          exit 1

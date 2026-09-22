@@ -1417,10 +1417,14 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
         ride_id = str((operation or {}).get("ride_id") or (refund.get("metadata") or {}).get("ride_id") or "")
         if operation_id:
             await db_supabase.update_one("ride_payment_operations", {"id": operation_id}, {
-                "status": status,
+                # Keep confirmed refunds due until the recovery worker has
+                # repaired the ride aggregate and append-only ledger. The
+                # charge.refunded webhook may already have done so; the
+                # finalizer is idempotent against that canonical projection.
+                "status": "pending" if status == "succeeded" else status,
                 "provider_object_id": refund_id,
                 "collected_cents": int(refund.get("amount") or 0),
-                "next_attempt_at": None if status == "succeeded" else datetime.now(timezone.utc).isoformat(),
+                "next_attempt_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
         if ride_id:

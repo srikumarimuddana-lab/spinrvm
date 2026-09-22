@@ -43,8 +43,10 @@ from ._shared import (  # noqa: F401
 )
 
 try:
+    from ...utils.gps_filtering import point_epoch_seconds
     from ...utils.location_write_gate import should_write_marker
 except ImportError:  # pragma: no cover - top-level execution fallback
+    from utils.gps_filtering import point_epoch_seconds
     from utils.location_write_gate import should_write_marker  # type: ignore
 
 router = APIRouter()
@@ -58,40 +60,28 @@ _RAW_LOCATION_RETENTION = timedelta(days=90)
 _PERIOD1_COLUMNS = ("period1_accum_km", "period1_accum_since")
 
 
-async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id: str, path: str) -> None:
-    """Issue the ``drivers`` marker UPDATE unless the write gate coalesces it.
-
-    Every GPS ingestion route funnels its marker write through the gate so the
-    REST and WebSocket paths share one window per driver instead of writing the
-    same row from two uncoordinated throttles.
-    """
-    force = any(col in update_data for col in _PERIOD1_COLUMNS)
-    if await should_write_marker(driver_id, path=path, force=force):
-        await db_supabase.update_one("drivers", driver_filter, update_data)
+async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id: str, path: str) -> bool | None:
+    """Coalesce writes; Postgres alone decides capture ordering across replicas."""
+    extra = {key: update_data[key] for key in _PERIOD1_COLUMNS if key in update_data}
+    if await should_write_marker(driver_id, path=path, force=bool(extra)):
+        # An untimed queued point is history, never a current position.
+        captured_at = update_data.get("location_captured_at") or datetime.fromtimestamp(0, timezone.utc)
+        return await db_supabase.update_driver_location(
+            driver_id,
+            update_data["lat"],
+            update_data["lng"],
+            heading=update_data.get("heading"),
+            captured_at=captured_at,
+            extra_fields=extra,
+        )
+    return None
 
 
 _MARKER_ORDER_CACHE_TTL = 120  # seconds; matches location_integrity's teleport-cache TTL
 
 
 async def _newer_than_last_written_marker(driver_id: str, captured_at: datetime) -> bool:
-    """True iff no later point has already updated this driver's live marker.
-
-    Deferring the marker write via BackgroundTasks (see
-    ``_apply_v2_live_marker_update``) removed an ordering guarantee that used
-    to come for free: previously the marker write was awaited before the
-    response returned, so a client that waits for one batch's ack before
-    sending the next could never have two marker writes for the same driver
-    in flight at once. Now the ack returns before the deferred write even
-    starts, so two successive batches' background tasks are independent,
-    unordered asyncio tasks -- an older batch's task finishing after a newer
-    one's would overwrite fresher coordinates with stale ones. This Redis
-    high-water mark (shared across replicas, unlike an in-process lock)
-    makes the write itself order-safe regardless of task scheduling.
-
-    Fails open (returns True) on a Redis error, matching
-    ``check_location_integrity``'s existing degraded-mode precedent -- a
-    transient cache outage must not block real marker writes.
-    """
+    """Legacy cache helper, unused by writes: ordering is enforced in Postgres."""
     try:
         from ...utils.redis_client import redis_get, redis_set
     except ImportError:
@@ -135,6 +125,9 @@ async def _apply_v2_live_marker_update(
     failure could make the driver-app outbox re-send points the server had
     already durably stored.
     """
+    if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
+        return  # Durable history was already acknowledged; no live side effects.
+
     try:
         from ...utils.location_integrity import check_location_integrity
     except ImportError:
@@ -157,16 +150,14 @@ async def _apply_v2_live_marker_update(
             ride_id,
             reason,
         )
-    elif not await _newer_than_last_written_marker(driver_id, captured_at):
-        logger.info(
-            "location-batch v2: skipped out-of-order marker write for driver_id=%s ride_id=%s", driver_id, ride_id
-        )
     else:
-        update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+        update_data = {"lat": lat, "lng": lng, "location_captured_at": captured_at}
         if heading is not None:
             update_data["heading"] = heading % 360
         try:
-            await _write_marker_if_due({"id": driver_id}, update_data, driver_id, "rest_v2_trip")
+            accepted = await _write_marker_if_due({"id": driver_id}, update_data, driver_id, "rest_v2_trip")
+            if accepted is False:
+                return
         except Exception:
             logger.error(
                 "location-batch v2: marker write failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
@@ -351,8 +342,8 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
 
     # Live marker from the newest accepted point (same contract as trips).
     if accepted_rows:
-        latest = accepted_rows[-1]
-        update_data: dict = {"lat": latest["lat"], "lng": latest["lng"], "updated_at": datetime.now(timezone.utc)}
+        latest = max(accepted_rows, key=lambda point: point_epoch_seconds(point) or 0)
+        update_data: dict = {"lat": latest["lat"], "lng": latest["lng"], "location_captured_at": latest["captured_at"]}
         if latest.get("heading") is not None:
             update_data["heading"] = latest["heading"] % 360
         # Period-1 deadhead accumulator (same flag as the legacy v1 path). The
@@ -373,7 +364,8 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
                 logger.error("period1 accumulator update failed for driver %s", driver["id"], exc_info=True)
         await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_idle")
 
-    await _deps.mark_present(driver["id"])
+    if accepted_rows and -5 <= (datetime.now(timezone.utc).timestamp() - (point_epoch_seconds(latest) or 0)) <= 60:
+        await _deps.mark_present(driver["id"])
     return result.ack.to_dict()
 
 
@@ -837,7 +829,9 @@ async def update_location_batch(
     if not points:
         return {"success": True}
 
-    latest = points[-1]
+    latest = max(points, key=lambda point: point_epoch_seconds(point) or 0)
+    capture_epoch = point_epoch_seconds(latest)
+    captured_at = datetime.fromtimestamp(capture_epoch or 0, timezone.utc)
     lat = latest.get("latitude") if latest.get("latitude") is not None else latest.get("lat")
     lng = latest.get("longitude") if latest.get("longitude") is not None else latest.get("lng")
     heading = latest.get("heading")
@@ -860,7 +854,7 @@ async def update_location_batch(
         # column added in migration 113 — persist it so rider/admin map
         # markers can rotate the car icon to the real direction of travel
         # (and so two drivers at the same point don't render as one).
-        update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+        update_data = {"lat": lat, "lng": lng, "location_captured_at": captured_at}
         # Normalise to 0–359 and skip clearly-invalid values. We deliberately
         # only write heading when the device sent a usable number, so a
         # stationary fix with no bearing doesn't wipe the last good heading.
@@ -883,7 +877,6 @@ async def update_location_batch(
             try:
                 from ...settings_loader import get_app_settings
                 from ...utils.breadcrumbs import resolve_active_ride
-                from ...utils.gps_filtering import point_epoch_seconds
                 from ...utils.period1_distance import batch_incremental_distance_km
             except ImportError:
                 from settings_loader import get_app_settings  # type: ignore

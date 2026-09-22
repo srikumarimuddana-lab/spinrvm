@@ -138,6 +138,9 @@ def test_history_or_future_capture_does_not_masquerade_as_live(delivery, age):
         )
     )
     send.assert_not_awaited()
+    location._write_marker_if_due.assert_not_awaited()
+    location._deps.mark_present.assert_not_awaited()
+    delivery[2].assert_not_awaited()
 
 
 def test_reassigned_ride_does_not_receive_previous_driver_position(delivery):
@@ -171,4 +174,15 @@ def test_fanout_can_be_disabled_without_disabling_marker_write(delivery, monkeyp
         )
     )
     location._write_marker_if_due.assert_awaited_once()
+    send.assert_not_awaited()
+
+
+def test_database_rejected_marker_is_not_delivered(delivery):
+    _, send, _ = delivery
+    location._write_marker_if_due.return_value = False
+    asyncio.run(
+        location._apply_v2_live_marker_update(
+            "driver-1", "ride-1", 50.45, -104.6, 90, 12, 8, False, True, datetime.now(timezone.utc)
+        )
+    )
     send.assert_not_awaited()

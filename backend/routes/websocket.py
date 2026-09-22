@@ -140,6 +140,20 @@ def _live_capture_time(point: dict, *, allow_untimed: bool = False):
     return datetime.fromtimestamp(epoch, timezone.utc)
 
 
+async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
+    if await should_write_marker(driver_id, path=path, unthrottled_before=False):
+        accepted = await db_supabase.update_driver_location(
+            driver_id,
+            lat,
+            lng,
+            heading=heading,
+            captured_at=captured_at,
+        )
+        return accepted is not False
+    # Coalescing limits storage writes, not delivery of fresh sensor samples.
+    return True
+
+
 def _valid_live_coordinates(lat: float, lng: float) -> bool:
     return -90 <= lat <= 90 and -180 <= lng <= 180 and not (lat == 0 and lng == 0)
 
@@ -955,10 +969,12 @@ async def websocket_endpoint(
                     # survives reconnects — the previous per-connection timer
                     # did neither, so a driver flushing REST while pinging over
                     # WS wrote this row from two uncoordinated throttles.
-                    if await should_write_marker(driver_id, path="ws_single", unthrottled_before=False):
-                        await db_supabase.update_driver_location(
-                            driver_id, lat, lng, heading=data.get("heading"), captured_at=live_captured_at
-                        )
+                    if not await _write_ws_marker(
+                        driver_id, lat, lng, data.get("heading"), live_captured_at, "ws_single"
+                    ):
+                        if data.get("durable", True) and not await _ws_session_revoked():
+                            await buffer_ride_breadcrumb(driver_id, data)
+                        continue
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
@@ -1195,18 +1211,9 @@ async def websocket_endpoint(
                             accuracy=last_pt.get("accuracy"),
                             mocked=last_pt.get("mocked"),
                         )
-                        if trusted:
-                            # Same shared write gate as the single-ping
-                            # handler — one window per driver across every GPS
-                            # ingestion route (utils/location_write_gate).
-                            if await should_write_marker(driver_id, path="ws_batch", unthrottled_before=False):
-                                await db_supabase.update_driver_location(
-                                    driver_id,
-                                    _lat,
-                                    _lng,
-                                    heading=last_pt.get("heading"),
-                                    captured_at=_batch_captured_at,
-                                )
+                        if trusted and await _write_ws_marker(
+                            driver_id, _lat, _lng, last_pt.get("heading"), _batch_captured_at, "ws_batch"
+                        ):
                             await mark_present(driver_id)
 
                             # Fan-out latest batch position to riders — the single-ping

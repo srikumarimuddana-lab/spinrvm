@@ -182,8 +182,8 @@ def test_malformed_json_gets_invalid_json_error(app_with_ws):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("age", [0, 61, -10])
-async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws, age):
+@pytest.mark.parametrize("age,accepted", [(0, True), (61, True), (-10, True), (0, False)])
+async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws, age, accepted):
     captured_at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat()
     active_ride = {
         "id": "ride_cov_1",
@@ -198,9 +198,10 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws, age
     send_personal = AsyncMock(return_value=None)
     broadcast_admin_loc = AsyncMock(return_value=None)
     buffer_crumb = AsyncMock(return_value=None)
-    update_driver_loc_db = AsyncMock(return_value=None)
+    update_driver_loc_db = AsyncMock(return_value=accepted)
 
     extra = [
+        patch("backend.routes.websocket.should_write_marker", new=AsyncMock(return_value=True)),
         patch("backend.routes.websocket.check_location_integrity", new=AsyncMock(return_value=(True, "ok"))),
         patch("backend.routes.websocket.db_supabase.update_driver_location", new=update_driver_loc_db),
         patch("backend.routes.websocket.manager.update_driver_location", new=update_loc),
@@ -235,12 +236,16 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws, age
             # No direct ack for driver_location — give the loop a beat then
             # send a pong to confirm the socket is still alive and the
             # handler didn't raise.
-            ws.send_json({"type": "pong"})
+            ws.send_json({"type": "location_batch", "points": []})
+            assert ws.receive_json() == {"type": "location_batch_ack", "count": 0}
     finally:
         _stop(patches)
 
-    if age != 0:
-        update_driver_loc_db.assert_not_awaited()
+    if age != 0 or not accepted:
+        if age != 0:
+            update_driver_loc_db.assert_not_awaited()
+        else:
+            update_driver_loc_db.assert_awaited_once()
         broadcast_admin_loc.assert_not_awaited()
         buffer_crumb.assert_awaited_once()
         assert not any(call.args[0].get("type") == "driver_location_update" for call in send_personal.await_args_list)

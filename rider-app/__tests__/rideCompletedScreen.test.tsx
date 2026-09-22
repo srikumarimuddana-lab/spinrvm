@@ -614,4 +614,74 @@ describe('RideCompletedScreen', () => {
     expect(allText(r)).toContain('Charged to the card you chose at booking. Any tip is included in the same charge.');
     expect(() => r.root.findByProps({ accessibilityLabel: 'Pay with Google Pay' })).toThrow();
   });
+
+  // ── $0.00 payment prompt ────────────────────────────────────────────────
+  // `currentRide` is null in two windows where this screen is still mounted
+  // and painting: before the first fetchRide lands (a push-notification tap
+  // cold-starts into this screen), and right after handleSubmit's clearRide()
+  // during the transition to /(tabs). Both used to render "TRIP TOTAL $0.00"
+  // and a live, tappable "Pay $0.00 & Done".
+  describe('when the ride row has not loaded', () => {
+    it('renders a missing-total placeholder, never a $0.00 total', async () => {
+      mockRideState.currentRide = null;
+      const r = await renderScreen();
+      expect(allText(r)).toContain('—');
+      expect(allText(r)).not.toContain('$0.00');
+    });
+
+    it('quotes no amount on the submit button and disables it', async () => {
+      mockRideState.currentRide = null;
+      const r = await renderScreen();
+      // `disabled` is what actually stops the tap. handleSubmit itself is
+      // deliberately NOT guarded on currentRide: the change-card escape
+      // (payWithCard) re-invokes it on mount before the ride has loaded, and
+      // the charge is settled server-side by rideId, so it is correct there.
+      const btn = r.root.findByProps({ accessibilityLabel: 'Loading your trip' });
+      expect(btn.props.disabled).toBe(true);
+      expect(btn.props.accessibilityState.disabled).toBe(true);
+      expect(allText(r)).toContain('Loading your trip…');
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+    });
+
+    it('still pays a legitimately $0.00 fully-covered ride', async () => {
+      // The gate keys on "ride loaded", not "fare > 0" — a comp / fully
+      // covered ride has a real $0.00 grand_total (see
+      // _authoritative_ride_charge) and must keep a working receipt + button.
+      mockRideState.currentRide = { ...CURRENT_RIDE, grand_total: '0.00', total_fare: '0.00' };
+      const r = await renderScreen();
+      expect(allText(r)).toContain('$0.00');
+      expect(r.root.findByProps({ accessibilityLabel: 'Pay and finish' }).props.disabled).toBe(false);
+    });
+  });
+
+  describe('after the charge lands', () => {
+    it('latches PAID so the still-mounted screen stops offering to charge again', async () => {
+      const r = await renderScreen();
+      const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+      await act(async () => {
+        submitBtn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      // clearRide() has run and this screen is still mounted for the
+      // transition — it must read as paid, not re-offer a payment.
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      expect(r.root.findByProps({ accessibilityLabel: 'Rate and finish' })).toBeTruthy();
+      expect(allText(r)).toContain('PAID');
+    });
+
+    it('latches PAID on the Google Pay path too', async () => {
+      Platform.OS = 'android';
+      mockPresentSheet.mockResolvedValue({ ok: true });
+      const r = await renderScreen();
+      const gpayBtn = r.root.findByProps({ accessibilityLabel: 'Pay with Google Pay' });
+      await act(async () => {
+        gpayBtn.props.onPress();
+        await flush();
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+      expect(() => r.root.findByProps({ accessibilityLabel: 'Pay and finish' })).toThrow();
+      expect(allText(r)).toContain('PAID');
+    });
+  });
 });

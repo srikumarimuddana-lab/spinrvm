@@ -162,6 +162,25 @@ function RideCompletedScreenContent() {
   }, [successScale, successOpacity]);
 
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
+  // Whether the ride row itself has loaded. `currentRide` is null in two
+  // windows where this screen is nonetheless mounted and painting:
+  //   1. before the first fetchRide lands — a push-notification tap cold-starts
+  //      straight into this screen (see the tip-ladder note below), and
+  //   2. right after handleSubmit's clearRide(), while this screen is still
+  //      mounted for the transition to /(tabs).
+  // In both, `fare` reads 0, so the receipt printed "TRIP TOTAL $0.00" and the
+  // action button offered a live "Pay $0.00 & Done" — a payment prompt for an
+  // amount that is not the rider's fare. Android surfaced it first because its
+  // stack transition keeps the outgoing screen painted through the animation,
+  // where iOS covers it sooner.
+  //
+  // Deliberately NOT `fare > 0`: a comped / fully-covered ride has a legitimate
+  // $0.00 grand_total (see _authoritative_ride_charge in
+  // backend/routes/payments.py, which explicitly refuses to treat $0 as
+  // "missing"), and that ride must still render its real total and a working
+  // button. The question here is "has the ride loaded", not "is the fare
+  // nonzero" — those only look alike because an unloaded ride also reads $0.
+  const rideLoaded = !!currentRide;
   // Fare-scaled rather than a flat $2/$5/$10 ladder: a $10 preset on a $5 ride
   // reads as absurd, and flat presets under-suggest on long trips. The rules
   // that make this correct live in components/tipPresets.ts so they can be
@@ -189,6 +208,14 @@ function RideCompletedScreenContent() {
   // A custom tip between $0 and the minimum can't be submitted: the rider stays
   // here, sees why, and fixes it (the server rejects it too — never dropped).
   const tipMinimumError = effectiveTip ? null : customTipMinimumError(getCustomTipAmount(customTip), minTip);
+  // Nothing is chargeable until the ride loads — the button would quote a fare
+  // the rider was never shown, and the server would charge the real
+  // grand_total regardless (attemptRidePayment settles by rideId, not by this
+  // number), so the amount on the button and the amount on the card statement
+  // would disagree. `alreadyPaid` is exempt: that button only rates and
+  // leaves, it never charges.
+  const submitDisabled =
+    isSubmitting || sheetLoading || !!tipMinimumError || (!rideLoaded && !alreadyPaid);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
@@ -411,6 +438,13 @@ function RideCompletedScreenContent() {
         return;
       }
 
+      // Latch PAID before anything below can yield. This screen stays mounted
+      // through the app-store prompt (await), clearRide(), and the transition
+      // to /(tabs) — every one of those repaints it, and without this latch
+      // those repaints still render a live "Pay … & Done" button for a ride
+      // the rider has already been charged for.
+      setAlreadyPaid(true);
+
       const total = toNum(currentRide?.total_fare) + toNum(tipAmount);
       Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
@@ -477,6 +511,10 @@ function RideCompletedScreenContent() {
       }
       return;
     }
+    // Same latch as handleSubmit's success path — the sheet has taken the
+    // money, so this screen must stop offering to take it again during the
+    // repaints between here and /(tabs).
+    setAlreadyPaid(true);
     try {
       await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
     } catch { /* already rated guard */ }
@@ -657,7 +695,17 @@ function RideCompletedScreenContent() {
           <View style={styles.fareTopRow}>
             <View>
               <Text style={styles.fareLabel}>TRIP TOTAL</Text>
-              <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
+              {/* "—" rather than "$0.00" until the ride loads: a placeholder
+                  that reads as a real total is worse than one that reads as
+                  missing, and this is the number the rider reconciles their
+                  card statement against. */}
+              <Text
+                style={styles.fareAmount}
+                allowFontScaling={false}
+                accessibilityLabel={rideLoaded ? undefined : 'Trip total still loading'}
+              >
+                {rideLoaded ? `$${fare.toFixed(2)}` : '—'}
+              </Text>
             </View>
             <View style={styles.paymentBadge}>
               <Ionicons
@@ -880,13 +928,15 @@ function RideCompletedScreenContent() {
           </TouchableOpacity>
         )}
         <TouchableOpacity
-          style={styles.submitBtn}
+          style={[styles.submitBtn, submitDisabled && { opacity: 0.6 }]}
           onPress={() => handleSubmit()}
-          disabled={isSubmitting || sheetLoading || !!tipMinimumError}
+          disabled={submitDisabled}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
-          accessibilityState={{ disabled: isSubmitting || sheetLoading || !!tipMinimumError, busy: isSubmitting }}
+          accessibilityLabel={
+            alreadyPaid ? 'Rate and finish' : rideLoaded ? 'Pay and finish' : 'Loading your trip'
+          }
+          accessibilityState={{ disabled: submitDisabled, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <>
@@ -900,10 +950,17 @@ function RideCompletedScreenContent() {
               <Text style={styles.submitBtnText}>
                 {alreadyPaid
                   ? 'Rate & Done'
-                  : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
+                  // No dollar figure until the ride loads. This button used to
+                  // read "Pay $0.00 & Done" in that window, which is both wrong
+                  // and tappable — see the rideLoaded note above.
+                  : !rideLoaded
+                    ? 'Loading your trip…'
+                    : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
                 }
               </Text>
-              <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
+              {(alreadyPaid || rideLoaded) && (
+                <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
+              )}
             </>
           )}
         </TouchableOpacity>

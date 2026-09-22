@@ -297,28 +297,6 @@ export function selectBearing(params: {
    */
   courseReference?: number | null;
   /**
-   * Opt-in. True when the caller independently knows the vehicle is in motion
-   * even though THIS tick's chord came in under `minMoveMeters` — the playback
-   * buffer interpolating or extrapolating between real fixes (see
-   * coalescePlaybackBearing, which already trusts its spline tangent on
-   * exactly this signal).
-   *
-   * It only ever frees the ROUTE branch, never the travel branch. The floor
-   * exists because a bearing measured from a sub-3 m chord is GPS noise — true
-   * of `from`→`to`, but NOT of a route segment, whose direction is a property
-   * of the road and is just as known at 5 km/h as at 50. Gating both on one
-   * threshold conflated the two: at 500 ms ticks, 3 m is 21.6 km/h, so for all
-   * ordinary city driving — stop-and-go, creeping through a turn, the last
-   * block before pickup — the route branch was unreachable and the icon fell
-   * through to the raw-GPS spline tangent instead. The car's POSITION stayed
-   * snapped to the road (the ticker snaps it regardless) while its HEADING
-   * followed noise, so it sat on the street pointing across it — exactly the
-   * misalignment riders see, and worst at the speeds they watch the map most.
-   *
-   * Omit it and every branch below behaves exactly as it did before.
-   */
-  movementConfirmed?: boolean;
-  /**
    * How far a movement-derived bearing may disagree with `courseReference`
    * before it is refused, in degrees.
    *
@@ -341,7 +319,7 @@ export function selectBearing(params: {
 }): BearingSelection {
   const {
     snap, movedMeters, from, to, heading, hasMovementBearing, minMoveMeters,
-    courseReference = null, movementConfirmed = false, maxCourseErrorDeg = 135,
+    courseReference = null, maxCourseErrorDeg = 135,
   } = params;
 
   // Same normalization the reported-heading branch below applies: a negative
@@ -363,11 +341,7 @@ export function selectBearing(params: {
   // exists to prevent, reintroduced through a different door.
   let refusedMovementBearing = false;
 
-  // The road's own direction needs no displacement to be meaningful, so this
-  // branch clears on EITHER real movement this tick or a caller-confirmed one
-  // (see `movementConfirmed`). The `courseReference` veto still applies to it
-  // unchanged — a route running backwards is refused however it was reached.
-  if (snap && (movedMeters >= minMoveMeters || movementConfirmed)) {
+  if (snap && movedMeters >= minMoveMeters) {
     if (!contradictsReference(snap.bearing)) {
       return { bearing: snap.bearing, source: 'route' };
     }

@@ -186,42 +186,6 @@ describe('playbackPosition', () => {
   });
 });
 
-describe("'interpolating' does NOT imply the car is moving", () => {
-  // CarMarker derives its `movementConfirmed` flag (which lets selectBearing
-  // use the route-segment bearing below the 3 m/tick floor) from the playback
-  // mode AND a non-null bearing. That second half depends entirely on the
-  // property pinned here: a stopped car still reports 'interpolating', because
-  // render time genuinely sits between two real fixes — elapsed time, not
-  // displacement, is what puts it in that mode.
-  //
-  // If this ever changes so that 'interpolating' implies real movement, go
-  // re-read CarMarker's `movementConfirmed` comment: the extra guard would
-  // become redundant, and more importantly the reasoning behind it would no
-  // longer hold. Without that guard a car stopped AT A TURN flaps between the
-  // pre- and post-turn segment bearings for as long as it sits there, and on
-  // driver-app that drives the course-up camera, not just the icon.
-  it('reports interpolating with a NULL bearing for a stationary car', () => {
-    // Four fixes ~0.3 m apart over 2 s each — pure GPS jitter at a red light.
-    const jitter: PlaybackFix[] = [0, 1, 2, 3].map((i) => ({
-      latitude: 50.4383 + (i % 2) * 3e-6,
-      longitude: -104.63,
-      timestampMs: i * 2000,
-    }));
-    const p = playbackPosition(jitter, 3000);
-    expect(p!.mode).toBe('interpolating');
-    expect(p!.bearing).toBeNull();
-  });
-
-  it('reports interpolating WITH a bearing once the car really moves', () => {
-    // ~8 m per 2 s ≈ 15 km/h — the band the route-bearing fix exists for.
-    const moving: PlaybackFix[] = [0, 1, 2, 3].map((i) => fix(i * 2, i * 1.13e-4));
-    const p = playbackPosition(moving, 3000);
-    expect(p!.mode).toBe('interpolating');
-    expect(p!.bearing).not.toBeNull();
-    expect(p!.bearing).toBeCloseTo(90, 0); // eastbound
-  });
-});
-
 describe('shouldResetBuffer', () => {
   it('flags a fix beyond the snap distance and accepts a nearby one', () => {
     const buf = [fix(10, 0)];

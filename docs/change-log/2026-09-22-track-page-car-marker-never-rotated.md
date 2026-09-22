@@ -9,7 +9,7 @@
 | Surface(s) | admin-dashboard (the `track.spinr.ca` public tracking page) |
 | Domain (Sentry tag) | rides |
 | PR / commit link | _pending_ |
-| Related issue or gap ID | Live-testing report **with screenshot**: Ride Tracking page on `track.spinr.ca`, trip in progress on Jim Cairns Blvd (Regina), car icon drawn pointing **north** while the orange route runs **east then south**. Follows `2026-09-22-live-map-car-marker-bearing-at-city-speed.md`, which fixed a genuine but **different** bearing defect in the React Native marker — that change does not touch this page. |
+| Related issue or gap ID | Live-testing report **with screenshot**: Ride Tracking page on `track.spinr.ca`, trip in progress on Jim Cairns Blvd (Regina), car icon drawn pointing **north** while the orange route runs **east then south**. Scope confirmed by the reporter: the fix is to apply **only** to the live tracking URL the rider opens while riding — i.e. this page. A separate, unrelated bearing defect found in the React Native `CarMarker` during the same investigation was deliberately **reverted out of this branch** to honour that scope; it remains unfixed and is described in §11. |
 
 ## 1. Issue / gap identified
 
@@ -124,8 +124,8 @@ not a new risk class.
   link** (a safety contact), which is the surface's other purpose.
 - **Visible mid-session: yes.** This is a server-rendered web page on Vercel,
   so it changes for everyone on the next deploy, including a rider currently
-  watching a live trip. There is no app update to wait for — which is the
-  opposite of the sibling React Native fix, and worth stating plainly.
+  watching a live trip. There is no app update to wait for — unlike a change
+  to the in-app React Native map, and worth stating plainly.
 - No copy change, no notification change, no new data shown. Nothing
   admin-facing or corporate-facing.
 
@@ -175,9 +175,9 @@ car icon at a wrong angle — strictly no worse than the north-pointing icon it
 replaces.
 
 `git revert` of this single commit plus a Vercel redeploy is a complete
-rollback, and unlike the sibling React Native change there is **no app-store or
-build cycle in the way** — the page is web, so a revert reaches every user on
-the next deploy. Vercel's own instant rollback to the prior deployment is the
+rollback, and unlike a change shipped inside a mobile build there is **no
+app-store or build cycle in the way** — the page is web, so a revert reaches
+every user on the next deploy. Vercel's own instant rollback to the prior deployment is the
 faster path and needs no code change at all.
 
 A narrower kill switch, if the rotation itself is ever suspect but the deploy
@@ -250,3 +250,56 @@ derivation in place and restores the exact previous (nose-up) rendering.
   not exercised — if it returns `undefined` the code falls back to `0`, which
   is the north-up case and therefore correct, but the two-finger-rotate path
   itself is untested.
+
+## 11. Found but deliberately NOT fixed (out of scope)
+
+The reporter scoped this work to the live tracking URL only. Two real defects
+in the **in-app React Native map** were found during the investigation and are
+**not** addressed by this change. Both are still live. Recording them here so
+they are not lost with the reverted commits.
+
+### 11a. Route bearing unreachable below ~21.6 km/h (in-app marker)
+
+`selectBearing()` in `shared/utils/vehicleTracking.ts` gates the route-segment
+bearing on the same `minMoveMeters` (3 m) floor as the travel bearing. At
+`CarMarker`'s 500 ms tick that is a **21.6 km/h** threshold, so below it the
+route branch is unreachable and the icon falls through to the raw-GPS spline
+tangent — while the ticker goes on snapping the *position* to the route.
+On-road position, noise-driven heading.
+
+Confirmed by executing the shipped file: at 2.1 m/tick (~15 km/h) it returns
+`{bearing: null, source: 'none'}`; at 4.2 m/tick, `{bearing: 270,
+source: 'route'}`. Below ~7 km/h it is worse — `markerPlayback` produces no
+tangent either (bracketing segment under `MIN_SEGMENT_MOVE_M`), so there is no
+bearing source at all and the icon freezes at its last heading, which right
+after a turn is the *pre-turn* heading.
+
+A fix was written and reverted (commits `77c5730`, `d406af9` on this branch,
+reverted in the commit carrying this file): an opt-in `movementConfirmed`
+parameter freeing only the route branch, gated on
+`(p.mode === 'interpolating' && p.bearing != null) || p.mode === 'extrapolating'`.
+That gate is not optional — a `mode`-only check lets a car **stopped at a turn**
+flap between the pre- and post-turn segment bearings indefinitely, and on
+driver-app that drives the course-up camera, not just the icon. Anyone picking
+this up should start from the reverted diff rather than re-deriving it.
+
+### 11b. iOS marker ignores the map's camera heading (rider-app)
+
+`visualRotationDegrees(worldBearing, mapHeading)` exists in the shared util and
+is applied **only** in `driver-app/components/CarMarker.tsx`. The shared
+`CarMarker` that rider-app uses applies the raw world bearing directly as a
+screen-space view transform. On iOS the rider maps use Apple Maps, where
+`Marker.rotation` is a no-op — which is why that view transform exists — and
+`rotateEnabled` is left at its react-native-maps default of `true` on
+`ride-in-progress.tsx`, `driver-arriving.tsx` and `driver-arrived.tsx` (it *is*
+explicitly `false` on the static receipt maps). So a rider who rotates the map,
+deliberately or while pinch-zooming, leaves the car wrong by exactly the
+rotation angle. Android is unaffected: a `flat` Marker's rotation is world-space
+and Google Maps subtracts the camera bearing itself.
+
+This is the same one-way-port gap `docs/known-forks.md` exists to catch —
+driver-app diagnosed and fixed it for itself (see its own comment at
+`driver-app/app/driver/(tabs)/index.tsx` ~985–992) and the rider side never got
+it. Cheapest fix: `rotateEnabled={false}` on those three rider live maps, which
+makes the north-up invariant the shared component already assumes true by
+construction, in three lines.

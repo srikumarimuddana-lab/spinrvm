@@ -27,8 +27,11 @@ inputs:
     description: >-
       1-100. Below 100 publishes a per-update rollout so only that share of
       devices on the branch receive it. NOTE — Expo allows ONE active rollout
-      per branch: the next publish to that branch fails until the rollout is
-      ended (`eas update:edit` → 100, or `eas update:revert-update-rollout`).
+      per branch+platform+runtime version: the next publish matching that
+      triple fails until the rollout is ended (`eas update:edit` → 100, or
+      `eas update:revert-update-rollout`), and `eas update` has no
+      non-interactive way to supersede one. This is why production publishes
+      only on workflow_dispatch — see eas-build.yml's header.
     required: false
     default: "100"
   expo_token:

@@ -132,7 +132,22 @@ if: |
 - `eas update`'s flag list, `eas update:edit`, `eas update:revert-update-rollout`, and the one-rollout-per-branch-platform-runtime rule re-confirmed against the EAS CLI reference for the pinned version 24.7.0 (`docs.expo.dev/eas/cli`, `docs.expo.dev/eas-update/rollouts`).
 - `actionlint` v1.7.7 run against both changed workflows (`eas-build.yml`, `ci-error-audit.yml`): **clean, no findings** (with `-shellcheck= -pyflakes=`, since neither is installed here).
 - Blast radius established by grep, not assumption — see §4 for the enumerated consumer list.
-- `spinr-cicd-infra-reviewer` run against the working-tree diff before commit.
+- `spinr-cicd-infra-reviewer` run against the diff: **no blockers, verdict "safe to merge"**. It re-derived the mode-step
+  output table and re-executed the extracted `publish()` shell against stubs itself rather than accepting this document's
+  claims, and independently confirmed (a) no push path reaches either production job — the `if:` is double-gated and the
+  `(app == … || app == 'both')` clause is correctly parenthesised, so it does not hit the GH-Actions precedence trap where
+  an unparenthesised trailing `||` makes the whole condition true on its own; (b) a real `eas update` failure cannot be
+  swallowed — the only `return 0` is gated behind the pipeline succeeding, and the loop aborts at the first failing
+  platform rather than continuing; (c) `local log group` is declared separately from `log=$(mktemp)`, so `local`'s own exit
+  status does not mask `mktemp`'s under `set -e`; (d) two source-map uploads for two platforms, no regression; (e) no new
+  interpolation site or unpinned `uses:`.
+  Its two INFO-level items: the `rollout_percentage` input description understated the constraint as "per branch" —
+  **fixed** (it now says branch+platform+runtime version, matching the rest of the diff); and the `grep` matches against
+  Expo's CLI output are best-effort, which is already disclosed in §10 below and degrades softly (the job still fails, only
+  the extra annotations stop appearing).
+  It also noted that on the push path `production_pairs`/`rollout` are computed and then structurally unreachable — kept
+  deliberately as a double-gate, since the explicit `github.event_name == 'workflow_dispatch'` clause is what makes the
+  push-exclusion legible at the job without cross-referencing the `mode` step.
 
 ## 10. What was NOT verified
 

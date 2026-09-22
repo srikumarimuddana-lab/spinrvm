@@ -63,8 +63,17 @@ jest.mock('../../store/languageStore', () => ({
 }));
 
 const mockSetNavApp = jest.fn();
+const mockSetAutoNavigate = jest.fn();
+let mockAutoNavigate = true;
 jest.mock('../../store/navStore', () => ({
-  useNavStore: () => ({ navApp: 'default', setNavApp: mockSetNavApp, loadNavApp: jest.fn() }),
+  useNavStore: () => ({
+    navApp: 'default',
+    setNavApp: mockSetNavApp,
+    autoNavigate: mockAutoNavigate,
+    setAutoNavigate: mockSetAutoNavigate,
+    isLoaded: true,
+    loadNavApp: jest.fn(),
+  }),
 }));
 
 const mockSetSoundEffects = jest.fn();
@@ -233,6 +242,33 @@ describe('navigation app selection', () => {
     await flush();
     fireEvent.press(screen.getByText('settings.navWaze'));
     expect(mockSetNavApp).toHaveBeenCalledWith('waze');
+  });
+});
+
+describe('auto-start navigation toggle', () => {
+  afterEach(() => { mockAutoNavigate = true; });
+
+  it('reads ON by default, matching the shipped default', async () => {
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(
+      screen.getByLabelText('settings.autoNavigate').props.accessibilityState.checked,
+    ).toBe(true);
+  });
+
+  it('turning it off calls setAutoNavigate(false)', async () => {
+    const screen = render(<SettingsScreen />);
+    await flush();
+    await act(async () => { fireEvent.press(screen.getByLabelText('settings.autoNavigate')); });
+    expect(mockSetAutoNavigate).toHaveBeenCalledWith(false);
+  });
+
+  it('turning it back on calls setAutoNavigate(true)', async () => {
+    mockAutoNavigate = false;
+    const screen = render(<SettingsScreen />);
+    await flush();
+    await act(async () => { fireEvent.press(screen.getByLabelText('settings.autoNavigate')); });
+    expect(mockSetAutoNavigate).toHaveBeenCalledWith(true);
   });
 });
 

@@ -55,7 +55,7 @@ jest.mock('../../store/languageStore', () => ({
 }));
 
 jest.mock('../../store/navStore', () => ({
-  useNavStore: () => ({ navApp: 'default', setNavApp: jest.fn(), loadNavApp: jest.fn() }),
+  useNavStore: () => ({ navApp: 'default', setNavApp: jest.fn(), autoNavigate: true, setAutoNavigate: jest.fn(), isLoaded: true, loadNavApp: jest.fn() }),
 }));
 
 jest.mock('../../store/alertPrefsStore', () => ({

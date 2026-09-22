@@ -996,7 +996,6 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 )
                 _payment_status = str(ride.get("payment_status") or "").lower()
                 _settlement_finalized = _payment_status in _SETTLED_PAYMENT_STATUSES
-                _settlement_pending = _payment_status in ("pending", "failed", "processing")
                 if _component_verified and _settlement_finalized:
                     # The authoritative app settlement already wrote paid and
                     # the aggregate ledger proof. A component webhook is only
@@ -1004,17 +1003,36 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     # append another aggregate charge row.
                     await mark_stripe_event_processed(event_id)
                     return {"received": True, "component_payment": True, "event_id": event_id}
-                if _settlement_pending:
-                    # A ledger map proves received funds but cannot finalize a
-                    # ride. Retry while pending/failed/processing until the
-                    # authoritative app settlement completes its paid flip.
+                if _component_verified and _payment_status == "processing":
+                    # The exact component manifest proves the split amount,
+                    # while processing is an active finalizer claim. Defer this
+                    # event until that in-flight finalizer commits or recovery
+                    # takes ownership. Other processing rows without a
+                    # matching in-flight source above are not enough to defer
+                    # an unrelated underpayment event.
                     if not await unclaim_stripe_event(event_id):
                         logger.critical(
-                            "Stripe event %s could not be unclaimed before ride %s settlement finished",
+                            "Stripe event %s could not be unclaimed while ride %s settlement was processing",
                             event_id,
                             ride_id,
                         )
                     raise HTTPException(status_code=503, detail="Payment settlement is still being finalized; retry")
+
+                if _component_verified:
+                    # The aggregate ledger row proves the exact full
+                    # obligation was collected, but the ride is not in a
+                    # settled state and no finalizer is currently in flight.
+                    # Acknowledge this component event without changing ride
+                    # state; the durable processing reconciliation owns the
+                    # settlement recovery and must not depend on Stripe retries.
+                    logger.error(
+                        "[webhook] verified split components lack settled ride state ride=%s status=%s",
+                        ride_id,
+                        _payment_status,
+                        extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    )
+                    await mark_stripe_event_processed(event_id)
+                    return {"received": True, "component_payment": True, "unsettled": True, "event_id": event_id}
 
                 # Permanent condition — retrying won't change the amounts.
                 # Leave the ride unpaid (payment_retry / reconciliation own it)

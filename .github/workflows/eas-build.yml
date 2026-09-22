@@ -2,33 +2,58 @@ name: EAS Mobile Update
 
 # ─── What this does ────────────────────────────────────────────────────────
 # On every push to main that touches rider-app / driver-app / shared:
-#   → Publishes an OTA JS-only update for the affected app.
-#     • preview channel   — immediately, ungated (internal-distribution APKs
-#                           handed to live testers).
-#     • production channel — behind the `production-ota` GitHub Environment
-#                           (required reviewer), as a percentage ROLLOUT
-#                           (default 10%). Phones on that channel pick it up
-#                           on next launch.
-#   → Uploads the exported source maps to Sentry after each publish so
-#     post-OTA crashes symbolicate (see .github/actions/eas-ota-publish).
+#   → Publishes an OTA JS-only update to the `preview` channel only
+#     (android — the internal-distribution APKs handed to live testers).
+#     Ungated, 100%, no rollout.
+#
+# On workflow_dispatch:
+#   → profile=test | preview — ungated publish to that channel.
+#   → profile=production     — behind the `production-ota` GitHub Environment
+#                              (required reviewer), as a percentage ROLLOUT
+#                              (default 10%). This is the ONLY path that
+#                              publishes a production OTA.
+#
+# Either way the exported source maps are uploaded to Sentry after each
+# publish so post-OTA crashes symbolicate (see .github/actions/eas-ota-publish).
 #
 # 2026-09-20 (review item C7): before this, every merge to main published
 # straight to `production` for both apps with no approval, no rollout and no
 # sourcemaps — a JS-only regression reached every production handset on next
 # launch, unsymbolicated, with no kill switch short of another `eas update`.
 #
+# 2026-09-22: C7 fixed that but published production on every push as a 10%
+# rollout. Expo permits ONE active rollout per branch+platform+runtime
+# version, and `eas update` has no non-interactive way to supersede one
+# (checked against eas-cli 24.7.0's flag list), so the first push after C7
+# created a rollout and every push after that was refused — two solid days of
+# red runs (last green: run 1103, before 94ade62 landed), during which
+# production handsets received nothing and the one rollout that did land
+# stayed stuck at 10%. A rollout is
+# human-paced state by design; an unattended push-triggered job cannot end
+# one. Production is therefore dispatch-only: whoever starts a rollout is the
+# one who ramps or reverts it.
+#
+# NOTE — iOS has no `preview` population (App Store installs sit on the
+# `production` channel), so with production on dispatch only a push publishes
+# no iOS OTA at all. iOS JS fixes ship by dispatching this workflow with
+# profile=production. That is deliberate, not an oversight.
+#
 # OPERATOR NOTES
 #   • The `production-ota` environment must exist in repo Settings →
 #     Environments with at least one required reviewer. GitHub auto-creates
 #     a referenced environment with NO protection rules, so until a human
 #     adds the reviewer this gate is inert — check before relying on it.
-#   • Expo allows ONE active per-update rollout per branch. While a
-#     production rollout is in progress the next production publish to that
-#     branch is refused by Expo (this job fails loudly). End it first:
-#         eas update:edit                    # ramp to 100
-#         eas update:revert-update-rollout   # or roll back
-#     (docs.expo.dev/eas-update/rollouts). `eas update:list --branch
-#     production` shows the state.
+#     Still inert as of 2026-09-22: in run 35743544726 the production jobs
+#     started after the same ~90s queue delay as the ungated preview jobs,
+#     with no approval pause.
+#   • Expo allows ONE active per-update rollout per branch+platform+runtime
+#     version. Before dispatching profile=production, end any rollout still in
+#     progress:
+#         eas update:list --branch production --json --non-interactive
+#         eas update:edit <GROUP_ID> --rollout-percentage 100 --non-interactive
+#         eas update:revert-update-rollout --group <GROUP_ID> --non-interactive
+#     (docs.expo.dev/eas-update/rollouts). The publish step prints these with
+#     the real group ID filled in whenever Expo refuses for this reason.
 #   • Sentry upload needs repo secret SENTRY_AUTH_TOKEN and variables
 #     SENTRY_ORG, SENTRY_PROJECT_RIDER, SENTRY_PROJECT_DRIVER. When unset the
 #     upload step warns and skips (the publish still happens).
@@ -64,16 +89,16 @@ on:
         default: "10"
         type: string
 
-# Channel routing background (kept from the original single-job version):
+# Channel routing background:
 # `github.event.inputs.*` is only populated for workflow_dispatch, so a push
 # must not fall through to a default profile. Real store builds live on two
 # channels: iOS App Store submissions use the `production` build profile /
 # channel; Android has two live populations — every internal-distribution APK
 # handed to live testers is on `preview`, and Play production installs (first
 # cut 2026-09-09 from the `production` build profile) are on `production`.
-# A push therefore publishes android to BOTH channels (preview ungated,
-# production gated) and ios to `production` (gated). workflow_dispatch keeps
-# the operator's explicit choice uniform across platforms.
+# A push therefore publishes android to `preview` and nothing else;
+# `production` (ios and android) is reached only by workflow_dispatch with
+# profile=production, which routes through the `production-ota` gate.
 #
 # Publishing is always by --branch (same name as the channel): `eas update
 # --channel` requires the channel to be linked to exactly one branch and
@@ -117,11 +142,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "push" ]; then
-            # Ungated preview leg + gated production leg (android on both).
+            # Ungated preview leg only. Production is dispatch-only: Expo
+            # permits one active rollout per branch+platform+runtime version
+            # and `eas update` cannot supersede one non-interactively, so a
+            # push-triggered production publish is refused from the second
+            # push onward until a human ends the rollout (see the header).
             echo "preview_pairs=android:preview" >> "$GITHUB_OUTPUT"
-            echo "production_pairs=ios:production android:production" >> "$GITHUB_OUTPUT"
-            echo "is_production=true" >> "$GITHUB_OUTPUT"
-            echo "rollout=10" >> "$GITHUB_OUTPUT"
+            echo "production_pairs=" >> "$GITHUB_OUTPUT"
+            echo "is_production=false" >> "$GITHUB_OUTPUT"
+            echo "rollout=100" >> "$GITHUB_OUTPUT"
           elif [ "$INPUT_PROFILE" = "production" ]; then
             echo "preview_pairs=" >> "$GITHUB_OUTPUT"
             echo "production_pairs=ios:production android:production" >> "$GITHUB_OUTPUT"
@@ -185,11 +214,11 @@ jobs:
   #    percentage rollout) ────────────────────────────────────────────────────
   rider-production:
     needs: detect
+    # Dispatch-only — a push never reaches this job (see the header block).
     if: |
-      needs.detect.outputs.is_production == 'true' && (
-        (github.event_name == 'push' && needs.detect.outputs.rider == 'true') ||
-        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both'))
-      )
+      needs.detect.outputs.is_production == 'true' &&
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production-ota
@@ -208,11 +237,11 @@ jobs:
 
   driver-production:
     needs: detect
+    # Dispatch-only — a push never reaches this job (see the header block).
     if: |
-      needs.detect.outputs.is_production == 'true' && (
-        (github.event_name == 'push' && needs.detect.outputs.driver == 'true') ||
-        (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both'))
-      )
+      needs.detect.outputs.is_production == 'true' &&
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production-ota

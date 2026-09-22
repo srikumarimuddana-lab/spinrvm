@@ -124,10 +124,14 @@ async def schedule_retry(operation: Dict[str, Any], *, error: str) -> None:
                            last_error=error[:1000], metadata=metadata)
 
 
-async def schedule_poll(operation_id: str, *, delay_minutes: int = PENDING_POLL_MINUTES) -> None:
+async def schedule_poll(operation: Dict[str, Any], *, delay_minutes: int = PENDING_POLL_MINUTES,
+                        **changes: Any) -> None:
     """Schedule ordinary provider-pending status polling without spending retries."""
     next_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
-    await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(), last_error=None)
+    metadata = dict(operation.get("metadata") or {})
+    metadata["error_attempt_count"] = 0
+    await update_operation(str(operation["id"]), status="pending", next_attempt_at=next_at.isoformat(),
+                           last_error=None, metadata=metadata, **changes)
 
 
 async def finalize_refund_success(operation: Dict[str, Any]) -> None:
@@ -268,7 +272,7 @@ async def reconcile_due_operations() -> int:
                     await update_operation(op_id, status="requires_action" if pi_status == "requires_action" else "failed",
                                            next_attempt_at=None, last_error=f"PaymentIntent status: {pi_status}")
                 else:
-                    await schedule_poll(op_id)
+                    await schedule_poll(operation)
                 continue
 
             # Refund: retrieve the saved object first. If the create response
@@ -327,18 +331,25 @@ async def reconcile_due_operations() -> int:
                     continue
                 stored_status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
                 if stored_status == "succeeded":
+                    metadata = dict(operation.get("metadata") or {})
+                    metadata["error_attempt_count"] = 0
                     await update_operation(op_id, provider_object_id=refund_id, status="pending",
                                            collected_cents=amount,
-                                           next_attempt_at=datetime.now(timezone.utc).isoformat())
-                    operation = {**operation, "provider_object_id": refund_id}
+                                           next_attempt_at=datetime.now(timezone.utc).isoformat(), metadata=metadata)
+                    operation = {**operation, "provider_object_id": refund_id, "metadata": metadata}
                     await finalize_refund_success(operation)
                     await update_operation(op_id, status="succeeded", next_attempt_at=None,
                                            collected_cents=amount, last_error=None)
                     continue
-                await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
-                                       collected_cents=amount,
-                                       next_attempt_at=None if stored_status in {"succeeded", "requires_action"} else
-                                       (datetime.now(timezone.utc) + timedelta(minutes=PENDING_POLL_MINUTES)).isoformat())
+                if stored_status == "pending":
+                    await schedule_poll(operation, provider_object_id=refund_id, collected_cents=amount)
+                    operation = {**operation, "provider_object_id": refund_id,
+                                 "metadata": {**(operation.get("metadata") or {}), "error_attempt_count": 0}}
+                else:
+                    metadata = dict(operation.get("metadata") or {})
+                    metadata["error_attempt_count"] = 0
+                    await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
+                                           collected_cents=amount, next_attempt_at=None, metadata=metadata)
                 await db.update_one("rides", {"id": ride_id}, {
                     "refund_id": refund_id, "refund_status": stored_status,
                 })

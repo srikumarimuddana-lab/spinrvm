@@ -276,12 +276,26 @@ async def test_pending_poll_count_does_not_spend_transport_error_budget():
     with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})) as update:
         from backend.utils.payment_operations import schedule_poll
 
-        await schedule_poll("op1")
+        await schedule_poll({"id": "op1", "attempt_count": 8, "metadata": {"error_attempt_count": 7}})
 
     changes = update.await_args.args[2]
     assert changes["status"] == "pending"
-    assert "metadata" not in changes
+    assert changes["metadata"]["error_attempt_count"] == 0
     assert "attempt_count" not in changes
+
+
+@pytest.mark.asyncio
+async def test_error_after_successful_poll_starts_new_consecutive_budget():
+    operation = {"id": "op1", "attempt_count": 8, "metadata": {"source": "refund", "error_attempt_count": 7}}
+    with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})) as update:
+        from backend.utils.payment_operations import schedule_retry
+
+        await schedule_retry({**operation, "metadata": {"source": "refund", "error_attempt_count": 0}},
+                             error="one timeout after successful poll")
+
+    changes = update.await_args.args[2]
+    assert changes["status"] == "pending"
+    assert changes["metadata"] == {"source": "refund", "error_attempt_count": 1}
     assert update.await_args.args[1] == {"id": "op1"}
 
 

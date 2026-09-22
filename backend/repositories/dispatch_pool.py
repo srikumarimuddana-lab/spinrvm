@@ -408,8 +408,10 @@ async def claim_batch(
     max_offers: int,
     offered_at,
     expires_at,
+    *,
+    claim_identity_enabled: bool = False,
 ) -> list[dict]:
-    """Call the `dispatch_claim_batch` RPC (migration 402) over the direct pool.
+    """Call the legacy or UUID-bound dispatch claim RPC over the direct pool.
 
     C50 Phase 2 (T12/T13) — the first real caller of this pool. Wraps the
     single-statement RPC call in the same one-transaction-per-call
@@ -464,7 +466,7 @@ async def claim_batch(
                     # ...) does not exist". Same for the id list and timestamps.
                     await asyncio.wait_for(
                         cur.execute(
-                            "SELECT * FROM public.dispatch_claim_batch("
+                            f"SELECT * FROM public.{'dispatch_claim_batch_v2' if claim_identity_enabled else 'dispatch_claim_batch'}("
                             "%s::text, %s::text[], %s::int[], %s::int, %s::timestamptz, %s::timestamptz)",
                             (
                                 ride_id,

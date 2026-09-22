@@ -382,25 +382,19 @@ function RideCompletedScreenContent() {
 
   // Leave when this client has already finished with this ride locally.
   //
-  // clearRide() records the ride id in the store's `_clearedRideId`, and from
-  // that moment BOTH fetchRide (rideStore.ts — it discards any response whose
-  // id matches) and fetchActiveRide refuse that ride, until a new one is
-  // booked. So on a re-entry to this screen for that id — a `ride_completed`
-  // push tap (_layout.tsx's routeFromNotificationData), the in-app
-  // notification list (notifications.tsx), or a late WS ride_completed —
-  // `currentRide` can never become non-null. The fare reads $0.00 forever, and
-  // the auto-dismiss effect above cannot rescue it: that one keys on
-  // `currentRide?.payment_status`, which stays `undefined`.
+  // `_clearedRideId` is set by clearRide(), which only runs once the ride has
+  // been paid, waived, held for review, or cancelled. So a re-entry to this
+  // screen for that id — a `ride_completed` push tap (_layout.tsx's
+  // routeFromNotificationData), the in-app notification list
+  // (notifications.tsx), or a late WS ride_completed — has nothing to collect
+  // and nothing useful to show. This screen blocks the hardware back button
+  // and disables the back gesture, so leaving is the only correct action.
   //
-  // Nothing is owed here (clearRide only runs after the ride was paid, waived,
-  // held, or cancelled) and this screen blocks the hardware back button, so
-  // leaving is the only correct action. Without this, a rider's one escape was
-  // tapping the $0.00 pay button — which round-trips to the server purely to
-  // be told `already_paid`, then navigates home off the back of that.
-  //
-  // This is a guard against the stuck state, NOT the general fix: the
-  // permanent latch in `_clearedRideId` is the underlying defect and is
-  // tracked separately (see the change-log entry for this fix).
+  // Belt-and-braces, not the load-bearing fix. The store's fetchRide no longer
+  // refuses a cleared ride outright (it discards only responses overtaken by a
+  // clear), so the ride does load now and the auto-dismiss effect above would
+  // also catch the paid case a moment later. This just gets there without the
+  // round trip, and keeps the screen out of a dead end if the fetch fails.
   useEffect(() => {
     if (!rideId || !_clearedRideId || _clearedRideId !== rideId) return;
     router.replace('/(tabs)');

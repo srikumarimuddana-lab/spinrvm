@@ -367,6 +367,12 @@ interface RideState {
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
   _clearedRideId: string | null;
+  // Bumped every time a ride is retired locally (clearRide / cancelRide).
+  // fetchRide reads it before its request and again after, so it can tell a
+  // response that was *overtaken* by a clear from one the caller deliberately
+  // asked for *after* that clear. See the guard in fetchRide for why the
+  // difference matters.
+  _clearEpoch: number;
   wsConnected: boolean;
   setWsConnected: (v: boolean) => void;
 
@@ -394,6 +400,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   _lastEventVersion: -1,
   chatMessages: [],
   _clearedRideId: null,
+  _clearEpoch: 0,
   wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
@@ -833,15 +840,43 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchRide: async (rideId) => {
     const driverFixAtStart = get()._lastDriverFix;
+    // Snapshot before the request goes out — see the guard below.
+    const clearEpochAtStart = get()._clearEpoch;
     try {
       // Only set isLoading on first fetch (when no ride data yet)
       if (!get().currentRide) {
         set({ isLoading: true });
       }
       const response = await api.get<Ride & { driver?: Driver | null }>(`/rides/${rideId}`);
-      // If clearRide() ran while this fetch was in-flight, discard the
-      // response so we don't re-populate the store with the old ride.
-      if (get()._clearedRideId === rideId) {
+      // If clearRide() ran for THIS ride while THIS request was in flight,
+      // discard the response so we don't re-populate the store with a ride the
+      // rider has already finished with (and bounce them back onto the screen
+      // they just left).
+      //
+      // The epoch comparison is what makes that "while in flight" real. This
+      // used to test `_clearedRideId === rideId` alone, which is a permanent,
+      // one-way latch: `_clearedRideId` is only reset by createRide (or by
+      // fetchActiveRide landing a *different* ride), so once a ride was
+      // cleared, EVERY later response for it was thrown away too — including a
+      // fresh, deliberate re-fetch from a screen that had just mounted and
+      // explicitly asked for it. That is how a rider re-entering the receipt
+      // screen for a paid ride (a `ride_completed` push tap, the in-app
+      // notification list) ended up on a receipt whose ride could never load:
+      // the fare read $0.00 forever, the screen's own "already paid, leave"
+      // effect could never fire because it keys on a payment_status that stayed
+      // undefined, and the hardware back button is blocked there.
+      //
+      // Comparing epochs separates the two cases cleanly:
+      //   - clear happened DURING this request  → epoch moved → stale, discard.
+      //   - clear happened BEFORE it was issued → epoch same  → the caller
+      //     asked for this ride knowing it had been cleared, so honour it.
+      //
+      // Deliberately NOT applied to fetchActiveRide's identical-looking check:
+      // that one guards against server read-after-write lag (/rides/active
+      // still reporting a just-cancelled ride as active), which is a property
+      // of the server's state, not of request ordering — an epoch would not
+      // express it. It stays a permanent latch on purpose.
+      if (get()._clearedRideId === rideId && get()._clearEpoch !== clearEpochAtStart) {
         set({ isLoading: false });
         return;
       }
@@ -893,7 +928,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       // server sends back is recognised as already-handled and skipped — without
       // this the echo re-toasts + re-navigates, restarting the toast animation
       // (the cancel-during-search flicker).
-      set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
+      set({
+        currentRide: null,
+        currentDriver: null,
+        isLoading: false,
+        _clearedRideId: currentRide.id,
+        _clearEpoch: get()._clearEpoch + 1,
+      });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {
       // 409 with a terminal current_status means the backend already cancelled/
@@ -905,7 +946,13 @@ export const useRideStore = create<RideState>((set, get) => ({
         error.status === 409 &&
         TERMINAL_STATUSES.has(String(error.details?.current_status ?? ''))
       ) {
-        set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
+        set({
+          currentRide: null,
+          currentDriver: null,
+          isLoading: false,
+          _clearedRideId: currentRide.id,
+          _clearEpoch: get()._clearEpoch + 1,
+        });
         AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
         return;
       }
@@ -1094,6 +1141,15 @@ export const useRideStore = create<RideState>((set, get) => ({
   // so that in-flight fetchRide calls for that ride are ignored. Without
   // this, the race (clearRide → fetchRide response arrives → currentRide
   // re-populated) traps the rider on ride-completed after paying.
+  //
+  // _clearEpoch is what scopes that to genuinely in-flight calls. The id alone
+  // is a permanent latch — nothing resets it until the rider books a new ride —
+  // so on its own it also silenced deliberate re-fetches issued long after the
+  // clear, which is its own trap (see the guard in fetchRide). Two other
+  // consumers read _clearedRideId directly and still want the permanent
+  // semantics, so the id is left exactly as it was: fetchActiveRide (server
+  // read-after-write lag) and useRiderSocket's ride_cancelled handler (the
+  // server's echo of a cancel the rider already saw).
   clearRide: () => {
     // Fall back to the existing _clearedRideId when currentRide is already null:
     // performCancel() calls cancelRide() (which nulls currentRide and records
@@ -1107,6 +1163,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       chatMessages: [],
       error: null,
       _clearedRideId: clearedId ?? null,
+      // Marks the boundary an in-flight fetchRide is measured against.
+      _clearEpoch: get()._clearEpoch + 1,
       activeRideRouteCoords: null,
       activeDriverRouteCoords: null,
       lastEtaMin: null,

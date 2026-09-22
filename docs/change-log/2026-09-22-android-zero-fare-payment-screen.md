@@ -62,7 +62,9 @@ repaint rendered the *payable* variant of the button (`Pay $… & Done`), not th
 
 ## 3. Fix / remediation
 
-Four changes, all inside `ride-completed.tsx`:
+Five changes. Four in `ride-completed.tsx`, plus the store fix in §11 — that
+last one is the root cause of the *persistent* $0.00 screen the reporter
+actually hit, and is the reason this entry is not purely a display fix.
 
 1. A `rideLoaded = !!currentRide` readiness signal. `TRIP TOTAL` renders `—`
    (not `$0.00`) until the ride row loads, and the submit button quotes no
@@ -76,8 +78,9 @@ Four changes, all inside `ride-completed.tsx`:
    every repaint during the transition reads as paid.
 4. A new effect leaves the screen (`router.replace('/(tabs)')`) when
    `_clearedRideId === rideId` — this client has already finished with the
-   ride, and in that state it can *never* load (see §11), so the screen has
-   nothing to show and nothing to collect.
+   ride, so there is nothing to show and nothing to collect.
+5. **`rideStore.ts`: `_clearedRideId`'s permanent latch replaced with a
+   `_clearEpoch` comparison** — see §11 for the full writeup and blast radius.
 
 **Do not turn that button into a dead end.** The first draft of this fix
 (commit `145ee10`) *disabled* it while the ride was unloaded. That is wrong,
@@ -104,21 +107,30 @@ permanent loading state and blocked their receipt.
 
 ## 4. Risk & impact on existing functionality
 
-**Blast radius: isolated to one screen.** No store, API, backend, schema, or
-shared-component change. `rider-app/app/ride-completed.tsx` is not in
-`docs/known-forks.md` (its only mention there is as a *navigation destination*
-in the `notifications.tsx` row) and has no driver-app sibling, so the fork
-registry's check 11 does not apply.
+**Blast radius: one screen, plus one guard inside the rider ride store.** No
+API, backend, schema, or shared-component change.
+`rider-app/app/ride-completed.tsx` is not in `docs/known-forks.md` (its only
+mention there is as a *navigation destination* in the `notifications.tsx` row)
+and has no driver-app sibling, so the fork registry's check 11 does not apply.
+`rideStore.ts` is rider-app-only — driver-app has its own store.
+
+**The store change is the wider half of this diff; its own blast-radius
+analysis, including the one real behaviour change it allows and why that is
+safe, is in §11.** Summary of what was checked there: every `fetchRide` call
+site, every screen that reacts to a cancelled `currentRide`, both other
+`_clearedRideId` consumers, and what `cancel-flicker.test.ts` actually pins.
 
 Greps performed:
 
 - `fetchRide` across `rider-app/` — 10 non-test call sites (`ride-completed`,
   `ride-in-progress`, `driver-arriving`, `driver-arrived`, `ride-status`,
-  `ride-details`, `_layout`, `useRiderSocket`, `useRideLocationFallback`).
-  **Untouched** — this change reads `currentRide`, it does not change how the
-  store is populated.
-- `clearRide` across `rider-app/` — 10 non-test call sites. **Untouched**; the
-  fix does not reorder or remove any `clearRide()` call.
+  `ride-details`, `_layout`, `useRiderSocket`, `useRideLocationFallback`). All
+  reviewed for the epoch change — see §11.
+- `clearRide` across `rider-app/` — 10 non-test call sites. No call reordered or
+  removed; `clearRide` now also bumps `_clearEpoch`.
+- `_clearedRideId` across `rider-app/` — 2 consumers outside the store
+  (`useRiderSocket.ts:147`, and `ride-completed.tsx`'s new leave effect), both
+  deliberately unaffected by the epoch.
 - `alreadyPaid` within the screen — 7 readers: the `payWithCard` auto-retry
   effect guard, `handleGooglePay`'s early return, `handleSubmit`'s
   `paymentOk = alreadyPaid` short-circuit, the `PAID` chip, the Google Pay
@@ -132,8 +144,9 @@ Could regress:
   `currentRide` — the `payWithCard` param re-invokes `handleSubmitRef.current()`
   on mount, potentially before `fetchRide` lands, and the charge is settled
   server-side by `rideId` (`attemptRidePayment` never sends an amount). Adding a
-  guard there would have broken that retry. Only the *button* is disabled; the
-  programmatic retry path is unaffected.
+  guard there would have broken that retry, so none was added — only the
+  *button's* behaviour changes, and the programmatic path is untouched. Pinned
+  by a new test (`change-card escape while the ride is still unloaded`).
 - **Tip correctness.** `tipOptions` / `tipReady` / `reconcileSelectedTip` are
   unchanged and still key on `fare > 0`, which remains right for a ladder (a
   `$0` fare cannot scale one). No tip amount changes.
@@ -181,6 +194,8 @@ disabled button that looks identical to an enabled one is the same trap as the
 |---|---|---|
 | `rider-app/app/ride-completed.tsx` | Added `rideLoaded` / `awaitingRide` / `submitDisabled`; gated `TRIP TOTAL` and the submit button's label+icon on them; made the unloaded button a retry; latched `setAlreadyPaid(true)` on both success paths; added the `_clearedRideId === rideId` leave effect | Stop rendering and offering a `$0.00` charge while the ride row is null, without creating a dead end on a back-blocked screen |
 | `rider-app/__tests__/rideCompletedScreen.test.tsx` | Added 9 regression tests across 4 describe blocks; gave `mockClearRide` a real implementation in the post-charge tests | Pin the unloaded-render contract, the retry behaviour, the comped-$0 exemption, the PAID latch on both pay paths, the cleared-ride exit, and the change-card-while-unloaded charge |
+| `rider-app/store/rideStore.ts` | Added `_clearEpoch`; bumped it at all three ride-retiring sites (`clearRide`, both `cancelRide` set sites); `fetchRide` now snapshots it and discards only responses overtaken by a clear | Stop the permanent latch silencing deliberate re-fetches — the root cause of the *persistent* $0.00 receipt (§11) |
+| `rider-app/store/__tests__/rideStore.clearedRide-refetch.test.ts` | New file, 7 tests | Pin both halves of the epoch guard, that the two other `_clearedRideId` consumers keep permanent semantics, and the post-cancel poll-tick case the change allows |
 
 ## 7. Before / after
 
@@ -194,6 +209,21 @@ disabled button that looks identical to an enabled one is the same trap as the
   {alreadyPaid
     ? 'Rate & Done'
     : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`}
+```
+
+```ts
+// Before — rideStore.ts fetchRide: a permanent, one-way latch
+if (get()._clearedRideId === rideId) { set({ isLoading: false }); return; }
+```
+
+```ts
+// After — discards only a response overtaken by a clear mid-request
+const clearEpochAtStart = get()._clearEpoch;          // before the request
+// ...
+if (get()._clearedRideId === rideId && get()._clearEpoch !== clearEpochAtStart) {
+  set({ isLoading: false });
+  return;
+}
 ```
 
 ```tsx
@@ -223,33 +253,48 @@ setAlreadyPaid(true);   // ← new: repaints during the transition read as paid
 
 ## 8. Rollback plan
 
-`git revert` of the single commit is a complete and sufficient rollback here,
-and this is one of the cases the template's caveat explicitly permits:
+`git revert` of these commits is a complete and sufficient rollback, and this is
+one of the cases the template's caveat explicitly permits:
 
 - No migration, no schema change, no `app_settings` key, no backend change.
-- **No live data is written by this diff.** It changes render conditions and one
-  piece of local component state. It creates no Stripe charge, no wallet delta,
-  no ride-state transition, and no `driver_insurance_periods` row — so there is
-  nothing applied-to-live-data that a code revert would leave stranded.
-- Reverting restores the previous (buggy) render exactly; a rider mid-session
+- **No live data is written by this diff.** It changes render conditions, one
+  piece of local component state, and one in-memory guard in a client-side
+  zustand store. It creates no Stripe charge, no wallet delta, no ride-state
+  transition, and no `driver_insurance_periods` row — so there is nothing
+  applied-to-live-data that a code revert would leave stranded.
+- `_clearEpoch` is **in-memory only**. It is not persisted to AsyncStorage, not
+  sent to the server, and not read by anything outside `rideStore.ts`, so a
+  revert cannot leave a stale or unreadable value anywhere — the field simply
+  stops existing, and `_clearedRideId` reverts to its previous meaning on the
+  next app start.
+- Reverting restores the previous (buggy) behaviour exactly; a rider mid-session
   during the revert sees only the old label on their next render.
 
 Not feature-flagged. Justification: the change removes a wrong, actionable money
-figure from a payment surface. Dark-shipping it would mean deliberately leaving
-riders looking at `Pay $0.00 & Done` while the flag was off, which is worse than
-the (bounded, revertible) risk of shipping it on. The fallback state is strictly
-more conservative than the current behaviour — a disabled button cannot charge
-anyone.
+figure from a payment surface, and frees riders who are currently stuck on it.
+Dark-shipping would mean deliberately leaving riders looking at
+`Pay $0.00 & Done` while the flag was off, which is worse than the (bounded,
+revertible) risk of shipping it on. Every fallback state introduced here is more
+conservative than what it replaces — the button never quotes an amount it does
+not know, and never charges when it cannot.
 
 ## 9. Verification performed
 
-- [x] Blast-radius grep performed — `fetchRide`, `clearRide`, `alreadyPaid`
-      across `rider-app/`; `docs/known-forks.md` checked for a sibling (none).
+- [x] Blast-radius grep performed — `fetchRide`, `clearRide`, `alreadyPaid`,
+      `_clearedRideId` across `rider-app/`; `docs/known-forks.md` checked for a
+      sibling (none). For the store change, additionally: every screen's
+      handling of a `cancelled` `currentRide` (only `driver-arriving.tsx:347`
+      reacts, and without a toast), every `_clearedRideId:` write site in the
+      store (3 retire-sites, all now epoch-bumped; 2 reset-sites, correctly
+      not), and what `rideStore.cancel-flicker.test.ts` actually covers
+      (`cancelRide`/`clearRide`/`fetchActiveRide` — not `fetchRide`). See §11.
 - [x] Syntax/parse check — `tsc --noEmit --noResolve --skipLibCheck
-      --jsx preserve` on both changed files: **zero `TS1xxx` syntax errors**
-      (all remaining diagnostics are `TS2307`/`TS2304`/`TS7006`/`TS2593`, i.e.
-      unresolved modules and missing `@types`, which are artifacts of
-      `--noResolve` with no `node_modules`).
+      --jsx preserve` on all four changed files: **zero `TS1xxx` syntax
+      errors**. All remaining diagnostics are `TS2307`/`TS2304`/`TS7006`/
+      `TS2593`/`TS2591` (unresolved modules, missing `@types`) — artifacts of
+      `--noResolve` with no `node_modules`. `rideStore.ts`'s two `TS18046`
+      (`'error' is of type 'unknown'`) were confirmed **pre-existing** by
+      running the same check against `git show HEAD:…` — 2 before, 2 after.
 - [x] Reviewed against `CLAUDE.md` conventions — Decimal/money (no new
       arithmetic introduced), no silent error swallowing, WCAG 2.1 AA labels on
       the new states.
@@ -269,7 +314,7 @@ anyone.
       added; (c) `mockClearRide` was a bare `jest.fn()`, so the post-charge
       tests never actually nulled `currentRide` and proved less than they
       claimed — it now has a real implementation.
-- [ ] **Automated tests NOT run.** 5 regression tests were written but could not
+- [ ] **Automated tests NOT run.** 16 regression tests were written but could not
       be executed in this session: `rider-app/node_modules` is absent and
       `registry.npmjs.org` is blocked by this environment's egress policy
       (`npm error code E403`). The agent-proxy README says not to route around a
@@ -305,52 +350,100 @@ anyone.
 - **rider-app has no visual/snapshot regression tooling at all** (CLAUDE.md
   pre-merge gate #6). The layout of the `—` placeholder and the
   `Loading your trip…` button was reasoned about, not screenshotted.
-- The 5 new tests are unexecuted (see §9) — treat them as written-but-unproven.
+- The 16 new tests are unexecuted (see §9) — treat them as written-but-unproven.
+  This matters more for the store change than the screen change: the store's
+  guard is exercised by 8 other call sites this session could not run.
 
-## 11. Open follow-up — GUARDED here, root cause NOT fixed
+## 11. Root cause behind the *persistent* $0.00 screen — FIXED
 
-`_clearedRideId` in `rider-app/store/rideStore.ts` is a **permanent, one-way
-latch**, and it turns the same `$0.00` render into an unrecoverable trap if
-anything re-enters this screen for a just-cleared ride.
+The reporter confirmed the screen **persists and is tappable** (they escape by
+pressing the $0.00 button), not a transition flash. That points past the render
+bug to a second defect in the store, which is fixed here too.
 
-`clearRide()` records the ride id (`rideStore.ts:1097-1115`). Both
-`fetchRide` (`:844`) and `fetchActiveRide` (`:493`) then refuse that ride
-**forever** — the latch is only reset by `createRide` (`:809`) or by
-`fetchActiveRide` succeeding for a *different* ride (`:498`). Its guard comment
-scopes the intent to *in-flight* fetches ("If `clearRide()` ran while this fetch
-was in-flight"), but the implementation is id-based, so it also discards a
-deliberate, *later* re-fetch — e.g. a fresh mount of `/ride-completed` for that
-same ride.
+### The defect
 
-Consequence: re-entering `/ride-completed?rideId=X` after `clearRide()` (via a
-`ride_completed` push tap — `_layout.tsx:181` — or the in-app notification list
-— `notifications.tsx:139`, neither of which consults `payment_status` or
-`_clearedRideId`) leaves `currentRide` permanently `null`. The auto-dismiss
-effect (`ride-completed.tsx:330`) keys on `currentRide?.payment_status`, which
-stays `undefined`, so it never fires; Android's `BackHandler` returns `true` and
-`gestureEnabled: false` is set on the route, so there is **no way off the
-screen**.
+`_clearedRideId` in `rider-app/store/rideStore.ts` was a **permanent, one-way
+latch**. `clearRide()` records the retired ride id; the latch is only reset by
+`createRide` or by `fetchActiveRide` landing a *different* ride. `fetchRide`'s
+guard tested that id alone:
 
-**What this commit does about it:** guards the *symptom* only. The new effect in
-`ride-completed.tsx` detects `_clearedRideId === rideId` and leaves for
-`/(tabs)` instead of rendering an unloadable receipt. That is safe (nothing is
-owed — `clearRide` only runs after the ride was paid, waived, held, or
-cancelled), screen-local, and has zero blast radius on the store. It stops the
-rider being stranded.
+```ts
+if (get()._clearedRideId === rideId) { set({ isLoading: false }); return; }
+```
 
-**It does not fix the latch.** `fetchRide` still permanently refuses a cleared
-ride for every other caller and every other screen.
+Its own comment scopes the intent to *in-flight* responses ("If `clearRide()`
+ran while this fetch was in-flight"), but an id-only test cannot express "while
+in flight". It also discarded every **later, deliberate** re-fetch — including a
+fresh mount of `/ride-completed` explicitly asking for that ride.
 
-**Proposed real fix (NOT applied):** replace the id-only check with a monotonic
-clear epoch captured at fetch start, so the guard discards a response only when
-a clear happened for that ride *during* the fetch, and lets a later deliberate
-re-fetch through.
+So re-entering `/ride-completed?rideId=X` after `clearRide()` (a
+`ride_completed` push tap, `_layout.tsx:181`; or the in-app notification list,
+`notifications.tsx:139` — neither consults `payment_status` or the latch) left
+`currentRide` `null` **forever**: the fare read `$0.00`, the screen's
+auto-dismiss effect could never fire because it keys on a `payment_status` that
+stayed `undefined`, and the hardware back button plus `gestureEnabled: false`
+meant no exit. The rider's only escape was pressing the $0.00 button, which
+round-trips to the server purely to be told `already_paid` and navigates home
+off the back of that.
 
-**Why that is not in this commit:** `fetchRide` has 10 call sites, four of which
-(`ride-status.tsx:164`, `driver-arriving.tsx:326`, `driver-arrived.tsx:124`,
-`useRiderSocket`'s handlers) poll or fire on a timer and can start a fetch
-*after* a cancel's `clearRide()`. Loosening the guard could let one of those
-repopulate a cancelled ride and re-open the cancel-during-search toast flicker
-that `rideStore.cancel-flicker.test.ts` pins. That needs its own blast-radius
-pass and its own Change Impact Log — CLAUDE.md pre-merge gate #9 (escalate,
-don't silently ship) rather than widening a payments diff.
+### The fix
+
+A monotonic `_clearEpoch`, bumped at all three sites that retire a ride
+(`clearRide`, and both `cancelRide` set sites including the 409/terminal
+branch). `fetchRide` snapshots it before issuing its request and compares after:
+
+```ts
+if (get()._clearedRideId === rideId && get()._clearEpoch !== clearEpochAtStart)
+```
+
+- clear happened **during** this request → epoch moved → stale, discard
+  (the original race, still fixed)
+- clear happened **before** it was issued → epoch same → the caller asked for
+  this ride knowing it was cleared → honour it
+
+### What was deliberately left alone
+
+Two other consumers read `_clearedRideId` directly and still want the permanent
+semantics. Neither is touched, and both are re-asserted by tests:
+
+| Consumer | Why it stays a permanent latch |
+|---|---|
+| `fetchActiveRide` (`rideStore.ts:493`) | Guards **server read-after-write lag** — `/rides/active` still reporting a just-cancelled ride as active. That is a property of the server's state, not of request ordering; an epoch cannot express it. |
+| `useRiderSocket.ts:147` (`ride_cancelled`) | Suppresses the server's **echo** of a cancel the rider already saw. Independent of `fetchRide` entirely. |
+
+### Blast radius of the store change
+
+`fetchRide` has 10 non-test call sites. The change only alters behaviour for a
+fetch that **starts after** a clear for that same ride — for every other caller
+`_clearedRideId !== rideId`, so the guard was already a no-op.
+
+The one real behaviour change is a **post-cancel poll tick**: `ride-status.tsx`
+(3s/15s), `driver-arriving.tsx` (5s), `driver-arrived.tsx` (15s) and
+`useRideLocationFallback` each hold an interval that can fire in the narrow
+window between `clearRide()` and unmount. Such a tick can now repopulate
+`currentRide` with the cancelled ride. Verified safe, by reading every consumer:
+
+- **Only one screen reacts to a cancelled `currentRide`** —
+  `driver-arriving.tsx:347`, which calls `clearRide()` and routes home. **It
+  shows no toast.** `ride-status.tsx`, `driver-arrived.tsx` and
+  `ride-in-progress.tsx` have no cancelled-status watcher at all (their
+  `cancelled` greps are all local effect-cleanup flags).
+- **The cancel-flicker toast** — the actual bug the latch is remembered for —
+  comes from `useRiderSocket`'s `ride_cancelled` handler, guarded by its own
+  direct `_clearedRideId` read. Not on this path.
+- **`rideStore.cancel-flicker.test.ts`** exercises `cancelRide`, `clearRide` and
+  `fetchActiveRide` — **not** `fetchRide`. Nothing it pins is affected.
+- A repopulated ride arrives in terminal `cancelled` state and `_clearedRideId`
+  stays set, so the WS echo stays suppressed either way.
+
+This case is pinned deliberately by a test rather than left implicit, so a
+future reader sees it was considered and not overlooked.
+
+### Screen-level guard kept as well
+
+`ride-completed.tsx` still leaves for `/(tabs)` when `_clearedRideId === rideId`.
+With the store fixed this is no longer load-bearing — the ride loads now, and
+the auto-dismiss effect would catch the paid case a moment later — but it skips
+the round trip and keeps the screen out of a dead end if the fetch fails for an
+unrelated reason. Its comment was rewritten to say exactly that, so nobody
+mistakes it for the fix.

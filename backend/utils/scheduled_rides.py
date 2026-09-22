@@ -513,7 +513,47 @@ async def _dispatch_scheduled_ride(ride: dict):
                     block_on_decline=False,
                 )
                 if _preauth.fields:
-                    await db.update_one("rides", {"id": ride_id}, {"$set": _preauth.fields})
+                    attached = await db.update_one(
+                        "rides",
+                        {"id": ride_id, "status": "searching", "payment_intent_id": None},
+                        {"$set": _preauth.fields},
+                    )
+                    if not attached:
+                        # Cancellation may have won while Stripe was creating
+                        # the hold. Compensate immediately; if that fails, save
+                        # bounded recovery work before returning to dispatch.
+                        pi_id = str(_preauth.fields.get("payment_intent_id") or "")
+                        try:
+                            released = await _rides_booking._deps.cancel_authorization(
+                                ride_id=ride_id, payment_intent_id=pi_id
+                            )
+                        except Exception as release_exc:
+                            logger.error(
+                                "scheduled dispatch: authorization compensation raised for %s: %s",
+                                ride_id, release_exc, exc_info=True,
+                            )
+                            released = False
+                        if not released and pi_id:
+                            try:
+                                try:
+                                    from .payment_operations import record_operation
+                                except ImportError:
+                                    from utils.payment_operations import record_operation  # type: ignore
+                                await record_operation(
+                                    operation_type="authorization_release", ride_id=ride_id,
+                                    payment_intent_id=pi_id,
+                                    idempotency_key=f"ride-cancelauth-{ride_id}-{pi_id}",
+                                    status="requested", metadata={"source": "scheduled_dispatch_race"},
+                                )
+                            except Exception:
+                                logger.error(
+                                    "scheduled dispatch: failed to persist authorization release ride=%s pi=%s",
+                                    ride_id, pi_id, exc_info=True,
+                                )
+                        current = await db.get_rows("rides", {"id": ride_id}, limit=1)
+                        if not current or current[0].get("status") != "searching":
+                            logger.info("scheduled dispatch stopped after state changed ride=%s", ride_id)
+                            return
         except Exception as _auth_err:
             # Never let a pre-auth hiccup block dispatch; post-trip settlement
             # remains the safety net. Surface loudly — it's a payment path.
@@ -523,6 +563,12 @@ async def _dispatch_scheduled_ride(ride: dict):
                 _auth_err,
                 exc_info=True,
             )
+
+        # Cancellation can win after a hold is attached but before dispatch
+        # notifications. Re-read immediately before any searching side effect.
+        current = await db.get_rows("rides", {"id": ride_id}, limit=1)
+        if not current or current[0].get("status") != "searching":
+            return
 
         # Mandatory state-change WS event (rider + admins). Drives the rider
         # app's status update and patches any admin dashboard that already has

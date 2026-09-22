@@ -672,6 +672,7 @@ async def authorize_ride(
             "authorized_amount": str(to_decimal(amount)),
             "payment_method_type": ride.get("payment_method") or "card",
             "source": "ride_booking_authorization",
+            "operation_purpose": ride.get("operation_purpose") or "booking_authorization",
         },
     }
 

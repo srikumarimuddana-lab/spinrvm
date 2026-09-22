@@ -27,8 +27,11 @@ inputs:
     description: >-
       1-100. Below 100 publishes a per-update rollout so only that share of
       devices on the branch receive it. NOTE — Expo allows ONE active rollout
-      per branch: the next publish to that branch fails until the rollout is
-      ended (`eas update:edit` → 100, or `eas update:revert-update-rollout`).
+      per branch+platform+runtime version: the next publish matching that
+      triple fails until the rollout is ended (`eas update:edit` → 100, or
+      `eas update:revert-update-rollout`), and `eas update` has no
+      non-interactive way to supersede one. This is why production publishes
+      only on workflow_dispatch — see eas-build.yml's header.
     required: false
     default: "100"
   expo_token:
@@ -130,6 +133,38 @@ runs:
           npx sentry-expo-upload-sourcemaps dist
         }
 
+        # Expo refuses a publish while a rollout is in progress on the same
+        # branch+platform+runtime version, and `eas update` has no
+        # non-interactive way to supersede one (verified against eas-cli
+        # 24.7.0's flag list — no --supersede; the CLI only offers it as an
+        # interactive prompt). Its own message names the blocking update but
+        # buries it under "Error: GraphQL request failed", which cost two days
+        # of unread red runs in Sept 2026 (see eas-build.yml's header for the
+        # full writeup). Re-surface the remediation with the
+        # real group ID rather than leaving the operator to read the wall.
+        publish() {
+          local platform="$1" channel="$2" env="$3"
+          local log group
+          log=$(mktemp)
+          # shellcheck disable=SC2086 — ROLLOUT_FLAG is intentionally unquoted (empty or one flag)
+          if eas update --platform "$platform" --branch "$channel" \
+              --environment "$env" --non-interactive --message "$MESSAGE" $ROLLOUT_FLAG 2>&1 | tee "$log"; then
+            rm -f "$log"
+            return 0
+          fi
+          if grep -q 'rollout is in progress' "$log"; then
+            # `|| true`: pipefail would otherwise abort the script here when
+            # the ID does not match, losing the message we are trying to print.
+            group=$(grep -oE 'Update [0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' "$log" | head -1 | awk '{print $2}' || true)
+            echo "::error::${platform}:${channel} refused — a rollout is already in progress for this branch, platform and runtime version. End it, then re-run this workflow:"
+            echo "::error::  eas update:edit ${group:-<GROUP_ID>} --rollout-percentage 100 --non-interactive          # ramp the current canary to 100%"
+            echo "::error::  eas update:revert-update-rollout --group ${group:-<GROUP_ID>} --non-interactive          # or roll it back"
+            echo "::error::See https://docs.expo.dev/eas-update/rollouts/#publishing-while-a-rollout-is-in-progress"
+          fi
+          rm -f "$log"
+          return 1
+        }
+
         for pair in $PAIRS; do
           platform="${pair%%:*}"
           channel="${pair#*:}"
@@ -137,8 +172,6 @@ runs:
             production) env=production ;;
             *)          env=preview ;;
           esac
-          # shellcheck disable=SC2086 — ROLLOUT_FLAG is intentionally unquoted (empty or one flag)
-          eas update --platform "$platform" --branch "$channel" \
-            --environment "$env" --non-interactive --message "$MESSAGE" $ROLLOUT_FLAG
+          publish "$platform" "$channel" "$env"
           upload_sourcemaps "$platform:$channel"
         done

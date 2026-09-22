@@ -79,6 +79,7 @@ def _refund(amount, status="succeeded"):
     r = MagicMock()
     r.amount = amount
     r.status = status
+    r.id = "re_1"
     return r
 
 
@@ -95,7 +96,12 @@ async def test_read_capture_state_reports_captured_and_refunded():
     stripe_patch, _ = _patch_stripe(amount_received=254, refunds=[_refund(54)])
     with stripe_patch, _patch_secret():
         state = await read_capture_state(ride_id="r1", payment_intent_id="pi_1")
-    assert state == {"captured_cents": 254, "refunded_cents": 54, "pending_refund_cents": 0}
+    assert state == {
+        "captured_cents": 254,
+        "refunded_cents": 54,
+        "pending_refund_cents": 0,
+        "succeeded_refund_ids": ["re_1"],
+    }
 
 
 @pytest.mark.unit
@@ -175,14 +181,13 @@ class _Deps:
         self, *, state, refund_status="refunded", refund_amount=Decimal("2.10"), ledger_id="led_1", claimed=True
     ):
         self.db = MagicMock()
-        self.db.update_one = AsyncMock(return_value={"id": "ride_1"} if claimed else None)
         self.read_capture_state = AsyncMock(return_value=state)
         outcome = MagicMock()
         outcome.status = refund_status
         outcome.charged_amount = refund_amount
         outcome.payment_intent_id = "pi_1"
         self.refund_excess_capture = AsyncMock(return_value=outcome)
-        self.record_refund_event = AsyncMock(return_value=ledger_id)
+        self.reconcile_confirmed_stripe_refund = AsyncMock(return_value={"outcome": "applied"})
 
     def __enter__(self):
         import backend.services.payment_service as ps
@@ -200,7 +205,7 @@ class _Deps:
             ),
             patch.object(sc, "read_capture_state", self.read_capture_state),
             patch.object(sc, "refund_excess_capture", self.refund_excess_capture),
-            patch.object(ps, "record_refund_event", self.record_refund_event),
+            patch.object(ps, "reconcile_confirmed_stripe_refund", self.reconcile_confirmed_stripe_refund),
         ]
         for p in self._patches:
             p.start()
@@ -219,28 +224,17 @@ async def test_dry_run_never_refunds():
         result = await script.reconcile_one(_ride(), apply_changes=False)
     assert result == "would_refund"
     d.refund_excess_capture.assert_not_awaited()
-    d.db.update_one.assert_not_awaited()
-    d.record_refund_event.assert_not_awaited()
+    d.reconcile_confirmed_stripe_refund.assert_not_awaited()
 
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_zero_fee_refunds_the_full_capture_and_books_it():
+async def test_zero_fee_refunds_the_full_capture_through_atomic_projection():
     with _Deps(state={"captured_cents": 210, "refunded_cents": 0}) as d:
         result = await script.reconcile_one(_ride(), apply_changes=True)
     assert result == "refunded"
     assert d.refund_excess_capture.await_args.kwargs["fee_owed"] == Decimal("0")
-    # Ledger row uses the same dedupe-key shape as the live cancel path.
-    assert d.record_refund_event.await_args.kwargs["dedupe_key"] == "stripe_refund|pi_1|210"
-    payload = d.db.update_one.await_args.args[2]
-    assert payload["refund_amount"] == "2.10"
-    assert payload["payment_status"] == "refunded"
-    # CAS filter pins the exact state this script selected for.
-    assert d.db.update_one.await_args.args[1] == {
-        "id": "ride_1",
-        "status": "cancelled",
-        "auth_status": "captured",
-    }
+    d.reconcile_confirmed_stripe_refund.assert_awaited_once_with(ride_id="ride_1", payment_intent_id="pi_1")
 
 
 @pytest.mark.unit
@@ -251,7 +245,7 @@ async def test_partial_fee_is_kept_and_marks_partially_refunded():
         result = await script.reconcile_one(ride, apply_changes=True)
     assert result == "refunded"
     assert d.refund_excess_capture.await_args.kwargs["fee_owed"] == Decimal("1.50")
-    assert d.db.update_one.await_args.args[2]["payment_status"] == "partially_refunded"
+    d.reconcile_confirmed_stripe_refund.assert_awaited_once_with(ride_id="ride_1", payment_intent_id="pi_1")
 
 
 @pytest.mark.unit
@@ -260,9 +254,9 @@ async def test_existing_stripe_refund_is_flagged_not_refunded_again():
     """The guard that makes a re-run safe past Stripe's 24h idempotency window."""
     with _Deps(state={"captured_cents": 210, "refunded_cents": 210}) as d:
         result = await script.reconcile_one(_ride(), apply_changes=True)
-    assert result == "already_refunded_on_stripe"
+    assert result == "accounting_repaired"
     d.refund_excess_capture.assert_not_awaited()
-    d.db.update_one.assert_not_awaited()
+    d.reconcile_confirmed_stripe_refund.assert_awaited_once_with(ride_id="ride_1", payment_intent_id="pi_1")
 
 
 @pytest.mark.unit
@@ -272,7 +266,7 @@ async def test_pending_stripe_refund_is_reported_separately_and_never_duplicated
         result = await script.reconcile_one(_ride(), apply_changes=True)
     assert result == "pending_refund_on_stripe"
     d.refund_excess_capture.assert_not_awaited()
-    d.db.update_one.assert_not_awaited()
+    d.reconcile_confirmed_stripe_refund.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -300,16 +294,17 @@ async def test_failed_refund_is_reported_and_writes_nothing():
     with _Deps(state={"captured_cents": 210, "refunded_cents": 0}, refund_status="failed") as d:
         result = await script.reconcile_one(_ride(), apply_changes=True)
     assert result == "failed"
-    d.db.update_one.assert_not_awaited()
-    d.record_refund_event.assert_not_awaited()
+    d.reconcile_confirmed_stripe_refund.assert_not_awaited()
 
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_lost_cas_and_failed_ledger_both_surface_as_ledger_failed():
-    with _Deps(state={"captured_cents": 210, "refunded_cents": 0}, claimed=False):
+async def test_atomic_projection_conflict_or_error_surfaces_as_ledger_failed():
+    with _Deps(state={"captured_cents": 210, "refunded_cents": 0}) as stale:
+        stale.reconcile_confirmed_stripe_refund.return_value = {"outcome": "stale"}
         assert await script.reconcile_one(_ride(), apply_changes=True) == "ledger_failed"
-    with _Deps(state={"captured_cents": 210, "refunded_cents": 0}, ledger_id=None):
+    with _Deps(state={"captured_cents": 210, "refunded_cents": 0}) as failed:
+        failed.reconcile_confirmed_stripe_refund.side_effect = RuntimeError("RPC down")
         assert await script.reconcile_one(_ride(), apply_changes=True) == "ledger_failed"
 
 
@@ -360,8 +355,9 @@ async def test_fee_already_charged_on_its_own_pi_is_not_withheld_again():
     assert result == "refunded"
     # Full capture refunded, fee NOT deducted a second time.
     assert d.refund_excess_capture.await_args.kwargs["fee_owed"] == Decimal("0")
-    # ...but the rider did keep paying a fee overall, so this is partial.
-    assert d.db.update_one.await_args.args[2]["payment_status"] == "partially_refunded"
+    # The atomic projector derives the summary from the actual confirmed Stripe
+    # aggregate; the script must not race it with a second summary write.
+    d.db.update_one.assert_not_called()
 
 
 @pytest.mark.unit
@@ -416,18 +412,18 @@ async def test_captured_nothing_is_surfaced_not_silently_skipped():
 async def test_stripe_not_needed_and_unconfigured_are_not_reported_as_failures():
     with _Deps(state={"captured_cents": 210, "refunded_cents": 0}, refund_status="not_needed") as d:
         assert await script.reconcile_one(_ride(), apply_changes=True) == "not_needed"
-        d.db.update_one.assert_not_awaited()
+        d.reconcile_confirmed_stripe_refund.assert_not_awaited()
     with _Deps(state={"captured_cents": 210, "refunded_cents": 0}, refund_status="unconfigured"):
         assert await script.reconcile_one(_ride(), apply_changes=True) == "unknown"
 
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_ledger_raise_after_a_real_refund_still_records_refund_amount():
+async def test_atomic_projection_error_after_real_refund_surfaces_for_reconciliation():
     """Money already left the account — this must not be bucketed as 'still owed'."""
     with _Deps(state={"captured_cents": 210, "refunded_cents": 0}) as d:
-        d.record_refund_event.side_effect = RuntimeError("ledger down")
+        d.reconcile_confirmed_stripe_refund.side_effect = RuntimeError("RPC down")
         result = await script.reconcile_one(_ride(), apply_changes=True)
 
     assert result == "ledger_failed"
-    assert d.db.update_one.await_args.args[2]["refund_amount"] == "2.10"
+    d.reconcile_confirmed_stripe_refund.assert_awaited_once()

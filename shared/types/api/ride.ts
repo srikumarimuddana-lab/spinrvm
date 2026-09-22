@@ -112,4 +112,5 @@ export interface DriverPublicView {
   lat?: number;
   /** Coordinate — not money. */
   lng?: number;
+  location_captured_at?: string | null;
 }

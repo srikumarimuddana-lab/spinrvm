@@ -57,6 +57,29 @@ describe('rideStore — WebSocket-driven updates', () => {
         expect(useRideStore.getState().currentDriver?.lat).toBe(50.1);
       } finally { jest.useRealTimers(); }
     });
+    it('preserves a newer sensor fix after the ten-second WS grace expires', async () => {
+      const now = Date.now();
+      useRideStore.setState({ currentRide: { id: 'ride-1', status: 'in_progress' } as any,
+        currentDriver: { id: 'driver-1', lat: 50.1, lng: -104, location_captured_at: new Date(now - 15000).toISOString() } as any,
+        _lastWsDriverPositionAt: now - 15000,
+        _lastDriverFix: { rideId: 'ride-1', driverId: 'driver-1', timestamp: now - 15000 } });
+      (api.get as jest.Mock).mockResolvedValueOnce({ data: { id: 'ride-1', status: 'in_progress',
+        driver: { id: 'driver-1', lat: 50, lng: -104, location_captured_at: new Date(now - 30000).toISOString() } } });
+      await useRideStore.getState().fetchRide('ride-1');
+      expect(useRideStore.getState().currentDriver?.lat).toBe(50.1);
+    });
+
+    it('uses a fresh polled timestamp to reject an older websocket sample', async () => {
+      const now = Date.now();
+      useRideStore.setState({ currentRide: { id: 'ride-1', status: 'in_progress' } as any });
+      (api.get as jest.Mock).mockResolvedValueOnce({ data: { id: 'ride-1', status: 'in_progress',
+        driver: { id: 'driver-1', lat: 50.2, lng: -104, location_captured_at: new Date(now).toISOString() } } });
+      await useRideStore.getState().fetchRide('ride-1');
+      useRideStore.getState().updateDriverLocation(50, -104, null, null, null,
+        { capturedAt: new Date(now - 5000).toISOString() });
+      expect(useRideStore.getState().currentDriver?.lat).toBe(50.2);
+    });
+
     it('should update currentDriver lat/lng', () => {
       useRideStore.setState({
          

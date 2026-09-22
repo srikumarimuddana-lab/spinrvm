@@ -116,6 +116,72 @@ console-breadcrumb category for this exact reason. Local logcat is still a log.)
 The AsyncStorage marker stores a ride id and a leg name — no GPS, no name, no
 contact details.
 
+## 4b. Adversarial review findings (spinr-edge-case-reviewer, post-implementation)
+
+CLAUDE.md gate #10 requires a reviewer agent against the actual diff. It returned
+two blockers. Both were verified against the code before acting — an agent report
+is a claim, not a finding.
+
+**Blocker 1 — CONFIRMED, fixed in this branch.** The auto-launch had no
+foreground gate. `lib/androidAuto/register.ts:550` calls
+`useDriverStore.getState().acceptRide(rideId)` straight off the Android Auto head
+unit, against the *same singleton store* `ActiveRidePanel` subscribes to, and
+`app/driver/(tabs)/index.tsx` renders that panel purely on `rideState` with no
+`AppState` gate. So a driver who opened the phone app earlier in the session
+(the normal way to go online) and then accepted on the car screen would have had
+their pocketed phone try to open Maps mid-drive. This is not hypothetical in this
+file: `(tabs)/index.tsx:329-337` documents a live-testing production crash
+(Sentry CRIMSON-SMOKE-7445-PV) caused by exactly this class of background store
+write, whose fix was to park the side effect until the next `'active'`.
+
+Fixed by spending the leg's claim *without* launching when
+`AppState.currentState !== 'active'`. Skip rather than defer, deliberately: an
+accept that reached the store while the phone was backgrounded came from the car,
+and Android Auto has its own navigation surface — replaying it whenever the
+driver next picks up the phone would pop Maps at a random later moment.
+
+**Blocker 2 — CONFIRMED as a real bug, but pre-existing and NOT fixed here.**
+`hooks/useDriverDashboard.ts:1632` zeroes `reconnectAttemptRef.current` before
+calling `connectWebSocket()` at `:1645`, so when `auth_success` arrives
+`wasReconnect` (`:1406`) is false on the ordinary foreground-resume path and the
+`fetchActiveRide()` reconciliation at `:1418-1420` is skipped. A ride cancelled
+while the driver is away leaves a stale, actionable-looking active-ride panel,
+and `arriveAtPickup`/`startRide` (`driverStore.ts:691-697`, `:725-729`) only set
+`error` on a 409 rather than reconciling like `cancelRide`/`completeRide` do.
+
+None of that is this diff's code. What this diff does is change how often it is
+reached: default-ON auto-launch takes "driver leaves the app for several minutes"
+from an occasional manual choice to the norm on every ride. Escalated to the
+requester rather than silently widened into this PR — it is WS/dispatch
+reliability work on a live-tested surface with its own blast radius, and gate #9
+says escalate rather than ship on a guess.
+
+**Warnings acted on:**
+- Cancelled-ride race in the claim's async gap → added an unmount guard
+  (`navMountedRef`). Burning a cancelled ride's claim is free; the ride is over.
+- Toggling auto-navigate ON mid-leg fired an immediate launch, contradicting the
+  toggle's own copy ("when you accept a ride and when the trip starts") → the
+  opted-out path now also spends the leg's claim, so the setting takes effect
+  from the next transition.
+
+**Warnings accepted, not fixed:**
+- Persistent (not one-shot) AsyncStorage write failure degrades to relaunch on
+  every cold start, not one extra. Bounded by the in-process guard within a
+  session; a device that cannot write a 20-byte key has larger problems.
+- Auto-navigate never fires on a car-only launch where the phone UI never mounts.
+  Correct — Android Auto has its own nav surface — and now stated rather than
+  implicit.
+- Nav preferences and the claim marker are device-global, not user-scoped, and
+  nothing clears them on logout, so a second driver on a shared device inherits
+  the first's nav-app choice. Pre-existing for `NAV_APP_KEY`; not introduced here.
+
+**Methodology gap worth keeping:** §4's blast-radius table greps importers of
+`ActiveRidePanel` and `navStore`. That could never have surfaced blocker 1,
+because Android Auto reaches this code through a *shared Zustand store write*
+from a subsystem that imports neither. A component-import grep cannot see a
+store-mediated interaction — for a shared-store change, grep the store's writers
+too, not just the component's importers.
+
 ## 5. User-experience effect
 
 **Driver-facing, and visible mid-session.** Per the product decision the toggle

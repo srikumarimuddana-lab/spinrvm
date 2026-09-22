@@ -1,5 +1,5 @@
 import React from 'react';
-import { Animated, Linking } from 'react-native';
+import { Animated, AppState, Linking } from 'react-native';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
@@ -295,12 +295,14 @@ describe('automatic navigation hand-off', () => {
     canOpenURL = jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true as never);
     mockAutoNavigate = true;
     mockNavPrefsLoaded = true;
+    (AppState as any).currentState = 'active';
   });
 
   afterEach(() => {
     mockNavApp = 'default';
     mockAutoNavigate = false;
     mockNavPrefsLoaded = true;
+    (AppState as any).currentState = 'active';
     openURL.mockRestore();
     canOpenURL.mockRestore();
   });
@@ -360,6 +362,54 @@ describe('automatic navigation hand-off', () => {
     // is parked and needs the OTP keypad, not a maps app on top of it.
     renderWithSafeArea(<ActiveRidePanel {...defaultProps} rideState="arrived_at_pickup" />);
     await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('stays off the phone screen when the accept came from the car head unit', async () => {
+    // lib/androidAuto/register.ts calls acceptRide() on this same singleton
+    // store straight off the head unit, so this effect can run with the phone
+    // locked in the driver's pocket. Launching then would throw the phone into
+    // Maps mid-drive for an accept that never touched it.
+    (AppState as any).currentState = 'background';
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+    // The leg is still spent, so returning to the phone later can't fire it.
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+      '@spinr_auto_nav_launched',
+      'ride-001:pickup',
+    );
+  });
+
+  it('does not retroactively launch when the toggle is switched on mid-leg', async () => {
+    // The toggle's own copy promises "when you accept a ride and when the trip
+    // starts" — it takes effect from the next transition, not the current one.
+    mockAutoNavigate = false;
+    const view = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+
+    mockAutoNavigate = true;
+    view.rerender(
+      <SafeAreaProvider initialMetrics={initialMetrics}>
+        <ActiveRidePanel {...defaultProps} routeEtaMinutes={7} />
+      </SafeAreaProvider>,
+    );
+    await act(async () => {});
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('does not launch for a ride cancelled during the claim round-trip', async () => {
+    // resetRideState() drops this panel out of the tree on a cancellation. If
+    // that lands inside the AsyncStorage round-trip, the hand-off must not
+    // still fire for a ride that no longer exists.
+    let releaseClaim: (v: string | null) => void = () => {};
+    (AsyncStorage.getItem as jest.Mock).mockReturnValue(
+      new Promise((resolve) => { releaseClaim = resolve; }),
+    );
+    const view = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    view.unmount();
+    await act(async () => { releaseClaim(null); });
     expect(openURL).not.toHaveBeenCalled();
   });
 

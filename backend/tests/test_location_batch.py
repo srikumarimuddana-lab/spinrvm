@@ -91,7 +91,7 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     marker-update task is *scheduled*, and running that scheduled task is
     what actually performs the marker write."""
     events = []
-    update_one = _install_driver_and_ride(monkeypatch, _ride())
+    _install_driver_and_ride(monkeypatch, _ride())
 
     async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")

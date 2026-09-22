@@ -32,7 +32,7 @@ except ImportError:
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.background import spawn as _spawn  # type: ignore
-    from utils.money import cents_to_dollars, dollars_to_cents
+    from utils.money import cents_to_dollars
     from utils.payment_collection import SETTLED_PAYMENT_STATUSES
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email

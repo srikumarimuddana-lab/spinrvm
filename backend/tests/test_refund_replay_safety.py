@@ -43,6 +43,7 @@ def _ride():
 @pytest.mark.anyio
 async def test_charge_refunded_delegates_confirmed_cumulative_to_atomic_projector():
     import stripe
+
     from backend.routes import webhooks as wh
 
     event = _event_obj("charge.refunded", {"id": "ch_1", "payment_intent": "pi_1", "amount_refunded": 2000}, "evt_1")
@@ -73,6 +74,7 @@ async def test_charge_refunded_delegates_confirmed_cumulative_to_atomic_projecto
 @pytest.mark.anyio
 async def test_charge_refunded_duplicate_cumulative_has_no_delta_notice():
     import stripe
+
     from backend.routes import webhooks as wh
 
     event = _event_obj("charge.refunded", {"id": "ch_1", "payment_intent": "pi_1", "amount_refunded": 2000}, "evt_2")
@@ -97,6 +99,7 @@ async def test_charge_refunded_duplicate_cumulative_has_no_delta_notice():
 @pytest.mark.anyio
 async def test_stale_charge_refunded_is_acknowledged_without_notice():
     import stripe
+
     from backend.routes import webhooks as wh
 
     event = _event_obj("charge.refunded", {"id": "ch_1", "payment_intent": "pi_1", "amount_refunded": 1000}, "evt_3")
@@ -119,6 +122,7 @@ async def test_stale_charge_refunded_is_acknowledged_without_notice():
 @pytest.mark.anyio
 async def test_refund_accounting_failure_unclaims_for_retry_without_partial_ride_write():
     import stripe
+
     from backend.routes import webhooks as wh
 
     event = _event_obj("charge.refunded", {"id": "ch_1", "payment_intent": "pi_1", "amount_refunded": 2000}, "evt_4")
@@ -146,6 +150,7 @@ async def test_refund_updated_accounting_failure_unclaims_even_without_operation
     """An external Refund may have no durable worker operation. A succeeded
     webhook still has to retry when aggregate accounting cannot be applied."""
     import stripe
+
     from backend.routes import webhooks as wh
 
     refund = {

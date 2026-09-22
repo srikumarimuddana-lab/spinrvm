@@ -128,8 +128,21 @@ EMAIL_STATUSES = frozenset({"active", "rejected", "suspended", "banned"})
 
 # What the driver should actually DO next. This is the reason the email exists
 # rather than being a copy of the push: a notification tray has no room for it.
+#
+# `active` names the training host because approval is the first moment the
+# driver can actually start driving, and it is the last message they get before
+# they do. The welcome email already tells them to train "before your first
+# ride", but that arrives at signup — days or weeks earlier, when there is no
+# ride in sight — and nothing repeated it at the point it becomes true. Sending
+# them straight to Go Online here contradicted the one instruction that matters,
+# so the address is repeated at the moment of use. `{training}` resolves at send
+# time from driver_emails.TRAINING_HOST, the same address the admin LMS
+# integration reads, so the two can never drift apart.
 _EMAIL_NEXT_STEPS: dict[str, str] = {
-    "active": "Open the {app_name} driver app, tap Go Online, and you'll start receiving ride offers.",
+    "active": (
+        "Complete your driver training at {training} before your first ride. "
+        "Open the {app_name} driver app, tap Go Online, and you'll start receiving ride offers."
+    ),
     "rejected": (
         "Open the {app_name} driver app to review your documents and submit them again. "
         "If you think this decision is wrong, contact {support}."
@@ -292,10 +305,12 @@ async def _send_status_email(
     try:
         try:
             from ..utils.company_details import load_company_details
+            from ..utils.driver_emails import TRAINING_HOST
             from ..utils.email_layout import render_email
             from ..utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
         except ImportError:  # pragma: no cover - direct module imports in tests
             from utils.company_details import load_company_details  # type: ignore
+            from utils.driver_emails import TRAINING_HOST  # type: ignore
             from utils.email_layout import render_email  # type: ignore
             from utils.email_notifications import (  # type: ignore
                 EmailClass,
@@ -306,6 +321,28 @@ async def _send_status_email(
         company = await load_company_details()
         user = await resolve_recipient(driver["user_id"])
         first_name = ((user or {}).get("first_name") or "").strip()
+        # The `{support}` placeholder is resolved here rather than in the copy
+        # maps because those are read by the synchronous `action_message` /
+        # `status_message`, and the address lives in DB-backed settings.
+        # Substituting at send time keeps those pure and keeps the body's
+        # support address identical to the one in the footer. `{training}` is a
+        # constant rather than a setting, but is resolved the same way so the
+        # copy maps stay free of the import.
+        #
+        # A literal replace, not str.format: these paragraphs carry the
+        # admin-written suspension/rejection reason, and a reason containing a
+        # brace would make format() raise.
+        paragraphs = [
+            p.replace("{support}", company.support_email)
+            .replace("{app_name}", company.app_name)
+            .replace("{training}", TRAINING_HOST)
+            for p in payload["paragraphs"]
+        ]
+        # Opt-in per email, not unconditional: `_linkify` only rewrites text it
+        # actually finds, but passing the map only when the host is present
+        # keeps the rejected/suspended/banned emails rendering byte-identically
+        # to before this existed, which is what the snapshot tests rely on.
+        links = {TRAINING_HOST: f"https://{TRAINING_HOST}"} if any(TRAINING_HOST in p for p in paragraphs) else None
         await send_lifecycle_email(
             user_id=driver["user_id"],
             user=user,
@@ -313,21 +350,9 @@ async def _send_status_email(
             rendered=await render_email(
                 greeting=f"Hi {first_name}," if first_name else None,
                 heading=payload["heading"],
-                # The `{support}` placeholder is resolved here rather than in
-                # the copy maps because those are read by the synchronous
-                # `action_message` / `status_message`, and the address lives in
-                # DB-backed settings. Substituting at send time keeps those
-                # pure and keeps the body's support address identical to the
-                # one in the footer.
-                #
-                # A literal replace, not str.format: these paragraphs carry the
-                # admin-written suspension/rejection reason, and a reason
-                # containing a brace would make format() raise.
-                paragraphs=[
-                    p.replace("{support}", company.support_email).replace("{app_name}", company.app_name)
-                    for p in payload["paragraphs"]
-                ],
+                paragraphs=paragraphs,
                 company=company,
+                links=links,
             ),
             email_type=payload["email_type"],
             email_class=EmailClass.TRANSACTIONAL,

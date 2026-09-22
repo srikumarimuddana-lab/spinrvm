@@ -200,6 +200,12 @@ export function routeQualityLabel(quality: unknown): string {
   // observed/inferred ratios below belong to the discarded reconstruction
   // and must not be shown beside a figure that is not GPS-measured.
   if (value?.distance_basis === 'planned_capped') return 'Distance from booking · GPS route implausible';
+  // The third case, added with the gap-connector guards: enough of the
+  // distance came from routed gap fill that the published total would have
+  // been part measurement and part guess, so the booking was published
+  // instead. The same warning as planned_capped applies — the ratios below
+  // describe the reconstruction that was rejected, not the figure shown.
+  if (value?.distance_basis === 'planned_guess_deviation') return 'Distance from booking · GPS route partly inferred';
   const observedRatio =
     typeof value?.observed_distance_ratio === 'number' ? value.observed_distance_ratio : undefined;
   const inferredRatio =

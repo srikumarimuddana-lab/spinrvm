@@ -36,6 +36,22 @@ describe('routeQualityLabel', () => {
     ).toBe('Distance from booking · GPS route implausible');
   });
 
+  it('shows the from-booking copy for planned_guess_deviation, not the rejected ratios', () => {
+    // Ride 0c24901f: a 389 m GPS hole was bridged with 2.33 km of routed
+    // gap fill, putting the reconstruction at 8.96 km against a 6.99 km
+    // booking. The finalizer published the booking. Without a branch here
+    // this fell through to the ratio copy and captioned that booked figure
+    // 'Route reconstructed · 74% GPS observed · 26% inferred' — percentages
+    // belonging to the 8.96 km reconstruction that was thrown away.
+    expect(
+      routeQualityLabel({
+        distance_basis: 'planned_guess_deviation',
+        observed_distance_ratio: 0.74,
+        inferred_distance_ratio: 0.26,
+      }),
+    ).toBe('Distance from booking · GPS route partly inferred');
+  });
+
   it('does not alter observed/reconstructed labels', () => {
     expect(
       routeQualityLabel({ observed_distance_ratio: 0.87, inferred_distance_ratio: 0.13 }),

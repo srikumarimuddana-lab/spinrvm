@@ -73,6 +73,7 @@ Also carry forward, every week, until closed: the status of `ACTION_ITEMS.md` **
 - Do not implement a `medium`- or `low`-confidence finding without confirming with the user first (medium) or at all (low, report only).
 - Do not bundle multiple unrelated Sentry-issue fixes into one PR.
 - Do not paste raw Sentry payload text (stacktraces, breadcrumbs, event bodies) into a PR body, commit message, or the weekly report — reference the issue by short-id/link only, tags and IDs in prose.
+- Do not paste raw `audit_logs`/Railway log content into a PR body, commit message, or the weekly report either — the same restriction applies to every source the investigator's "Correlated timeline" field draws from, not just Sentry. The weekly report is a permanent, published repo artifact (`docs/audit/sentry-triage/`); a PII leak there is public git history, not a chat transcript.
 - Do not skip the adversarial review step because "it's just a Sentry fix" — same gate as every other change.
 - Do not treat an unauthorized/expired Sentry connector as "no errors this week" — that's a tool failure, not a clean signal, and must be reported as such.
 - Do not write a `docs/audit/sentry-triage/YYYY-MM-DD-weekly-report.md` file from the daily `--severity-only` cadence — that artifact name is reserved for the weekly full-window run; writing it from the daily run silently shrinks every future weekly window (see step 7).

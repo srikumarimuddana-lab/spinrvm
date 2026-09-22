@@ -13701,6 +13701,27 @@ record of what was assumed vs. what was actually true</summary>
        watchdog-monitored. Would need backend/metrics-layer changes beyond
        this PR's `.claude/`+`scripts/` scope — left as future backlog here
        rather than expanding scope unilaterally.
+  5. **Update (2026-09-21, full three-source correlation wired):** per a
+     direct user decision (asked explicitly via `AskUserQuestion`, not
+     assumed), the investigator agent was granted `mcp__Supabase__execute_sql`
+     and `mcp__Railway__get-logs` to wire the `log_lines`/`audit_rows`
+     correlation `correlate_incident.py` always supported but that #5667
+     left explicitly unwired pending this scoping decision. **Accepted
+     risk, explicitly documented, not silently shipped**: the account-level
+     Supabase connector is currently full read/write/admin to production
+     (see the Supabase row in `.claude/context/connector-scoping.md`,
+     `2026-10-31` narrowing deadline) — the investigator's `SELECT`-only,
+     `audit_logs`-only restriction is enforced by its own prompt
+     instructions, not a real permission boundary, until that connector is
+     narrowed. The user chose to proceed on this basis rather than wait for
+     the narrowing or hold off on wiring. Railway access was scoped
+     properly at the connector level: `list-projects()` found a second,
+     unrelated project (`beautiful-harmony`) on the same account, which the
+     investigator is explicitly instructed to never reach —
+     `cooperative-harmony`/`spinrvm` only. See
+     `.claude/context/connector-scoping.md`'s new Railway row and Supabase
+     addendum, and `docs/change-log/2026-09-21-sentry-triage-audit-log-correlation.md`
+     for the full Change Impact Log.
 
 ### C134. New `spinr-ops-triage-investigator` agent + `/ops-triage` command — live ops-health check (no agent in this repo previously watched live production state)
 - [ ] **Status:** shipped 2026-09-21 (`.claude/agents/spinr-ops-triage-investigator.md`,

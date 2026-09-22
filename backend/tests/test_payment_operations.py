@@ -20,17 +20,20 @@ async def test_record_operation_returns_existing_idempotency_winner():
 
 @pytest.mark.asyncio
 async def test_claim_operation_uses_status_and_attempt_count_compare_and_swap():
-    claimed = {"id": "op1", "status": "processing", "attempt_count": 1}
+    claimed = {"id": "op1", "status": "processing", "attempt_count": 0}
     with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value=claimed)) as update:
         from backend.utils.payment_operations import claim_due_operation
 
-        result = await claim_due_operation({"id": "op1", "status": "pending", "attempt_count": 0})
+        result = await claim_due_operation({"id": "op1", "status": "pending", "attempt_count": 0,
+                                            "next_attempt_at": "2026-09-22T00:00:00+00:00"})
 
     assert result == claimed
     update.assert_awaited_once()
-    assert update.await_args.args[1] == {"id": "op1", "attempt_count": 0, "status": "pending"}
+    assert update.await_args.args[1] == {"id": "op1", "attempt_count": 0, "status": "pending",
+                                         "next_attempt_at": "2026-09-22T00:00:00+00:00"}
     assert update.await_args.args[2]["status"] == "processing"
     assert "next_attempt_at" in update.await_args.args[2]
+    assert "attempt_count" not in update.await_args.args[2]
 
 
 @pytest.mark.asyncio
@@ -108,7 +111,7 @@ async def test_due_authorization_release_is_claimed_and_completed():
         "id": "op-release", "ride_id": "ride1", "operation_type": "authorization_release",
         "payment_intent_id": "pi1", "status": "requested", "attempt_count": 0,
     }
-    claimed = {**operation, "status": "processing", "attempt_count": 1}
+    claimed = {**operation, "status": "processing", "attempt_count": 0}
     with (
         patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])),
         patch("backend.utils.payment_operations.db.update_one", AsyncMock(side_effect=[claimed, {"id": "op-release"}])),
@@ -223,7 +226,7 @@ async def test_refund_reconciliation_does_not_create_when_refund_history_is_pagi
         "id": "op-refund", "ride_id": "ride1", "operation_type": "refund", "payment_intent_id": "pi1",
         "amount_cents": 500, "idempotency_key": "key1", "status": "requested", "attempt_count": 0,
     }
-    claimed = {**operation, "status": "processing", "attempt_count": 1}
+    claimed = {**operation, "status": "processing", "attempt_count": 0}
     stripe_mock = MagicMock()
     stripe_mock.Refund.list.return_value = MagicMock(data=[], has_more=True)
     with (
@@ -237,3 +240,60 @@ async def test_refund_reconciliation_does_not_create_when_refund_history_is_pagi
         await reconcile_due_operations()
 
     stripe_mock.Refund.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pending_refund_can_be_polled_past_old_attempt_limit_without_exhausting():
+    operation = {
+        "id": "op-pending", "ride_id": "ride1", "operation_type": "refund", "payment_intent_id": "pi1",
+        "provider_object_id": "re1", "amount_cents": 500, "status": "pending", "attempt_count": 8,
+        "next_attempt_at": "2026-09-22T00:00:00+00:00",
+    }
+    claimed = {**operation, "status": "processing"}
+    refund = MagicMock(id="re1", status="pending", amount=500)
+    stripe_mock = MagicMock()
+    stripe_mock.Refund.retrieve.return_value = refund
+    with (
+        patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])),
+        patch("backend.utils.payment_operations.db.update_one", AsyncMock(side_effect=[
+            claimed, {"id": "op-pending"}, {"id": "ride1"},
+        ])) as update,
+        patch("backend.utils.stripe_charge.stripe", stripe_mock),
+        patch("backend.utils.stripe_charge._resolve_stripe_secret", AsyncMock(return_value="sk_test")),
+    ):
+        from backend.utils.payment_operations import reconcile_due_operations
+
+        processed = await reconcile_due_operations()
+
+    assert processed == 1
+    assert update.await_args_list[1].args[2]["status"] == "pending"
+    assert update.await_args_list[1].args[2]["next_attempt_at"]
+    assert update.await_args_list[1].args[2].get("attempt_count") is None
+
+
+@pytest.mark.asyncio
+async def test_pending_poll_count_does_not_spend_transport_error_budget():
+    with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})) as update:
+        from backend.utils.payment_operations import schedule_poll
+
+        await schedule_poll("op1")
+
+    changes = update.await_args.args[2]
+    assert changes["status"] == "pending"
+    assert "metadata" not in changes
+    assert "attempt_count" not in changes
+    assert update.await_args.args[1] == {"id": "op1"}
+
+
+@pytest.mark.asyncio
+async def test_retry_error_budget_is_separate_from_legacy_poll_attempt_count():
+    operation = {"id": "op1", "attempt_count": 8, "metadata": {"source": "refund"}}
+    with patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})) as update:
+        from backend.utils.payment_operations import schedule_retry
+
+        await schedule_retry(operation, error="provider timeout")
+
+    changes = update.await_args.args[2]
+    assert changes["status"] == "pending"
+    assert changes["metadata"] == {"source": "refund", "error_attempt_count": 1}
+    assert "attempt_count" not in changes

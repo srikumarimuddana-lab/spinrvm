@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - dual import
 TABLE = "ride_payment_operations"
 MAX_ATTEMPTS = 8
 CLAIM_LEASE_MINUTES = 10
+PENDING_POLL_MINUTES = 15
 RETRY_MINUTES = (1, 5, 15, 60, 240, 720, 1440, 1440)
 
 
@@ -91,31 +92,42 @@ async def update_operation(operation_id: str, **changes: Any) -> Optional[Dict[s
 
 
 async def claim_due_operation(operation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """CAS claim by state and attempt count so concurrent workers do one call."""
+    """CAS claim by state, attempt budget, and due time; poll count is unlimited."""
     attempt = int(operation.get("attempt_count") or 0)
-    if attempt >= MAX_ATTEMPTS:
-        await update_operation(str(operation["id"]), status="exhausted", next_attempt_at=None)
-        return None
     claimed = await db.update_one(TABLE, {
         "id": operation["id"], "attempt_count": attempt,
         "status": operation.get("status"),
+        "next_attempt_at": operation.get("next_attempt_at"),
     }, {
-        "status": "processing", "attempt_count": attempt + 1,
+        "status": "processing",
         "next_attempt_at": (datetime.now(timezone.utc) + timedelta(minutes=CLAIM_LEASE_MINUTES)).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
     return claimed
 
 
-async def schedule_retry(operation_id: str, *, attempt_count: int, error: str) -> None:
-    if attempt_count >= MAX_ATTEMPTS:
-        await update_operation(operation_id, status="exhausted", next_attempt_at=None, last_error=error[:1000])
+async def schedule_retry(operation: Dict[str, Any], *, error: str) -> None:
+    """Back off retryable exceptions; only exceptions spend the error budget."""
+    operation_id = str(operation["id"])
+    metadata = dict(operation.get("metadata") or {})
+    error_attempt = int(metadata.get("error_attempt_count") or 0) + 1
+    metadata["error_attempt_count"] = error_attempt
+    if error_attempt >= MAX_ATTEMPTS:
+        await update_operation(operation_id, status="exhausted", next_attempt_at=None,
+                               last_error=error[:1000], metadata=metadata)
         return
-    delay = RETRY_MINUTES[min(attempt_count - 1, len(RETRY_MINUTES) - 1)]
+    delay = RETRY_MINUTES[min(error_attempt - 1, len(RETRY_MINUTES) - 1)]
     next_at = datetime.now(timezone.utc) + timedelta(minutes=delay)
     # A retryable provider/transport error is ambiguous. Keep the same durable
     # operation and idempotency key, then reconcile its provider object first.
-    await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(), last_error=error[:1000])
+    await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(),
+                           last_error=error[:1000], metadata=metadata)
+
+
+async def schedule_poll(operation_id: str, *, delay_minutes: int = PENDING_POLL_MINUTES) -> None:
+    """Schedule ordinary provider-pending status polling without spending retries."""
+    next_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+    await update_operation(operation_id, status="pending", next_attempt_at=next_at.isoformat(), last_error=None)
 
 
 async def finalize_refund_success(operation: Dict[str, Any]) -> None:
@@ -209,7 +221,7 @@ async def reconcile_due_operations() -> int:
                 if ok:
                     await update_operation(op_id, status="succeeded", next_attempt_at=None, last_error=None)
                 else:
-                    await schedule_retry(op_id, attempt_count=int(operation["attempt_count"]), error="Authorization release not confirmed")
+                    await schedule_retry(operation, error="Authorization release not confirmed")
                 continue
 
             if operation.get("operation_type") == "scheduled_notice_fee":
@@ -256,7 +268,7 @@ async def reconcile_due_operations() -> int:
                     await update_operation(op_id, status="requires_action" if pi_status == "requires_action" else "failed",
                                            next_attempt_at=None, last_error=f"PaymentIntent status: {pi_status}")
                 else:
-                    await schedule_retry(op_id, attempt_count=int(operation["attempt_count"]), error=f"PaymentIntent status: {pi_status}")
+                    await schedule_poll(op_id)
                 continue
 
             # Refund: retrieve the saved object first. If the create response
@@ -326,7 +338,7 @@ async def reconcile_due_operations() -> int:
                 await update_operation(op_id, provider_object_id=refund_id, status=stored_status,
                                        collected_cents=amount,
                                        next_attempt_at=None if stored_status in {"succeeded", "requires_action"} else
-                                       (datetime.now(timezone.utc) + timedelta(minutes=RETRY_MINUTES[0])).isoformat())
+                                       (datetime.now(timezone.utc) + timedelta(minutes=PENDING_POLL_MINUTES)).isoformat())
                 await db.update_one("rides", {"id": ride_id}, {
                     "refund_id": refund_id, "refund_status": stored_status,
                 })
@@ -334,5 +346,5 @@ async def reconcile_due_operations() -> int:
             await update_operation(op_id, status="exhausted", next_attempt_at=None,
                                    last_error="Unsupported operation type")
         except Exception as exc:
-            await schedule_retry(op_id, attempt_count=int(operation.get("attempt_count") or 1), error=str(exc))
+            await schedule_retry(operation, error=str(exc))
     return processed

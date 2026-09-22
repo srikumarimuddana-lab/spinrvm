@@ -32,15 +32,20 @@ _RIDE_ID = "ride-wh-1"
 _THIS_PI = "pi_failed_1"
 
 
-def _data_object(pi=_THIS_PI, ride_id=_RIDE_ID):
+def _data_object(pi=_THIS_PI, ride_id=_RIDE_ID, source=None):
+    """``source`` stamps metadata.source — omitted entirely when None so the
+    pre-existing tests exercise the same non-pre-auth shape they always did."""
+    metadata = {"ride_id": ride_id, "user_id": "user-1"}
+    if source is not None:
+        metadata["source"] = source
     return {
         "id": pi,
-        "metadata": {"ride_id": ride_id, "user_id": "user-1"},
+        "metadata": metadata,
         "last_payment_error": {"message": "Your card was declined."},
     }
 
 
-async def _dispatch(ride_row, *, update_result={"id": _RIDE_ID}):
+async def _dispatch(ride_row, *, update_result={"id": _RIDE_ID}, source=None, ack_preauth=True):
     """Run the payment_failed branch with the ride read stubbed."""
     from backend.routes import webhooks
 
@@ -48,16 +53,30 @@ async def _dispatch(ride_row, *, update_result={"id": _RIDE_ID}):
     update_one = AsyncMock(return_value=update_result)
     update_ride = AsyncMock(return_value={"id": _RIDE_ID})
     unclaim = AsyncMock()
+    mark_processed = AsyncMock()
+    push = AsyncMock()
 
     with (
         patch.object(webhooks.db_supabase, "get_ride", get_ride),
         patch.object(webhooks.db_supabase, "update_one", update_one),
         patch.object(webhooks.db_supabase, "update_ride", update_ride),
         patch.object(webhooks, "unclaim_stripe_event", unclaim),
-        patch.object(webhooks, "send_push_notification", AsyncMock()),
+        patch.object(webhooks, "mark_stripe_event_processed", mark_processed),
+        patch.object(
+            webhooks,
+            "get_app_settings",
+            AsyncMock(return_value={"webhook_preauth_failure_ack_enabled": ack_preauth}),
+        ),
+        patch.object(webhooks, "send_push_notification", push),
     ):
-        await webhooks._dispatch_stripe_event("evt_1", "payment_intent.payment_failed", {}, _data_object())
-    return {"update_one": update_one, "update_ride": update_ride, "unclaim": unclaim}
+        await webhooks._dispatch_stripe_event("evt_1", "payment_intent.payment_failed", {}, _data_object(source=source))
+    return {
+        "update_one": update_one,
+        "update_ride": update_ride,
+        "unclaim": unclaim,
+        "mark_processed": mark_processed,
+        "push": push,
+    }
 
 
 class TestStaleFailureIsIgnored:
@@ -196,6 +215,103 @@ class TestMissingRideStillRetries:
                 await webhooks._dispatch_stripe_event("evt_1", "payment_intent.payment_failed", {}, _data_object())
         assert exc.value.status_code == 500
         unclaim.assert_awaited_once()
+
+
+_PREAUTH = "ride_booking_authorization"
+
+
+class TestPreAuthStageFailureIsNotASettlementFailure:
+    """A booking-authorization PaymentIntent failing BEFORE the ride reaches
+    settlement is not a payment failure.
+
+    authorize_ride asks Stripe for an incremental authorization first; when the
+    account is not enrolled Stripe refuses the request but still mints a real,
+    FAILED PaymentIntent, and the fallback retry then places the hold
+    successfully. The refused PI's payment_failed event used to stamp
+    payment_status='failed' + payment_failure_reason on a ride whose hold was
+    live, and push "Payment Failed" to the rider.
+
+    Real consequence, 2026-09-15 and 2026-09-16 (SPR-XY55VL, SPR-RKYCJM): both
+    scheduled rides were mislabelled this way, payment_retry's requires_capture
+    branch then captured the full fare pre-trip, and the rider cancelled minutes
+    later for a correctly-computed $0 cancellation fee — keeping the whole fare.
+
+    The `current is None` orphan ack above never covered this: it fires only for
+    the booking-time insert race, and a scheduled ride's row is inserted at
+    booking, long before its hold is placed at dispatch.
+    """
+
+    @pytest.mark.parametrize(
+        "status",
+        ["scheduled", "searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"],
+    )
+    async def test_pre_trip_preauth_failure_is_acked_not_recorded(self, status):
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None, "status": status},
+            source=_PREAUTH,
+        )
+        m["update_one"].assert_not_awaited()
+        m["update_ride"].assert_not_awaited()
+        # Acked, not unclaimed: an unclaimed event is redelivered for days.
+        m["mark_processed"].assert_awaited_once_with("evt_1")
+        m["unclaim"].assert_not_awaited()
+
+    async def test_pre_trip_preauth_failure_sends_no_payment_failed_push(self):
+        """The rider's hold is live and the ride is being dispatched — telling
+        them their payment failed is wrong, and it is sent from OUTSIDE the
+        write branch, so skipping the write alone would not have stopped it."""
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None, "status": "searching"},
+            source=_PREAUTH,
+        )
+        m["push"].assert_not_awaited()
+
+    async def test_the_real_incident_shape_is_covered(self):
+        """SPR-XY55VL: the ride is already linked to the GOOD hold PI when the
+        refused PI's failure lands. The pre-existing superseded-PI branch
+        already skipped the write here, but not the push."""
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": "pi_good_hold", "status": "searching"},
+            source=_PREAUTH,
+        )
+        m["update_one"].assert_not_awaited()
+        m["push"].assert_not_awaited()
+        m["mark_processed"].assert_awaited_once_with("evt_1")
+
+    async def test_completed_ride_still_records_a_capture_decline(self):
+        """The one case metadata.source cannot distinguish: a capture declined
+        at settlement carries the SAME source on the SAME PI. It is a real
+        failure and must still be recorded and pushed."""
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None, "status": "completed"},
+            source=_PREAUTH,
+        )
+        m["update_one"].assert_awaited_once()
+        assert m["update_one"].await_args.args[2]["$set"]["payment_status"] == "failed"
+        m["push"].assert_awaited()
+
+    @pytest.mark.parametrize("source", [None, "ride_completion_charge", "cancellation_fee"])
+    async def test_non_preauth_source_on_a_pre_trip_ride_is_unchanged(self, source):
+        """Guard against over-correcting: only booking-authorization PIs are
+        exempt. A cancellation-fee charge failing on a cancelled ride, or a
+        completion charge failing, must still be recorded."""
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None, "status": "cancelled"},
+            source=source,
+        )
+        m["update_one"].assert_awaited_once()
+        assert m["update_one"].await_args.args[2]["$set"]["payment_status"] == "failed"
+
+    async def test_kill_switch_off_restores_the_previous_behaviour(self):
+        """webhook_preauth_failure_ack_enabled=False must record exactly as
+        before, so this is revertible from app_settings without a deploy."""
+        m = await _dispatch(
+            {"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None, "status": "searching"},
+            source=_PREAUTH,
+            ack_preauth=False,
+        )
+        m["update_one"].assert_awaited_once()
+        assert m["update_one"].await_args.args[2]["$set"]["payment_status"] == "failed"
 
 
 class TestPreauthStageFailureIsAcked:

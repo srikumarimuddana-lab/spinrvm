@@ -13,6 +13,7 @@ try:
         unclaim_stripe_event,
     )
     from ..features import send_push_notification
+    from ..models.ride_status import RideStatus
     from ..settings_loader import get_app_settings
     from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars, dollars_to_cents
@@ -30,6 +31,7 @@ except ImportError:
         unclaim_stripe_event,
     )
     from features import send_push_notification
+    from models.ride_status import RideStatus
     from settings_loader import get_app_settings
     from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars, dollars_to_cents
@@ -1071,6 +1073,64 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 )
                 await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=500, detail="Ride lookup failed — Stripe will retry")
+
+            # A PRE-AUTH-stage failure on a ride that has not reached
+            # settlement is not a payment failure. Two ways it happens, both
+            # benign: the hold succeeded on a retry (authorize_ride falls back
+            # when Stripe refuses the incremental-authorization request, and
+            # that refusal still mints a real, FAILED PaymentIntent), or the
+            # hold was deliberately degraded to post-trip settlement
+            # (scheduled dispatch, block_on_decline=False). The ride stays
+            # collectable either way, so stamping payment_status='failed' +
+            # payment_failure_reason is wrong, and so is the "Payment Failed"
+            # push to the rider (and the driver) further down this handler.
+            #
+            # `status != completed` is what makes this safe to key on, and is
+            # the same discriminator utils/payment_retry.py's requires_capture
+            # branch uses. metadata.source alone cannot decide it: the source is
+            # stamped once at PaymentIntent creation and never updated, so a
+            # capture declined at settlement (payment_service's
+            # _settle_against_hold) carries the SAME source on the SAME PI —
+            # that one IS a real failure. A completed ride therefore falls
+            # through to the CAS below exactly as before. This is the row-
+            # PRESENT counterpart of the `current is None` orphan ack above,
+            # which only ever fires for the booking-time insert race and so
+            # never covered a scheduled ride (its row is inserted at booking,
+            # minutes-to-days before the hold is placed at dispatch).
+            #
+            # Found 2026-09-22 from two real scheduled rides (2026-09-15,
+            # 2026-09-16) marked payment_status='failed' while their holds were
+            # live; the retry loop then captured the full fare pre-trip and the
+            # rider cancelled for a $0 fee. That capture and the missing refund
+            # are fixed separately (2026-09-21) — this removes the trigger.
+            _preauth_stage_failure = (data_object.get("metadata") or {}).get(
+                "source"
+            ) == _PREAUTH_METADATA_SOURCE and current.get("status") != RideStatus.COMPLETED
+            if _preauth_stage_failure:
+                # Same app_settings kill switch as the orphan ack above —
+                # revertible without a deploy.
+                try:
+                    _ack_preauth = bool(
+                        (await get_app_settings() or {}).get("webhook_preauth_failure_ack_enabled", True)
+                    )
+                except Exception:
+                    logger.error(
+                        "[webhook] pre-auth ack flag read failed; defaulting on",
+                        exc_info=True,
+                        extra={"domain": "payments", "event_id": event_id},
+                    )
+                    _ack_preauth = True
+                if _ack_preauth:
+                    logger.info(
+                        "Webhook payment_intent.payment_failed: pre-auth %s failed for ride %s "
+                        "in status %s (not settled) — not a settlement failure, acking",
+                        payment_intent_id,
+                        ride_id,
+                        current.get("status"),
+                        extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    )
+                    await mark_stripe_event_processed(event_id)
+                    return {"received": True, "preauth_stage": True, "event_id": event_id}
 
             _observed_status = current.get("payment_status")
             _observed_pi = current.get("payment_intent_id")

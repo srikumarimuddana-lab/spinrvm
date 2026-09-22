@@ -41,21 +41,23 @@ For previously affected real rides, use the existing reconciliation script in **
 ## Verification performed locally
 
 - 174 targeted Python location/repository/WS/API tests passed; one pre-existing physical-device test is intentionally xfailed.
-- 86 driver background-location Jest tests passed. Four new tests fail against the original source and pass with the deadline fix (Firebase init, App Check, fetch ignoring abort, stalled response body). Late native completion cannot start a location request after timeout, and queued points remain unacknowledged.
+- Complete driver Jest suite and coverage gates: **1,895 passed across 159 suites**. This includes 86 background-location tests. Four new tests fail against the original source and pass with the deadline fix (Firebase init, App Check, fetch ignoring abort, stalled response body). Late native completion cannot start a location request after timeout, and queued points remain unacknowledged.
 - 34 rider Jest tests passed across sensor ordering, stale-state display, cancellation payment messages and ride-detail route contracts.
 - Both complete mobile TypeScript checks (`tsc --noEmit`) passed.
 - Migration 445 executed in a local PostgreSQL WASM runtime against a minimal schema: newer/older/stale/future captures, preservation of insurance fields, and denial of client-role execution checked. This is SQL execution, not a live Supabase or multi-replica load test.
-- Combined integrated backend verification: 338 passed, one physical-device-only xfail across 21 targeted payment, cancellation, scheduling, marker, WebSocket and API files.
-- Migration 446 executed in local PostgreSQL WASM: cumulative 100→200 cents books two 100-cent deltas; stale and duplicate calls do not book more; zero confirmed refunds preserve paid status; tax metadata, amount/PI validation, rollback on conflicting ledger UUID, full-refund status and client-role denial passed. This validates SQL transactions sequentially, not concurrent production replicas.
+- Final integrated backend verification: **548 passed**, one physical-device-only xfail across 29 targeted payment, cancellation, scheduling, marker, WebSocket, API and existing refund/orphan contract files. All changed Python files pass Ruff.
+- Migration 446 executed in local PostgreSQL WASM: cumulative 100→200 cents books two 100-cent deltas; stale and duplicate calls do not book more; zero confirmed refunds preserve paid status; tax metadata, amount/PI validation, rollback on conflicting ledger UUID, full-refund status, separate paid fee preservation on replay, failed-fee handling and client-role denial passed. This validates SQL transactions sequentially, not concurrent production replicas.
 - The repository migration safety check passes for all three new migrations.
 - Migration 444 also executed in local PostgreSQL WASM: backend access, unique operation key, nonnegative cents and client-role denial passed.
-- Mobile review found no remaining blockers at integrated commit 60069c8; final payment architecture re-review is recorded in the PR.
+- GPT-6 Luna architect review found no remaining money or location blockers after the atomic accounting, separate-fee replay, orphan handling and email-preservation corrections.
 
-No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. Hosted rider tests have three failures in unchanged `shared/components/__tests__/SupportScreen.contact.test.tsx`; the same three failures were reproduced locally on base commit `0b6689b`. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and its full-suite comparison is tracked in the PR. These checks are not represented as green.
+No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. Hosted rider tests have three failures in unchanged `shared/components/__tests__/SupportScreen.contact.test.tsx`; the same three failures were reproduced locally on base commit `0b6689b`. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and the complete local PR suite passes 1,895 tests (unchanged base passes 1,891). These checks are not represented as green.
 
 ## Guarantees and remaining boundaries
 
 Postgres prevents a delayed writer from replacing a newer stored marker. The rider store orders the samples it has observed. A fresh WebSocket sample whose database write was deliberately coalesced is still delivered for latency reasons; it is not independently proven newer than an unseen persisted position. Polling/resume timestamps provide a baseline once received. Missing sensor times on older client single pings retain a compatibility fallback.
+
+Refund push/email delivery remains best-effort. If cancellation, `refund.updated` or a worker applies the accounting delta before `charge.refunded`, the later charge event can have no new delta and omit a notification. Ride history and confirmed accounting remain available; reliable cross-path notification delivery needs a separate notification-outbox change.
 
 The existing Period 1 accumulator uses absolute read-modify-write values. Its pre-existing concurrent-batch lost-increment risk is not repaired by this marker change; replacing it with simple increments would introduce duplicate increments on ambiguous retries. Fresh explicitly untrusted points and mocked historical points do not gain new permission to increment it.
 

@@ -54,7 +54,7 @@ Files: driver-app/utils/backgroundLocation.ts plus focused helper/test, at most3
 - [x] Focused Python/Jest regression tests and lint on changed files; local SQL test when available.
 - [x] Record unavailable native build/device and live-provider checks without implying they ran.
 - [x] Impact log: actual files/blast radius, before/after behavior, rollout/rollback, verification boundaries.
-- [ ] Final architect re-review after recovery corrections. Draft PR #5717 is open; final CI/provider/device rollout checks are tracked there.
+- [x] Final architect re-review after recovery corrections: no remaining money/location blockers; best-effort notification limitation documented. Draft PR #5717 contains the reviewed fixes; hosted CI/provider/device rollout checks remain tracked there.
 
 ## Cross-task review focus
 

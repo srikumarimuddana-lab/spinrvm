@@ -1,0 +1,204 @@
+name: EAS Rollout Control
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Operator tool for the one piece of Expo state that blocks production OTA
+# publishing, run from the Actions UI so it does not need a local eas login.
+#
+#   action=list          → prints every update group on the chosen branch,
+#                          raw JSON plus a rollout summary. Read-only.
+#   action=ramp-to-100   → sets ONE named group's rollout to 100% (promotes
+#                          that update to every device on the branch).
+#   action=revert        → reverts ONE named group's rollout (republishes the
+#                          previous update to every device on the branch).
+#
+# WHY THIS EXISTS
+# Expo permits ONE active rollout per (branch, platform, runtime version), and
+# refuses ANY new publish to that triple while one is open — the new publish's
+# own percentage is irrelevant, so `rollout_percentage=100` does not get you
+# past it. `eas update` has no non-interactive supersede flag (eas-cli 24.7.0),
+# and `eas update:edit` / `eas update:revert-update-rollout` are interactive
+# unless given an explicit --group. So a stuck rollout can only be cleared by a
+# human decision, which is what this workflow is: you pick the group and you
+# pick what happens to it.
+#
+# Between 2026-09-20 and 2026-09-22 four rollouts (rider + driver, ios +
+# android) sat open at 10% and blocked every production OTA. See
+# docs/change-log/2026-09-22-ota-production-dispatch-only.md.
+#
+# MUTATING ACTIONS REQUIRE AN EXPLICIT group_id — ON PURPOSE.
+# This workflow never picks the group for you. Both mutations change what is
+# running on real handsets, and `eas update:list --json`'s exact shape is not
+# pinned by this repo, so selecting a group by parsing that output would risk
+# acting on the wrong update. Run action=list first, read the output, then
+# paste the group ID back in.
+#
+# RUNTIME VERSIONS ARE PER-PLATFORM in both apps, so ios and android each hold
+# their own rollout slot on the same branch and must be cleared separately:
+#     rider-app   ios 2.1.0   android 2.2.0
+#     driver-app  ios 2.7.0   android 2.8.0
+# (app.config.ts — top-level runtimeVersion is iOS, the `android:` block
+# overrides it. Re-read them rather than trusting these numbers; they are
+# bumped on every native change.)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Which app"
+        required: true
+        default: "both"
+        type: choice
+        options: [rider-app, driver-app, both]
+      branch:
+        description: "EAS branch to inspect or act on"
+        required: true
+        default: "production"
+        type: choice
+        options: [production, preview, test]
+      action:
+        description: "list = read-only. ramp-to-100 / revert need group_id and change what real devices run."
+        required: true
+        default: "list"
+        type: choice
+        options: [list, ramp-to-100, revert]
+      group_id:
+        description: "Update group ID — REQUIRED for ramp-to-100 and revert. Get it from an action=list run. Ignored by list."
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  # Never let two rollout mutations race each other.
+  group: eas-rollout-control
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # fail-fast off: with app=both, one app erroring should not hide the
+      # other's output — an operator usually wants to see both states at once.
+      fail-fast: false
+      matrix:
+        app_dir: ${{ github.event.inputs.app == 'both' && fromJSON('["rider-app","driver-app"]') || fromJSON(format('["{0}"]', github.event.inputs.app)) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Node 22 and eas-cli 24.7.0 pinned to match .github/actions/eas-ota-publish
+      # — see that file's comment for why 20 hard-fails the yarn install.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
+        with:
+          eas-version: 24.7.0
+          token: ${{ secrets.EXPO_TOKEN }}
+      # eas resolves the project from app.config.ts, which needs node_modules.
+      - shell: bash
+        working-directory: ${{ matrix.app_dir }}
+        run: yarn install --frozen-lockfile
+
+      - name: ${{ github.event.inputs.action }} on ${{ matrix.app_dir }}
+        shell: bash
+        working-directory: ${{ matrix.app_dir }}
+        env:
+          ACTION: ${{ github.event.inputs.action }}
+          BRANCH: ${{ github.event.inputs.branch }}
+          GROUP_ID: ${{ github.event.inputs.group_id }}
+          APP_DIR: ${{ matrix.app_dir }}
+        run: |
+          set -euo pipefail
+
+          if [ "$ACTION" = "list" ]; then
+            echo "::group::Raw eas update:list output ($APP_DIR, branch $BRANCH)"
+            # Not piped into a parser: the raw output is the authoritative
+            # record an operator copies the group ID from.
+            eas update:list --branch "$BRANCH" --json --non-interactive | tee /tmp/updates.json
+            echo "::endgroup::"
+
+            # Best-effort summary. A shape change in eas-cli's JSON degrades
+            # this to "could not parse" — it never invents a group ID, and the
+            # raw output above is unaffected.
+            python3 - <<'PY' || echo "::warning::Could not parse eas update:list JSON — read the raw output above instead."
+          import json
+
+          # Walks the whole document rather than assuming a top-level shape:
+          # eas-cli's --json layout is not pinned by this repo and has no
+          # compatibility promise, so anything that indexes a fixed path would
+          # break silently on an eas-cli bump. Any dict anywhere carrying a
+          # rolloutPercentage below 100 is reported.
+          def walk(o):
+              if isinstance(o, dict):
+                  yield o
+                  for v in o.values():
+                      yield from walk(v)
+              elif isinstance(o, list):
+                  for v in o:
+                      yield from walk(v)
+
+          seen, stuck = set(), []
+          for d in walk(json.load(open("/tmp/updates.json"))):
+              pct = d.get("rolloutPercentage")
+              if not isinstance(pct, (int, float)) or isinstance(pct, bool) or pct >= 100:
+                  continue
+              gid = d.get("group") or d.get("id") or "?"
+              if gid in seen:
+                  continue
+              seen.add(gid)
+              stuck.append((gid, d.get("runtimeVersion", "?"),
+                            d.get("platform") or d.get("platforms") or "?", pct))
+
+          if stuck:
+              print("\nROLLOUTS IN PROGRESS — each blocks further publishes to its (branch, platform, runtime version):")
+              for gid, rt, plat, pct in stuck:
+                  print(f"  group={gid}  runtime={rt}  platform={plat}  at {pct}%")
+              print("\nRe-run with action=ramp-to-100 or action=revert and group_id set to one of the above.")
+          else:
+              # Deliberately not phrased as "you are not blocked". Absence of a
+              # rolloutPercentage field is indistinguishable here from a real
+              # 100%, and a false all-clear would send an operator back to a
+              # production publish that fails again for the same reason.
+              print("\nNo rollout below 100% appears in this output.")
+              print("That is NOT proof you are unblocked: if eas-cli omits rolloutPercentage from")
+              print("update:list, a live rollout would not show here. If a production publish is")
+              print("still refused, check `eas update:view <group>` or the branch on expo.dev —")
+              print("the refusal message itself always names the blocking update ID.")
+          PY
+            exit 0
+          fi
+
+          # ── Mutating actions ────────────────────────────────────────────
+          if [ -z "$GROUP_ID" ]; then
+            echo "::error::action=$ACTION requires group_id. Run action=list first, then paste the group ID from its output. This workflow will not choose a group for you — both mutations change what real devices run."
+            exit 1
+          fi
+          # Fail closed on a malformed ID rather than handing it to eas.
+          if ! printf '%s' "$GROUP_ID" | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'; then
+            echo "::error::group_id '$GROUP_ID' is not a UUID. Copy it verbatim from an action=list run."
+            exit 1
+          fi
+
+          # A group belongs to exactly one app. With app=both, the other app's
+          # job will not find it — that is expected, and is why fail-fast is
+          # off and why this exits 0 with a notice instead of failing the run.
+          if ! eas update:view "$GROUP_ID" --json >/dev/null 2>&1; then
+            echo "::notice::$APP_DIR does not own group $GROUP_ID — skipping. (Expected when app=both; the other app's job handles it.)"
+            exit 0
+          fi
+
+          case "$ACTION" in
+            ramp-to-100)
+              echo "Promoting $GROUP_ID to 100% on branch $BRANCH — every device on this branch and runtime version will receive it."
+              eas update:edit "$GROUP_ID" --rollout-percentage 100 --non-interactive
+              ;;
+            revert)
+              echo "Reverting the rollout for $GROUP_ID — Expo republishes the PREVIOUS update to 100% of devices on this branch."
+              eas update:revert-update-rollout --group "$GROUP_ID" --non-interactive \
+                --message "Revert stuck rollout $GROUP_ID (EAS Rollout Control)"
+              ;;
+            *)
+              echo "::error::Unknown action '$ACTION'"; exit 1 ;;
+          esac
+
+          echo "Done. Re-run action=list to confirm, then dispatch 'EAS Mobile Update' with profile=production."

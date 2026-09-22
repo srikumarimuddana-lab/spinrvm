@@ -269,7 +269,18 @@ describe('background durable trip recording', () => {
     (global.fetch as jest.Mock).mockImplementation(async (url: string, options: any) => {
       if (url.endsWith('/auth/refresh')) {
         expect(mockedOutbox.enqueue).toHaveBeenCalled();
-        return { ok: true, status: 200, json: async () => ({ token: 'renewed-access', refresh_token: 'renewed-refresh', expires_in: 900 }) };
+        // /auth/refresh's RefreshResponse (backend/routes/auth.py) sends
+        // access_expires_at as an absolute ISO timestamp, never expires_in --
+        // this mock must match the real contract. See CRIMSON-SMOKE-7445-10F/10Y/SE.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            token: 'renewed-access',
+            refresh_token: 'renewed-refresh',
+            access_expires_at: new Date(Date.now() + 900_000).toISOString(),
+          }),
+        };
       }
       expect(options.headers.Authorization).toBe('Bearer renewed-access');
       return { ok: true, status: 200, json: async () => ({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }) };

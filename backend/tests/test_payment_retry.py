@@ -350,7 +350,7 @@ async def test_requires_capture_hold_is_captured_for_owed_amount():
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "pre_trip_status",
-    ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"],
+    ["scheduled", "searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"],
 )
 async def test_requires_capture_skips_pre_trip_ride(pre_trip_status):
     """2026-09-21 fix: a booking-time hold can sit in Stripe's requires_capture
@@ -362,6 +362,15 @@ async def test_requires_capture_skips_pre_trip_ride(pre_trip_status):
     via a real test-ride discrepancy (rider cancelled a scheduled ride for a
     computed $0 fee; the fare had already been fully captured with nothing
     refunded) — see docs/change-log/ for the writeup.
+
+    "scheduled" is explicitly included, not incidental: the hold is placed at
+    booking time (routes/rides/booking.py's _preauthorize_ride_card) for every
+    ride, but a scheduled ride then sits parked in status="scheduled" until the
+    scheduled-dispatch loop flips it to "searching" at its scheduled_time —
+    which can be minutes to days out. That gap is exactly the exposure window
+    this bug needed, and both real rides that hit it were scheduled rides
+    cancelled while still in a pre-dispatch status. The other five statuses
+    were already covered; this one, the highest-exposure one, was not.
 
     The loop must skip the capture (no Stripe capture call) AND release the
     'retrying' claim back to the ride's original payment_status, unchanged

@@ -555,14 +555,53 @@ async def _dispatch_scheduled_ride(ride: dict):
                             logger.info("scheduled dispatch stopped after state changed ride=%s", ride_id)
                             return
         except Exception as _auth_err:
-            # Never let a pre-auth hiccup block dispatch; post-trip settlement
-            # remains the safety net. Surface loudly — it's a payment path.
+            # A database exception after Stripe authorized can be an ambiguous
+            # attachment write. Re-read before treating the ride as unheld; if
+            # the PI is not durably attached, release it or persist recovery
+            # work before allowing dispatch notifications to proceed.
             logger.error(
                 "scheduled dispatch: pre-auth at dispatch failed for %s: %s",
                 ride_id,
                 _auth_err,
                 exc_info=True,
             )
+            _preauth_value = locals().get("_preauth")
+            _pi_id = str((getattr(_preauth_value, "fields", None) or {}).get("payment_intent_id") or "")
+            try:
+                _current_rows = await db.get_rows("rides", {"id": ride_id}, limit=1)
+            except Exception:
+                logger.error("scheduled dispatch: unable to verify ambiguous auth attach ride=%s", ride_id, exc_info=True)
+                return
+            _current = (_current_rows or [None])[0]
+            if not _current or _current.get("status") != "searching":
+                return
+            if _pi_id and _current.get("payment_intent_id") == _pi_id and _current.get("auth_status"):
+                logger.info("scheduled dispatch: ambiguous auth attach confirmed on reread ride=%s pi=%s", ride_id, _pi_id)
+            elif _pi_id:
+                try:
+                    released = await _rides_booking._deps.cancel_authorization(
+                        ride_id=ride_id, payment_intent_id=_pi_id
+                    )
+                except Exception:
+                    released = False
+                    logger.error("scheduled dispatch: auth release after ambiguous attach raised ride=%s pi=%s",
+                                 ride_id, _pi_id, exc_info=True)
+                if not released:
+                    try:
+                        try:
+                            from .payment_operations import record_operation
+                        except ImportError:
+                            from utils.payment_operations import record_operation  # type: ignore
+                        await record_operation(
+                            operation_type="authorization_release", ride_id=ride_id,
+                            payment_intent_id=_pi_id,
+                            idempotency_key=f"ride-cancelauth-{ride_id}-{_pi_id}",
+                            status="requested", metadata={"source": "scheduled_dispatch_ambiguous_attach"},
+                        )
+                    except Exception:
+                        logger.error("scheduled dispatch: could not persist auth release ride=%s pi=%s",
+                                     ride_id, _pi_id, exc_info=True)
+                        return
 
         # Cancellation can win after a hold is attached but before dispatch
         # notifications. Re-read immediately before any searching side effect.

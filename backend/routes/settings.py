@@ -143,8 +143,16 @@ async def get_company_info():
     Settings → Company Info) and both apps pick it up on next fetch.
     """
     settings = await get_app_settings()
+    # Every field returns "" when unset — including ``name``, which used to
+    # fall back to "Spinr". That fallback meant a blanked-out Company Name
+    # still arrived at the apps as a non-empty value, so a client could never
+    # tell "unset" from "deliberately named Spinr" and had no way to omit the
+    # field. Callers that genuinely need a display name of last resort own
+    # that decision themselves; this endpoint reports what is configured.
+    # (``utils/company_details.py`` keeps its own "Spinr" default for email
+    # and PDF footers — a different risk class, deliberately unchanged.)
     return {
-        "name": settings.get("company_name", "Spinr") or "Spinr",
+        "name": settings.get("company_name", "") or "",
         "address": settings.get("company_address", "") or "",
         "phone": settings.get("company_phone", "") or "",
         "email": settings.get("company_email", "") or "",

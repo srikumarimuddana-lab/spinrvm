@@ -397,6 +397,18 @@ class TestCompanyInfo:
         # as the real address, not the PII token the rider then sees quoted.
         assert result["email"] == "support@spinr.ca"
 
+    @pytest.mark.anyio
+    async def test_company_name_empty_when_unset(self):
+        """Mirrors routes/settings.py::get_company_info — no invented name.
+
+        The assistant must not assert a company name nobody configured, for
+        the same reason it is not handed a made-up phone or address. This
+        default used to be "Spinr" in both copies of the handler.
+        """
+        with _settings(company_name=""):
+            result, ok = await execute_tool("get_company_info", {}, user=RIDER)
+        assert ok and result["name"] == ""
+
 
 class TestEscalation:
     @pytest.mark.anyio

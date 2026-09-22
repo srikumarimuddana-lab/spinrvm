@@ -382,8 +382,12 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:
     settings = await get_app_settings()
+    # Mirrors ``routes/settings.py``'s /company-info exactly, including the
+    # empty-string default for ``name``: the assistant must not assert a
+    # company name nobody configured, for the same reason it is not handed a
+    # made-up phone or address.
     return {
-        "name": settings.get("company_name", "Spinr") or "Spinr",
+        "name": settings.get("company_name", "") or "",
         "address": settings.get("company_address", "") or "",
         "phone": settings.get("company_phone", "") or "",
         "email": settings.get("company_email", "") or "",

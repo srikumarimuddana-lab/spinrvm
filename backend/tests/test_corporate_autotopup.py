@@ -5,6 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_loop_monitor_state(monkeypatch):
+    from utils import loop_monitor
+
+    monkeypatch.setattr(loop_monitor, "_heartbeats", {})
+    monkeypatch.setattr(loop_monitor, "_failures", {})
+
+
 @pytest.mark.asyncio
 async def test_triggers_charge_when_balance_below_threshold():
     wallets = [
@@ -320,7 +328,7 @@ async def test_lock_unavailable_skips_topup_logs_only_error_class_and_records_me
     inc.assert_any_call("spinr_loop_lock_unavailable_total", {"loop": "corporate_autotopup"})
     inc.assert_any_call("spinr_bgloop_errors_total", {"loop": "corporate_autotopup"})
     gauge.assert_called_once()
-    heartbeat.assert_called_once_with("corporate_autotopup (10min)")
+    heartbeat.assert_not_called()
     sleep.assert_awaited_once()
 
 
@@ -350,6 +358,42 @@ async def test_lock_contention_skips_tick_but_keeps_heartbeat_and_normal_interva
     inc.assert_not_called()
     heartbeat.assert_called_once_with("corporate_autotopup (10min)")
     sleep.assert_awaited_once_with(600)
+
+
+@pytest.mark.asyncio
+async def test_lock_exception_marks_unhealthy_then_contention_heartbeat_recovers(monkeypatch):
+    import asyncio
+
+    from utils import corporate_autotopup, loop_monitor
+
+    name = "corporate_autotopup (10min)"
+    loop_monitor.record_heartbeat(name)
+    monkeypatch.setattr(
+        corporate_autotopup,
+        "redis_set_nx",
+        AsyncMock(side_effect=[ConnectionError("redis down"), False]),
+        raising=False,
+    )
+    tick = AsyncMock()
+    monkeypatch.setattr(corporate_autotopup, "run_autotopup_tick", tick)
+    sleeps = 0
+
+    async def sleep(_seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            assert loop_monitor.get_loop_status([name])["loops"][name]["status"] == "unhealthy"
+        else:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(corporate_autotopup.asyncio, "sleep", sleep)
+    monkeypatch.setattr(corporate_autotopup.random, "random", lambda: 0.5)
+
+    with pytest.raises(asyncio.CancelledError):
+        await corporate_autotopup.corporate_autotopup_loop()
+
+    tick.assert_not_awaited()
+    assert loop_monitor.get_loop_status([name])["loops"][name]["status"] == "ok"
 
 
 @pytest.mark.asyncio

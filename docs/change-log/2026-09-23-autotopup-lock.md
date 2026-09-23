@@ -38,3 +38,6 @@ Pause corporate billing with `corporate_billing_enabled=false` if needed; revert
 
 ## What was NOT verified
 No live Redis, Supabase, or Stripe calls. A tick exceeding 510 seconds still relies on Stripe idempotency.
+
+## Health visibility follow-up
+An exception from the strict Redis lock records `required_dependency_unavailable` in loop health and suppresses a successful heartbeat for that tick. Ordinary lock contention continues to heartbeat and clears an earlier failure. Regression coverage verifies failure status, skipped top-up work, and recovery. Top-up behavior, Stripe idempotency, and the 600-second jittered schedule are unchanged.

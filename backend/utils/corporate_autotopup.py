@@ -31,8 +31,16 @@ from decimal import ROUND_HALF_UP, Decimal
 import stripe
 
 try:
-    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+    from utils.loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from utils.loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -206,12 +214,15 @@ async def corporate_autotopup_loop() -> None:
     while True:
         _t0 = time.monotonic()
         _had_error = False
+        lock_unavailable = False
         try:
             got_lock = await redis_set_nx(_LOCK_KEY, loop_pod_id(), _LOCK_TTL_SECONDS)
         except Exception as lock_err:
             logger.error("autotopup: leader lock unavailable (%s), skipping tick", type(lock_err).__name__)
             _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "corporate_autotopup"})
+            _record_dependency_failure(_LOOP_NAME)
             _had_error = True
+            lock_unavailable = True
             got_lock = False
         try:
             if got_lock:
@@ -222,5 +233,6 @@ async def corporate_autotopup_loop() -> None:
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_autotopup"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_autotopup"})
-        _record_heartbeat(_LOOP_NAME)
+        if not lock_unavailable:
+            _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(600 * (0.9 + random.random() * 0.2))

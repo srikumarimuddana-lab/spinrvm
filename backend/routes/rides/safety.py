@@ -488,8 +488,8 @@ async def mark_emergency_false_alarm(
 ):
     """Caller says they are OK within 60s of sending SOS.
 
-    Marks the incident false_alarm and tells the safety team. Does not
-    send another contact SMS and does not dial 911.
+    Resolves the incident with false-alarm metadata and tells the safety
+    team. Does not send another contact SMS and does not dial 911.
     """
     rows = await _deps.db_supabase.get_rows(
         "safety_incidents",
@@ -503,8 +503,8 @@ async def mark_emergency_false_alarm(
     incident = rows[0] if rows else None
     if not incident:
         raise HTTPException(status_code=404, detail="Emergency alert not found")
-    if incident.get("status") == "false_alarm":
-        return {"success": True, "status": "false_alarm"}
+    if incident.get("status") == "resolved" and "false alarm" in (incident.get("resolution_notes") or "").lower():
+        return {"success": True, "status": "resolved"}
 
     reported_raw = incident.get("reported_at") or incident.get("created_at")
     reported_at = None
@@ -523,7 +523,13 @@ async def mark_emergency_false_alarm(
     updated = await _deps.db_supabase.update_one(
         "safety_incidents",
         {"id": body.incident_id, "status": "open"},
-        {"status": "false_alarm", "updated_at": datetime.now(timezone.utc).isoformat()},
+        {
+            "status": "resolved",
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolved_by": current_user["id"],
+            "resolution_notes": "False alarm reported by the user.",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     if not updated:
         raise HTTPException(status_code=409, detail="This alert can no longer be cancelled")
@@ -538,7 +544,7 @@ async def mark_emergency_false_alarm(
     except Exception as exc:
         logger.opt(exception=True).error(f"sos_false_alarm admin broadcast failed: {exc}")
     logger.info(f"[SOS] false_alarm incident_id={body.incident_id} ride_id={ride_id}")
-    return {"success": True, "status": "false_alarm"}
+    return {"success": True, "status": "resolved"}
 
 
 # ---------------------------------------------------------------------------

@@ -805,3 +805,47 @@ class TestSOSMalformedKeyFailsOpen:
         assert result["success"] is True
         assert len(incidents) == 1
         assert "sos_idempotency_key" not in incidents[0], "a malformed key must not be stored"
+
+
+@pytest.mark.asyncio
+async def test_false_alarm_uses_supported_terminal_status_and_resolution_metadata():
+    """The safety_incidents CHECK constraint rejects a custom false_alarm status."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.routes.rides import safety
+
+    incident_id = "incident-false-alarm-1"
+    updates = []
+    incident = {
+        "id": incident_id,
+        "ride_id": RIDE_ID,
+        "reported_by_user_id": RIDER_ID,
+        "status": "open",
+        "reported_at": (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat(),
+    }
+
+    async def _get_rows(table, filters, **kwargs):
+        assert table == "safety_incidents"
+        return [incident]
+
+    async def _update_one(table, filters, values):
+        updates.append((table, filters, values))
+        return {"id": incident_id}
+
+    with (
+        patch.object(safety._deps.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+        patch.object(safety._deps.db_supabase, "update_one", AsyncMock(side_effect=_update_one)),
+        patch.object(safety._deps.manager, "broadcast_to_admins", AsyncMock()),
+    ):
+        result = await safety.mark_emergency_false_alarm(
+            RIDE_ID,
+            safety.FalseAlarmRequest(incident_id=incident_id),
+            current_user={"id": RIDER_ID},
+        )
+
+    assert result["success"] is True
+    assert result["status"] == "resolved"
+    assert updates[0][2]["status"] == "resolved"
+    assert updates[0][2]["resolved_by"] == RIDER_ID
+    assert updates[0][2]["resolved_at"]
+    assert "false alarm" in updates[0][2]["resolution_notes"].lower()

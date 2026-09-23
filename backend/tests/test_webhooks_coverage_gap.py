@@ -1662,3 +1662,26 @@ class TestResolveUserIdByPhoneException:
         ):
             out = await _resolve_user_id_by_phone("+13065550100")
         assert out is None
+
+
+class TestExtractInvoicePaymentIntentRealStripeV15Invoice:
+    """stripe==15.5.1: a real Invoice has no ``to_dict_recursive`` attribute and
+    ``dict(invoice)`` raises TypeError, so the old fallback silently returned
+    None and invoice.paid never persisted the PaymentIntent id."""
+
+    def test_real_invoice_object_resolves_pi(self):
+        import stripe
+
+        from backend.routes.webhooks import _extract_invoice_payment_intent
+
+        refreshed = stripe.Invoice.construct_from(
+            {
+                "id": "in_v15",
+                "object": "invoice",
+                "payments": {"object": "list", "data": [{"payment": {"payment_intent": "pi_v15"}}]},
+            },
+            "sk_test_dummy",
+        )
+        assert not isinstance(refreshed, dict)
+        with patch("stripe.Invoice.retrieve", MagicMock(return_value=refreshed)):
+            assert _extract_invoice_payment_intent({"id": "in_v15"}, stripe_secret="sk_test") == "pi_v15"

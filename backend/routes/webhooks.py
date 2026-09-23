@@ -324,7 +324,13 @@ def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> s
 
         refreshed = _stripe.Invoice.retrieve(invoice_id, expand=["payments"], api_key=stripe_secret)
         # stripe-python returns a typed object; normalize to a plain dict.
-        as_dict = refreshed.to_dict_recursive() if hasattr(refreshed, "to_dict_recursive") else dict(refreshed)
+        # v15 has neither to_dict_recursive nor dict() support (TypeError, which
+        # the except below swallowed -> PI never resolved); use the shared helper.
+        try:
+            from ..utils.stripe_config import stripe_object_to_dict
+        except ImportError:
+            from utils.stripe_config import stripe_object_to_dict  # type: ignore
+        as_dict = stripe_object_to_dict(refreshed)
         return _from_payload(as_dict)
     except Exception:
         logger.error(

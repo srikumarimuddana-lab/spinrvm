@@ -164,7 +164,10 @@ class TestAdminResolveDispute:
         dispute = _dispute()
         with (
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
-            patch("backend.routes.disputes.db_supabase.get_ride", AsyncMock(return_value={"id": "ride_1"})),
+            patch(
+                "backend.routes.disputes.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1"}),
+            ),
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as mock_update,
             patch("backend.routes.disputes.log_admin_action", AsyncMock()),
             patch("backend.routes.disputes.send_push_notification", AsyncMock()),
@@ -184,7 +187,7 @@ class TestAdminResolveDispute:
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
             patch(
                 "backend.routes.disputes.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "ride_1", "stripe_charge_id": "pi_1"}),
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_1"}),
             ),
             patch("backend.routes.disputes.get_app_settings", AsyncMock(return_value={})),
         ):
@@ -201,7 +204,7 @@ class TestAdminResolveDispute:
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
             patch(
                 "backend.routes.disputes.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "ride_1", "stripe_charge_id": "pi_1"}),
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_1"}),
             ),
             patch(
                 "backend.routes.disputes.get_app_settings",
@@ -223,6 +226,10 @@ class TestAdminResolveDispute:
         dispute = _dispute()
         with (
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
+            patch(
+                "backend.routes.disputes.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1"}),
+            ),
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as mock_update,
             patch("backend.routes.disputes.log_admin_action", AsyncMock()),
             patch("backend.routes.disputes.send_push_notification", AsyncMock()),
@@ -240,13 +247,16 @@ class TestAdminResolveDispute:
         dispute = _dispute()
         with (
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
-            patch("backend.routes.disputes.db_supabase.get_ride", AsyncMock()) as mock_get_ride,
+            patch(
+                "backend.routes.disputes.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1"}),
+            ) as mock_get_ride,
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.disputes.log_admin_action", AsyncMock()),
             patch("backend.routes.disputes.send_push_notification", AsyncMock()),
         ):
             result = await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
-        mock_get_ride.assert_not_called()
+        mock_get_ride.assert_awaited_once()
         assert result["refund"] is None
 
     async def test_push_notification_failure_does_not_fail_request(self):
@@ -256,6 +266,10 @@ class TestAdminResolveDispute:
         dispute = _dispute()
         with (
             patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dispute])),
+            patch(
+                "backend.routes.disputes.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1"}),
+            ),
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.disputes.log_admin_action", AsyncMock()),
             patch(
@@ -265,3 +279,46 @@ class TestAdminResolveDispute:
         ):
             result = await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
         assert result["success"] is True
+
+
+@pytest.mark.parametrize("resolution", ["approved", "partial_refund", "rejected"])
+async def test_driver_claim_never_refunds_rider(resolution):
+    from backend.routes import disputes
+
+    dispute = _dispute(user_id="driver-user")
+
+    async def rows(table, *args, **kwargs):
+        return [dispute] if table == "disputes" else [{"id": "driver-1", "user_id": "driver-user"}]
+
+    with (
+        patch.object(disputes.db_supabase, "get_rows", AsyncMock(side_effect=rows)),
+        patch.object(
+            disputes.db_supabase,
+            "get_ride",
+            AsyncMock(
+                return_value={
+                    "id": "ride_1",
+                    "rider_id": "rider-user",
+                    "driver_id": "driver-1",
+                    "payment_intent_id": "pi_1",
+                }
+            ),
+        ),
+        patch.object(disputes.db_supabase, "update_one", AsyncMock()) as update,
+        patch.object(disputes, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch.object(disputes, "log_admin_action", AsyncMock()),
+        patch.object(disputes, "send_push_notification", AsyncMock()) as push,
+        patch("stripe.Refund.create") as refund,
+    ):
+        req = disputes.ResolveDisputeRequest(
+            resolution=resolution, refund_amount=Decimal("5.00") if resolution != "rejected" else None
+        )
+        if resolution == "rejected":
+            await disputes.admin_resolve_dispute("disp_1", req, dict(_ADMIN))
+            assert push.call_args.kwargs["target_app"] == "driver"
+        else:
+            with pytest.raises(HTTPException) as error:
+                await disputes.admin_resolve_dispute("disp_1", req, dict(_ADMIN))
+            assert error.value.status_code == 409
+            update.assert_not_awaited()
+        refund.assert_not_called()

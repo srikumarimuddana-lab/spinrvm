@@ -52,7 +52,7 @@ async def _resolve_and_capture_stripe_amount(refund_amount: str) -> dict:
         ),
         patch(
             "backend.routes.disputes.db_supabase.get_ride",
-            AsyncMock(return_value={"id": "ride_1", "stripe_charge_id": "pi_123"}),
+            AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_123"}),
         ),
         patch(
             "backend.routes.disputes.db_supabase.update_one",

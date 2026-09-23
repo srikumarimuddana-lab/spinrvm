@@ -226,12 +226,27 @@ async def admin_resolve_dispute(
             detail=f"Refund amount ${req.refund_amount} exceeds original fare ${original_fare}",
         )
 
+    ride = await db_supabase.get_ride(dispute.get("ride_id"))
+    claimant = dispute.get("user_id")
+    target_app = "rider"
+    if not ride or not claimant:
+        raise HTTPException(status_code=409, detail="Dispute ownership requires manual review")
+    if claimant != ride.get("rider_id"):
+        drivers = await db_supabase.get_rows("drivers", {"id": ride.get("driver_id")}, limit=1)
+        if not drivers or drivers[0].get("user_id") != claimant:
+            raise HTTPException(status_code=409, detail="Dispute ownership requires manual review")
+        target_app = "driver"
+        if req.resolution != "rejected":
+            raise HTTPException(
+                status_code=409,
+                detail="Driver earnings disputes require manual earnings review; no rider refund was issued",
+            )
+
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         # HALF_UP cents conversion — int() truncation shaved sub-cent refund
         # amounts (e.g. 10.005 → 1000 cents instead of 1001).
         refund_amount_cents = dollars_to_cents(req.refund_amount)
-        ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -328,7 +343,7 @@ async def admin_resolve_dispute(
                     "dispute_id": str(dispute_id),
                     "resolution": req.resolution,
                 },
-                target_app="rider",
+                target_app=target_app,
             )
         except Exception as notif_err:
             logger.debug(f"Dispute resolved notification failed: {notif_err}")

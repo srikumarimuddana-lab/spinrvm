@@ -383,6 +383,73 @@ async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, boo
     return result, True
 
 
+async def scoped_driver_presence_evidence(candidate_ids: List[str]) -> tuple[dict[str, dict], bool]:
+    """Return fresh scoped lease evidence by driver using durable scope + pipeline."""
+    if not candidate_ids:
+        return {}, True
+    try:
+        try:
+            from ..repositories._base import get_rows
+        except ImportError:  # pragma: no cover
+            from repositories._base import get_rows  # type: ignore
+        rows = await get_rows(
+            "drivers",
+            {"id": {"$in": candidate_ids}},
+            limit=len(candidate_ids),
+            columns="id,controller_session_id,online_epoch,is_online",
+        )
+    except Exception as exc:
+        logger.error("scoped presence durable controller lookup failed: %s", exc, exc_info=True)
+        return {}, False
+    scoped_rows = [
+        row for row in rows
+        if row.get("is_online") is True
+        and isinstance(row.get("controller_session_id"), str)
+        and type(row.get("online_epoch")) is int
+        and row["online_epoch"] >= 0
+    ]
+    if not scoped_rows:
+        return {}, True
+    redis_client = await _get_redis()
+    if redis_client is None:
+        return {}, False
+    try:
+        pipe = redis_client.pipeline(transaction=False)
+        for row in scoped_rows:
+            pipe.hgetall(scoped_presence_key(row["id"], row["controller_session_id"], row["online_epoch"]))
+        values = await pipe.execute()
+    except Exception as exc:
+        logger.error("scoped presence Redis pipeline failed: %s", exc, exc_info=True)
+        return {}, False
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    result = {}
+    for row, raw_fields in zip(scoped_rows, values, strict=False):
+        fields = {
+            (key.decode() if isinstance(key, bytes) else str(key)): (value.decode() if isinstance(value, bytes) else str(value))
+            for key, value in (raw_fields or {}).items()
+        }
+        try:
+            contact_until = int(fields.get("contact_valid_until_ms", "0"))
+            location_until = int(fields.get("location_valid_until_ms", "0"))
+        except (TypeError, ValueError):
+            continue
+        if contact_until > now_ms and location_until > now_ms:
+            result[row["id"]] = {
+                "session_id": row["controller_session_id"],
+                "online_epoch": row["online_epoch"],
+                "contact_valid_until_ms": contact_until,
+                "location_valid_until_ms": location_until,
+            }
+    return result, True
+
+
+async def scoped_present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
+    """Return only authoritative v2-scoped presence; never merge legacy keys."""
+    evidence, reachable = await scoped_driver_presence_evidence(candidate_ids)
+    return set(evidence), reachable
+
+
 async def present_driver_ids(candidate_ids: List[str]) -> set:
     """Return the subset of ``candidate_ids`` that are currently present.
 

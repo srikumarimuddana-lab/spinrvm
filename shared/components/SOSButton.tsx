@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getSOSLocation } from '../utils/sosLocation';
+import api from '../api/client';
 import { deriveContactOutcome, type SOSContactOutcome, type SOSTriggerResult } from '../types/safety';
 
 // This component is shared by rider-app and driver-app, which each ship
@@ -39,6 +40,8 @@ const DEFAULT_STRINGS: Record<string, string> = {
   'sos.failure_msg': 'Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.',
   'sos.retry_now': 'Retry Now',
   'sos.dismiss': 'Dismiss',
+  'sos.false_alarm_failed_title': 'Could not mark as safe',
+  'sos.false_alarm_failed_msg': 'The SOS alert remains active. Try again when you have a safe moment.',
   'sos.no_active_ride_title': 'No Active Ride',
   'sos.no_active_ride_msg': 'Emergency alert requires an active ride. Call 911 directly for immediate help.',
   'sos.label_hold': 'Hold...',
@@ -149,6 +152,7 @@ export function SOSButton({
   // apart from a completed hold. Only consulted when onTap is supplied.
   const holdFired = useRef(false);
   const lastIncidentId = useRef<string | null>(null);
+  const falseAlarmInFlight = useRef(false);
   // Persistent failure flag: stays true until the backend confirms the alert.
   // Dismissing the failure dialog does NOT clear it — the button stays amber
   // so the driver always has a visible reminder that the alert was NOT sent.
@@ -220,14 +224,41 @@ export function SOSButton({
           style: 'cancel',
           onPress: () => {
             const incidentId = lastIncidentId.current;
-            setTriggered(false);
-            if (incidentId && onFalseAlarm) {
-              onFalseAlarm(incidentId).catch(() => {});
+            if (incidentId && (onFalseAlarm || rideId)) {
+              void markFalseAlarm(incidentId);
+            } else {
+              setTriggered(false);
             }
           },
         },
       ]
     );
+  };
+
+  const markFalseAlarm = async (incidentId: string) => {
+    if (falseAlarmInFlight.current) return;
+    falseAlarmInFlight.current = true;
+    try {
+      if (onFalseAlarm) {
+        await onFalseAlarm(incidentId);
+      } else if (rideId) {
+        // Rider consumers use the shared button without an explicit callback;
+        // keep their backend incident in sync just like the driver's callback.
+        await api.post(`/rides/${rideId}/emergency/false-alarm`, { incident_id: incidentId });
+      }
+      setTriggered(false);
+    } catch {
+      Alert.alert(
+        translate('sos.false_alarm_failed_title'),
+        translate('sos.false_alarm_failed_msg'),
+        [
+          { text: translate('sos.retry_now'), onPress: () => void markFalseAlarm(incidentId) },
+          { text: translate('sos.dismiss'), style: 'cancel' },
+        ],
+      );
+    } finally {
+      falseAlarmInFlight.current = false;
+    }
   };
 
   const showFailureAlert = (retry: () => void) => {

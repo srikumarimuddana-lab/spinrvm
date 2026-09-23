@@ -799,6 +799,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 final_sequence_number: completion.point?.sequence_number ?? null,
                 pending_outbox_count: completion.pendingCount,
                 off_route_confirmation: offRouteConfirmation ?? null,
+                stop_progress_enabled: true,
             });
             try {
                 if (res.data.location_ack) {

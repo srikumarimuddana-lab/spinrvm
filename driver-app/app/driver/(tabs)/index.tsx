@@ -128,6 +128,13 @@ function DriverDashboard() {
   // so this is a pure source-order reshuffle: same expression, same effect
   // timing, no behavior change.
   const ride = activeRide?.ride || incomingRide;
+  const routeStops = Array.isArray((activeRide?.ride as any)?.stops) ? (activeRide!.ride as any).stops : [];
+  const nextRouteStopIndex = routeStops.findIndex((stop: any) => stop?.completed !== true);
+  const nextRouteStop = nextRouteStopIndex >= 0 ? routeStops[nextRouteStopIndex] : null;
+  const nextRouteStopValid = !!nextRouteStop &&
+    typeof nextRouteStop.lat === 'number' && Number.isFinite(nextRouteStop.lat) && Math.abs(nextRouteStop.lat) <= 90 &&
+    typeof nextRouteStop.lng === 'number' && Number.isFinite(nextRouteStop.lng) && Math.abs(nextRouteStop.lng) <= 180 &&
+    !(nextRouteStop.lat === 0 && nextRouteStop.lng === 0);
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
   const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
@@ -474,7 +481,10 @@ function DriverDashboard() {
     }
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
     const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-    const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+    const useSavedRoute = hasSavedRoute && (
+      rideState === 'ride_offered' || (rideState === 'trip_in_progress' && !nextRouteStop)
+    );
+    if (rideState === 'trip_in_progress' && nextRouteStop && !nextRouteStopValid) return null;
     if (!GOOGLE_MAPS_API_KEY || useSavedRoute || osrmRouteActive) return null;
 
     const pNavLat = (ride as any).pickup_nav_lat ?? ride.pickup_lat;
@@ -489,7 +499,9 @@ function DriverDashboard() {
       origin = roundedDriverLat != null && roundedDriverLng != null
         ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
         : { latitude: pNavLat, longitude: pNavLng };
-      destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+      destination = nextRouteStop
+        ? { latitude: nextRouteStop.lat, longitude: nextRouteStop.lng }
+        : { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
     } else {
       origin = roundedDriverLat != null && roundedDriverLng != null
         ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
@@ -497,7 +509,7 @@ function DriverDashboard() {
       destination = { latitude: pNavLat, longitude: pNavLng };
     }
     return { origin, destination };
-  }, [ride, rideState, osrmRouteActive, roundedDriverLat, roundedDriverLng]);
+  }, [ride, rideState, osrmRouteActive, roundedDriverLat, roundedDriverLng, nextRouteStop, nextRouteStopValid]);
 
   // R7: try the backend Directions proxy before the on-device
   // MapViewDirections fallback below. On failure, records the current
@@ -709,7 +721,7 @@ function DriverDashboard() {
     const canUseSaved =
       Array.isArray(savedPoly) &&
       savedPoly.length >= 2 &&
-      (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+      (rideState === 'ride_offered' || (rideState === 'trip_in_progress' && !nextRouteStop));
 
     if (canUseSaved) {
       const coords = savedPoly
@@ -831,7 +843,7 @@ function DriverDashboard() {
       clearInterval(id);
     };
      
-  }, [activeRide?.ride?.id, rideState]);
+  }, [activeRide?.ride?.id, activeRide?.ride?.stops, rideState]);
 
   // Turn-by-turn steps for the active leg — one fetch per ride+leg, keyed by
   // a ref rather than by re-checking navSteps/state so this doesn't refire
@@ -854,7 +866,10 @@ function DriverDashboard() {
       setCurrentNavStep(null);
       return;
     }
-    const legKey = `${rid}:${destination}`;
+    const routeKey = destination === 'dropoff' && nextRouteStopValid
+      ? `${nextRouteStop.id ?? nextRouteStopIndex}:${nextRouteStop.lat}:${nextRouteStop.lng}`
+      : 'final';
+    const legKey = `${rid}:${destination}:${routeKey}`;
     if (fetchedNavLegRef.current === legKey) return;
     fetchedNavLegRef.current = legKey;
     navStepIndexRef.current = null;
@@ -873,7 +888,7 @@ function DriverDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [activeRide?.ride?.id, rideState]);
+  }, [activeRide?.ride?.id, activeRide?.ride?.stops, rideState, nextRouteStopValid, nextRouteStopIndex]);
 
   // Which step the driver is currently on + distance remaining to its
   // maneuver, re-derived on every GPS tick via the same continuity-hint
@@ -1497,6 +1512,7 @@ function DriverDashboard() {
           // would mount on the `enabled=false` default the instant before a
           // `true` value arrives, firing both this on-device call and the
           // proxy for the same generation with no way to cancel this one.
+          if (rideState === 'trip_in_progress' && nextRouteStop && !nextRouteStopValid) return null;
           const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive &&
             directionsProxyFlagLoaded && (!directionsProxyEnabled || proxyFailedKey === directionsKey);
 
@@ -1515,7 +1531,9 @@ function DriverDashboard() {
             origin = driverLat != null && driverLng != null
               ? { latitude: driverLat, longitude: driverLng }
               : { latitude: pNavLat, longitude: pNavLng };
-            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+            destination = nextRouteStop
+              ? { latitude: nextRouteStop.lat, longitude: nextRouteStop.lng }
+              : { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
           } else {
             origin = driverLat != null && driverLng != null
               ? { latitude: driverLat, longitude: driverLng }
@@ -1975,6 +1993,17 @@ function DriverDashboard() {
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={async () => {
             await requestRideCompletion();
+          }}
+          onCompleteStop={async (stopIndex, expectedStops) => {
+            try {
+              await api.post(`/rides/${activeRide!.ride.id}/stops/${stopIndex}/complete`, {
+                expected_stops: expectedStops,
+              });
+              await useDriverStore.getState().fetchActiveRide();
+            } catch {
+              showToast('error', 'Stop not updated', 'Refresh the ride and try again.');
+              await useDriverStore.getState().fetchActiveRide();
+            }
           }}
           onCancelRide={(reason) => cancelRide(activeRide!.ride.id, reason)}
           onReportNoShow={() => reportNoShow(activeRide!.ride.id)}

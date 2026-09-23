@@ -179,6 +179,7 @@ const mockResetRideState = jest.fn();
 const mockClearError = jest.fn();
 const mockRateRider = jest.fn();
 const mockSetCountdown = jest.fn();
+const mockFetchActiveRide = jest.fn(() => Promise.resolve());
 let mockDriverState: any;
 jest.mock('../../store/driverStore', () => {
   function useDriverStore(selector?: (s: any) => any) {
@@ -287,6 +288,9 @@ jest.mock('../../components/dashboard', () => {
         <RNTouchableOpacity accessibilityLabel="complete-ride" onPress={props.onCompleteRide}>
           <RNText>Complete</RNText>
         </RNTouchableOpacity>
+        <RNTouchableOpacity accessibilityLabel="complete-stop" onPress={() => props.onCompleteStop(1, props.ride.stops)}>
+          <RNText>Complete stop</RNText>
+        </RNTouchableOpacity>
         <RNTouchableOpacity accessibilityLabel="cancel-ride" onPress={() => props.onCancelRide('rider_no_show')}>
           <RNText>Cancel</RNText>
         </RNTouchableOpacity>
@@ -351,6 +355,7 @@ function resetState() {
     verifyOTP: mockVerifyOTP,
     startRide: mockStartRide,
     completeRide: mockCompleteRide,
+    fetchActiveRide: mockFetchActiveRide,
     cancelRide: mockCancelRide,
     resetRideState: mockResetRideState,
     clearError: mockClearError,
@@ -518,6 +523,19 @@ describe('DriverDashboardScreen', () => {
     });
     expect(mockCompleteRide).toHaveBeenCalledWith('ride-1', undefined);
     expect(allText(r)).not.toContain('"Confirm trip completion"');
+  });
+
+  it('completes the explicitly selected stop with its expected route snapshot, then refetches', async () => {
+    mockDriverState.rideState = 'trip_in_progress';
+    const stops = [{ id: 's1', address: 'Market', lat: 52.16, lng: -106.64 }];
+    mockDriverState.activeRide = { ride: { id: 'ride-1', stops }, rider: { name: 'Alex' } };
+    const r = await renderScreen();
+    await act(async () => {
+      r.root.findByProps({ accessibilityLabel: 'complete-stop' }).props.onPress();
+      await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledWith('/rides/ride-1/stops/1/complete', { expected_stops: stops });
+    expect(mockFetchActiveRide).toHaveBeenCalled();
   });
 
   it('an off-route completion opens the confirm modal; picking a reason re-completes with it and closes', async () => {

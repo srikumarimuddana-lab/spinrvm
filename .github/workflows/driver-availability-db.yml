@@ -1,0 +1,92 @@
+name: Driver Availability DB Tests
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - '.github/workflows/driver-availability-db.yml'
+      - 'backend/migrations/455_driver_availability_epoch.sql'
+      - 'backend/migrations/456_driver_claim_epoch_fence.sql'
+      - 'backend/migrations/457_offer_decision_atomicity.sql'
+      - 'backend/repositories/driver_availability_repo.py'
+      - 'backend/repositories/driver_offer_repo.py'
+      - 'backend/routes/drivers/status.py'
+      - 'backend/services/driver_availability_service.py'
+      - 'backend/tests/direct_pool/conftest.py'
+      - 'backend/tests/direct_pool/test_driver_availability_*.py'
+      - 'backend/tests/direct_pool/test_driver_claim_epoch_fence.py'
+      - 'backend/tests/direct_pool/test_offer_decision_atomicity.py'
+  push:
+    branches: [main, staging]
+    paths:
+      - '.github/workflows/driver-availability-db.yml'
+      - 'backend/migrations/455_driver_availability_epoch.sql'
+      - 'backend/migrations/456_driver_claim_epoch_fence.sql'
+      - 'backend/migrations/457_offer_decision_atomicity.sql'
+      - 'backend/repositories/driver_availability_repo.py'
+      - 'backend/repositories/driver_offer_repo.py'
+      - 'backend/routes/drivers/status.py'
+      - 'backend/services/driver_availability_service.py'
+      - 'backend/tests/direct_pool/conftest.py'
+      - 'backend/tests/direct_pool/test_driver_availability_*.py'
+      - 'backend/tests/direct_pool/test_driver_claim_epoch_fence.py'
+      - 'backend/tests/direct_pool/test_offer_decision_atomicity.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: driver-availability-db-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  availability-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: spinr_test
+          PGUSER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install direct-pool test dependencies
+        run: python -m pip install --disable-pip-version-check pytest==9.1.1 pytest-asyncio==1.4.0 psycopg2-binary==2.9.12
+
+      - name: Run focused availability SQL tests
+        working-directory: backend
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: spinr_test
+        run: |
+          export TEST_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          shopt -s nullglob
+          test_files=(
+            tests/direct_pool/test_driver_availability_*.py
+            tests/direct_pool/test_driver_claim_epoch_fence*.py
+            tests/direct_pool/test_offer_decision_atomicity*.py
+          )
+          if ((${#test_files[@]} == 0)); then
+            echo 'No focused driver-availability SQL tests were found.' >&2
+            exit 1
+          fi
+          python -m pytest "${test_files[@]}" -c /dev/null --confcutdir=tests/direct_pool -q

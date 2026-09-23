@@ -178,6 +178,62 @@ async def test_get_redis_falls_back_to_none_on_connect_failure(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_strict_lock_never_uses_local_ownership(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with pytest.raises(RuntimeError, match="Redis unavailable"):
+        await rc.redis_set_nx_strict("money-lock", "pod-a", 30)
+    assert rc._local == {}
+
+
+@pytest.mark.anyio
+async def test_strict_lock_rejects_cold_client_failure(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.from_url.side_effect = RuntimeError("connection refused")
+    _patch_redis_asyncio_module(monkeypatch, fake)
+    with pytest.raises(RuntimeError, match="Redis unavailable"):
+        await rc.redis_set_nx_strict("money-lock", "pod-a", 30)
+    assert rc._local == {}
+
+
+@pytest.mark.anyio
+async def test_strict_lock_propagates_command_failure(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    fake = MagicMock(set=AsyncMock(side_effect=TimeoutError("timed out")))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(TimeoutError):
+        await rc.redis_set_nx_strict("money-lock", "pod-a", 30)
+    assert rc._local == {}
+
+
+@pytest.mark.anyio
+async def test_strict_lock_contends_until_lease_expires(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    now = 0
+    expires = {}
+
+    async def set_nx(key, value, *, nx, ex):
+        assert nx is True
+        if expires.get(key, 0) > now:
+            return None
+        expires[key] = now + ex
+        return True
+
+    _patch_get_redis(monkeypatch, MagicMock(set=AsyncMock(side_effect=set_nx)))
+    assert await rc.redis_set_nx_strict("money-lock", "pod-a", 30)
+    assert not await rc.redis_set_nx_strict("money-lock", "pod-b", 30)
+    now = 31
+    assert await rc.redis_set_nx_strict("money-lock", "pod-b", 30)
+    assert rc._local == {}
+
+
+@pytest.mark.anyio
 async def test_redis_get_uses_local_fallback_when_unset(monkeypatch):
     from backend.utils import redis_client as rc
 

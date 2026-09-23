@@ -255,6 +255,19 @@ async def redis_set_nx(key: str, value: str, ttl: int) -> bool:
     return True
 
 
+async def redis_set_nx_strict(key: str, value: str, ttl: int) -> bool:
+    """Acquire a real Redis lease; never grant process-local ownership.
+
+    False means contention. Missing Redis or a failed command raises so money
+    loops can skip this tick explicitly. Lease expiry can still allow overlap;
+    callers must retain database claims and external idempotency protection.
+    """
+    r = await _get_redis()
+    if r is None:
+        raise RuntimeError("Redis unavailable for distributed lock")
+    return bool(await r.set(key, value, nx=True, ex=ttl))
+
+
 async def redis_incr(key: str) -> int:
     r = await _get_redis()
     if r is not None:

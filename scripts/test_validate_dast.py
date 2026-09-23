@@ -80,3 +80,14 @@ def test_default_https_port_context_accepts_normalized_and_explicit_443(tmp_path
     pattern = ET.parse(context).getroot().findtext("./context/incregexes")
     assert pattern and re.fullmatch(pattern, STAGING + "/health")
     assert re.fullmatch(pattern, STAGING + ":443/health")
+
+
+def test_workflow_fails_closed_scopes_before_zap_and_checks_report_afterward():
+    workflow = open(".github/workflows/dast-zap-baseline.yml", encoding="utf-8").read()
+    preflight = workflow.index("--write-scope-context staging.context")
+    scanner = workflow.index("uses: zaproxy/action-baseline@")
+    report_check = workflow.index("python3 scripts/validate_dast.py report_json.json")
+    assert preflight < scanner < report_check
+    assert "cmd_options: '-a -n staging.context'" in workflow
+    assert "STAGING_ALLOWED_ORIGIN" in workflow
+    assert "No-op (STAGING_URL not configured)" not in workflow

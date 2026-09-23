@@ -31,6 +31,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { isPersonalStepValid, getVehicleStepError, isCrcConsentValid } from '../utils/becomeDriverSchema';
+import { getEligibilityProfileError } from '../utils/eligibilityProfileSchema';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -75,6 +76,8 @@ export default function BecomeDriverScreen() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [gender, setGender] = useState(user?.gender || '');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [licenseIssueDate, setLicenseIssueDate] = useState('');
   const [city, setCity] = useState(user?.city || 'Saskatoon');
   const [serviceAreaId, setServiceAreaId] = useState('');
   const [serviceAreas, setServiceAreas] = useState<any[]>([]);
@@ -164,6 +167,8 @@ export default function BecomeDriverScreen() {
           setEmail(data.personal.email || '');
           setGender(data.personal.gender || '');
           setCity(data.personal.city || '');
+          setDateOfBirth(data.personal.dateOfBirth || '');
+          setLicenseIssueDate(data.personal.licenseIssueDate || '');
         }
         if (data.vehicle) {
           setVehicleMake(data.vehicle.make || '');
@@ -194,7 +199,7 @@ export default function BecomeDriverScreen() {
     try {
       const draftData = {
         step: currentStep,
-        personal: { firstName, lastName, email, gender, city },
+        personal: { firstName, lastName, email, gender, city, dateOfBirth, licenseIssueDate },
         vehicle: { make: vehicleMake, model: vehicleModel, color: vehicleColor, year: vehicleYear, plate: licensePlate, vin: vehicleVin, type: vehicleType },
         docs: { licenseNumber, files: docs }
       };
@@ -202,7 +207,7 @@ export default function BecomeDriverScreen() {
     } catch (e) {
       console.log('Failed to save draft:', e);
     }
-  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
+  }, [currentStep, firstName, lastName, email, gender, city, dateOfBirth, licenseIssueDate, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
 
   // useCallback keyed on serviceAreaId (its fallback-arg closure value) so
   // its identity only changes on the same trigger the effect below already
@@ -347,7 +352,7 @@ export default function BecomeDriverScreen() {
   // Save draft whenever relevant state changes
   useEffect(() => {
     saveDraft();
-  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs, saveDraft]);
+  }, [currentStep, firstName, lastName, email, gender, city, dateOfBirth, licenseIssueDate, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs, saveDraft]);
 
   const processUpload = async (uri: string, name: string, mimeType: string, reqId: string, side: 'front' | 'back') => {
     try {
@@ -459,8 +464,15 @@ export default function BecomeDriverScreen() {
 
   const validateStep = (step: number) => {
     switch (step) {
-      case 1: // Personal
-        return isPersonalStepValid(firstName, lastName, email, gender, serviceAreaId);
+      case 1: { // Personal
+        if (!isPersonalStepValid(firstName, lastName, email, gender, serviceAreaId)) return false;
+        const eligibilityError = getEligibilityProfileError({ dateOfBirth, licenseIssueDate });
+        if (eligibilityError) {
+          Alert.alert('Eligibility Details', eligibilityError);
+          return false;
+        }
+        return true;
+      }
       case 2: { // Vehicle
         const vehicleStepError = getVehicleStepError({
           vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType,
@@ -559,6 +571,8 @@ export default function BecomeDriverScreen() {
         email,
         gender,
         city,
+        date_of_birth: dateOfBirth,
+        license_issue_date: licenseIssueDate,
         service_area_id: serviceAreaId || undefined,
         // Vehicle (send undefined if empty to avoid validation errors or "None" strings)
         vehicle_make: vehicleMake || undefined,
@@ -666,6 +680,9 @@ export default function BecomeDriverScreen() {
               {renderInput('First Name', firstName, setFirstName, 'John')}
               {renderInput('Last Name', lastName, setLastName, 'Doe')}
               {renderInput('Email', email, setEmail, 'john@example.com', 'email-address')}
+              {renderInput('Date of Birth (YYYY-MM-DD)', dateOfBirth, setDateOfBirth, '2000-01-31', 'numbers-and-punctuation', 10)}
+              {renderInput('Licence Issue Date (YYYY-MM-DD)', licenseIssueDate, setLicenseIssueDate, '2018-01-31', 'numbers-and-punctuation', 10)}
+              <Text style={styles.serviceAreaHint}>You must be 18 or older and have at least 3 years of licensed driving experience.</Text>
 
               <Text style={styles.label}>Gender</Text>
               <View style={styles.typeContainer}>

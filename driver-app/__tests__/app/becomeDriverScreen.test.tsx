@@ -146,6 +146,8 @@ async function fillPersonalAndAdvance(r: TestRenderer.ReactTestRenderer) {
   act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
   act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
   act(() => { inputs.find((i) => i.props.placeholder === 'john@example.com')!.props.onChangeText('jamie@example.com'); });
+  act(() => { inputs.find((i) => i.props.placeholder === '2000-01-31')!.props.onChangeText('2000-01-31'); });
+  act(() => { inputs.find((i) => i.props.placeholder === '2018-01-31')!.props.onChangeText('2018-01-31'); });
   const maleChip = findButtonByText(r, 'Male');
   act(() => { maleChip.props.onPress(); });
   const areaChip = findButtonByText(r, 'Saskatoon, SK');
@@ -467,6 +469,7 @@ describe('BecomeDriverScreen', () => {
     await act(async () => { await submitBtn.props.onPress(); await flush(); });
     expect(mockRegisterDriver).toHaveBeenCalledWith(expect.objectContaining({
       first_name: 'Jamie', last_name: 'Smith', email: 'jamie@example.com', gender: 'Male', service_area_id: 'sk-1',
+      date_of_birth: '2000-01-31', license_issue_date: '2018-01-31',
     }));
     expect(mockApiPost).toHaveBeenCalledWith('/drivers/crc-consent');
     const successAlert = (Alert.alert as jest.Mock).mock.calls.find((c) => c[0] === 'Success');
@@ -571,7 +574,7 @@ describe('BecomeDriverScreen', () => {
   it('restores a saved in-progress draft on mount', async () => {
     mockGetItem.mockResolvedValue(JSON.stringify({
       step: 1,
-      personal: { firstName: 'Drafted', lastName: 'Driver', email: 'd@example.com', gender: 'Female', city: 'Saskatoon' },
+      personal: { firstName: 'Drafted', lastName: 'Driver', email: 'd@example.com', gender: 'Female', city: 'Saskatoon', dateOfBirth: '1990-01-01', licenseIssueDate: '2015-01-01' },
       vehicle: { make: 'Honda', model: 'Civic', color: 'Blue', year: '2020', plate: 'XYZ 999', vin: '1H1', type: '' },
       docs: { licenseNumber: 'S9999', files: { 'req-1': { front: '/uploads/existing.jpg' } } },
     }));
@@ -579,6 +582,7 @@ describe('BecomeDriverScreen', () => {
     expect(allText(r)).toContain('Personal Info'); // restored to step 1
     const firstNameInput = r.root.findAllByType(TextInput).find((i) => i.props.placeholder === 'John')!;
     expect(firstNameInput.props.value).toBe('Drafted');
+    expect(r.root.findAllByType(TextInput).find((i) => i.props.placeholder === '2000-01-31')!.props.value).toBe('1990-01-01');
   });
 
   it('ignores a corrupt saved draft without crashing', async () => {

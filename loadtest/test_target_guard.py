@@ -2,6 +2,7 @@ import pytest
 
 from loadtest.target_guard import (
     guard_http_client,
+    guard_requests_session,
     validate_api_target,
     validate_cached_target,
     websocket_connection_options,
@@ -89,6 +90,19 @@ def test_http_client_allows_relative_and_same_origin_urls():
     client = guard_http_client(FakeClient())
     assert client.request("GET", "/health")[1] == "/health"
     assert client.request("GET", STAGING + "/health")[1] == STAGING + "/health"
+
+
+def test_requests_session_rejects_cross_origin_and_disables_redirects():
+    class FakeSession:
+        def request(self, method, url, **kwargs):
+            return method, url, kwargs
+
+    session = guard_requests_session(FakeSession(), STAGING)
+    method, url, kwargs = session.request("POST", STAGING + "/auth/send-otp")
+    assert (method, url) == ("POST", STAGING + "/auth/send-otp")
+    assert kwargs["allow_redirects"] is False
+    with pytest.raises(ValueError, match="cross-origin"):
+        session.request("POST", "https://api.spinr.ca/auth/send-otp")
 
 
 def test_websocket_client_is_forbidden_from_following_redirects():

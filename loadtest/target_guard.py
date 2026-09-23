@@ -116,6 +116,25 @@ def guard_http_client(client):
     return client
 
 
+def guard_requests_session(session, base_url: str):
+    """Reject cross-origin URLs and redirects for requests.Session callers."""
+    request = session.request
+    base_parts = urlsplit(base_url)
+    base_origin = _origin(f"{base_parts.scheme}://{base_parts.netloc}")
+
+    def no_redirects(method, url, *args, **kwargs):
+        absolute_url = urljoin(base_url, str(url))
+        target_parts = urlsplit(absolute_url)
+        target_origin = _origin(f"{target_parts.scheme}://{target_parts.netloc}")
+        if target_origin != base_origin:
+            raise ValueError("cross-origin load-test request is forbidden")
+        kwargs["allow_redirects"] = False
+        return request(method, url, *args, **kwargs)
+
+    session.request = no_redirects
+    return session
+
+
 def websocket_connection_options() -> dict[str, int]:
     """websocket-client follows redirects by default; zero forbids them."""
     return {"redirect_limit": 0}

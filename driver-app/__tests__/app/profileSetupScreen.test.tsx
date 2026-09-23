@@ -452,6 +452,8 @@ describe('ProfileSetupScreen', () => {
     act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
     act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
     act(() => { inputs.find((i) => i.props.placeholder === 'john.doe@example.com')!.props.onChangeText('jamie@example.com'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'YYYY-MM-DD')!.props.onChangeText('2000-01-02'); });
+    act(() => { inputs.filter((i) => i.props.placeholder === 'YYYY-MM-DD')[1]!.props.onChangeText('2018-01-02'); });
     act(() => { findButtonByText(r, 'Male').props.onPress(); });
     expect(findButtonByText(r, 'Create Profile').props.disabled).toBe(false);
   });

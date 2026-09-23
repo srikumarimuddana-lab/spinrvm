@@ -47,6 +47,21 @@ from loguru import logger
 # connect/disconnect against Redis). If this ever becomes hot we can
 # switch to pattern-subscribe per-{role} without a migration.
 CHANNEL = "spinr:ws:dispatch"
+OUTBOX_MAXLEN = 50
+OUTBOX_TTL_SECONDS = 300
+
+# Redis executes this script atomically with respect to concurrent publishers.
+# A command error after INCR can leave a sequence gap; Lua does not roll back
+# writes that happened before a runtime error.
+_DURABLE_PUBLISH_SCRIPT = """
+local seq = redis.call('INCR', KEYS[1])
+local message = '{"seq":' .. seq .. ',"data":' .. ARGV[3] .. '}'
+redis.call('RPUSH', KEYS[2], message)
+redis.call('LTRIM', KEYS[2], -tonumber(ARGV[4]), -1)
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[5]))
+redis.call('PUBLISH', ARGV[1], '{"kind":"unicast","client_id":' .. cjson.encode(ARGV[2]) .. ',"message":' .. message .. '}')
+return seq
+"""
 
 
 class _WSPubSub:
@@ -178,47 +193,41 @@ class _WSPubSub:
         if not self.active:
             return False
 
-        # Durable path is 2 Redis round-trips (was 3): one INCR for the seq
-        # (its result builds seq_message, so it can't fold into a
-        # non-transactional pipeline), then ONE pipeline that both buffers the
-        # outbox AND publishes.
-        seq_message: Any = message
-        buffered = False
-        if durable:
-            try:
-                seq = await self._redis.incr(f"spinr:ws:seq:{client_id}")
-                seq_message = {"seq": seq, "data": message}
-                buffered = True
-            except Exception as e:
-                logger.error(f"WS pub/sub: seq incr failed for {client_id}: {e}")
-                seq_message = message
-
         try:
-            body = json.dumps({"kind": "unicast", "client_id": client_id, "message": seq_message})
+            payload = json.dumps(message)
         except (TypeError, ValueError) as e:
             # Non-JSON-serialisable payloads would cause every message
             # to fail silently if we swallowed this; log loudly.
             logger.error(f"WS pub/sub: could not serialise message for {client_id}: {e}")
             return False
 
-        if buffered:
-            # Outbox writes + PUBLISH in a single round-trip.
+        if durable:
+            # Sequence assignment, outbox append/retention, and publish share
+            # one atomic Redis operation so later sequences cannot overtake an
+            # earlier publisher that is still between INCR and RPUSH.
             try:
-                outbox_key = f"spinr:ws:outbox:{client_id}"
-                pipe = self._redis.pipeline(transaction=False)
-                pipe.rpush(outbox_key, json.dumps(seq_message))
-                pipe.ltrim(outbox_key, -50, -1)
-                pipe.expire(outbox_key, 300)
-                pipe.publish(CHANNEL, body)
-                await pipe.execute()
+                await self._redis.eval(
+                    _DURABLE_PUBLISH_SCRIPT,
+                    2,
+                    f"spinr:ws:seq:{client_id}",
+                    f"spinr:ws:outbox:{client_id}",
+                    CHANNEL,
+                    client_id,
+                    payload,
+                    OUTBOX_MAXLEN,
+                    OUTBOX_TTL_SECONDS,
+                )
                 return True
             except Exception as e:
-                # Durability bookkeeping failed — still deliver via a bare
-                # publish below rather than dropping the event.
-                logger.error(f"WS pub/sub: durable pipeline failed for {client_id}, bare-publishing: {e}")
+                # If durability is unavailable, keep local delivery working
+                # with the established unwrapped, non-replayable fallback.
+                logger.error(f"WS pub/sub: durable publish failed for {client_id}, bare-publishing: {e}")
 
         try:
-            await self._redis.publish(CHANNEL, body)
+            await self._redis.publish(
+                CHANNEL,
+                json.dumps({"kind": "unicast", "client_id": client_id, "message": message}),
+            )
             return True
         except Exception as e:
             logger.opt(exception=True).error(f"WS pub/sub: publish failed, falling back to local delivery: {e}")

@@ -65,21 +65,60 @@ class TestEmailDriverStatement:
             )
         assert exc.value.status_code == 422
 
-    async def test_misaligned_weekly_anchor_is_422(self):
+    @pytest.mark.parametrize(
+        "period_type,period_start",
+        [("weekly", "2026-07-21"), ("monthly", "2026-07-02")],
+    )
+    async def test_misaligned_anchor_is_fixed_422_without_email(self, period_type, period_start):
         from backend.routes.drivers.tax_exports import email_driver_statement
 
+        bg = BackgroundTasks()
         with patch(
             "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(return_value=[{"id": "drv-1", "user_id": DRIVER_USER_ID}]),
         ):
             with pytest.raises(HTTPException) as exc:
                 await email_driver_statement(
-                    background_tasks=BackgroundTasks(),
-                    period_type="weekly",
-                    period_start="2026-07-21",  # Tuesday
+                    background_tasks=bg,
+                    period_type=period_type,
+                    period_start=period_start,
                     current_user=_user(),
                 )
         assert exc.value.status_code == 422
+        assert (
+            exc.value.detail
+            == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        )
+        assert not bg.tasks
+
+    async def test_arbitrary_period_validation_error_is_redacted_and_does_not_email(self):
+        from backend.routes.drivers.tax_exports import email_driver_statement
+
+        bg = BackgroundTasks()
+        with (
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "drv-1", "user_id": DRIVER_USER_ID}]),
+            ),
+            patch(
+                "backend.utils.driver_statement.build_statement",
+                AsyncMock(side_effect=ValueError("private validator detail")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await email_driver_statement(
+                    background_tasks=bg,
+                    period_type="weekly",
+                    period_start="2026-07-20",
+                    current_user=_user(),
+                )
+        assert exc.value.status_code == 422
+        assert (
+            exc.value.detail
+            == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        )
+        assert "private validator detail" not in exc.value.detail
+        assert not bg.tasks
 
     async def test_no_email_on_file_is_400(self):
         from backend.routes.drivers.tax_exports import email_driver_statement

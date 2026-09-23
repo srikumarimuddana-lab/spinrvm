@@ -256,6 +256,41 @@ def test_ws_valid_auth_accepted(app_with_ws):
         _stop_patches(patches)
 
 
+def test_ws_reconnect_replays_only_messages_after_last_sequence(app_with_ws):
+    """The actual endpoint resumes from last_seq without replaying old frames."""
+    firebase_payload = {
+        "uid": _RIDER_USER["id"],
+        "phone_number": _RIDER_USER["phone"],
+        "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
+    }
+    outbox = [
+        {"seq": 4, "data": {"type": "ride_offered", "id": "old"}},
+        {"seq": 5, "data": {"type": "ride_offered", "id": "first"}},
+        {"seq": 6, "data": {"type": "ride_status_changed", "id": "second"}},
+    ]
+    get_outbox = AsyncMock(return_value=outbox)
+    patches = _start_patches(
+        patch("backend.routes.websocket.settings", _rider_settings_mock()),
+        patch("backend.routes.websocket.firebase_auth.verify_id_token", return_value=firebase_payload),
+        patch("backend.routes.websocket.db_supabase.get_user_by_id", new=AsyncMock(return_value=_RIDER_USER)),
+        patch("backend.routes.websocket.db_supabase.get_rows", new=AsyncMock(return_value=[])),
+        patch("backend.routes.websocket.db.find_one", new=AsyncMock(return_value=None)),
+        patch("backend.routes.websocket.manager.broadcast_to_admins", new=AsyncMock(return_value=None)),
+        patch("backend.utils.ws_pubsub.pubsub.get_outbox", new=get_outbox),
+    )
+    try:
+        client = TestClient(app_with_ws)
+        with client.websocket_connect(f"/ws/rider/{_RIDER_USER['id']}?last_seq=4") as ws:
+            ws.send_json({"type": "auth", "token": "valid-firebase-token"})
+            assert ws.receive_json()["type"] == "auth_success"
+            assert ws.receive_json() == outbox[1]
+            assert ws.receive_json() == outbox[2]
+        get_outbox.assert_awaited_once_with(f"rider_{_RIDER_USER['id']}")
+    finally:
+        _stop_patches(patches)
+
+
 # ── Test 3: invalid token rejected ───────────────────────────────────────────
 
 

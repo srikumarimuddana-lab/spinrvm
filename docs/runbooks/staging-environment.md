@@ -80,7 +80,7 @@ staging project too — there is no PIPEDA exception for "it's just staging."
   `CLAUDE.md`'s Required Environment Variables section. None of these may be
   copied from production.
 
-### 3. Register the two new GitHub secrets
+### 3. Register the staging-only GitHub secrets
 
 In GitHub → repo → Settings → Secrets and variables → Actions, add:
 
@@ -89,20 +89,49 @@ In GitHub → repo → Settings → Secrets and variables → Actions, add:
 | `FLY_API_TOKEN_STAGING` | A deploy-scoped token for `spinr-backend-staging` only: `fly tokens create deploy -a spinr-backend-staging`. Not the production `FLY_API_TOKEN`. |
 | `SUPABASE_STAGING_URL` | The staging Supabase project's URL. Not the production `SUPABASE_URL`. |
 | `SUPABASE_STAGING_SERVICE_ROLE_KEY` | The staging Supabase project's service-role key. Not the production `SUPABASE_SERVICE_ROLE_KEY`. |
+| `FLY_HEALTH_URL_STAGING` | Exactly `https://spinr-backend-staging.fly.dev`; the workflow requires this URL for `/ready`. |
+| `METRICS_AUTH_TOKEN_STAGING` | Staging-only bearer token accepted by `/deploy-info`; used to verify baseline and candidate build SHAs. |
 
-Optionally, `FLY_HEALTH_URL_STAGING` (e.g. `https://spinr-backend-staging.fly.dev`)
-enables the post-deploy health probe in the workflow; it is skipped safely
-if left unset.
+Do not use production Fly, Supabase, or metrics credentials here. The workflow
+fails before any Fly mutation when a required value is missing or the health URL
+does not match the staging app.
 
 ### 4. Create the `staging` branch and push
 
-Once the app and secrets exist, `.github/workflows/deploy-backend-staging.yml`
-takes over automatically: pushing `backend/**` changes to a `staging` branch
-(or running the workflow manually via `workflow_dispatch`) deploys
-`backend/fly.staging.toml` to `spinr-backend-staging`, staging the two
-Supabase secrets into Fly first. No further workflow changes should be
-needed — verify the health check passes, then the environment is live for
-E2/E4 work.
+Once the empty Fly app, secrets, and synthetic Supabase project exist,
+`.github/workflows/deploy-backend-staging.yml` takes over automatically.
+The first deployment is a bootstrap: with no existing Machine there is no prior
+image to restore. It stamps and verifies the new build. On later deployments,
+the workflow first requires the existing `/ready` endpoint and an authenticated
+`/deploy-info` build SHA, captures that Machine's immutable image digest, and
+loads `backend/fly.staging.toml` from the exact served commit. It verifies the
+config hash and saves only the snapshot metadata plus nonsecret TOML as a
+30-day Actions artifact before staging secrets or deploying. If a nonempty app
+has no valid SHA/image/config baseline, it fails closed; do not delete Machines
+to bypass that check.
+
+Every candidate must pass `/ready` and return its exact `GITHUB_SHA` from
+`/deploy-info`. After a candidate deploy/readiness/SHA failure, recovery deploys
+the recorded image digest with the saved config, then checks `/ready` and the
+prior served SHA. The candidate workflow remains failed even if restore succeeds.
+Before each candidate deployment, the workflow stages `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, and `METRICS_AUTH_TOKEN` from the corresponding
+staging-only GitHub secrets into the staging Fly app. The metrics token is
+required for `/deploy-info` probes after deployment. Fly runtime secrets are
+not snapshotted; do not rotate staging secrets during a recovery drill. A failed
+initial bootstrap has no image to restore.
+
+After the first successful bootstrap, test the recovery path from a **different
+commit SHA** so prior and candidate build stamps are distinguishable. Create a
+drill branch from the known-good staging baseline, make a comment-only change
+to `backend/fly.staging.toml`, then manually dispatch the workflow on that branch
+with `force_recovery_test_failure=true`. The workflow deploys the new SHA,
+injects a failure after readiness/SHA checks, redeploys the earlier image and
+config, and intentionally ends failed. Confirm the log reports restoration to
+the prior SHA and inspect the snapshot artifact for the expected image digest
+and config hash; it must contain no Machine JSON or secrets. No staging
+database, wallet, or financial data is reversed. Do not run this drill on
+production.
 
 ## What NOT to do
 

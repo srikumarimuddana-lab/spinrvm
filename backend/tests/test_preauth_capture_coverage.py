@@ -13,7 +13,8 @@ file closes:
   receipt-send exception being swallowed (logged, not re-raised) rather
   than aborting the capture.
 - `preauth_capture_loop`: lock-not-acquired skips the tick and re-loops,
-  lock-acquired runs the tick, a tick exception is caught and logged (loop
+  lock acquisition errors fail closed and recover on a later acquisition,
+  cancellation propagates, a tick exception is caught and logged (loop
   survives), and the heartbeat/jitter-sleep call on every iteration.
 - `_pod_id`'s hostname:pid shape, `_d`/`_round`'s None/Decimal-string
   coercion.
@@ -123,13 +124,16 @@ async def test_loop_lock_not_acquired_skips_tick_and_sleeps():
         patch(P + "redis_set_nx", AsyncMock(return_value=False)),
         patch(P + "_capture_tick", tick),
         patch(P + "asyncio.sleep", fake_sleep),
-        patch(P + "_record_heartbeat"),
+        patch(P + "_record_heartbeat") as heartbeat,
+        patch(P + "_record_dependency_failure") as failure,
     ):
         from backend.utils.preauth_capture import preauth_capture_loop
 
         with pytest.raises(asyncio.CancelledError):
             await preauth_capture_loop()
     tick.assert_not_awaited()
+    heartbeat.assert_called_once()
+    failure.assert_not_called()
 
 
 async def test_loop_lock_acquired_runs_tick():
@@ -152,11 +156,8 @@ async def test_loop_lock_acquired_runs_tick():
     mock_hb.assert_called_once()
 
 
-async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
-    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
-    instead of silently falling back per-replica. Previously this call sat
-    directly in `while True:` with no surrounding try/except -- an
-    unhandled exception here would have killed the loop task permanently."""
+async def test_loop_survives_a_redis_lock_error_without_running_the_tick():
+    """A missing distributed lock must not authorize a money-moving tick."""
     tick = AsyncMock()
 
     async def fake_sleep(secs):
@@ -167,13 +168,66 @@ async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
         patch(P + "_capture_tick", tick),
         patch(P + "asyncio.sleep", fake_sleep),
         patch(P + "_record_heartbeat") as mock_hb,
+        patch(P + "_record_dependency_failure") as failure,
     ):
         from backend.utils.preauth_capture import preauth_capture_loop
 
         with pytest.raises(asyncio.CancelledError):
             await preauth_capture_loop()
+    tick.assert_not_awaited()
+    mock_hb.assert_not_called()
+    failure.assert_called_once_with("preauth_capture (5min)")
+
+
+async def test_loop_recovers_after_lock_error_and_cancellation_propagates(caplog):
+    tick = AsyncMock()
+    sleeps = 0
+    from backend.utils import metrics
+
+    lock_unavailable_key = (("loop", "preauth_capture"),)
+    before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(lock_unavailable_key, 0)
+
+    async def fake_sleep(secs):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch(
+            P + "redis_set_nx",
+            AsyncMock(side_effect=[ConnectionError("credential-bearing redis detail"), True]),
+        ) as lock,
+        patch(P + "_capture_tick", tick),
+        patch(P + "asyncio.sleep", fake_sleep),
+        patch(P + "_record_heartbeat") as mock_hb,
+        patch(P + "_record_dependency_failure") as failure,
+    ):
+        from backend.utils.preauth_capture import preauth_capture_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await preauth_capture_loop()
+    assert lock.await_count == 2
     tick.assert_awaited_once()
-    mock_hb.assert_called_once()
+    assert mock_hb.call_count == 1
+    failure.assert_called_once_with("preauth_capture (5min)")
+    assert "credential-bearing redis detail" not in caplog.text
+    assert "ConnectionError" in caplog.text
+    after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][lock_unavailable_key]
+    assert after == before + 1
+
+
+async def test_loop_propagates_cancellation_during_lock_acquisition():
+    tick = AsyncMock()
+    with (
+        patch(P + "redis_set_nx", AsyncMock(side_effect=asyncio.CancelledError())),
+        patch(P + "_capture_tick", tick),
+    ):
+        from backend.utils.preauth_capture import preauth_capture_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await preauth_capture_loop()
+    tick.assert_not_awaited()
 
 
 async def test_loop_survives_tick_exception():

@@ -194,7 +194,39 @@ jobs:
         # an emulator, so this step works unmodified on a plain
         # ubuntu-latest runner. Non-zero exit on any flow failure fails
         # the job, same as any other CI test step.
-        run: maestro cloud app.apk "../${{ matrix.app.flows }}" --app-id "${{ matrix.app.appId }}"
+        run: |
+          mkdir -p maestro-results
+          maestro cloud app.apk "../${{ matrix.app.flows }}" --app-id "${{ matrix.app.appId }}" --format junit --output maestro-results/report.xml
+
+      - name: Require at least one executed Maestro flow
+        if: always()
+        working-directory: ${{ matrix.app.dir }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = "maestro-results/report.xml"
+          try:
+              root = ET.parse(path).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"Maestro report missing or invalid ({type(exc).__name__})")
+
+          cases = list(root.iter("testcase"))
+          executed = sum(case.find("skipped") is None for case in cases)
+          if executed == 0:
+              sys.exit(f"Maestro report contains no executed flows (cases={len(cases)})")
+          print(f"Maestro completed-flow proof: {executed} executed testcase(s)")
+          PY
+
+      - name: Upload Maestro Cloud execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: maestro-cloud-results-${{ matrix.app.dir }}
+          path: ${{ matrix.app.dir }}/maestro-results/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload EAS build metadata (debugging aid on failure)
         if: failure()

@@ -43,6 +43,7 @@ ad-hoc smoke tests when no cache exists.
 
 ```bash
 export LOADTEST_BASE_URL=https://staging-api.spinr.ca
+export LOADTEST_ALLOWED_ORIGINS=https://staging-api.spinr.ca
 mkdir -p results
 
 # One-time pre-auth pass (paced at 4 logins/min, ~15 min for 60 bots).
@@ -61,6 +62,34 @@ locust -f locustfile.py --headless -u 60 -r 2 -t 10m \
 locust -f locustfile.py --headless -u 600 -r 4 -t 30m \
   --host "$LOADTEST_BASE_URL" --csv results/ramp
 ```
+
+Set `LOADTEST_ALLOWED_ORIGINS` to the exact origin used by `LOADTEST_BASE_URL`
+before running either `preauth_bots.py` or Locust. For more than one approved
+staging target, provide a comma-separated list of exact origins (scheme,
+hostname, and optional nondefault port; no paths). Production API origins are
+always refused. Locust checks this setting before any bot request and refuses
+to use a token cache whose recorded `base_url` differs from the selected host.
+
+### Seeding bot accounts
+
+The seeder must point at the intended nonproduction Supabase project. Set
+`ENV` to an allowed nonproduction value and set
+`EXPECTED_SUPABASE_PROJECT_REF` independently from `SUPABASE_URL` to that
+project's exact 20-character project ref. The script validates both before
+initializing its database client and refuses the known production project or
+any mismatch. For example, with credentials sourced from a protected staging
+environment, run from the repository root:
+
+```bash
+export ENV=staging
+export SUPABASE_URL='https://<staging-project-ref>.supabase.co'
+export SUPABASE_SERVICE_ROLE_KEY='<staging service role key>'
+export EXPECTED_SUPABASE_PROJECT_REF='<exact 20-character staging project ref>'
+python backend/scripts/seed_loadtest_bots.py --riders 45 --drivers 15
+```
+
+Use the real project ref in both places; do not use the placeholder text above.
+The `--cleanup` operation is destructive and separately requires `--yes`.
 
 The 3:1 rider:driver weight matches a supply-constrained Saturday night;
 override with class picking (`locust -f locustfile.py RiderBot DriverBot`).

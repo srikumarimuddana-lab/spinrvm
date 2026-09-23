@@ -494,7 +494,15 @@ async def email_driver_statement(
         statement = await build_statement(driver, period_type, start_d, driver_name=driver_name)
     except ValueError as e:
         # Misaligned anchor (weekly not a Monday / monthly not the 1st).
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        logger.warning(
+            "Rejected driver statement period (type=%s, validation_error=%s)",
+            period_type,
+            type(e).__name__,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Choose a Monday for weekly statements or the first day of the month for monthly statements.",
+        ) from None
 
     background_tasks.add_task(_email_statement_document, current_user["id"], email, statement)
     return {"message": f"Your earnings statement for {statement['period_label']} is on its way. Check your email."}

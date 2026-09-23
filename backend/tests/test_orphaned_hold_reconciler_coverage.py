@@ -145,6 +145,7 @@ async def test_loop_initial_stagger_sleep_then_skips_when_lock_not_acquired():
         patch("backend.utils.orphaned_hold_reconciler.redis_set_nx", AsyncMock(return_value=False)),
         patch("backend.utils.orphaned_hold_reconciler.reconcile_tick", reconcile_mock),
         patch("backend.utils.orphaned_hold_reconciler._record_heartbeat", lambda name: heartbeats.append(name)),
+        patch("backend.utils.orphaned_hold_reconciler._record_dependency_failure") as failure,
     ):
         from backend.utils.orphaned_hold_reconciler import RECONCILE_INTERVAL_SECONDS, orphaned_hold_reconciler_loop
 
@@ -159,14 +160,12 @@ async def test_loop_initial_stagger_sleep_then_skips_when_lock_not_acquired():
     assert sleep_calls[1] == sleep_calls[2] == RECONCILE_INTERVAL_SECONDS
     reconcile_mock.assert_not_awaited()
     assert heartbeats  # heartbeat still recorded even when skipping
+    failure.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
-    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
-    instead of silently falling back per-replica. Previously this call sat
-    directly in `while True:` with no surrounding try/except -- an
-    unhandled exception here would have killed the loop task permanently."""
+async def test_loop_survives_a_redis_lock_error_without_running_the_tick():
+    """A missing distributed lock must not authorize an orphan release tick."""
     sleep_calls: list[float] = []
 
     async def fake_sleep(seconds):
@@ -184,13 +183,54 @@ async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick():
         ),
         patch("backend.utils.orphaned_hold_reconciler.reconcile_tick", reconcile_mock),
         patch("backend.utils.orphaned_hold_reconciler._record_heartbeat", MagicMock()),
+        patch("backend.utils.orphaned_hold_reconciler._record_dependency_failure") as failure,
     ):
         from backend.utils.orphaned_hold_reconciler import orphaned_hold_reconciler_loop
 
         with pytest.raises(_StopLoop):
             await orphaned_hold_reconciler_loop()
 
+    reconcile_mock.assert_not_awaited()
+    failure.assert_called_once_with("orphaned_hold_reconciler (15m)")
+
+
+@pytest.mark.anyio
+async def test_loop_recovers_after_lock_error_and_redacts_diagnostic(caplog):
+    sleep_calls: list[float] = []
+    metric_key = (("loop", "orphaned_hold_reconciler"),)
+    from backend.utils import metrics
+
+    before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(metric_key, 0)
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        # startup stagger, failed-lock retry delay, then successful tick delay
+        if len(sleep_calls) == 3:
+            raise _StopLoop()
+
+    reconcile_mock = AsyncMock(return_value={"found": 0})
+    lock = AsyncMock(side_effect=[ConnectionError("private redis credential"), True])
+    with (
+        patch("asyncio.sleep", fake_sleep),
+        patch("backend.utils.orphaned_hold_reconciler.redis_set_nx", lock),
+        patch("backend.utils.orphaned_hold_reconciler.reconcile_tick", reconcile_mock),
+        patch("backend.utils.orphaned_hold_reconciler._record_heartbeat", MagicMock()) as heartbeat,
+        patch("backend.utils.orphaned_hold_reconciler._record_dependency_failure") as failure,
+        caplog.at_level(logging.ERROR),
+    ):
+        from backend.utils.orphaned_hold_reconciler import orphaned_hold_reconciler_loop
+
+        with pytest.raises(_StopLoop):
+            await orphaned_hold_reconciler_loop()
+
+    assert lock.await_count == 2
     reconcile_mock.assert_awaited_once()
+    assert heartbeat.call_count == 1
+    failure.assert_called_once_with("orphaned_hold_reconciler (15m)")
+    assert "private redis credential" not in caplog.text
+    assert "ConnectionError" in caplog.text
+    after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][metric_key]
+    assert after == before + 1
 
 
 @pytest.mark.anyio

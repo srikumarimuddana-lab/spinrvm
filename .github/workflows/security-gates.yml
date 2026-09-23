@@ -699,6 +699,12 @@ jobs:
             --file backend/Dockerfile \
             --tag spinr-backend:sec-${{ github.sha }} \
             backend/
+      - name: Verify migration entrypoint in built image
+        run: |
+          docker run --rm --network none --entrypoint python spinr-backend:sec-${{ github.sha }} \
+            -c 'import psycopg; import scripts.run_migrations as m; assert m._discover_migrations(); assert (m.MIGRATIONS_DIR / m.TRACKING_TABLE_MIGRATION).is_file()'
+          docker run --rm --network none --entrypoint python spinr-backend:sec-${{ github.sha }} \
+            -m scripts.run_migrations --help
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

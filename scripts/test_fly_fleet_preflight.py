@@ -9,7 +9,7 @@ import unittest
 from fly_fleet_preflight import validate
 
 
-def fleet(app=2, burst=6):
+def fleet(app=2, burst=6, workers=0):
     return [
         {
             "id": f"{group}-{i}",
@@ -17,7 +17,7 @@ def fleet(app=2, burst=6):
             "state": "stopped",
             "config": {"metadata": {"fly_process_group": group}},
         }
-        for group, count in (("app", app), ("burst", burst))
+        for group, count in (("app", app), ("burst", burst), ("worker", workers))
         for i in range(count)
     ]
 
@@ -31,6 +31,31 @@ class FleetPreflightTests(unittest.TestCase):
         for machines in (fleet(), fleet(2, 3), fleet(1, 0), []):
             with self.subTest(count=len(machines)):
                 validate(machines)
+
+    def test_worker_profile_is_explicit_and_keeps_total_at_eight(self):
+        # The historical profile remains unchanged; workers require opt-in.
+        validate(fleet())
+        with self.assertRaises(ValueError):
+            validate(fleet(2, 5, 1))
+        validate(fleet(2, 5, 1), workers=1)
+        validate(fleet(1, 0, 1), workers=1)
+        for machines in (fleet(2, 6, 1), fleet(2, 5, 2)):
+            with self.subTest(machines=machines):
+                with self.assertRaises(ValueError):
+                    validate(machines, workers=1)
+
+    def test_worker_profile_requires_explicit_cli_option(self):
+        script = Path(__file__).with_name("fly_fleet_preflight.py")
+        payload = json.dumps(fleet(2, 5, 1))
+        for args, expected in (([], 1), (["--workers", "1"], 0)):
+            result = subprocess.run(
+                [sys.executable, str(script), *args],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_rejects_excess_unknown_group_region_and_duplicates(self):
         bad_group, bad_region, duplicate = fleet(), fleet(), fleet()

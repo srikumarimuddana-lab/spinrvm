@@ -1611,11 +1611,8 @@ jobs:
         run: python3 scripts/check_mobile_test_placement.py
 
   # ─── 7. Change Impact & Risk Log gate ─────────────────────────────────────
-  # CLAUDE.md: any PR touching a live-tested surface (rides, dispatch,
-  # payments, auth, corporate, safety) must include a filled Change Impact
-  # & Risk Log — either pasted into the PR description or added under
-  # docs/change-log/. This gate only checks presence/shape of the required
-  # sections, not their content quality — that's still a human reviewer's job.
+  # Checks required fields and sensitive-path coverage. Risk/evidence truth
+  # remains a reviewer responsibility; this parser checks structure only.
   change-impact-log-gate:
     name: Change Impact & Risk Log check
     runs-on: ubuntu-latest
@@ -1625,112 +1622,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install validator test runner
+        run: python -m pip install pytest==9.1.1
+
+      - name: Test Change Impact validator
+        run: python -m pytest scripts/test_check_change_impact.py -q
+
       - name: Verify Change Impact Log present for sensitive-surface PRs
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # PR and merge-queue SHAs remain authoritative. For manual runs,
+          # pass the branch name through the environment; the validator
+          # resolves it to refs/remotes/origin/<branch> when checkout has no
+          # local branch (as is typical on GitHub-hosted runners).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.base_branch || 'main' }}
+          HEAD_SHA: ${{ github.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          python3 - <<'PYEOF'
-          import os, re, subprocess, sys
-
-          BASE_SHA = os.environ.get('BASE_SHA', '')
-          HEAD_SHA = os.environ.get('HEAD_SHA', '')
-          PR_BODY = os.environ.get('PR_BODY') or ''
-
-          # Diff from the actual merge-base, not raw BASE_SHA.
-          # `pull_request.base.sha` is the base branch's CURRENT tip, which
-          # keeps moving as main advances -- a PR branch that hasn't
-          # rebased/merged main in a while would otherwise show every file
-          # main gained since the PR's fork point as "changed by this PR",
-          # tripping this gate on files the PR never touched. Same bug class
-          # already found and fixed in migration-check.yml (PR #3497) --
-          # mirroring that fix here rather than reinventing it. Found
-          # 2026-08-21 on PR #4319: a stale BASE_SHA made the two-dot diff
-          # surface backend/migrations/356_legacy_consent_notice_enabled_flag.sql
-          # as "changed" even though this PR touches only CI workflow files
-          # and one new doc.
-          merge_base_result = subprocess.run(
-              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
-              capture_output=True, text=True,
-          )
-          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
-
-          result = subprocess.run(
-              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
-              capture_output=True, text=True,
-          )
-          changed = [f for f in result.stdout.strip().split('\n') if f]
-
-          # Path substrings that mark a "live-tested surface" per CLAUDE.md's
-          # own Change Impact Log policy (rides, dispatch, payments, auth,
-          # corporate, safety). Kept as substrings, not exact paths, so it
-          # still catches new files in these domains without maintenance.
-          SENSITIVE_MARKERS = [
-              'backend/routes/rides', 'backend/services/dispatch_service',
-              'backend/services/fare_service', 'backend/routes/payments',
-              'backend/routes/webhooks', 'backend/routes/auth.py',
-              'backend/routes/corporate', 'backend/services/corporate',
-              'backend/routes/wallet', 'backend/routes/safety.py',
-              'backend/utils/insurance_periods', 'backend/services/payment_service',
-              'backend/routes/drivers/ride_', 'backend/routes/drivers/status',
-              'backend/routes/drivers/payouts', 'backend/migrations/',
-          ]
-
-          touched = [f for f in changed if any(m in f for m in SENSITIVE_MARKERS)]
-
-          if not touched:
-              print("PASS: No live-tested-surface files changed — Change Impact Log not required.")
-              sys.exit(0)
-
-          print(f"Live-tested-surface files changed: {touched}")
-
-          # Required fields, per docs/templates/CHANGE_IMPACT_LOG.md. Matched
-          # loosely (case-insensitive substring) since PR authors may adapt
-          # heading style slightly — this checks presence, not formatting.
-          REQUIRED_MARKERS = [
-              'root cause',
-              'risk & impact',
-              'user experience',
-              'rollback plan',
-              'verification performed',
-          ]
-
-          # Accept either: (a) the PR body contains the required sections, or
-          # (b) this PR adds a docs/change-log/*.md file (also checked for markers).
-          change_log_added = [
-              f for f in changed
-              if f.startswith('docs/change-log/') and f.endswith('.md')
-          ]
-
-          # Normalize hyphens to spaces before matching — the template itself
-          # uses hyphenated headings in places (e.g. "## 5. User-experience
-          # effect"), and a literal-substring match against 'user experience'
-          # (space) would false-negative on that exact heading. Found via a
-          # real false-positive on this gate's own first production run.
-          def _normalize(text):
-              return text.lower().replace('-', ' ')
-
-          candidate_text = _normalize(PR_BODY)
-          for f in change_log_added:
-              try:
-                  candidate_text += '\n' + _normalize(open(f, encoding='utf-8').read())
-              except OSError:
-                  pass
-
-          missing = [m for m in REQUIRED_MARKERS if m not in candidate_text]
-
-          if missing:
-              print("FAIL: This PR touches a live-tested surface but is missing a Change Impact & Risk Log.")
-              print(f"Missing section(s): {missing}")
-              print()
-              print("Fix: paste a filled docs/templates/CHANGE_IMPACT_LOG.md into the PR description,")
-              print("or add docs/change-log/YYYY-MM-DD-<short-slug>.md with the same sections.")
-              print("See CLAUDE.md → 'Change Impact & Risk Log (mandatory)'.")
-              sys.exit(1)
-          else:
-              print("PASS: Change Impact & Risk Log present and covers required sections.")
-          PYEOF
+        run: python scripts/check_change_impact.py
 
   # ─── 8. Risk label bot ────────────────────────────────────────────────────
   # Informational only (never blocks): labels the PR risk:high / risk:medium /
@@ -1844,6 +1755,31 @@ jobs:
               }).catch(() => {});
             }
 
+  # These helper suites are intentionally independent of app credentials,
+  # external services, and the backend test environment. Keep their runtime
+  # dependencies explicit so the guard logic runs even when backend setup fails.
+  offline-helper-tests:
+    name: Offline guard helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned test dependencies
+        run: python -m pip install pytest==9.1.1 PyYAML==6.0.3
+
+      - name: Test offline safety helpers
+        run: >-
+          python -m pytest -q
+          scripts/test_validate_dast.py
+          scripts/test_payment_failure_alert.py
+          loadtest/test_target_guard.py
+
   # ─── Guard rail summary comment on PR ─────────────────────────────────────
   guardrail-summary:
     name: Post guard rail summary
@@ -1859,6 +1795,7 @@ jobs:
       - breaking-change-gate
       - mobile-test-placement-gate
       - change-impact-log-gate
+      - offline-helper-tests
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
@@ -1876,6 +1813,7 @@ jobs:
               'Breaking Changes':     '${{ needs.breaking-change-gate.result }}',
               'Test Placement':       '${{ needs.mobile-test-placement-gate.result }}',
               'Change Impact Log':    '${{ needs.change-impact-log-gate.result }}',
+              'Offline Guard Helpers': '${{ needs.offline-helper-tests.result }}',
             };
 
             const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';

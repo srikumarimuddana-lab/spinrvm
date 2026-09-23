@@ -4,22 +4,19 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'backend/**'
-      - 'backend/fly.toml'
-      - '.github/workflows/deploy-fly.yml'
-      - 'scripts/fly_fleet_preflight.py'
-      - 'scripts/test_fly_fleet_preflight.py'
-  workflow_dispatch:
 
-# Serialize deploys: rapid successive merges to main (or a manual dispatch racing
-# a push) otherwise launch overlapping `flyctl deploy` runs against the same app,
-# and the second one gets superseded mid-rollout and Fly marks the release failed.
-# Queue instead of cancel — never abort an in-flight production rollout, and never
-# skip a commit's deploy (cancel-in-progress would drop the queued newer commit).
+# Serialize deploys: rapid successive merges otherwise launch overlapping
+# `flyctl deploy` runs against the same app. Runs whose SHA is no longer main
+# fail the CI gate before secrets are staged or a release is attempted. Every
+# main push triggers this workflow: a docs-only push can advance main while an
+# older backend deploy waits for CI, and must start a fresh exact-SHA deploy.
 concurrency:
   group: deploy-fly-spinr-backend-yyz
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
 
 # Fly.io runs the backend in yyz (Toronto) alongside Railway. Both providers
 # deploy from main in parallel so the Fly app never drifts behind the primary.
@@ -33,23 +30,32 @@ concurrency:
 #      (important: DSN, not DNS). The workflow stages it into Fly secrets before
 #      deploying so the backend can initialize Sentry at startup.
 #
-# Optional: set FLY_HEALTH_URL (e.g. https://spinr-backend-yyz.fly.dev) to enable
-# the post-deploy health probe. Leave unset in forks to skip it.
+# Production secrets required: FLY_HEALTH_URL must be exactly
+# https://spinr-backend-yyz.fly.dev, METRICS_AUTH_TOKEN must authorize /deploy-info,
+# FLY_API_TOKEN must deploy this Fly app, and SENTRY_DSN must initialize Sentry.
+# Missing probe configuration blocks the job before any Fly secret is staged.
 
 jobs:
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
-    # Hoisted to job env because the `secrets` context is not available in a step
-    # `if:` conditional — gate the health probe on `env.FLY_HEALTH_URL` instead.
     env:
       FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
-      # Optional: the backend's own METRICS_AUTH_TOKEN. With FLY_HEALTH_URL it
-      # enables the post-deploy "is the new SHA actually serving" check.
       METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Wait for exact-SHA backend and security gates
+        run: python3 scripts/fly_deploy_gate.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify production probe configuration
+        run: python3 scripts/fly_deploy_gate.py --check-probes
+        env:
+          FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+          METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
 
       - name: Verify FLY_API_TOKEN is set
         run: |
@@ -135,8 +141,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       # Poll /ready for up to 3 minutes (18 × 10 s) on the Fly app domain.
-      # Set FLY_HEALTH_URL to https://spinr-backend-yyz.fly.dev in repo secrets
-      # (or leave unset to skip the probe in forks/staging).
       #
       # /ready, NOT /health: this is a deploy gate, so it must fail when the new
       # build cannot reach Supabase (F1's original protection). /health is now
@@ -145,7 +149,6 @@ jobs:
       # block comment in backend/server.py.
       - name: Readiness check
         id: health
-        if: ${{ env.FLY_HEALTH_URL != '' }}
         run: |
           echo "Polling ${FLY_HEALTH_URL}/ready …"
           for i in $(seq 1 18); do
@@ -164,10 +167,8 @@ jobs:
           exit 1
 
       # A green /ready only proves *something* is serving. This proves it is
-      # THIS commit: /deploy-info returns the build stamp written above. Skipped
-      # (not failed) when either optional secret is absent.
+      # THIS commit: /deploy-info returns the build stamp written above.
       - name: Verify the deployed build SHA is serving
-        if: ${{ env.FLY_HEALTH_URL != '' && env.METRICS_AUTH_TOKEN != '' }}
         run: |
           set -euo pipefail
           for i in $(seq 1 12); do

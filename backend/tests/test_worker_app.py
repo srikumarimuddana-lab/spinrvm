@@ -30,9 +30,15 @@ def _patch_loops():
 
 
 @pytest.fixture
-def worker_client(monkeypatch):
+def worker_client(monkeypatch, request):
     monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
     monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    selection = getattr(request, "param", None)
+    if selection is not None:
+        monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", selection)
+    else:
+        monkeypatch.delenv("SPINR_WORKER_LOOP_ALLOWLIST", raising=False)
     patches = list(_patch_loops())
     for p in patches:
         p.start()
@@ -89,6 +95,66 @@ def test_health_ok_when_supervised_tasks_running(worker_client):
     assert body["status"] == "healthy"
     assert set(body["tasks"]) == set(worker_mod.WORKER_LOOP_NAMES)
     assert all(item["running"] is True for item in body["tasks"].values())
+
+
+@pytest.mark.parametrize(
+    "worker_client",
+    ["push_retry (30s)", "zoho_desk_sync (10min)", "driver_onboarding_reminders (15min)"],
+    indirect=True,
+)
+def test_worker_runs_only_selected_wave_loop_and_watches_exact_tasks(worker_client, request):
+    client, worker_mod = worker_client
+    selected_name = request.node.callspec.params["worker_client"]
+    expected = {worker_mod.OUTBOX_LOOP_NAME, selected_name}
+    assert set(worker_mod.app.state.worker_tasks) == expected
+    assert set(client.get("/health").json()["tasks"]) == expected
+
+    worker_mod.app.state.worker_started_mono = time.monotonic() - (worker_mod.STARTUP_GRACE_S + 5)
+    with patch("utils.loop_monitor.get_loop_status", return_value={"healthy": True, "loops": {}}) as status:
+        assert client.get("/health").status_code == 200
+    assert set(status.call_args.kwargs["registered_names"]) == expected
+
+
+@pytest.mark.parametrize("invalid", ["", "unknown-loop", "push_retry (30s),push_retry (30s)"])
+def test_worker_rejects_invalid_allowlist_before_startup(monkeypatch, invalid):
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", invalid)
+    import worker as worker_mod
+
+    with (
+        patch.object(worker_mod, "init_firebase") as firebase,
+        patch.object(worker_mod, "init_backend_sentry") as sentry,
+        patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+    ):
+        with pytest.raises(RuntimeError, match="SPINR_WORKER_LOOP_ALLOWLIST"):
+            with TestClient(worker_mod.app):
+                pytest.fail("invalid allowlist reached worker lifespan body")
+    firebase.assert_not_called()
+    sentry.assert_not_called()
+    database.assert_not_awaited()
+
+
+def test_worker_all_role_ignores_allowlist_and_keeps_default_wave(monkeypatch):
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "all")
+    monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", "unknown-loop")
+    import worker as worker_mod
+
+    patches = list(_patch_loops())
+    for patcher in patches:
+        patcher.start()
+    try:
+        with (
+            patch.object(worker_mod, "init_firebase"),
+            patch.object(worker_mod, "init_backend_sentry"),
+            patch.object(worker_mod, "init_database", new=AsyncMock()),
+        ):
+            with TestClient(worker_mod.app):
+                assert set(worker_mod.app.state.worker_tasks) == set(worker_mod.WORKER_LOOP_NAMES)
+    finally:
+        for patcher in patches:
+            patcher.stop()
 
 
 def test_health_unhealthy_when_a_task_is_dead(worker_client):
@@ -192,15 +258,19 @@ def test_worker_lifespan_calls_firebase_sentry_and_database(monkeypatch):
 def test_worker_production_startup_raises_when_database_init_fails(monkeypatch):
     monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
     monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
     patches = _patch_loops()
     for p in patches:
         p.start()
     try:
         import worker as worker_mod
 
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
         with (
             patch.object(worker_mod, "init_firebase"),
             patch.object(worker_mod, "init_backend_sentry"),
+            patch.object(worker_mod, "_validate_production_config"),
             patch.object(
                 worker_mod,
                 "init_database",
@@ -213,6 +283,127 @@ def test_worker_production_startup_raises_when_database_init_fails(monkeypatch):
     finally:
         for p in patches:
             p.stop()
+
+
+def test_worker_production_rejects_wrong_process_role_before_startup(monkeypatch):
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "all")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(worker_mod, "_validate_production_config") as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="SPINR_PROCESS_ROLE=worker"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_not_called()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def test_worker_production_uses_shared_config_guard_before_startup(monkeypatch):
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(
+                worker_mod, "_validate_production_config", side_effect=RuntimeError("invalid config")
+            ) as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="invalid config"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_called_once()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def test_worker_production_requires_metrics_token_before_startup(monkeypatch):
+    monkeypatch.delenv("METRICS_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(worker_mod, "_validate_production_config") as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="METRICS_AUTH_TOKEN"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_called_once()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.parametrize("first_outcome", ["return", "raise"])
+def test_worker_supervisor_retries_factory_return_and_exception(monkeypatch, first_outcome):
+    import asyncio
+
+    import worker as worker_mod
+
+    calls = 0
+    delays = []
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        if calls == 1 and first_outcome == "raise":
+            raise RuntimeError("loop failed")
+        if calls == 2:
+            raise asyncio.CancelledError
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(worker_mod, "loop_start_offset_seconds", lambda _name: 0)
+    with patch.object(worker_mod.asyncio, "sleep", new=sleep):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(worker_mod._restartable("probe", factory))
+
+    assert calls == 2
+    assert delays == [5]
 
 
 def test_graceful_shutdown_cancels_tasks(monkeypatch):

@@ -60,22 +60,11 @@ def _spawned_loop_names(fn: ast.AsyncFunctionDef) -> list[str]:
 
 
 def _watchdog_loop_names(fn: ast.AsyncFunctionDef) -> list[str]:
-    """The string literals inside the `_WATCHDOG_LOOP_NAMES = list([...])`
-    assignment inside the lifespan() function body."""
-    for node in ast.walk(fn):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "_WATCHDOG_LOOP_NAMES"
-        ):
-            # RHS is `list([...])` — a Call to list() with one list-literal arg.
-            value = node.value
-            assert isinstance(value, ast.Call), "_WATCHDOG_LOOP_NAMES must be assigned via list([...])"
-            assert len(value.args) == 1 and isinstance(value.args[0], ast.List)
-            elts = value.args[0].elts
-            return [e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-    raise AssertionError("could not find `_WATCHDOG_LOOP_NAMES = list([...])` in lifespan()")
+    """All-role watchdog inventory from the placement registry and live spawns."""
+    from backend.core.background_loop_registry import LOOP_WATCHDOG_NAME, active_api_loop_names
+
+    spawned = set(_spawned_loop_names(fn))
+    return [name for name in active_api_loop_names("all") if name in spawned and name != LOOP_WATCHDOG_NAME]
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +90,14 @@ class TestWatchdogCoversEverySpawnedLoop:
 
         extra = sorted(set(watched) - watchable)
         assert extra == [], f"watchdog names with no matching _spawn() call (stale/typo'd): {extra}"
+
+    def test_every_spawned_loop_has_a_role_and_h3_stays_dormant(self, _lifespan_fn):
+        from backend.core.background_loop_registry import LOOP_PLACEMENT
+
+        spawned = set(_spawned_loop_names(_lifespan_fn))
+        assert spawned <= set(LOOP_PLACEMENT)
+        assert "h3_index_reconciler (2min)" in LOOP_PLACEMENT
+        assert "h3_index_reconciler (2min)" not in spawned
 
     def test_watchdog_list_has_no_duplicate_names(self, _lifespan_fn):
         """A duplicate entry is a silent naming collision — one loop's
@@ -163,6 +160,211 @@ class TestWatchdogCoversEverySpawnedLoop:
         }
         assert len(previously_missing) == 13
         assert previously_missing <= watched, previously_missing - watched
+
+
+class TestProcessRoleLoopOwnership:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "role,env",
+        [("all", "development"), ("api", "development"), ("worker", "development"), ("all", "test")],
+    )
+    async def test_lifespan_spawns_and_watches_only_role_owned_loops(self, role, env, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi import FastAPI
+
+        import ai.mcp_server as mcp_server
+        from backend.core import lifespan as lifespan_module
+        from backend.core.background_loop_registry import (
+            LOOP_WATCHDOG_NAME,
+            WORKER_WAVE1_LOOP_NAMES,
+            active_api_loop_names,
+        )
+        from backend.utils import loop_alert
+
+        settings = MagicMock(
+            ENV=env,
+            DISPATCH_POOL_DSN="",
+            REDIS_URL="",
+            RATE_LIMIT_REDIS_URL="",
+            WS_REDIS_URL="",
+            ALERT_WEBHOOK_URL="",
+        )
+        monkeypatch.setattr(lifespan_module, "settings", settings)
+        monkeypatch.setattr(lifespan_module, "init_database", AsyncMock(return_value=None))
+        monkeypatch.setenv("SPINR_PROCESS_ROLE", role)
+        if role == "all":
+            monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", "unknown-loop")
+        else:
+            monkeypatch.delenv("SPINR_WORKER_LOOP_ALLOWLIST", raising=False)
+        monkeypatch.setattr(mcp_server, "start_mcp", AsyncMock())
+        monkeypatch.setattr(mcp_server, "stop_mcp", AsyncMock())
+
+        from utils import ws_pubsub
+
+        monkeypatch.setattr(ws_pubsub.pubsub, "start", AsyncMock(return_value=True))
+        monkeypatch.setattr(ws_pubsub.pubsub, "stop", AsyncMock())
+
+        created_names = []
+        watchdog_registrations = []
+        real_create_task = asyncio.create_task
+        loop = asyncio.get_running_loop()
+
+        async def watchdog_once(factory):
+            try:
+                await factory()
+            except asyncio.CancelledError:
+                pass
+
+        async def stop_after_watchdog_check(**kwargs):
+            watchdog_registrations.append(kwargs["registered_names"])
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(loop_alert, "check_and_alert", stop_after_watchdog_check)
+
+        def fake_create_task(coro, *, name=None):
+            created_names.append(name)
+            if name == LOOP_WATCHDOG_NAME:
+                factory = coro.cr_frame.f_locals["coro_factory"]
+                coro.close()
+                return real_create_task(watchdog_once(factory), name=name)
+            coro.close()
+            future = loop.create_future()
+            future.set_result(None)
+            return future
+
+        monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+        async with lifespan_module.lifespan(FastAPI()):
+            await asyncio.sleep(0)
+
+        spawned_names = set(_spawned_loop_names(_find_lifespan_function(_parse_lifespan_module())))
+        selected = {
+            name
+            for name in spawned_names
+            if name != LOOP_WATCHDOG_NAME and (role == "all" or (role == "api" and name not in WORKER_WAVE1_LOOP_NAMES))
+        }
+        if role == "worker":
+            selected = set()
+        expected_tasks = selected | ({LOOP_WATCHDOG_NAME} if role != "worker" else set())
+        if env == "test":
+            expected_tasks = set()
+        assert {name for name in created_names if name in spawned_names} == expected_tasks
+        assert "h3_index_reconciler (2min)" not in created_names
+        assert "redis_startup_diagnosis" in created_names
+        if role == "worker" or env == "test":
+            assert watchdog_registrations == []
+        else:
+            assert len(watchdog_registrations) == 1
+            assert set(watchdog_registrations[0]) == set(active_api_loop_names(role)) & spawned_names
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("invalid", ["", "unknown-loop", "push_retry (30s),push_retry (30s)"])
+    async def test_api_rejects_invalid_allowlist_before_database_or_tasks(self, invalid, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi import FastAPI
+
+        from backend.core import lifespan as lifespan_module
+
+        init_database = AsyncMock()
+        monkeypatch.setattr(lifespan_module, "init_database", init_database)
+        monkeypatch.setattr(lifespan_module, "settings", MagicMock(ENV="development"))
+        monkeypatch.setenv("SPINR_PROCESS_ROLE", "api")
+        monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", invalid)
+
+        with pytest.raises(RuntimeError, match="SPINR_WORKER_LOOP_ALLOWLIST"):
+            async with lifespan_module.lifespan(FastAPI()):
+                pytest.fail("invalid worker loop selection reached lifespan body")
+        init_database.assert_not_awaited()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "selected_worker_loop",
+        [
+            "push_retry (30s)",
+            "zoho_desk_sync (10min)",
+            "driver_onboarding_reminders (15min)",
+        ],
+    )
+    async def test_api_role_keeps_unselected_wave_loops_and_watches_them(self, selected_worker_loop, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi import FastAPI
+
+        import ai.mcp_server as mcp_server
+        from backend.core import lifespan as lifespan_module
+        from backend.core.background_loop_registry import (
+            LOOP_CATALOG,
+            LOOP_WATCHDOG_NAME,
+        )
+        from backend.utils import loop_alert
+        from utils import ws_pubsub
+
+        monkeypatch.setattr(
+            lifespan_module,
+            "settings",
+            MagicMock(
+                ENV="development",
+                DISPATCH_POOL_DSN="",
+                REDIS_URL="",
+                RATE_LIMIT_REDIS_URL="",
+                WS_REDIS_URL="",
+                ALERT_WEBHOOK_URL="",
+            ),
+        )
+        monkeypatch.setattr(lifespan_module, "init_database", AsyncMock())
+        monkeypatch.setenv("SPINR_PROCESS_ROLE", "api")
+        monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", selected_worker_loop)
+        monkeypatch.setattr(mcp_server, "start_mcp", AsyncMock())
+        monkeypatch.setattr(mcp_server, "stop_mcp", AsyncMock())
+        monkeypatch.setattr(ws_pubsub.pubsub, "start", AsyncMock(return_value=True))
+        monkeypatch.setattr(ws_pubsub.pubsub, "stop", AsyncMock())
+
+        created_names = []
+        watchdog_registrations = []
+        real_create_task = asyncio.create_task
+        loop = asyncio.get_running_loop()
+
+        async def watchdog_once(factory):
+            try:
+                await factory()
+            except asyncio.CancelledError:
+                pass
+
+        async def stop_after_watchdog_check(**kwargs):
+            watchdog_registrations.append(kwargs["registered_names"])
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(loop_alert, "check_and_alert", stop_after_watchdog_check)
+
+        def fake_create_task(coro, *, name=None):
+            created_names.append(name)
+            if name == LOOP_WATCHDOG_NAME:
+                factory = coro.cr_frame.f_locals["coro_factory"]
+                coro.close()
+                return real_create_task(watchdog_once(factory), name=name)
+            coro.close()
+            future = loop.create_future()
+            future.set_result(None)
+            return future
+
+        monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+        async with lifespan_module.lifespan(FastAPI()):
+            await asyncio.sleep(0)
+
+        spawned_names = set(_spawned_loop_names(_find_lifespan_function(_parse_lifespan_module())))
+        active = {
+            name
+            for name, placement in LOOP_CATALOG
+            if name != LOOP_WATCHDOG_NAME and (placement != "worker_wave1" or name != selected_worker_loop)
+        }
+        expected = (active | {LOOP_WATCHDOG_NAME}) & spawned_names
+        assert {name for name in created_names if name in spawned_names} == expected
+        assert len(watchdog_registrations) == 1
+        assert set(watchdog_registrations[0]) == expected - {LOOP_WATCHDOG_NAME}
 
 
 class TestWatchdogFlagsAHungNewlyAddedLoop:

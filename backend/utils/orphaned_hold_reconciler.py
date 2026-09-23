@@ -27,9 +27,9 @@ a ride that is still going to be charged. Completed rides with open holds are
 that work would refund fares the driver has earned. See ``_TERMINAL_STATES``.
 
 Replay-safety contract (CLAUDE.md, Background loops) — runs on every replica:
-  1. **Redis leader lock** (``SET NX``) — a best-effort throttle so replicas do not
-     all scan at once. NOT the safety net: ``utils/redis_client`` falls back to an
-     in-process dict when ``REDIS_URL`` is unset, in which case every replica runs.
+  1. **Strict Redis leader lock** (``SET NX``) — required before a scan; a
+     Redis outage skips the tick. Its TTL can expire during a slow scan, so it
+     is not the double-release safety net.
   2. **Atomic DB claim** — a compare-and-swap on ``updated_at``, asserting
      ``auth_status`` is still open. Only the replica whose UPDATE returns a row acts.
      This is the real guard and holds with Redis down. ``updated_at`` is used as the
@@ -53,8 +53,16 @@ import socket
 from datetime import datetime, timezone
 
 try:
-    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+    from utils.loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from utils.loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -64,7 +72,7 @@ try:
     from .. import db_supabase as db
     from .card_hold_release import OPEN_AUTH_STATES, RELEASED, RELEASED_UNMARKED, has_open_hold, release_open_hold
     from .metrics import inc as _metric_inc
-    from .redis_client import redis_set_nx
+    from .redis_client import redis_set_nx_strict as redis_set_nx
 except ImportError:  # pragma: no cover - dual import
     import db_supabase as db  # type: ignore
     from utils.card_hold_release import (  # type: ignore
@@ -75,7 +83,7 @@ except ImportError:  # pragma: no cover - dual import
         release_open_hold,
     )
     from utils.metrics import inc as _metric_inc  # type: ignore
-    from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -239,22 +247,26 @@ async def orphaned_hold_reconciler_loop() -> None:
         # interval — halving the documented cadence. The old `interval * 2`
         # ("outlives a slow tick") doesn't (2x > 0.9x) — the atomic DB claim is
         # still the real correctness guard if a second replica races in; this
-        # lock is only ever a throttle. Matches ledger_projection.py's
+        # lock gates tick starts and throttles contention but cannot guarantee
+        # full-tick ownership. Matches ledger_projection.py's
         # `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21): 0.05 headroom under
         # the 0.9 floor.
         lock_ttl = int(RECONCILE_INTERVAL_SECONDS * 0.85)
+        lock_failed = False
         try:
             got_lock = await redis_set_nx("spinr:orphaned_hold:reconcile:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
-            # redis_set_nx now raises on a real (Redis-configured-but-
-            # unavailable) error instead of silently falling back per-replica
-            # (2026-08-11 P1 fix). This lock is a throttle only — the atomic
-            # DB claim is the real correctness guard — so proceed with the
-            # tick rather than skip it.
-            logger.error(f"orphaned_hold_reconciler: leader lock unavailable ({lock_err}), proceeding without it")
-            got_lock = True
+            logger.error(
+                "orphaned_hold_reconciler: leader lock unavailable (%s); skipping tick",
+                type(lock_err).__name__,
+            )
+            _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "orphaned_hold_reconciler"})
+            _record_dependency_failure(_LOOP_NAME)
+            lock_failed = True
+            got_lock = False
         if not got_lock:
-            _record_heartbeat(_LOOP_NAME)
+            if not lock_failed:
+                _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
             continue
         try:

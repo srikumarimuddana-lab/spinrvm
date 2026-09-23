@@ -145,6 +145,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:6.2.14-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -228,6 +237,16 @@ jobs:
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
             --ignore=tests/direct_pool --ignore=tests/rls \
             --ignore=tests/test_schemathesis_fuzz.py -v
+
+      # This separate step executes the durable WS outbox Lua script against
+      # the disposable Redis service above. The test itself permits only
+      # loopback database 15 and cleans its uniquely-prefixed keys afterward.
+      - name: Run WebSocket replay tests against Redis
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        env:
+          WS_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: pytest tests/test_ws_pubsub_redis_integration.py -q --no-cov
 
       # C50 Phase 1 (T11, docs/audit/2026-09-02-pgbouncer-direct-pool-
       # migration-plan.md): real-Postgres tests for the (currently unused --

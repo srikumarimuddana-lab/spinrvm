@@ -1,8 +1,9 @@
-"""Background loop staleness alerter.
+"""Background loop health alerter.
 
 Reads loop heartbeat state from loop_monitor and posts a Slack-compatible
-webhook message when a loop goes stale.  Throttles to one alert per loop
-per COOLDOWN_SECONDS to avoid flooding the channel during a prolonged outage.
+webhook message when a loop goes stale or loses a required dependency. Throttles
+to one alert per loop per COOLDOWN_SECONDS to avoid flooding the channel during
+a prolonged outage.
 
 Usage (from the watchdog loop):
     await check_and_alert(registered_names=[...], webhook_url="https://...")
@@ -49,7 +50,7 @@ async def check_and_alert(
     now = time.monotonic()
 
     for name, info in status["loops"].items():
-        if info["status"] != "stale":
+        if info["status"] not in {"stale", "unhealthy"}:
             continue
 
         # "Never alerted" must be an explicit None, NOT a 0.0 default.
@@ -75,6 +76,12 @@ async def check_and_alert(
             f"Last tick: *{elapsed_str}* ago (threshold: {threshold_str})\n"
             f"Check Railway logs — the loop may have crashed or deadlocked."
         )
+        if info["status"] == "unhealthy":
+            text = (
+                f":warning: *Spinr loop dependency unavailable*: `{name}`\n"
+                "A required dependency is unavailable. "
+                "Check backend health and logs."
+            )
         payload = {"text": text}
 
         try:
@@ -82,6 +89,6 @@ async def check_and_alert(
                 resp = await client.post(webhook_url, json=payload)
                 resp.raise_for_status()
             _last_alerted[name] = now
-            logger.info("loop_alert: posted stale-loop alert for %s", name)
+            logger.info("loop_alert: posted loop-health alert for %s", name)
         except Exception as exc:
             logger.error("loop_alert: failed to post webhook for %s: %s", name, exc)

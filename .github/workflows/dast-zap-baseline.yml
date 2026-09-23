@@ -5,16 +5,14 @@ name: DAST · ZAP Baseline Scan
 # in .github/workflows/security-gates.yml on every PR; this workflow is the
 # complementary DAST leg — it exercises the *running* application instead of
 # static source. It intentionally does NOT run on pull_request: a DAST scan
-# needs a live target to hit, and this repo has no staging environment yet
-# (blocked on ACTION_ITEMS.md E1). Running it as a PR gate would either be a
-# permanent no-op or, worse, someone eventually pointing it at production.
+# needs a live target to hit. It remains manual/weekly rather than running on
+# pull requests; this avoids turning ordinary PRs into unplanned network scans.
 #
 # Trigger is manual (workflow_dispatch) and a weekly schedule only.
 #
-# STAGING_URL (repo variable or secret) does not exist yet. Until E1 stands
-# up a staging environment and that value is configured, the scan step
-# no-ops with a clear message and exits 0 — this workflow is inert scaffolding,
-# not a promise that a scan is actually running today.
+# STAGING_URL and STAGING_ALLOWED_ORIGIN are required variables or secrets.
+# Missing or invalid configuration fails before ZAP starts; it cannot silently
+# report success without scanning.
 #
 # The third-party penetration test referenced in E6 is a separate
 # budget/procurement action for a human to book — this workflow does not
@@ -38,43 +36,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  zap-baseline:
-    name: ZAP baseline scan
+  preflight:
+    name: Validate DAST target and egress attestation
     runs-on: ubuntu-latest
     steps:
-      - name: Check STAGING_URL is configured
-        id: check-target
-        # Secrets are passed via env:, not interpolated directly into the
-        # run: script, to avoid GitHub Actions script-injection risk.
-        env:
-          STAGING_URL_VAR: ${{ vars.STAGING_URL }}
-          STAGING_URL_SECRET: ${{ secrets.STAGING_URL }}
-        run: |
-          if [ -z "$STAGING_URL_VAR$STAGING_URL_SECRET" ]; then
-            echo "STAGING_URL not configured, skipping — see ACTION_ITEMS.md E1/E6 and docs/runbooks/dast-and-pentest.md."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: steps.check-target.outputs.configured == 'true'
+
+      - name: Validate target and origin-bound egress attestation
+        # Values go through env rather than expression interpolation in shell.
+        env:
+          STAGING_URL: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
+          STAGING_ALLOWED_ORIGIN: ${{ vars.STAGING_ALLOWED_ORIGIN || secrets.STAGING_ALLOWED_ORIGIN }}
+          DAST_EGRESS_ORIGIN_ATTESTATION: ${{ vars.DAST_EGRESS_ORIGIN_ATTESTATION }}
+        run: python3 scripts/validate_dast.py
+
+  zap-baseline:
+    name: ZAP baseline scan
+    needs: preflight
+    # The runner's enforced proxy/firewall must permit only this exact origin
+    # and port, including requests from the ZAP container, with no direct bypass.
+    # These labels and the matching origin attestation are operator prerequisites,
+    # not proof that network enforcement has been provisioned.
+    runs-on: [self-hosted, linux, x64, dast-egress-locked]
+    env:
+      STAGING_URL: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
+      STAGING_ALLOWED_ORIGIN: ${{ vars.STAGING_ALLOWED_ORIGIN || secrets.STAGING_ALLOWED_ORIGIN }}
+      DAST_EGRESS_ORIGIN_ATTESTATION: ${{ vars.DAST_EGRESS_ORIGIN_ATTESTATION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Revalidate target and generate exact-origin ZAP scope
+        run: python3 scripts/validate_dast.py --write-scope-context staging.context
 
       - name: ZAP baseline scan
-        if: steps.check-target.outputs.configured == 'true'
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
           # Baseline scan only (passive + spidering) — no active attack
           # payloads are sent. See docs/runbooks/dast-and-pentest.md for why
           # a full active scan is not automated here.
-          cmd_options: '-a'
+          # Context scopes crawler URLs; runner egress enforcement is the
+          # boundary that must block cross-origin redirects before connection.
+          cmd_options: '-a -n staging.context'
           allow_issue_writing: false
-          fail_action: false
+          # ZAP reports alerts as WARN by default; true makes WARN/FAIL findings
+          # fail the check instead of becoming a successful artifact-only scan.
+          fail_action: true
           artifact_name: zap-baseline-report
 
-      - name: No-op (STAGING_URL not configured)
-        if: steps.check-target.outputs.configured == 'false'
-        run: |
-          echo "No staging target configured — nothing to scan. This is expected until ACTION_ITEMS.md E1 lands."
-          exit 0
+      - name: Retain raw ZAP reports even when scan findings fail the job
+        if: always() && needs.preflight.result == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: zap-baseline-raw-reports
+          path: |
+            report_json.json
+            report_md.md
+            report_html.html
+          if-no-files-found: warn
+
+      - name: Validate generated JSON report target
+        if: always() && needs.preflight.result == 'success'
+        env:
+          STAGING_URL: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
+          STAGING_ALLOWED_ORIGIN: ${{ vars.STAGING_ALLOWED_ORIGIN || secrets.STAGING_ALLOWED_ORIGIN }}
+        run: python3 scripts/validate_dast.py report_json.json

@@ -22,20 +22,93 @@ Payloads store `{"ride_id": "<id>"}` only. Never log email, phone, or GPS.
 
 ## Staged rollout (do not skip)
 
-1. **Deploy the worker first.** APIs stay `SPINR_PROCESS_ROLE=all` so the three
-   wave-1 loops still run on API replicas (temporary overlap is safe: push
-   retry is claim-based, the worker initializes Firebase/Sentry/DB the same
-   way the API does, Zoho upserts, onboarding reminders are per-driver/date).
+The production Fly app does not currently activate the dedicated worker
+process group. The sequence below is a future rollout procedure, not an
+instruction to change the live topology as part of this code change. First
+prove the candidate inventory, process configuration, private health, and
+authenticated metrics checks described below.
+
+`backend/fly.worker-canary.toml` is an inactive candidate for moving only
+`push_retry (30s)`. Before any operator uses it, validate from `backend/` with
+`fly config validate -c fly.worker-canary.toml --strict`, then review the
+resulting process/service/check behavior. This candidate does not declare
+Machine counts; it must be paired with the opt-in eight-Machine preflight.
+Never point an active deploy workflow at this file as part of this change.
+
+1. Set `SPINR_API_ROLE="all"` in the inactive candidate and deploy that
+   candidate as a staged overlap. Fly deploy does not guarantee that the worker
+   starts before API Machines; this phase keeps the API as owner while worker
+   startup and health are validated.
 2. Confirm worker `/health` is 200, authenticated `/metrics` scrapes, and
    `spinr_worker_task_healthy{task="outbox_poller"}` is 1. Confirm the worker
    claims test rows (or that `outbox_stats` stays empty while the producer is
    off).
-3. **Only then** deploy APIs with `SPINR_PROCESS_ROLE=api` so those three loops
-   stop on API replicas.
-4. Drain old API replicas.
-5. **Only then** set `settings.outbox_receipts_enabled = true`.
-6. Do not claim Railway failover readiness until `ACTION_ITEMS.md` C5 is
+3. Before moving any loop, verify its complete-tick replay behavior and
+   external side effects; claim safety or upsert behavior alone does not prove
+   that a repeated provider call is harmless. Wait through at least one full
+   loop cadence (and any claim/lease window) while observing task health and
+   duplicate-side-effect signals.
+4. **Only after those checks pass**, set `SPINR_API_ROLE="api"` and redeploy the
+   candidate. This makes API Machines select the exact loop also selected on
+   the worker. Verify API watchdog ownership and worker health again.
+5. Drain old API replicas.
+6. **Only then** set `settings.outbox_receipts_enabled = true`.
+7. Do not claim Railway failover readiness until `ACTION_ITEMS.md` C5 is
    resolved and an equivalent one-process worker runs there.
+
+### Single-loop worker canary
+
+The worker loop selector supports a bounded canary while the rest of wave 1
+stays on the API. Use the exact same selector on every API and worker Machine:
+
+| Process group | `SPINR_PROCESS_ROLE` | `SPINR_WORKER_LOOP_ALLOWLIST` | Loops owned |
+|---|---|---|---|
+| API | `api` (via candidate `SPINR_API_ROLE`) | One exact catalog name, for example `push_retry (30s)` | All current API loops and the two unselected wave-1 loops |
+| Worker | `worker` | The same exact catalog name | Outbox poller and the selected wave-1 loop |
+
+The candidate's app/burst wrappers copy `SPINR_API_ROLE` into
+`SPINR_PROCESS_ROLE`; the worker wrapper sets `SPINR_PROCESS_ROLE=worker`.
+Set `SPINR_API_ROLE="all"` for the worker-first stage and set it to `api` only
+after the worker is proven healthy and the overlap/replay gate passes. Do not
+assume Fly deploy orders worker before API Machines.
+
+The selector value is a comma-separated list of exact loop names. Empty, unknown, or
+duplicate names fail startup. An unset value preserves the existing full-wave
+role behavior: API role moves all three wave-1 loops, and worker role starts
+all three. `SPINR_PROCESS_ROLE=all` ignores the selector and preserves the
+legacy all-loops behavior.
+
+Before deploying a canary:
+
+1. Run `flyctl machine list --json -a <app-name> | python scripts/fly_fleet_preflight.py --workers 1`
+   against the current inventory. This only validates
+   `app<=2, burst<=5, worker<=1, total<=8`; it does not prove loop ownership,
+   health, or metrics.
+2. Run `fly config validate -c fly.worker-canary.toml --strict` from `backend/`
+   and review provider validation. This validation has not been run for this
+   repository candidate yet.
+3. Verify the candidate's `SPINR_API_ROLE` and selector wrapper match on every
+   API/burst Machine, and the worker wrapper sets role `worker` with the same
+   selector. Confirm effective `SPINR_PROCESS_ROLE` and
+   `SPINR_WORKER_LOOP_ALLOWLIST` in each live process. Any mismatch can
+   duplicate or omit work; do not continue until all Machines agree.
+4. Verify the worker is private and `/health` returns 200 with exactly the
+   outbox poller and selected loop. An authenticated private `/metrics` scrape
+   must return 200 and show `spinr_worker_task_healthy=1` for both tasks.
+5. Verify API watchdog status still includes the two unselected wave loops.
+   Observe worker heartbeats, outbox claim/release, oldest pending age, and
+   task errors before moving another loop.
+6. Roll back by changing candidate `SPINR_API_ROLE` to `all` and redeploying
+   the compatible process commands. Verify API logs show role `all` and the
+   watchdog monitors the full wave, then scale the worker down after committed
+   outbox rows drain. Setting `SPINR_PROCESS_ROLE` alone does not override the
+   candidate wrapper, which derives it from `SPINR_API_ROLE`; redeploy the
+   changed candidate and confirm effective API role `all` before scaling down.
+
+These external checks are required because unit tests cannot prove Fly Machine
+environment parity, private network reachability, deployed restart behavior,
+or metrics credentials. Do not enable the outbox producer as part of a loop
+ownership canary.
 
 Do not enable the producer if the worker is not healthy in every environment
 that can take payment traffic.
@@ -88,11 +161,12 @@ a SQL `DELETE FROM` in the migration. Dead letters must alert before cleanup.
 - `[http_service]` stays on `app` only. Worker machines are not in the public
   service; they expose `/health` and Bearer `/metrics` on port 8000 for Fly
   checks and internal scrape.
-- Keep at least one worker machine. CI scales
-  `flyctl scale count app=8 worker=1` in `deploy-fly.yml` and
-  `bootstrap-fly.yml`. A bare `flyctl scale count 8` (no process group) would
-  also create 8 workers — never run that against this `fly.toml`.
-- Manual resize of the API burst pool: `flyctl scale count app=N worker=1`.
+- The current production `fly.toml` and deployment workflows do not configure
+  this worker group. Do not run worker scale commands against the live app
+  until a separate deployment change declares the process group, private
+  checks, and matching process-role/selector environments.
+- The opt-in fleet preflight validates only candidate counts. It does not
+  activate, resize, or verify Fly process configuration.
 
 ## Local run
 

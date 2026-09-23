@@ -7,8 +7,8 @@ from 06:00 local, the hourly loop scans eligible drivers and creates one
 recording the payout in ``payouts`` with ``payout_type='auto'``.
 
 Replay-safety contract (mandatory per CLAUDE.md background-task rules):
-  - Redis leader lock (fail-open, loud) prevents redundant concurrent runs;
-    the ``auto_payout_batches.week_key`` unique index is the hard guard.
+  - Strict Redis leader lock is required before weekly batch execution;
+    the ``auto_payout_batches.week_key`` unique index remains a hard guard.
   - Deterministic payout id ``auto-{driver_id}-{week_key}`` + migration
     250's partial unique index ``idx_payouts_one_inflight_per_driver``
     (one in-flight payout row per driver, any type) make the reserve step
@@ -68,18 +68,26 @@ try:
     from ..utils.error_handling import DuplicateRecordError
     from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
     from ..utils.money import dollars_to_cents
-    from ..utils.redis_client import redis_set_nx
+    from ..utils.redis_client import redis_set_nx_strict as redis_set_nx
 except ImportError:  # pragma: no cover - dual-import pattern
     import db_supabase  # type: ignore
     from utils.dual_run_monitor import record_legacy_payout  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
     from utils.money import dollars_to_cents  # type: ignore
-    from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
-    from .loop_monitor import record_heartbeat as _record_heartbeat
+    from .loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from .loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:  # pragma: no cover
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -1214,8 +1222,8 @@ def _is_batch_window(now_local: datetime) -> bool:
 
 
 async def auto_payout_loop():
-    """Hourly loop: heartbeat + stale-reserved sweep every tick; the weekly
-    batch fires on Sundays (America/Regina) from 06:00 local, leader-locked."""
+    """Hourly loop: Redis ownership gates stale-transfer retries and the
+    Sunday (America/Regina) weekly batch from 06:00 local."""
     import os
     import socket
 
@@ -1223,6 +1231,7 @@ async def auto_payout_loop():
     interval = 3600  # 1 hour
 
     while True:
+        lock_failed = False
         try:
             try:
                 from ..settings_loader import get_app_settings
@@ -1235,30 +1244,41 @@ async def auto_payout_loop():
 
             if enabled and stripe_secret:
                 try:
-                    await sweep_stale_reserved(stripe_secret)
-                except Exception:
-                    logger.exception("[AUTO-PAYOUT] stale-reserved sweep failed")
-                try:
                     await finalize_stale_running_batches()
                 except Exception:
                     logger.exception("[AUTO-PAYOUT] stale-batch finalize failed")
 
                 now_local = datetime.now(_TZ)
-                if _is_batch_window(now_local):
-                    lock_ttl = int(interval * 0.85)
+                # The shortest loop cadence is one hour, so a 0.85× TTL
+                # expires before the next wake. Claims and Stripe idempotency
+                # still protect work that outlasts the lease.
+                lock_ttl = int(interval * 0.85)
+                try:
+                    got_lock = await redis_set_nx(LOCK_KEY, pod_id, lock_ttl)
+                except Exception as lock_err:
+                    logger.error(
+                        "[AUTO-PAYOUT] leader lock unavailable (%s), skipping payout work",
+                        type(lock_err).__name__,
+                    )
+                    _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
+                    _record_dependency_failure("auto_payout (1h, Sundays)")
+                    lock_failed = True
+                    got_lock = False
+                if got_lock:
                     try:
-                        got_lock = await redis_set_nx(LOCK_KEY, pod_id, lock_ttl)
-                    except Exception as lock_err:
-                        logger.error("[AUTO-PAYOUT] leader lock unavailable (%s), proceeding", lock_err)
-                        got_lock = True
-                    if got_lock:
+                        await sweep_stale_reserved(stripe_secret)
+                    except Exception:
+                        logger.exception("[AUTO-PAYOUT] stale-reserved sweep failed")
+
+                    if _is_batch_window(now_local):
                         result = await run_weekly_auto_payout()
                         logger.info("[AUTO-PAYOUT] loop result: %s", result)
-                    else:
-                        logger.debug("[AUTO-PAYOUT] another replica holds the lock, sleeping")
+                else:
+                    logger.debug("[AUTO-PAYOUT] another replica holds the lock, skipping payout work")
         except Exception:
             logger.exception("[AUTO-PAYOUT] loop iteration failed")
             _metric_inc("spinr_bgloop_errors_total", {"loop": "auto_payout"})
 
-        _record_heartbeat("auto_payout (1h, Sundays)")
+        if not lock_failed:
+            _record_heartbeat("auto_payout (1h, Sundays)")
         await asyncio.sleep(interval)

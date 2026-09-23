@@ -1,0 +1,108 @@
+# INACTIVE CANDIDATE ONLY. Do not deploy or point workflows at this file until
+# `fly config validate --strict`, provider behavior review, and the eight-Machine
+# inventory preflight are complete. This profile adds a worker group and changes
+# the API/burst startup roles. It does not declare or enforce Machine counts.
+# Candidate scale budget: app=2, burst=5, worker=1 (total=8, never 9).
+# Candidate canary: push_retry (30s) only. API and worker wrappers must match.
+# Default API role keeps current API ownership during worker staging. Switch
+# SPINR_API_ROLE to "api" only after health, metrics, and full-tick replay gates.
+app = "spinr-backend-yyz"
+primary_region = "yyz"
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENV = "production"
+  PORT = "8000"
+  SUPABASE_REGION = "ca-central-1"
+  UVICORN_WORKERS = "2"
+  PYTHONUNBUFFERED = "1"
+  SPINR_API_ROLE = "all"
+
+[processes]
+  app = "sh -c 'export SPINR_PROCESS_ROLE=\"${SPINR_API_ROLE:-all}\"; export SPINR_WORKER_LOOP_ALLOWLIST=\"push_retry (30s)\"; exec uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-2}'"
+  burst = "sh -c 'export SPINR_PROCESS_ROLE=\"${SPINR_API_ROLE:-all}\"; export SPINR_WORKER_LOOP_ALLOWLIST=\"push_retry (30s)\"; exec uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-2}'"
+  worker = "sh -c 'export SPINR_PROCESS_ROLE=worker; export SPINR_WORKER_LOOP_ALLOWLIST=\"push_retry (30s)\"; exec uvicorn worker:app --host :: --port 8000 --workers 1'"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 2
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 750
+    hard_limit = 1000
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  processes = ["burst"]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [services.concurrency]
+    type = "connections"
+    soft_limit = 750
+    hard_limit = 1000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+# Non-service check for the private worker port. The worker group has no
+# [http_service] or [[services]] membership and is not sent public traffic.
+[checks.worker_health]
+  grace_period = "60s"
+  interval = "30s"
+  method = "get"
+  path = "/health"
+  port = 8000
+  timeout = "5s"
+  type = "http"
+  processes = ["worker"]
+
+[[vm]]
+  processes = ["app"]
+  size = "shared-cpu-2x"
+  memory = "4gb"
+
+[[vm]]
+  processes = ["burst"]
+  size = "shared-cpu-1x"
+  memory = "2gb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "1gb"

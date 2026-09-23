@@ -44,6 +44,7 @@ LOOP_CATALOG: Tuple[Tuple[str, Placement], ...] = (
     ("kyb_reverification (24h)", "deferred"),
     ("route_finalizer (15s)", "deferred"),
     ("route_gap_monitor (15s)", "deferred"),
+    ("route_deviation_alerter (30s)", "api"),
     ("stale_intent_reconciler (15min)", "api"),
     ("safety_checkin (30s)", "api"),
     ("retention_purge (24h)", "deferred"),
@@ -56,6 +57,7 @@ LOOP_CATALOG: Tuple[Tuple[str, Placement], ...] = (
     ("period1_distance_finalizer (5min)", "api"),
     ("driver_daily_rollup (30min)", "deferred"),
     ("stale_p3_closer (15min)", "api"),
+    ("insurance_period_reconciler (10min)", "api"),
     ("h3_index_reconciler (2min)", "deferred"),
     ("t4a_annual_job (yearly Feb 28)", "deferred"),
     ("driver_statements (30min)", "deferred"),
@@ -88,33 +90,59 @@ def resolve_process_role(raw: str | None, *, env: str) -> str:
     raise RuntimeError(f"Unknown SPINR_PROCESS_ROLE={raw!r}. Expected one of: {sorted(PROCESS_ROLES)}")
 
 
-def should_spawn_on_api(loop_name: str, process_role: str) -> bool:
+def resolve_worker_loop_allowlist(raw: str | None = None) -> Tuple[str, ...]:
+    """Resolve the worker-owned wave subset; unset preserves the full wave."""
+    if raw is None:
+        return WORKER_WAVE1_LOOP_NAMES
+    requested = [name.strip() for name in raw.split(",")]
+    if not raw.strip() or any(not name for name in requested):
+        raise RuntimeError("SPINR_WORKER_LOOP_ALLOWLIST must name one or more worker wave loops")
+    if len(set(requested)) != len(requested):
+        raise RuntimeError("SPINR_WORKER_LOOP_ALLOWLIST contains duplicate loop names")
+    unknown = set(requested) - _WORKER_WAVE1
+    if unknown:
+        raise RuntimeError(f"SPINR_WORKER_LOOP_ALLOWLIST contains unknown worker loops: {sorted(unknown)}")
+    selected = set(requested)
+    return tuple(name for name in WORKER_WAVE1_LOOP_NAMES if name in selected)
+
+
+def should_spawn_on_api(loop_name: str, process_role: str, worker_loop_allowlist: Iterable[str] | None = None) -> bool:
     """Whether the API lifespan should start this loop for the given role."""
     role = (process_role or "all").strip().lower() or "all"
     if role == "all":
         return True
+    worker_names = set(WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist)
     if role == "api":
-        return LOOP_PLACEMENT.get(loop_name) != "worker_wave1"
+        return loop_name not in worker_names
     # Dedicated worker is a separate process (backend/worker.py). An API
     # process must not silently run as an empty worker.
     return False
 
 
-def active_api_loop_names(process_role: str | None = "all") -> List[str]:
+def active_api_loop_names(
+    process_role: str | None = "all",
+    worker_loop_allowlist: Iterable[str] | None = None,
+) -> List[str]:
     """Watchdog names for this API role (every spawned loop except the watchdog)."""
     role = (process_role or "all").strip().lower() or "all"
+    if role == "worker":
+        return []
+    worker_names = set(WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist)
     names: List[str] = []
-    for name, placement in LOOP_CATALOG:
+    for name, _placement in LOOP_CATALOG:
         if name == LOOP_WATCHDOG_NAME:
             continue
-        if role == "all" or placement != "worker_wave1":
+        if role == "all" or name not in worker_names:
             names.append(name)
     return names
 
 
-def worker_loop_names() -> List[str]:
+def worker_loop_names(allowlist: Iterable[str] | None = None) -> List[str]:
     """Loops the dedicated worker owns, excluding the outbox poller."""
-    return list(WORKER_WAVE1_LOOP_NAMES)
+    if allowlist is None:
+        return list(WORKER_WAVE1_LOOP_NAMES)
+    selected = set(allowlist)
+    return [name for name in WORKER_WAVE1_LOOP_NAMES if name in selected]
 
 
 def classified_names() -> Iterable[str]:

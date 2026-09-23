@@ -1,6 +1,6 @@
 """Static guard: SECURITY DEFINER functions must not stay client-executable.
 
-Background (migrations 354 and 448): Postgres grants EXECUTE to PUBLIC on
+Background (migrations 354 and 450): Postgres grants EXECUTE to PUBLIC on
 CREATE FUNCTION, and Supabase's default ACL additionally grants anon /
 authenticated. The pattern
 
@@ -9,7 +9,7 @@ authenticated. The pattern
 is a NO-OP for access control: anon/authenticated keep EXECUTE through PUBLIC.
 Migrations 380-395 shipped 15 admin_* SECURITY DEFINER aggregates that way,
 after 354's one-shot sweep had already run, and production had them callable
-via /rest/v1/rpc with the public anon key until migration 448.
+via /rest/v1/rpc with the public anon key until migration 450.
 
 This test replays backend/migrations in runner order (numeric prefix) and
 fails if any SECURITY DEFINER function (non-trigger) is created/replaced after
@@ -34,7 +34,7 @@ pytestmark = pytest.mark.unit
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 SWEEP_354 = "354_revoke_public_execute_on_security_definer_fns.sql"
-MIGRATION_448 = MIGRATIONS_DIR / "448_revoke_client_exec_admin_rpcs.sql"
+MIGRATION_450 = MIGRATIONS_DIR / "450_revoke_client_exec_admin_rpcs.sql"
 
 # Functions that may legitimately stay executable by anon. Keep empty unless a
 # function is genuinely needed by unauthenticated RLS evaluation; say why.
@@ -85,7 +85,9 @@ def _scan(sources: list[tuple[str, str]]):
         events: list[tuple[int, str, str]] = []
         for m in _CREATE_FN.finditer(sql):
             header = "RETURNS" + m.group(3)
-            if re.search(r"SECURITY\s+DEFINER", header, re.I) and not re.search(r"RETURNS\s+(event_)?trigger\b", header, re.I):
+            if re.search(r"SECURITY\s+DEFINER", header, re.I) and not re.search(
+                r"RETURNS\s+(event_)?trigger\b", header, re.I
+            ):
                 created[m.group(1).lower()] = (idx, name)
         for m in _REVOKE_FN.finditer(sql):
             fn, roles = m.group(1).lower(), _roles(m.group(2))
@@ -111,7 +113,9 @@ def _violations(sources: list[tuple[str, str]], sweep_name: str | None = SWEEP_3
         covered_by_sweep = idx <= sweep_idx
         revoked_later = any(r >= idx for r in public_revokes.get(fn, []))
         if not (covered_by_sweep or revoked_later):
-            problems.append(f"{fname}: SECURITY DEFINER {fn}() never revoked FROM PUBLIC (FROM anon, authenticated alone is a no-op)")
+            problems.append(
+                f"{fname}: SECURITY DEFINER {fn}() never revoked FROM PUBLIC (FROM anon, authenticated alone is a no-op)"
+            )
     for fn, evts in anon_events.items():
         if fn in created and evts and evts[-1][1] == "grant" and fn not in ANON_EXEC_ALLOWLIST:
             problems.append(f"{names[evts[-1][0]]}: SECURITY DEFINER {fn}() left GRANTed to anon/PUBLIC")
@@ -138,9 +142,11 @@ def test_admin_secdef_functions_revoked_from_public():
     assert not problems, "\n".join(problems)
 
 
-def test_guard_would_have_caught_380_to_395_without_448():
-    sources = [s for s in _repo_sources() if s[0] != MIGRATION_448.name]
-    flagged = {line.split("SECURITY DEFINER ")[1].split("(")[0] for line in _violations(sources) if "FROM PUBLIC" in line}
+def test_guard_would_have_caught_380_to_395_without_450():
+    sources = [s for s in _repo_sources() if s[0] != MIGRATION_450.name]
+    flagged = {
+        line.split("SECURITY DEFINER ")[1].split("(")[0] for line in _violations(sources) if "FROM PUBLIC" in line
+    }
     assert flagged == {
         "admin_audit_actor_stats",
         "admin_cloud_message_stats_rollup",
@@ -192,7 +198,13 @@ def test_detector_accepts_revoke_in_later_migration():
 
 
 def test_detector_flags_explicit_anon_grant():
-    src = [("500_x.sql", _FN + "REVOKE ALL ON FUNCTION admin_x(int) FROM PUBLIC;\nGRANT EXECUTE ON FUNCTION admin_x(int) TO anon, service_role;")]
+    src = [
+        (
+            "500_x.sql",
+            _FN
+            + "REVOKE ALL ON FUNCTION admin_x(int) FROM PUBLIC;\nGRANT EXECUTE ON FUNCTION admin_x(int) TO anon, service_role;",
+        )
+    ]
     assert any("left GRANTed" in p for p in _violations(src, sweep_name=None))
 
 
@@ -208,7 +220,7 @@ def test_detector_ignores_security_invoker_and_triggers():
 
 
 # --------------------------------------------------------------------------
-# Migration 448 contract
+# Migration 450 contract
 # --------------------------------------------------------------------------
 
 EXPECTED_ADMIN_SIGNATURES = {
@@ -230,20 +242,20 @@ EXPECTED_ADMIN_SIGNATURES = {
 }
 
 
-def _448() -> str:
-    return _strip_sql_comments(MIGRATION_448.read_text(encoding="utf-8"))
+def _450() -> str:
+    return _strip_sql_comments(MIGRATION_450.read_text(encoding="utf-8"))
 
 
-def test_448_revokes_each_admin_signature_and_regrants_service_role():
-    sql = _448()
+def test_450_revokes_each_admin_signature_and_regrants_service_role():
+    sql = _450()
     for sig in EXPECTED_ADMIN_SIGNATURES:
         esc = re.escape(f"public.{sig}")
         assert re.search(rf"REVOKE EXECUTE ON FUNCTION {esc} FROM PUBLIC, anon, authenticated;", sql), sig
         assert re.search(rf"GRANT\s+EXECUTE ON FUNCTION {esc} TO service_role;", sql), sig
 
 
-def test_448_keeps_authenticated_on_rls_helper_but_drops_anon():
-    sql = _448()
+def test_450_keeps_authenticated_on_rls_helper_but_drops_anon():
+    sql = _450()
     assert "REVOKE EXECUTE ON FUNCTION public.is_party_to_lost_and_found_case(text) FROM PUBLIC, anon;" in sql
     assert re.search(
         r"GRANT\s+EXECUTE ON FUNCTION public\.is_party_to_lost_and_found_case\(text\) TO authenticated, service_role;",
@@ -253,14 +265,22 @@ def test_448_keeps_authenticated_on_rls_helper_but_drops_anon():
     assert not re.search(r"is_party_to_lost_and_found_case\(text\)[^;]*FROM[^;]*authenticated", sql)
 
 
-def test_448_is_privileges_only_and_reloads_postgrest():
-    sql = _448()
+def test_450_is_privileges_only_and_reloads_postgrest():
+    sql = _450()
     upper = sql.upper()
-    for forbidden in ("CREATE OR REPLACE FUNCTION", "DROP ", "ALTER TABLE", "INSERT ", "UPDATE ", "DELETE ", "ALTER DEFAULT PRIVILEGES"):
+    for forbidden in (
+        "CREATE OR REPLACE FUNCTION",
+        "DROP ",
+        "ALTER TABLE",
+        "INSERT ",
+        "UPDATE ",
+        "DELETE ",
+        "ALTER DEFAULT PRIVILEGES",
+    ):
         assert forbidden not in upper, forbidden
     assert "NOTIFY pgrst, 'reload schema';" in sql
     assert "post-condition failed" in sql
 
 
-def test_448_has_rollback_comment():
-    assert "-- Rollback" in MIGRATION_448.read_text(encoding="utf-8")
+def test_450_has_rollback_comment():
+    assert "-- Rollback" in MIGRATION_450.read_text(encoding="utf-8")

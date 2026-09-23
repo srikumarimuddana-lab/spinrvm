@@ -1,6 +1,7 @@
 """Fail-closed checks for production Fly deployment evidence."""
 
 import unittest
+from pathlib import Path
 
 from fly_deploy_gate import GateDenied, evaluate_deploy_evidence, validate_probe_config, wait_for_deploy_evidence
 
@@ -145,7 +146,6 @@ class DeployEvidenceTests(unittest.TestCase):
             )
         self.assertEqual(main_reads, [])
 
-
     def test_probe_config_requires_exact_production_url_and_metrics_token(self):
         for url, token in (
             ("", "metrics-token"),
@@ -156,6 +156,37 @@ class DeployEvidenceTests(unittest.TestCase):
                 with self.assertRaises(GateDenied):
                     validate_probe_config(url, token)
         validate_probe_config("https://spinr-backend-yyz.fly.dev", "metrics-token")
+
+
+class DeployWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "deploy-fly.yml"
+        cls.source = workflow.read_text()
+
+    def test_production_deploy_is_push_main_only_and_has_actions_read(self):
+        self.assertIn("  push:\n    branches:\n      - main", self.source)
+        self.assertNotIn("  workflow_dispatch:", self.source)
+        self.assertNotIn("    paths:", self.source)
+        self.assertIn("  actions: read", self.source)
+
+    def test_exact_sha_gate_runs_before_secrets_or_deploy(self):
+        gate = self.source.index("python3 scripts/fly_deploy_gate.py")
+        self.assertLess(gate, self.source.index("Stage Sentry DSN in Fly secrets"))
+        self.assertLess(gate, self.source.index("run: flyctl deploy"))
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.source)
+
+    def test_production_readiness_and_served_sha_probes_are_required(self):
+        self.assertIn("Verify production probe configuration", self.source)
+        self.assertIn("python3 scripts/fly_deploy_gate.py --check-probes", self.source)
+        self.assertIn("FLY_HEALTH_URL", self.source)
+        self.assertIn("METRICS_AUTH_TOKEN", self.source)
+        for step in ("Readiness check", "Verify the deployed build SHA is serving"):
+            start = self.source.index(f"- name: {step}")
+            next_step = self.source.find("- name:", start + 1)
+            block = self.source[start : next_step if next_step >= 0 else len(self.source)]
+            self.assertNotIn("if:", block)
+
 
 if __name__ == "__main__":
     unittest.main()

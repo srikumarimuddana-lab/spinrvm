@@ -9,11 +9,63 @@
 -- and 384, which restore the prior aggregate semantics. No data is changed.
 -- migration-override-ok: intentionally replaces admin_payout_stats and
 -- admin_payout_window_stats with identical signatures to exclude noncash
--- clawbacks from fleet cash reports; execute grants remain restricted below.
+-- clawbacks from fleet cash reports, and admin_payout_period_snapshot with
+-- its original signature/JSON shape to exclude holds at period close; execute
+-- grants remain restricted below.
 --
 -- Dry-run: admin_payout_stats and admin_payout_window_stats should not count
 -- completed clawback rows as paid or as payout volume; regular auto, standard,
 -- instant and legacy payout rows retain their current accounting.
+
+-- Period-close audit snapshots share cash-paid semantics with dashboard totals.
+-- Keep the response keys and first-50 audit ID behavior from migration 391.
+CREATE OR REPLACE FUNCTION public.admin_payout_period_snapshot(
+    p_start timestamptz,
+    p_end   timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_result jsonb;
+BEGIN
+    SELECT jsonb_build_object(
+        'payout_count',  COUNT(*),
+        'total_amount',  COALESCE(SUM(amount), 0),
+        'payout_ids',    COALESCE((
+            SELECT jsonb_agg(id)
+            FROM (
+                SELECT id FROM payouts
+                WHERE status = 'completed'
+                  AND payout_type IS DISTINCT FROM 'clawback'
+                  AND processed_at >= p_start
+                  AND processed_at < p_end
+                ORDER BY processed_at
+                LIMIT 50
+            ) sub
+        ), '[]'::jsonb)
+    ) INTO v_result
+    FROM payouts
+    WHERE status = 'completed'
+      AND payout_type IS DISTINCT FROM 'clawback'
+      AND processed_at >= p_start
+      AND processed_at < p_end;
+
+    RETURN v_result;
+END;
+$$;
+
+COMMENT ON FUNCTION public.admin_payout_period_snapshot(timestamptz, timestamptz) IS
+    'Payout period close snapshot: cash payout count + total_amount + first 50 IDs for audit. '
+    'Excludes noncash clawback adjustments.';
+
+REVOKE EXECUTE ON FUNCTION public.admin_payout_period_snapshot(timestamptz, timestamptz)
+FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_payout_period_snapshot(timestamptz, timestamptz)
+TO service_role;
 
 CREATE OR REPLACE FUNCTION public.admin_payout_stats()
 RETURNS jsonb

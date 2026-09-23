@@ -8,13 +8,31 @@
  * silent route loss (SPR-PE7TTB class). These tests pin the isolation and the
  * registry-wide reset that go-offline / sign-out rely on.
  */
+import { Platform } from 'react-native';
 import {
   checkLocationIntegrity,
   createLocationIntegrityChecker,
   resetLocationIntegrity,
 } from '../locationIntegrity';
 
-jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
+// Keep React Native's real Platform object and pin only OS for these tests.
+// The original descriptor is restored so test setup cannot leak into other
+// suites or later tests in this file.
+const originalPlatformOS = Object.getOwnPropertyDescriptor(Platform, 'OS');
+
+function setPlatformOS(os: string): void {
+  Object.defineProperty(Platform, 'OS', {
+    configurable: true,
+    enumerable: originalPlatformOS?.enumerable ?? true,
+    writable: true,
+    value: os,
+  });
+}
+
+beforeAll(() => setPlatformOS('android'));
+afterAll(() => {
+  if (originalPlatformOS) Object.defineProperty(Platform, 'OS', originalPlatformOS);
+});
 
 const fix = (lat: number, lng: number, timestamp: number, extra: Record<string, unknown> = {}) =>
   ({
@@ -34,6 +52,16 @@ describe('createLocationIntegrityChecker', () => {
     expect(c.check(fix(52.1, -106.6, 3_000)).trusted).toBe(true);
     // >5km jump in <5s
     expect(c.check(fix(52.9, -106.6, 4_000)).reason).toBe('teleport_detected');
+  });
+
+  it('does not reject mocked fixes on iOS', () => {
+    setPlatformOS('ios');
+    try {
+      const c = createLocationIntegrityChecker();
+      expect(c.check(fix(52.1, -106.6, 5_000, { mocked: true })).trusted).toBe(true);
+    } finally {
+      setPlatformOS('android');
+    }
   });
 
   it('keeps per-producer state isolated — cross-producer interleaving cannot trip teleport', () => {

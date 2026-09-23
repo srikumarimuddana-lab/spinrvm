@@ -12,9 +12,9 @@ triggered themselves.
 
 Replay-safety contract (CLAUDE.md, Background loops):
   Runs on every replica. Two replays must not double-capture. Three layers:
-    1. Redis leader lock (SET NX) — normally one pod runs a tick; this is a
-       best-effort throttle, not a guarantee. When Redis is unavailable the
-       in-process fallback lets every replica run, so it is NOT the safety net.
+    1. Strict Redis leader lock (SET NX) — required to start a tick; an
+       unavailable Redis skips the tick. Its TTL can still expire during a
+       slow tick, so it is not the double-capture safety net.
     2. Atomic DB claim — flip payment_status 'pending' → 'processing' asserting
        auth_status unchanged; only the replica whose UPDATE returns a row acts.
        This is the real double-capture guard and holds even with Redis down.
@@ -39,13 +39,15 @@ try:
     from ..services.outbox_receipts import maybe_send_auto_receipt
     from ..services.payment_service import send_ride_receipt, settle_card
     from .datetime_utils import parse_iso_utc
-    from .redis_client import redis_set_nx
+    from .redis_client import redis_set_nx_strict as redis_set_nx
+    from .metrics import inc as _metric_inc
 except ImportError:
     from db import db  # type: ignore
     from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
 
 try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
@@ -200,13 +202,12 @@ async def preauth_capture_loop() -> None:
         try:
             got_lock = await redis_set_nx("spinr:preauth:capture:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
-            # redis_set_nx now raises on a real (Redis-configured-but-
-            # unavailable) error instead of silently falling back per-replica
-            # (2026-08-11 P1 fix). This lock is a throttle only — the atomic
-            # DB claim is the real double-capture guard — so proceed with the
-            # tick rather than skip it.
-            logger.error(f"preauth_capture: leader lock unavailable ({lock_err}), proceeding without it")
-            got_lock = True
+            logger.error(
+                "preauth_capture: leader lock unavailable (%s); skipping tick",
+                type(lock_err).__name__,
+            )
+            _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "preauth_capture"})
+            got_lock = False
         if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(CAPTURE_INTERVAL_SECONDS)

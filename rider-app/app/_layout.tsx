@@ -1000,8 +1000,8 @@ function RiderReconnectBanner() {
           paddingVertical: 8,
           borderRadius: 999,
           borderWidth: 1,
-          borderColor: colors.warning,
-          backgroundColor: colors.warningBg,
+          borderColor: colors.info,
+          backgroundColor: colors.infoBg,
         }}
       >
         <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600', textAlign: 'center' }}>

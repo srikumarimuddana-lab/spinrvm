@@ -90,10 +90,7 @@ def scoped_presence_key(driver_id: str, session_id: str, online_epoch: int) -> s
     """Return an isolated v2 key; legacy writes cannot replace scoped evidence."""
     if not driver_id or not session_id or type(online_epoch) is not int or online_epoch < 0:
         raise ValueError("driver, session, and non-negative online epoch are required")
-    return (
-        f"{_SCOPED_PREFIX}{quote(driver_id, safe='')}:session:{quote(session_id, safe='')}"
-        f":epoch:{online_epoch}"
-    )
+    return f"{_SCOPED_PREFIX}{quote(driver_id, safe='')}:session:{quote(session_id, safe='')}:epoch:{online_epoch}"
 
 
 def _timestamp_milliseconds(value: str | datetime | None) -> int:
@@ -114,6 +111,80 @@ def _milliseconds_datetime(value: Any) -> datetime | None:
     except (TypeError, ValueError):
         return None
     return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc) if milliseconds > 0 else None
+
+
+def bind_ws_presence_epoch(
+    conn_state: dict, session_id: str | None, requested_epoch: str | None, snapshot: dict
+) -> bool:
+    """Bind only the decimal epoch explicitly presented by this socket."""
+    conn_state.pop("presence_epoch", None)
+    conn_state.pop("presence_session_id", None)
+    if (
+        not session_id
+        or not isinstance(requested_epoch, str)
+        or not requested_epoch.isascii()
+        or not requested_epoch.isdecimal()
+        or len(requested_epoch) > 19
+        or int(requested_epoch) > 9_223_372_036_854_775_807
+        or not snapshot.get("is_online")
+        or str(snapshot.get("online_epoch")) != requested_epoch
+    ):
+        conn_state["presence_reconcile_required"] = True
+        return False
+    conn_state["presence_session_id"] = session_id
+    conn_state["presence_epoch"] = requested_epoch
+    conn_state.pop("presence_reconcile_required", None)
+    return True
+
+
+def ws_session_was_superseded(result: dict[str, Any]) -> bool:
+    """Whether durable renewal proved this JWT controller has been replaced."""
+    return result.get("code") == "SESSION_SUPERSEDED"
+
+
+def scoped_marker_allows_fanout(accepted: Any, *, fenced: bool, attempted: bool = True) -> bool:
+    """Require an actual DB acceptance before v2 marker delivery/fanout."""
+    if fenced:
+        return attempted and accepted is True
+    return accepted is not False
+
+
+async def renew_ws_presence(
+    driver_id: str, conn_state: dict, *, location_captured_at: datetime | None = None
+) -> dict[str, Any] | None:
+    """Renew this immutable socket fence; omitted GPS means contact-only."""
+    epoch = conn_state.get("presence_epoch")
+    if epoch is None:
+        return None
+    kwargs = {"location_captured_at": location_captured_at} if location_captured_at is not None else {}
+    result = await renew_driver_presence(
+        driver_id,
+        conn_state["presence_session_id"],
+        int(epoch),
+        **kwargs,
+    )
+    if result.get("status") in {"stale_epoch", "offline"}:
+        conn_state["presence_epoch"] = None
+        conn_state["presence_reconcile_required"] = True
+    return result
+
+
+async def renew_ws_batch_location(
+    driver_id: str, conn_state: dict, captured_at: datetime, *, trusted: bool
+) -> dict[str, Any] | None:
+    """Renew approved batch GPS only through the batch socket's immutable fence."""
+    if not trusted or conn_state.get("presence_epoch") is None:
+        return None
+    return await renew_ws_presence(driver_id, conn_state, location_captured_at=captured_at)
+
+
+async def clear_ws_presence(driver_id: str, conn_state: dict) -> None:
+    """Clear only the exact scoped socket key; legacy clear is dark-path only."""
+    epoch = conn_state.get("presence_epoch")
+    if epoch is not None:
+        await clear_scoped_driver_presence(driver_id, conn_state["presence_session_id"], int(epoch))
+    elif not conn_state.get("availability_v2"):
+        await clear_presence(driver_id)
 
 
 async def _merge_scoped_presence(key: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -197,8 +268,9 @@ async def get_scoped_driver_presence(driver_id: str, session_id: str, online_epo
         raise RuntimeError("Scoped presence requires shared Redis")
     fields = await redis_client.hgetall(key)
     fields = {
-        (name.decode() if isinstance(name, bytes) else str(name)):
-        (value.decode() if isinstance(value, bytes) else str(value))
+        (name.decode() if isinstance(name, bytes) else str(name)): (
+            value.decode() if isinstance(value, bytes) else str(value)
+        )
         for name, value in (fields or {}).items()
     }
     if not fields:

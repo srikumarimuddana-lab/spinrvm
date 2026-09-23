@@ -41,7 +41,9 @@ def _raw(**overrides):
 
 @pytest.mark.anyio
 async def test_snapshot_preserves_database_ordering_and_serializes_versions():
-    with patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw())):
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw())
+    ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["state_version"] == "9"
     assert snapshot["online_epoch"] == "3"
@@ -63,7 +65,9 @@ async def test_snapshot_lookup_failure_is_not_converted_to_pending():
 @pytest.mark.anyio
 async def test_expired_pending_offer_is_not_actionable_and_requires_reconciliation():
     raw = _raw(offer_reconciliation_required=True)
-    with patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)):
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)
+    ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["pending_offer"] is None
     assert snapshot["offer_reconciliation_required"] is True
@@ -73,7 +77,9 @@ async def test_expired_pending_offer_is_not_actionable_and_requires_reconciliati
 
 @pytest.mark.anyio
 async def test_eligible_offline_driver_remains_offline():
-    with patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw())):
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw())
+    ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["availability_state"] == "offline"
     assert snapshot["reason_code"] == "OFFLINE_INTENT"
@@ -85,7 +91,9 @@ async def test_active_trip_survives_reconnect_and_account_block():
         driver=_driver(status="suspended", is_online=True),
         active_ride={"id": "ride-1", "status": "in_progress", "updated_at": NOW.isoformat()},
     )
-    with patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)):
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)
+    ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["availability_state"] == "paused"
     assert snapshot["reason_code"] == "ACTIVE_TRIP"
@@ -96,7 +104,9 @@ async def test_active_trip_survives_reconnect_and_account_block():
 @pytest.mark.anyio
 async def test_expired_document_blocks_eligible_driver():
     raw = _raw(driver=_driver(license_expiry_date=(NOW - timedelta(days=1)).date().isoformat()))
-    with patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)):
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)
+    ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["availability_state"] == "blocked"
     assert snapshot["reason_code"] == "LICENSE_EXPIRED"
@@ -172,12 +182,12 @@ async def test_enabled_status_write_requires_explicit_epoch_and_request_id():
 
     with (
         patch.object(status, "_availability_v2_enabled", AsyncMock(return_value=True)),
-        patch.object(status.db_supabase, "get_driver_by_id", AsyncMock(return_value=_driver(id="drv-1", user_id="user-1"))),
+        patch.object(
+            status.db_supabase, "get_driver_by_id", AsyncMock(return_value=_driver(id="drv-1", user_id="user-1"))
+        ),
     ):
         with pytest.raises(HTTPException) as error:
-            await status.update_driver_status(
-                driver_id="drv-1", is_online=False, current_user={"id": "user-1"}
-            )
+            await status.update_driver_status(driver_id="drv-1", is_online=False, current_user={"id": "user-1"})
     assert error.value.status_code == 409
     assert error.value.detail["code"] == "AVAILABILITY_UPGRADE_REQUIRED"
 
@@ -188,15 +198,19 @@ async def test_enabled_stop_uses_presented_token_session_and_keeps_trip_online()
 
     with (
         patch.object(status, "_availability_v2_enabled", AsyncMock(return_value=True)),
-        patch.object(status.db_supabase, "get_driver_by_id", AsyncMock(return_value=_driver(id="drv-1", user_id="user-1"))),
+        patch.object(
+            status.db_supabase, "get_driver_by_id", AsyncMock(return_value=_driver(id="drv-1", user_id="user-1"))
+        ),
         patch.object(
             status,
             "_change_availability_status",
-            AsyncMock(return_value={
-                "code": "OK",
-                "is_online": True,
-                "transition": {"availability_reason": "stop_requests"},
-            }),
+            AsyncMock(
+                return_value={
+                    "code": "OK",
+                    "is_online": True,
+                    "transition": {"availability_reason": "stop_requests"},
+                }
+            ),
         ) as change,
     ):
         result = await status.update_driver_status(
@@ -214,6 +228,52 @@ async def test_enabled_stop_uses_presented_token_session_and_keeps_trip_online()
         "presented-session",
     )
     assert result["is_online"] is True
+
+
+@pytest.mark.anyio
+async def test_v2_idempotent_go_does_not_write_unfenced_coordinates():
+    """Go Online coordinates must go through captured-time fenced location APIs."""
+    from backend.routes.drivers import status
+    from backend.utils import driver_presence
+
+    driver = _driver(is_online=True, lat=51.0, lng=-105.0)
+    committed = {
+        "code": "OK",
+        "is_online": True,
+        "is_available": True,
+        "accepting_requests": True,
+        "online_epoch": "3",
+        "state_version": "10",
+        "transition": {
+            "online_epoch": "3",
+            "state_version": "10",
+            "availability_reason": "go_online",
+            "is_online": True,
+        },
+    }
+    with (
+        patch.object(status, "_availability_v2_enabled", AsyncMock(return_value=True)),
+        patch.object(status.db_supabase, "get_driver_by_id", AsyncMock(return_value=driver)),
+        patch.object(status.db_supabase, "get_rows", AsyncMock(return_value=[])),
+        patch.object(status.db_supabase, "update_one", AsyncMock()) as raw_update,
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.utils.spinr_pass.assert_quota_available", AsyncMock()),
+        patch.object(status, "_change_availability_status", AsyncMock(return_value=committed)),
+        patch.object(driver_presence, "renew_driver_presence", AsyncMock(return_value={"status": "renewed"})),
+        patch.object(status, "reset_miss_streak", AsyncMock()),
+    ):
+        await status.update_driver_status(
+            driver_id="drv-1",
+            is_online=True,
+            lat=52.0,
+            lng=-106.0,
+            current_user={"id": "user-1"},
+            token_session_id="session-1",
+            online_epoch="3",
+            request_id="retry-1",
+            availability_action="go_online",
+        )
+    raw_update.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -285,8 +345,12 @@ async def test_matching_go_transition_still_publishes_fresh_presence():
     }
     with (
         patch.object(status._deps, "mark_present", AsyncMock()) as mark_present,
+        patch(
+            "backend.utils.driver_presence.renew_driver_presence", AsyncMock(return_value={"status": "renewed"})
+        ) as renew,
         patch.object(status, "reset_miss_streak", AsyncMock()) as reset_misses,
     ):
-        await status._finish_v2_status(result, "drv-1")
-    mark_present.assert_awaited_once_with("drv-1")
+        await status._finish_v2_status(result, "drv-1", "session-1")
+    mark_present.assert_not_awaited()
+    renew.assert_awaited_once_with("drv-1", "session-1", 5)
     reset_misses.assert_awaited_once_with("drv-1")

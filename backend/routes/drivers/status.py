@@ -74,9 +74,7 @@ async def _change_availability_status(user_id: str, command: dict, token_session
             change_driver_availability,
         )
     try:
-        return await asyncio.wait_for(
-            change_driver_availability(user_id, command, token_session_id), timeout=10
-        )
+        return await asyncio.wait_for(change_driver_availability(user_id, command, token_session_id), timeout=10)
     except (AvailabilityLookupError, TimeoutError) as exc:
         logger.error("driver availability command unavailable", exc_info=True)
         raise HTTPException(
@@ -85,7 +83,7 @@ async def _change_availability_status(user_id: str, command: dict, token_session
         ) from exc
 
 
-async def _finish_v2_status(result: dict, driver_id: str) -> dict:
+async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str | None = None) -> dict:
     code = result.get("code")
     if code != "OK":
         status_by_code = {
@@ -117,24 +115,54 @@ async def _finish_v2_status(result: dict, driver_id: str) -> dict:
         and str(result.get("online_epoch")) == str(transition_epoch)
         and str(result.get("state_version")) == str(transition_version)
     )
-    if (
-        snapshot_matches_transition
-        and action == "go_online"
-        and result.get("is_online")
-        and result.get("accepting_requests")
-        and result.get("is_available")
-        and not result.get("active_ride")
-        and not result.get("pending_offer")
-        and not result.get("offer_reconciliation_required")
-    ):
-        await _deps.mark_present(driver_id)
-        await reset_miss_streak(driver_id)
-    elif (
-        snapshot_matches_transition
-        and not transition.get("is_online")
-        and not result.get("is_online")
-    ):
-        await _deps.clear_presence(driver_id)
+    if snapshot_matches_transition and result.get("is_online"):
+        try:
+            from ...utils.driver_presence import renew_driver_presence
+        except ImportError:  # pragma: no cover - top-level backend import mode
+            from utils.driver_presence import renew_driver_presence  # type: ignore
+        if not token_session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=_availability_error(
+                    "AVAILABILITY_UPGRADE_REQUIRED", "Reconnect to refresh driver availability."
+                ),
+            )
+        try:
+            epoch = int(str(transition_epoch))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=503,
+                detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to refresh driver availability."),
+            ) from None
+        presence = await renew_driver_presence(driver_id, token_session_id, epoch)
+        if presence.get("status") in {"stale_epoch", "offline"}:
+            raise HTTPException(
+                status_code=409, detail={"code": presence.get("code"), "online_epoch": presence.get("online_epoch")}
+            )
+        if (
+            action == "go_online"
+            and result.get("accepting_requests")
+            and result.get("is_available")
+            and not result.get("active_ride")
+            and not result.get("pending_offer")
+            and not result.get("offer_reconciliation_required")
+        ):
+            await reset_miss_streak(driver_id)
+    elif snapshot_matches_transition and not transition.get("is_online") and not result.get("is_online"):
+        # This transition has already advanced the durable epoch. Delete only
+        # its immediately preceding scoped lease; legacy clearing is reserved
+        # for the default-off branch.
+        try:
+            from ...utils.driver_presence import clear_scoped_driver_presence
+        except ImportError:  # pragma: no cover
+            from utils.driver_presence import clear_scoped_driver_presence  # type: ignore
+        if (
+            token_session_id
+            and str(transition_epoch).isascii()
+            and str(transition_epoch).isdecimal()
+            and int(transition_epoch) > 0
+        ):
+            await clear_scoped_driver_presence(driver_id, token_session_id, int(transition_epoch) - 1)
     return {"success": True, **result}
 
 
@@ -155,9 +183,7 @@ async def get_my_availability(
             get_driver_availability,
         )
     try:
-        return await asyncio.wait_for(
-            get_driver_availability(current_user["id"], token_session_id), timeout=10
-        )
+        return await asyncio.wait_for(get_driver_availability(current_user["id"], token_session_id), timeout=10)
     except (AvailabilityLookupError, TimeoutError) as exc:
         logger.error("driver availability snapshot unavailable", exc_info=True)
         raise HTTPException(
@@ -292,7 +318,10 @@ async def update_driver_status(
         v2_action = availability_action if isinstance(availability_action, str) else None
         v2_action = v2_action or ("go_online" if is_online else "stop_requests")
         if v2_action not in {"go_online", "go_offline", "stop_requests"}:
-            raise HTTPException(status_code=422, detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Unsupported availability action."))
+            raise HTTPException(
+                status_code=422,
+                detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Unsupported availability action."),
+            )
         if v2_epoch is None or v2_request_id is None:
             raise HTTPException(
                 status_code=409,
@@ -302,14 +331,17 @@ async def update_driver_status(
                 ),
             )
         if (v2_action == "go_online") != bool(is_online) or (v2_action == "go_offline" and is_online):
-            raise HTTPException(status_code=422, detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Action does not match requested status."))
+            raise HTTPException(
+                status_code=422,
+                detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Action does not match requested status."),
+            )
         if not is_online:
             result = await _change_availability_status(
                 current_user["id"],
                 {"action": v2_action, "online_epoch": v2_epoch, "request_id": v2_request_id},
                 token_session_id,
             )
-            return await _finish_v2_status(result, driver_id)
+            return await _finish_v2_status(result, driver_id, token_session_id)
 
     # CR-4104 / A34 dual-run cutover guard: block go-online for a
     # legacy-imported driver an operator has confirmed is still active on
@@ -930,9 +962,7 @@ async def update_driver_status(
             {"action": v2_action, "online_epoch": v2_epoch, "request_id": v2_request_id},
             token_session_id,
         )
-        if result.get("code") == "OK" and lat is not None and lng is not None and (lat != 0 or lng != 0):
-            await db_supabase.update_one("drivers", {"id": driver_id}, {"lat": lat, "lng": lng})
-        return await _finish_v2_status(result, driver_id)
+        return await _finish_v2_status(result, driver_id, token_session_id)
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "

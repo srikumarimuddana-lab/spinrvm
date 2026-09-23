@@ -220,15 +220,48 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
     # (cold start / reconnect path). The polygon is non-sensitive geodata.
     service_area_polygon = None
     sa_id = ride.get("service_area_id")
+    sa = None
+    area_loaded = False
+    noshow_eligible_at = None
+    arrived_at = parse_iso_utc(ride.get("driver_arrived_at"))
+    if ride.get("status") == RideStatus.DRIVER_ARRIVED and arrived_at is not None:
+        try:
+            from ...settings_loader import get_app_settings
+            from ...utils.scheduled_ride_config import pickup_wait_start
+        except ImportError:
+            from settings_loader import get_app_settings
+            from utils.scheduled_ride_config import pickup_wait_start
+        try:
+            # Match mark_rider_noshow: area override (including zero), then
+            # app settings, starting no earlier than a scheduled pickup.
+            settings = await get_app_settings() or {}
+            if sa_id:
+                sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+                area_loaded = True
+            wait_seconds = int(
+                sa["noshow_wait_seconds"]
+                if sa and sa.get("noshow_wait_seconds") is not None
+                else settings.get("noshow_wait_seconds", 300)
+            )
+            noshow_eligible_at = (pickup_wait_start(ride, arrived_at) + timedelta(seconds=wait_seconds)).isoformat()
+        except Exception as error:
+            original = (getattr(error, "details", None) or {}).get("original", error)
+            logger.error("get_active_ride: no-show policy unavailable: %s", original, exc_info=True)
+            raise HTTPException(status_code=503, detail="Could not load no-show eligibility. Please retry.") from error
     if sa_id:
         try:
-            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            if not area_loaded:
+                sa = await db_supabase.find_one("service_areas", {"id": sa_id})
             service_area_polygon = get_service_area_polygon(sa or {}) or None
         except Exception as e:
             logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
 
     return {
-        "ride": serialize_ride_for_driver(ride),
+        "ride": {
+            **serialize_ride_for_driver(ride),
+            "noshow_eligible_at": noshow_eligible_at,
+            "noshow_server_now": datetime.now(timezone.utc).isoformat(),
+        },
         "rider": safe_rider,
         "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
         "incentives": incentives,

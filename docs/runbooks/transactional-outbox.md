@@ -28,22 +28,32 @@ instruction to change the live topology as part of this code change. First
 prove the candidate inventory, process configuration, private health, and
 authenticated metrics checks described below.
 
-1. **Deploy the worker first.** APIs stay `SPINR_PROCESS_ROLE=all` so the three
-   wave-1 loops still run on API replicas during a deliberate overlap. Before
-   relying on that overlap, verify each selected loop's complete-tick replay
-   behavior and external side effects; claim safety or upsert behavior alone
-   does not prove that a repeated provider call is harmless. Wait through at
-   least one full loop cadence (and any claim/lease window) while observing
-   task health and duplicate-side-effect signals.
+`backend/fly.worker-canary.toml` is an inactive candidate for moving only
+`push_retry (30s)`. Before any operator uses it, validate from `backend/` with
+`fly config validate -c fly.worker-canary.toml --strict`, then review the
+resulting process/service/check behavior. This candidate does not declare
+Machine counts; it must be paired with the opt-in eight-Machine preflight.
+Never point an active deploy workflow at this file as part of this change.
+
+1. Set `SPINR_API_ROLE="all"` in the inactive candidate and deploy that
+   candidate as a staged overlap. Fly deploy does not guarantee that the worker
+   starts before API Machines; this phase keeps the API as owner while worker
+   startup and health are validated.
 2. Confirm worker `/health` is 200, authenticated `/metrics` scrapes, and
    `spinr_worker_task_healthy{task="outbox_poller"}` is 1. Confirm the worker
    claims test rows (or that `outbox_stats` stays empty while the producer is
    off).
-3. **Only then** deploy APIs with `SPINR_PROCESS_ROLE=api` so those three loops
-   stop on API replicas.
-4. Drain old API replicas.
-5. **Only then** set `settings.outbox_receipts_enabled = true`.
-6. Do not claim Railway failover readiness until `ACTION_ITEMS.md` C5 is
+3. Before moving any loop, verify its complete-tick replay behavior and
+   external side effects; claim safety or upsert behavior alone does not prove
+   that a repeated provider call is harmless. Wait through at least one full
+   loop cadence (and any claim/lease window) while observing task health and
+   duplicate-side-effect signals.
+4. **Only after those checks pass**, set `SPINR_API_ROLE="api"` and redeploy the
+   candidate. This makes API Machines select the exact loop also selected on
+   the worker. Verify API watchdog ownership and worker health again.
+5. Drain old API replicas.
+6. **Only then** set `settings.outbox_receipts_enabled = true`.
+7. Do not claim Railway failover readiness until `ACTION_ITEMS.md` C5 is
    resolved and an equivalent one-process worker runs there.
 
 ### Single-loop worker canary
@@ -53,10 +63,16 @@ stays on the API. Use the exact same selector on every API and worker Machine:
 
 | Process group | `SPINR_PROCESS_ROLE` | `SPINR_WORKER_LOOP_ALLOWLIST` | Loops owned |
 |---|---|---|---|
-| API | `api` | One exact catalog name, for example `push_retry (30s)` | All current API loops and the two unselected wave-1 loops |
+| API | `api` (via candidate `SPINR_API_ROLE`) | One exact catalog name, for example `push_retry (30s)` | All current API loops and the two unselected wave-1 loops |
 | Worker | `worker` | The same exact catalog name | Outbox poller and the selected wave-1 loop |
 
-The value is a comma-separated list of exact loop names. Empty, unknown, or
+The candidate's app/burst wrappers copy `SPINR_API_ROLE` into
+`SPINR_PROCESS_ROLE`; the worker wrapper sets `SPINR_PROCESS_ROLE=worker`.
+Set `SPINR_API_ROLE="all"` for the worker-first stage and set it to `api` only
+after the worker is proven healthy and the overlap/replay gate passes. Do not
+assume Fly deploy orders worker before API Machines.
+
+The selector value is a comma-separated list of exact loop names. Empty, unknown, or
 duplicate names fail startup. An unset value preserves the existing full-wave
 role behavior: API role moves all three wave-1 loops, and worker role starts
 all three. `SPINR_PROCESS_ROLE=all` ignores the selector and preserves the
@@ -68,20 +84,26 @@ Before deploying a canary:
    against the current inventory. This only validates
    `app<=2, burst<=5, worker<=1, total<=8`; it does not prove loop ownership,
    health, or metrics.
-2. Verify the non-secret `SPINR_PROCESS_ROLE` and exact selector value on every
-   API and worker Machine. Any mismatch can duplicate or omit work; do not
-   continue until all Machines agree.
-3. Verify the worker is private and `/health` returns 200 with exactly the
+2. Run `fly config validate -c fly.worker-canary.toml --strict` from `backend/`
+   and review provider validation. This validation has not been run for this
+   repository candidate yet.
+3. Verify the candidate's `SPINR_API_ROLE` and selector wrapper match on every
+   API/burst Machine, and the worker wrapper sets role `worker` with the same
+   selector. Confirm effective `SPINR_PROCESS_ROLE` and
+   `SPINR_WORKER_LOOP_ALLOWLIST` in each live process. Any mismatch can
+   duplicate or omit work; do not continue until all Machines agree.
+4. Verify the worker is private and `/health` returns 200 with exactly the
    outbox poller and selected loop. An authenticated private `/metrics` scrape
    must return 200 and show `spinr_worker_task_healthy=1` for both tasks.
-4. Verify API watchdog status still includes the two unselected wave loops.
+5. Verify API watchdog status still includes the two unselected wave loops.
    Observe worker heartbeats, outbox claim/release, oldest pending age, and
    task errors before moving another loop.
-5. Roll back by setting every API Machine to `SPINR_PROCESS_ROLE=all`, verifying
-   the API started and watchdog-monitors the full wave, and only then scaling
-   the worker down after committed outbox rows drain. Clearing the selector
-   while the API remains in `api` role still leaves all three wave loops off
-   the API; do not scale down the worker until API role `all` is confirmed.
+6. Roll back by changing candidate `SPINR_API_ROLE` to `all` and redeploying
+   the compatible process commands. Verify API logs show role `all` and the
+   watchdog monitors the full wave, then scale the worker down after committed
+   outbox rows drain. Setting `SPINR_PROCESS_ROLE` alone does not override the
+   candidate wrapper, which derives it from `SPINR_API_ROLE`; redeploy the
+   changed candidate and confirm effective API role `all` before scaling down.
 
 These external checks are required because unit tests cannot prove Fly Machine
 environment parity, private network reachability, deployed restart behavior,

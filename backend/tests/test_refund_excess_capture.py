@@ -21,7 +21,7 @@ import pytest
 from backend.utils.stripe_charge import refund_excess_capture
 
 
-def _patch_stripe(amount_received: int = 210, refund_id: str = "re_test_1", refund_raises=None):
+def _patch_stripe(amount_received: int = 210, refund_id: str = "re_test_1", refund_raises=None, refund_status="succeeded"):
     mock_stripe = MagicMock()
     intent = MagicMock()
     intent.amount_received = amount_received
@@ -31,6 +31,7 @@ def _patch_stripe(amount_received: int = 210, refund_id: str = "re_test_1", refu
     else:
         refund = MagicMock()
         refund.id = refund_id
+        refund.status = refund_status
         mock_stripe.Refund.create.return_value = refund
     return patch("backend.utils.stripe_charge.stripe", mock_stripe), mock_stripe
 
@@ -45,6 +46,16 @@ def _patch_secret(secret: str = "sk_test_xxx"):
 @pytest.mark.unit
 @pytest.mark.asyncio
 class TestRefundExcessCapture:
+    @pytest.fixture(autouse=True)
+    def isolate_operation_storage(self):
+        with patch("backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[])), patch(
+            "backend.utils.payment_operations.db.find_one", AsyncMock(return_value=None)
+        ), patch(
+            "backend.utils.payment_operations.db.insert_one",
+            AsyncMock(side_effect=lambda _table, row: {"id": "op1", **row}),
+        ), patch("backend.utils.payment_operations.db.update_one", AsyncMock(return_value={"id": "op1"})):
+            yield
+
     async def test_no_payment_intent_is_not_needed_and_never_calls_stripe(self):
         outcome = await refund_excess_capture(ride_id="r1", payment_intent_id="", fee_owed=Decimal("0"))
         assert outcome.status == "not_needed"
@@ -63,6 +74,38 @@ class TestRefundExcessCapture:
         assert outcome.charged_amount == Decimal("2.10")
         assert mock_stripe.Refund.create.call_args.kwargs["amount"] == 210
         assert mock_stripe.Refund.create.call_args.kwargs["payment_intent"] == "pi_1"
+        assert outcome.raw["refund_id"] == "re_test_1"
+        assert outcome.raw["refund_status"] == "succeeded"
+
+    @pytest.mark.parametrize(("provider_status", "expected"), [("pending", "pending"), ("failed", "failed"), ("requires_action", "requires_action")])
+    async def test_refund_result_preserves_provider_lifecycle(self, provider_status, expected):
+        stripe_patch, _ = _patch_stripe(amount_received=210, refund_status=provider_status)
+        with _patch_secret(), stripe_patch:
+            outcome = await refund_excess_capture(ride_id="r1", payment_intent_id="pi_1", fee_owed=Decimal("0"))
+
+        assert outcome.status == expected
+        assert outcome.raw["refund_status"] == provider_status
+
+    async def test_existing_pending_operation_retrieves_provider_object_without_duplicate_create(self):
+        stripe_patch, mock_stripe = _patch_stripe(amount_received=210)
+        prior = MagicMock()
+        prior.id = "re_pending"
+        prior.status = "pending"
+        prior.amount = 210
+        mock_stripe.Refund.retrieve.return_value = prior
+        operation = {
+            "id": "op1", "status": "pending", "provider_object_id": "re_pending",
+            "idempotency_key": "ride-cancelrefund-r1-210-a1",
+        }
+        with _patch_secret(), stripe_patch, patch(
+            "backend.utils.payment_operations.db.get_rows", AsyncMock(return_value=[operation])
+        ):
+            outcome = await refund_excess_capture(ride_id="r1", payment_intent_id="pi_1", fee_owed=Decimal("0"))
+
+        assert outcome.status == "pending"
+        assert outcome.raw["refund_id"] == "re_pending"
+        mock_stripe.Refund.create.assert_not_called()
+        mock_stripe.Refund.retrieve.assert_called_once_with("re_pending", api_key="sk_test_xxx")
 
     async def test_partial_fee_refunds_only_the_excess(self):
         stripe_patch, mock_stripe = _patch_stripe(amount_received=210)
@@ -114,4 +157,4 @@ class TestRefundExcessCapture:
             await refund_excess_capture(ride_id="ride_xyz", payment_intent_id="pi_1", fee_owed=Decimal("0"))
 
         key = mock_stripe.Refund.create.call_args.kwargs["idempotency_key"]
-        assert key == "ride-cancelrefund-ride_xyz-210"
+        assert key == "ride-cancelrefund-ride_xyz-210-a1"

@@ -126,6 +126,7 @@ const renderContactTab = () => renderTab('contact');
 describe('SupportScreen Contact tab — phone comes from admin settings', () => {
   beforeEach(() => {
     mockCompanyInfo = {};
+    mockAiConfigPromise = null;
     jest.clearAllMocks();
   });
 
@@ -164,8 +165,8 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     // placeholder the operator never entered and cannot correct.
     expect(queryByText('support@spinr.ca')).toBeNull();
     expect(queryByLabelText(/^Email support/)).toBeNull();
-    // The Contact tab itself always has this icon; no email action chip or
-    // company-card row should add another one when the email is unset.
+    // The Contact tab itself has a mail icon; only company-detail icons must
+    // be absent when no email is configured.
     expect(queryAllByText('mail-outline')).toHaveLength(1);
     // ...and the former hardcoded identity/address/website placeholders.
     expect(queryByText('SPINR MOBILITY INC.')).toBeNull();
@@ -281,38 +282,6 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
     mockAiConfigPromise = null;
   });
 
-  it('keeps chat out of view while config is pending, then shows it when enabled', async () => {
-    let resolveConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
-    mockAiConfigPromise = new Promise((resolve) => { resolveConfig = resolve; });
-
-    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
-    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
-    expect(utils.queryByText('AI Chat')).toBeNull();
-    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
-    expect(utils.getByLabelText('Loading support chat availability')).toBeTruthy();
-
-    await act(async () => {
-      resolveConfig({ data: { enabled: true, mode: 'enabled' } });
-      await mockAiConfigPromise;
-    });
-    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
-  });
-
-  it('falls back to FAQ without exposing chat when config rejects', async () => {
-    let rejectConfig!: (reason: Error) => void;
-    mockAiConfigPromise = new Promise((_resolve, reject) => { rejectConfig = reject; });
-
-    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
-    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
-
-    await act(async () => {
-      rejectConfig(new Error('configuration unavailable'));
-      await mockAiConfigPromise?.catch(() => undefined);
-    });
-    expect(utils.queryByText('AI Chat')).toBeNull();
-    expect(utils.getByPlaceholderText('Search questions...')).toBeTruthy();
-  });
-
   /** Type a message and send it, letting the rejected POST settle. */
   async function sendChat(utils: ReturnType<typeof render>) {
     await act(async () => {
@@ -336,6 +305,47 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
       utils.getByText("I'm having trouble connecting right now. Please try again."),
     ).toBeTruthy();
     expect(utils.queryByText(/support@spinr\.ca/)).toBeNull();
+  });
+
+  it('keeps an initially requested chat tab while AI config is loading', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
+    expect(utils.getByLabelText('Loading support options')).toBeTruthy();
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: true, mode: 'enabled' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
+  });
+
+  it('falls back from an initially requested chat tab when AI is hidden', async () => {
+    mockAiEnabled = false;
+    const utils = await renderTab('chat');
+
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+    expect(utils.getByText('No FAQs available yet')).toBeTruthy();
+  });
+
+  it('keeps the rider on Contact if they select it before hidden AI config loads', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    fireEvent.press(utils.getByText('Contact'));
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: false, mode: 'hidden' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByText('Submit Report')).toBeTruthy();
   });
 
   it('names the configured email when one is set', async () => {

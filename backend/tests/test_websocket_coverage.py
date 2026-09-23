@@ -21,6 +21,7 @@ defining module — this file imports its dependencies via the dual-import
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -181,7 +182,9 @@ def test_malformed_json_gets_invalid_json_error(app_with_ws):
 
 
 @pytest.mark.anyio
-async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
+@pytest.mark.parametrize("age,accepted", [(0, True), (61, True), (-10, True), (0, False)])
+async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws, age, accepted):
+    captured_at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat()
     active_ride = {
         "id": "ride_cov_1",
         "rider_id": "rider_target_1",
@@ -195,9 +198,10 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
     send_personal = AsyncMock(return_value=None)
     broadcast_admin_loc = AsyncMock(return_value=None)
     buffer_crumb = AsyncMock(return_value=None)
-    update_driver_loc_db = AsyncMock(return_value=None)
+    update_driver_loc_db = AsyncMock(return_value=accepted)
 
     extra = [
+        patch("backend.routes.websocket.should_write_marker", new=AsyncMock(return_value=True)),
         patch("backend.routes.websocket.check_location_integrity", new=AsyncMock(return_value=(True, "ok"))),
         patch("backend.routes.websocket.db_supabase.update_driver_location", new=update_driver_loc_db),
         patch("backend.routes.websocket.manager.update_driver_location", new=update_loc),
@@ -226,17 +230,28 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
                     "lng": -104.6189,
                     "speed": 12,
                     "heading": 90,
-                    "captured_at": "2026-09-15T19:00:00+00:00",
+                    "captured_at": captured_at,
                 }
             )
             # No direct ack for driver_location — give the loop a beat then
             # send a pong to confirm the socket is still alive and the
             # handler didn't raise.
-            ws.send_json({"type": "pong"})
+            ws.send_json({"type": "location_batch", "points": []})
+            assert ws.receive_json() == {"type": "location_batch_ack", "count": 0}
     finally:
         _stop(patches)
 
+    if age != 0 or not accepted:
+        if age != 0:
+            update_driver_loc_db.assert_not_awaited()
+        else:
+            update_driver_loc_db.assert_awaited_once()
+        broadcast_admin_loc.assert_not_awaited()
+        buffer_crumb.assert_awaited_once()
+        assert not any(call.args[0].get("type") == "driver_location_update" for call in send_personal.await_args_list)
+        return
     update_driver_loc_db.assert_awaited_once()
+    assert update_driver_loc_db.await_args.kwargs["captured_at"].isoformat() == captured_at
     # The ephemeral 60 s Redis location cache is no longer written on the ping
     # path: ConnectionManager.get_driver_location never had a single caller, so
     # the write was pure overhead. Dropping it keeps the location write gate's
@@ -248,7 +263,7 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
     sent_msg, sent_target = send_personal.await_args.args[0], send_personal.await_args.args[1]
     assert sent_msg["type"] == "driver_location_update"
     assert sent_msg["ride_id"] == active_ride["id"]
-    assert sent_msg["captured_at"] == "2026-09-15T19:00:00+00:00"
+    assert sent_msg["captured_at"] == captured_at
     assert sent_target == f"rider_{active_ride['rider_id']}"
     assert sent_msg.get("eta_seconds") == 42
     broadcast_admin_loc.assert_awaited_once()
@@ -453,7 +468,14 @@ async def test_location_batch_successful_persist_fans_out_to_riders(app_with_ws)
             ws.send_json(
                 {
                     "type": "location_batch",
-                    "points": [{"latitude": 50.44, "longitude": -104.61, "speed": 5}],
+                    "points": [
+                        {
+                            "latitude": 50.44,
+                            "longitude": -104.61,
+                            "speed": 5,
+                            "captured_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    ],
                 }
             )
             msg = ws.receive_json()
@@ -552,13 +574,17 @@ async def test_location_batch_drops_implausible_middle_point_but_live_marker_unc
                 {
                     "type": "location_batch",
                     "points": [
-                        {"lat": _REGINA[0], "lng": _REGINA[1], "captured_at": "2026-06-01T23:06:00Z"},
+                        {
+                            "lat": _REGINA[0],
+                            "lng": _REGINA[1],
+                            "captured_at": (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat(),
+                        },
                         # Implausible teleport -- must be dropped from the
                         # breadcrumb persist, but is still the raw last point.
                         {
                             "lat": _SASKATOON[0],
                             "lng": _SASKATOON[1],
-                            "captured_at": "2026-06-01T23:06:03Z",
+                            "captured_at": datetime.now(timezone.utc).isoformat(),
                             "speed": 5,
                         },
                     ],

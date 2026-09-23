@@ -73,7 +73,7 @@ def _base_patches(settings=None):
         patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
         patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
         patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")),
-        patch("backend.routes.rides._deps.record_refund_event", AsyncMock(return_value="evt_refund_1")),
+        patch("backend.routes.rides._deps.reconcile_confirmed_stripe_refund", AsyncMock(return_value={"outcome": "applied"})),
         patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("cancelled"))),
         patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
         patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
@@ -132,8 +132,8 @@ class TestAlreadyCapturedHoldRefund:
         charge_mock.assert_not_awaited()
 
         written = update_ride_mock.call_args_list[0].args[1]
-        assert written["payment_status"] == "refunded"
-        assert Decimal(str(written["refund_amount"])) == Decimal("2.10")
+        assert "payment_status" not in written
+        assert "refund_amount" not in written
 
     async def test_partial_fee_refunds_only_the_excess(self):
         """A cancellation fee IS owed — only the amount above it comes back."""
@@ -159,8 +159,8 @@ class TestAlreadyCapturedHoldRefund:
         charge_mock.assert_not_awaited()
 
         written = update_ride_mock.call_args_list[0].args[1]
-        assert written["payment_status"] == "partially_refunded"
-        assert Decimal(str(written["refund_amount"])) == Decimal("1.60")
+        assert "payment_status" not in written
+        assert "refund_amount" not in written
 
     async def test_capture_already_covers_the_fee_no_refund_needed(self):
         """The captured amount is <= the fee owed — nothing to give back, and
@@ -205,6 +205,26 @@ class TestAlreadyCapturedHoldRefund:
         charge_mock.assert_not_awaited()
 
         written = update_ride_mock.call_args_list[0].args[1]
+        assert "refund_amount" not in written
+        assert written.get("payment_status") != "refunded"
+
+    async def test_pending_refund_is_exposed_without_finalizing_refund_accounting(self):
+        update_ride_mock = AsyncMock()
+        refund_mock = AsyncMock(return_value=ChargeOutcome(
+            status="pending", payment_intent_id="pi_already_captured",
+            charged_amount=Decimal("2.10"),
+            raw={"refund_id": "re_pending_1", "refund_status": "pending"},
+        ))
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.refund_excess_capture", refund_mock),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", AsyncMock()),
+        ):
+            await _run_cancel()
+
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert written["refund_status"] == "pending"
+        assert written["refund_id"] == "re_pending_1"
         assert "refund_amount" not in written
         assert written.get("payment_status") != "refunded"
 
@@ -266,7 +286,7 @@ class TestAlreadyCapturedHoldRefund:
             patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
             patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")),
-            patch("backend.routes.rides._deps.record_refund_event", AsyncMock()),
+            patch("backend.routes.rides._deps.reconcile_confirmed_stripe_refund", AsyncMock(return_value={"outcome": "applied"})),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("cancelled"))),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),

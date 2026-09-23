@@ -87,6 +87,7 @@ module.exports = {
     '^@shared/services/posthogReplay$': '<rootDir>/../shared/services/posthogReplay.ts',
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
+    '^@shared/auth/(.*)$': '<rootDir>/../shared/auth/$1',
     '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',
   },
 };

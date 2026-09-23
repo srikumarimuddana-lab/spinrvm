@@ -1,3 +1,4 @@
+import { DriverLocationStatus } from '../components/DriverLocationStatus';
 import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
@@ -517,6 +518,7 @@ function RideInProgressScreenContent() {
         <View style={{ flex: 1 }}>
           <Text style={styles.etaLabel}>ARRIVING AT</Text>
           <Text style={styles.etaTime} allowFontScaling={false}>{estimatedTime}</Text>
+                    <DriverLocationStatus capturedAt={currentDriver?.location_captured_at} color={colors.textDim} />
         </View>
         <View style={styles.etaBadge}>
           <Text style={styles.etaBadgeNum} allowFontScaling={false}>{eta}</Text>

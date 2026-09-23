@@ -20,6 +20,7 @@ _DRIVER = {
     "rating": 4.9,
     "lat": 52.13,
     "lng": -106.67,
+    "location_captured_at": "2026-09-22T12:00:00+00:00",
     "vehicle_make": "Toyota",
     "license_plate": "ABC123",
 }
@@ -43,7 +44,9 @@ async def _call(status: str):
     with (
         patch("backend.routes.rides.queries._deps.db_supabase.get_ride", AsyncMock(return_value=_ride(status))),
         patch("backend.routes.rides.queries._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=dict(_DRIVER))),
-        patch("backend.routes.rides.queries._deps.db_supabase.get_user_by_id", AsyncMock(return_value={"id": "drvuser_1"})),
+        patch(
+            "backend.routes.rides.queries._deps.db_supabase.get_user_by_id", AsyncMock(return_value={"id": "drvuser_1"})
+        ),
         patch("backend.routes.rides.queries._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         patch("backend.routes.rides.queries._rider_visible_photo", lambda u: None),
         patch("backend.routes.rides.queries.get_app_settings", AsyncMock(return_value={}), create=True),
@@ -58,17 +61,38 @@ class TestDriverGpsTerminalRedaction:
         driver = result["driver"]
         assert driver["lat"] == 52.13
         assert driver["lng"] == -106.67
+        assert driver["location_captured_at"] == _DRIVER["location_captured_at"]
 
     async def test_completed_ride_redacts_location(self):
         result = await _call("completed")
         driver = result["driver"]
         assert driver["lat"] is None
         assert driver["lng"] is None
+        assert driver["location_captured_at"] is None
         # Non-location identity fields still present.
         assert driver["license_plate"] == "ABC123"
 
     async def test_cancelled_ride_redacts_location(self):
         result = await _call("cancelled")
         driver = result["driver"]
+        assert driver["lat"] is None
+        assert driver["lng"] is None
+        assert driver["location_captured_at"] is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["in_progress", "completed"])
+async def test_resume_driver_view_includes_capture_time_and_redacts_unpaid_completed(status):
+    from backend.routes.rides import queries
+
+    with (
+        patch.object(queries._deps.db_supabase, "get_rows", AsyncMock(return_value=[_ride(status)])),
+        patch.object(queries._deps.db_supabase, "get_driver_by_id", AsyncMock(return_value=dict(_DRIVER))),
+        patch.object(queries._deps.db_supabase, "get_user_by_id", AsyncMock(return_value={})),
+    ):
+        result = await queries.get_active_ride(current_user={"id": "rider_1"})
+    driver = result["ride"]["driver"]
+    assert driver["location_captured_at"] == (_DRIVER["location_captured_at"] if status == "in_progress" else None)
+    if status == "completed":
         assert driver["lat"] is None
         assert driver["lng"] is None

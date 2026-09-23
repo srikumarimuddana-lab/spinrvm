@@ -1,4 +1,5 @@
 """A release audit must not create schema or migration provenance."""
+
 from unittest.mock import MagicMock
 
 import pytest

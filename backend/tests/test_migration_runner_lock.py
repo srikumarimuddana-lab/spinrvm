@@ -1,4 +1,5 @@
 """Migration ownership must precede bootstrap and pending classification."""
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,12 +44,15 @@ def test_failed_lock_never_bootstraps_and_redacts_exception(monkeypatch, capsys)
     conn.close.assert_called_once()
 
 
-@pytest.mark.parametrize("dsn", [
-    "postgresql://u:private@aws-0-ca.pooler.supabase.com:5432/db",
-    "postgresql://u:private@localhost:6543/db",
-    "postgresql://u:private@localhost/db?pgbouncer=true",
-    "host=localhost password=private dbname=test",
-])
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://u:private@aws-0-ca.pooler.supabase.com:5432/db",
+        "postgresql://u:private@localhost:6543/db",
+        "postgresql://u:private@localhost/db?pgbouncer=true",
+        "host=localhost password=private dbname=test",
+    ],
+)
 def test_apply_rejects_poolers_and_unverifiable_dsn(dsn):
     with pytest.raises(ValueError, match="direct PostgreSQL URL") as exc:
         runner._validate_apply_dsn(dsn)

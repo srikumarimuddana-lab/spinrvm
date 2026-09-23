@@ -100,9 +100,7 @@ def _validate_target_environment(environment: dict[str, str] | None = None) -> s
         raise ValueError("ENV is not an allowed development/staging environment")
 
     url = values.get("SUPABASE_URL", "")
-    if url != url.strip() or any(
-        char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url
-    ):
+    if url != url.strip() or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url):
         raise ValueError("SUPABASE_URL is malformed")
     if not url or not values.get("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")

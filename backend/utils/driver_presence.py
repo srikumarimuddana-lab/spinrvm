@@ -30,7 +30,9 @@ presence to fan out correctly.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Any, List, Optional
+from urllib.parse import quote
 
 try:
     from .redis_client import (
@@ -59,10 +61,161 @@ logger = logging.getLogger(__name__)
 PRESENCE_TTL = 90
 
 _PREFIX = "spinr:presence:driver:"
+_SCOPED_PREFIX = "spinr:presence:v2:driver:"
+
+_MERGE_SCOPED_PRESENCE = """
+local contact_ms = tonumber(ARGV[1])
+local contact_deadline_ms = tonumber(ARGV[2])
+local location_deadline_ms = tonumber(ARGV[3])
+local old_contact_ms = tonumber(redis.call('HGET', KEYS[1], 'contact_received_ms') or '0')
+local old_contact_deadline_ms = tonumber(redis.call('HGET', KEYS[1], 'contact_valid_until_ms') or '0')
+local old_location_deadline_ms = tonumber(redis.call('HGET', KEYS[1], 'location_valid_until_ms') or '0')
+if contact_ms >= old_contact_ms then
+    redis.call('HSET', KEYS[1], 'contact_received_ms', ARGV[1], 'contact_valid_until_ms', ARGV[2])
+end
+if location_deadline_ms > old_location_deadline_ms then
+    redis.call('HSET', KEYS[1], 'location_valid_until_ms', ARGV[3])
+end
+local latest_contact_deadline_ms = math.max(contact_deadline_ms, old_contact_deadline_ms)
+redis.call('PEXPIREAT', KEYS[1], latest_contact_deadline_ms)
+return redis.call('HGETALL', KEYS[1])
+"""
 
 
 def _key(driver_id: str) -> str:
     return f"{_PREFIX}{driver_id}"
+
+
+def scoped_presence_key(driver_id: str, session_id: str, online_epoch: int) -> str:
+    """Return an isolated v2 key; legacy writes cannot replace scoped evidence."""
+    if not driver_id or not session_id or type(online_epoch) is not int or online_epoch < 0:
+        raise ValueError("driver, session, and non-negative online epoch are required")
+    return (
+        f"{_SCOPED_PREFIX}{quote(driver_id, safe='')}:session:{quote(session_id, safe='')}"
+        f":epoch:{online_epoch}"
+    )
+
+
+def _timestamp_milliseconds(value: str | datetime | None) -> int:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _milliseconds_datetime(value: Any) -> datetime | None:
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc) if milliseconds > 0 else None
+
+
+async def _merge_scoped_presence(key: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Atomically preserve newest contact and approved-GPS deadlines per fence."""
+    received_ms = _timestamp_milliseconds(result.get("contact_received_at"))
+    contact_until_ms = _timestamp_milliseconds(result.get("contact_valid_until"))
+    location_until_ms = _timestamp_milliseconds(result.get("location_valid_until"))
+    redis_client = await _get_redis()
+    if redis_client is None:
+        raise RuntimeError("Scoped presence requires shared Redis")
+    values = await redis_client.eval(
+        _MERGE_SCOPED_PRESENCE,
+        1,
+        key,
+        received_ms,
+        contact_until_ms,
+        location_until_ms,
+    )
+    if isinstance(values, list):
+        fields = {}
+        for name, value in zip(values[::2], values[1::2], strict=False):
+            name = name.decode() if isinstance(name, bytes) else str(name)
+            value = value.decode() if isinstance(value, bytes) else str(value)
+            fields[name] = value
+        return fields
+    return await redis_client.hgetall(key)
+
+
+async def renew_driver_presence(
+    driver_id: str,
+    session_id: str,
+    online_epoch: int,
+    *,
+    location_captured_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Renew server-authenticated contact and optional integrity-approved GPS."""
+    try:
+        try:
+            from ..repositories.driver_presence_repo import renew_driver_presence as renew_in_database
+        except ImportError:  # pragma: no cover - top-level backend import mode
+            from repositories.driver_presence_repo import renew_driver_presence as renew_in_database  # type: ignore
+
+        result = await renew_in_database(driver_id, session_id, online_epoch, location_captured_at)
+    except Exception:
+        logger.error("[presence] durable renewal failed", exc_info=True)
+        return {"status": "unavailable", "code": "PRESENCE_UNAVAILABLE", "online_epoch": str(online_epoch)}
+
+    status = result.get("status")
+    code = result.get("code")
+    if status != "renewed":
+        external_code = {
+            "UNAUTHORIZED_SESSION": "SESSION_SUPERSEDED",
+            "CONTROLLER_SESSION_MISMATCH": "SESSION_SUPERSEDED",
+            "ONLINE_EPOCH_STALE": "ONLINE_EPOCH_STALE",
+            "OFFLINE": "DRIVER_OFFLINE",
+            "CONTACT_GAP": "CONTACT_GAP",
+            "AVAILABILITY_V2_DISABLED": "AVAILABILITY_V2_DISABLED",
+        }.get(code, code or "PRESENCE_UNAVAILABLE")
+        return {**result, "code": external_code}
+
+    try:
+        key = scoped_presence_key(driver_id, session_id, online_epoch)
+        fields = await _merge_scoped_presence(key, result)
+    except Exception:
+        logger.error("[presence] scoped Redis renewal failed", exc_info=True)
+        return {"status": "unavailable", "code": "PRESENCE_UNAVAILABLE", "online_epoch": str(online_epoch)}
+
+    return {
+        **result,
+        "code": "INVALID_LOCATION_TIME" if code == "INVALID_LOCATION_TIME" else "renewed",
+        "contact_valid_until": _milliseconds_datetime(fields.get("contact_valid_until_ms")),
+        "location_valid_until": _milliseconds_datetime(fields.get("location_valid_until_ms")),
+    }
+
+
+async def get_scoped_driver_presence(driver_id: str, session_id: str, online_epoch: int) -> dict[str, Any] | None:
+    """Read only the matching controller and epoch's expiring evidence."""
+    key = scoped_presence_key(driver_id, session_id, online_epoch)
+    redis_client = await _get_redis()
+    if redis_client is None:
+        raise RuntimeError("Scoped presence requires shared Redis")
+    fields = await redis_client.hgetall(key)
+    fields = {
+        (name.decode() if isinstance(name, bytes) else str(name)):
+        (value.decode() if isinstance(value, bytes) else str(value))
+        for name, value in (fields or {}).items()
+    }
+    if not fields:
+        return None
+    return {
+        "contact_received_at": _milliseconds_datetime(fields.get("contact_received_ms")),
+        "contact_valid_until": _milliseconds_datetime(fields.get("contact_valid_until_ms")),
+        "location_valid_until": _milliseconds_datetime(fields.get("location_valid_until_ms")),
+    }
+
+
+async def clear_scoped_driver_presence(driver_id: str, session_id: str, online_epoch: int) -> None:
+    """Delete only the exact controller lease; old disconnects cannot clear newer keys."""
+    redis_client = await _get_redis()
+    if redis_client is None:
+        raise RuntimeError("Scoped presence requires shared Redis")
+    await redis_client.delete(scoped_presence_key(driver_id, session_id, online_epoch))
 
 
 async def mark_present(driver_id: str, ttl: int = PRESENCE_TTL) -> None:

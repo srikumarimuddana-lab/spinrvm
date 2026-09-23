@@ -30,6 +30,7 @@ try:
     from .driver_status_notifications import ACCOUNT_PRIORITY
     from .email_layout import render_email
     from .email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
+    from .insurance_periods import close_period_for_forced_offline
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
 except ImportError:
@@ -42,6 +43,7 @@ except ImportError:
     from utils.driver_status_notifications import ACCOUNT_PRIORITY
     from utils.email_layout import render_email
     from utils.email_notifications import EmailClass, resolve_recipient, send_lifecycle_email
+    from utils.insurance_periods import close_period_for_forced_offline
     from utils.metrics import inc as _metric_inc
     from utils.metrics import set_gauge as _metric_gauge
 
@@ -260,6 +262,12 @@ async def check_expiring_documents():
                 # Already suspended by a prior tick or another replica — nothing to do.
                 continue
             logger.warning(f"Doc expiry: driver {driver['id']} suspended for expired docs ({doc_list})")
+            # The write above forced is_online=False. Close the driver's open
+            # insurance period to what they actually are now — Period 0, unless
+            # a ride/offer is still theirs (then it stays 2/3; see the helper).
+            # Nothing else would: the reconciler only scans online drivers.
+            # The helper never raises on a DB error (logs at ERROR instead).
+            await close_period_for_forced_offline(driver["id"], reason="document_expired")
             # Clear Redis presence so dispatch filters drop this driver
             # immediately — otherwise they'd remain eligible for up to
             # PRESENCE_TTL (90 s) and could still be assigned a ride.

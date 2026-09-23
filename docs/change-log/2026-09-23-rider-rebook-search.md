@@ -1,5 +1,25 @@
 # Change Impact & Risk Log
 
+## PR review follow-up — Expo Router compatibility
+
+- Issue/root cause: the new `useIsFocused` import used external React Navigation,
+  which Expo Router on SDK 57 rejects. PR native export and web E2E export both failed.
+- Change: repoint the hook and its screen-test mock to `expo-router/react-navigation`.
+  The focus check and customer-visible behaviour are unchanged.
+- Alternative considered: disabling the bundler compatibility check. Rejected because
+  the supported import preserves the guard and the correct navigation context.
+- Blast radius: `confirm-pickup.tsx` is the only application caller of `useIsFocused`;
+  its focused/unfocused tests remain the relevant behaviour checks. No sibling driver
+  hook needs changing, and no database, payment, or native dependency changes are made.
+- Before: import from `@react-navigation/native`. After: import from
+  `expo-router/react-navigation` in the screen and its mock.
+- Verification: failing native/web exports observed on PR head `2015b3f79`.
+  Follow-up verification results are recorded below before push.
+- Rollback: revert this follow-up commit and redeploy the preceding bundle; this
+  reintroduces the known export failure. No live data repair is needed.
+- Not verified: device behaviour; a successful JS export is not a signed native
+  build or Android/iOS device test.
+
 ## Summary
 
 | Field | Value |

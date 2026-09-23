@@ -616,9 +616,9 @@ function DriverDashboard() {
   useEffect(() => {
     if (rideState !== 'ride_offered') return;
     // Re-seed local state from the store so we always start from the
-    // configured countdown when a fresh offer arrives. Deps are [rideState]
-    // only (see the exhaustive-deps suppression below) — this doesn't
-    // re-fire on countdownSeconds changes, so it can't loop.
+    // configured countdown when a fresh offer arrives, or the remaining
+    // deadline after an interrupted acceptance. Local ticks don't write
+    // countdownSeconds until expiry, so this cannot reset on each tick.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCountdownState(countdownSeconds);
     const interval = setInterval(() => {
@@ -633,10 +633,10 @@ function DriverDashboard() {
       });
     }, 1000);
     return () => clearInterval(interval);
-    // `countdownSeconds` is read at effect-start only; we intentionally
-    // don't re-run on every tick.
+    // Local ticks use countdownState; store countdownSeconds only changes
+    // for a new offer, server reconciliation, or expiry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rideState]);
+  }, [rideState, countdownSeconds]);
 
   // Resync the offer countdown against wall-clock time when the app returns
   // to the foreground. The interval above only decrements while JS is

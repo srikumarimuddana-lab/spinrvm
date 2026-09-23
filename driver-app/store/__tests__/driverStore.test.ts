@@ -66,6 +66,7 @@ const resetStore = () =>
     completedRide: null,
     countdownSeconds: 0,
     isLoading: false,
+    acceptNetworkHold: false,
     error: null,
     earnings: null,
     dailyEarnings: [],
@@ -225,6 +226,92 @@ describe('driverStore — ride state machine', () => {
     });
 
     expect(useDriverStore.getState().error).toBe('Internal server error');
+  });
+
+  test('releases the accept hold after an uncertain response and empty recovery', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide());
+    mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+    mockApi.get.mockResolvedValueOnce({ data: null } as any);
+
+    await useDriverStore.getState().acceptRide('ride-123');
+
+    expect(useDriverStore.getState().acceptNetworkHold).toBe(false);
+    expect(useDriverStore.getState().rideState).toBe('ride_offered');
+  });
+
+  test.each(['reset', 'decline', 'new offer'])('%s clears a previous offer accept hold', async (action) => {
+    useDriverStore.setState({ acceptNetworkHold: true });
+    if (action === 'reset') useDriverStore.getState().resetRideState();
+    else if (action === 'decline') {
+      mockApi.post.mockResolvedValueOnce({ data: {} } as any);
+      await useDriverStore.getState().declineRide('ride-123');
+    } else useDriverStore.getState().setIncomingRide(makeMockRide({ ride_id: 'ride-456' }));
+
+    expect(useDriverStore.getState().acceptNetworkHold).toBe(false);
+  });
+
+  test('drops an expired uncertain offer without sending a decline', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide({ offer_expires_at: '2000-01-01T00:00:00Z' }));
+    mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+    mockApi.get.mockResolvedValueOnce({ data: null } as any);
+
+    await useDriverStore.getState().acceptRide('ride-123');
+
+    expect(useDriverStore.getState().rideState).toBe('idle');
+    expect(useDriverStore.getState().acceptNetworkHold).toBe(false);
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('an uncertain old accept cannot dismiss the next offer', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide());
+    mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+    mockApi.get.mockImplementationOnce(async () => {
+      useDriverStore.getState().resetRideState();
+      useDriverStore.getState().setIncomingRide(makeMockRide({ ride_id: 'ride-456' }));
+      return { data: null } as any;
+    });
+
+    await useDriverStore.getState().acceptRide('ride-123');
+
+    expect(useDriverStore.getState().incomingRide?.ride_id).toBe('ride-456');
+    expect(useDriverStore.getState().rideState).toBe('ride_offered');
+    expect(useDriverStore.getState().isLoading).toBe(false);
+  });
+
+  test('an interrupted accept resumes only the time left before the offer deadline', async () => {
+    const start = Date.now();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      useDriverStore.getState().setIncomingRide(makeMockRide({ offer_expires_at: new Date(start + 15000).toISOString() }));
+      mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+      mockApi.get.mockImplementationOnce(async () => {
+        now.mockReturnValue(start + 5000);
+        return { data: null } as any;
+      });
+
+      await useDriverStore.getState().acceptRide('ride-123');
+
+      expect(useDriverStore.getState().countdownSeconds).toBe(10);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test('an old accept failure preserves the next offer acceptance loading and hold', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide());
+    mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+    mockApi.get.mockImplementationOnce(async () => {
+      useDriverStore.getState().resetRideState();
+      useDriverStore.getState().setIncomingRide(makeMockRide({ ride_id: 'ride-456' }));
+      useDriverStore.setState({ isLoading: true, acceptNetworkHold: true });
+      return { data: null } as any;
+    });
+
+    await useDriverStore.getState().acceptRide('ride-123');
+
+    expect(useDriverStore.getState().incomingRide?.ride_id).toBe('ride-456');
+    expect(useDriverStore.getState().isLoading).toBe(true);
+    expect(useDriverStore.getState().acceptNetworkHold).toBe(true);
   });
 
   test('acceptRide 409 proceeds as success when this driver actually owns the ride', async () => {

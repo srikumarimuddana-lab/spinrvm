@@ -32,7 +32,7 @@ try:
     from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding, t4a_income
     from ...utils.datetime_utils import parse_iso_utc
-    from ...utils.legacy_rides import is_legacy_ride
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, is_legacy_ride
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -44,7 +44,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils import metrics, report_branding, t4a_income
     from utils.datetime_utils import parse_iso_utc
-    from utils.legacy_rides import is_legacy_ride
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, is_legacy_ride
     from utils.rate_limiter import default_limiter as limiter
 
 logger = logging.getLogger(__name__)
@@ -841,7 +841,11 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
     end = f"{year + 1}-01-01"
     rides = await _get_all_rows_paginated(
         "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}},
+        # Previous-app imported rides are excluded exactly as on the driver's
+        # slip and in the $500 check (utils/legacy_rides): that income belongs
+        # to the old app and, where paid through Stripe, is reported via the
+        # synced payouts added below — counting both double-reports to CRA.
+        {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}, **EXCLUDE_LEGACY_RIDES},
         columns="id,driver_id,driver_earnings,base_fare,distance_fare,time_fare,tip_amount",
         # Stable offset pagination: an unordered multi-page read can skip or
         # repeat rides, which would also skip/repeat their incentive claims.
@@ -886,10 +890,25 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
         else []
     ) or []
 
+    # Legacy-era income actually PAID through Stripe — same two settled types,
+    # same status='completed' gate, as get_t4a_summary/_driver_annual_earnings.
+    synced = await _get_all_rows_paginated(
+        "payouts",
+        {
+            "payout_type": {"$in": ["stripe_sync", "legacy_outstanding_correction"]},
+            "status": "completed",
+            "created_at": window,
+        },
+        columns="id,driver_id,amount",
+        order="id",
+    )
+
     def _add(driver_id: Optional[str], amount: Decimal) -> None:
         if driver_id:
             earnings_by_driver[driver_id] = earnings_by_driver.get(driver_id, Decimal("0")) + amount
 
+    for p in synced:
+        _add(p.get("driver_id"), Decimal(str(p.get("amount") or "0")))
     for c in cancelled:
         _add(c.get("driver_id"), t4a_income.cancellation_fee(c))
     for b in bonuses:

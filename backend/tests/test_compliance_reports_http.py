@@ -632,6 +632,44 @@ def test_t4a_filer_handoff_counts_cancellation_fees_bonuses_and_incentives(admin
     assert rides_q_kw.get("order") == "id"
 
 
+def test_t4a_filer_handoff_matches_slip_legacy_rules(admin_client):
+    """The filer must apply the slip's legacy rules: previous-app imported
+    rides are excluded server-side, and settled legacy Stripe payouts
+    (stripe_sync / completed legacy_outstanding_correction) are income.
+    d4's only income is $520 of synced legacy payouts -> qualifies, as it
+    does on their slip and in the $500 check."""
+    seen: list = []
+
+    async def get_rows_side(table, filters=None, **kw):
+        seen.append((table, filters))
+        if table == "payouts":
+            return [{"id": "p1", "driver_id": "d4", "amount": "520.00"}]
+        if table == "drivers":
+            return [dict(_T4A_DRIVER_ROW, id="d4")]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8").splitlines()
+    header = lines[0].split(",")
+    assert lines[1].split(",")[header.index("total_earnings")] == "520.00"
+    rides_q = next(f for t, f in seen if t == "rides" and f.get("status") == "completed")
+    assert rides_q["legacy_import_metadata"] == {"$eq": {}}
+    payouts_q = next(f for t, f in seen if t == "payouts")
+    assert payouts_q["payout_type"] == {"$in": ["stripe_sync", "legacy_outstanding_correction"]}
+    assert payouts_q["status"] == "completed"
+    assert payouts_q["created_at"] == {"$gte": "2026-01-01", "$lt": "2027-01-01"}
+
+
 # ── Insurance billing (SGI / Knight Archer, per-trip per-phase) ─────────────
 
 _PD_PERIOD_2 = {

@@ -126,3 +126,43 @@ def test_presence_rpc_is_service_role_only(presence_db):
     assert cur.fetchone()[0] is False
     cur.execute("SELECT has_function_privilege('service_role', 'renew_driver_presence(text,text,bigint,timestamptz)', 'EXECUTE')")
     assert cur.fetchone()[0] is True
+
+
+def test_v2_live_marker_is_fenced_atomically_by_session_and_epoch(presence_db):
+    cur = presence_db
+    cur.execute(
+        """CREATE OR REPLACE FUNCTION public.update_live_driver_marker(
+               p_driver_id text,p_captured_at timestamptz,p_values jsonb)
+             RETURNS boolean LANGUAGE plpgsql AS $$
+             BEGIN
+               UPDATE public.drivers SET lat=(p_values->>'lat')::double precision,
+                     lng=(p_values->>'lng')::double precision WHERE id=p_driver_id;
+               RETURN FOUND;
+             END; $$"""
+    )
+
+    def fenced(session, epoch):
+        cur.execute(
+            "SELECT public.update_live_driver_marker_fenced(%s,%s,%s::jsonb,%s,%s)",
+            (
+                "presence-driver",
+                "2026-09-23T12:00:00Z",
+                '{"lat":50.45,"lng":-104.6}',
+                session,
+                epoch,
+            ),
+        )
+        return cur.fetchone()[0]
+
+    assert fenced("sess-A", 11) is False
+    assert fenced("old-session", 12) is False
+    cur.execute("SELECT lat,lng FROM drivers WHERE id='presence-driver'")
+    assert cur.fetchone() == (None, None)
+    assert fenced("sess-A", 12) is True
+    cur.execute("SELECT lat,lng FROM drivers WHERE id='presence-driver'")
+    assert cur.fetchone() == (50.45, -104.6)
+    cur.execute(
+        "SELECT has_function_privilege('authenticated', "
+        "'update_live_driver_marker_fenced(text,timestamptz,jsonb,text,bigint)', 'EXECUTE')"
+    )
+    assert cur.fetchone()[0] is False

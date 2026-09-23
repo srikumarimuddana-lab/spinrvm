@@ -121,7 +121,15 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
 
 
 async def update_driver_location(
-    driver_id: str, lat: float, lng: float, heading=None, *, captured_at=None, extra_fields=None
+    driver_id: str,
+    lat: float,
+    lng: float,
+    heading=None,
+    *,
+    captured_at=None,
+    extra_fields=None,
+    authenticated_session_id: str | None = None,
+    online_epoch: int | None = None,
 ):
     """Commit a live marker under a DB capture-time guard (migration 445).
 
@@ -131,6 +139,10 @@ async def update_driver_location(
     if not supabase:
         _write_skipped("update_driver_location", "drivers")
         return None
+    if (authenticated_session_id is None) != (online_epoch is None):
+        raise ValueError("authenticated session and online epoch must be supplied together")
+    if online_epoch is not None and (type(online_epoch) is not int or online_epoch < 0):
+        raise ValueError("online_epoch must be a non-negative integer")
     capture = captured_at if captured_at is not None else datetime.now(timezone.utc)
     if isinstance(capture, datetime):
         capture = capture.isoformat()
@@ -150,14 +162,19 @@ async def update_driver_location(
             data[key] = value.isoformat() if isinstance(value, datetime) else value
 
     def _update():
-        result = supabase.rpc(
-            "update_live_driver_marker",
-            {
-                "p_driver_id": str(driver_id),
-                "p_captured_at": capture,
-                "p_values": data,
-            },
-        ).execute()
+        params = {
+            "p_driver_id": str(driver_id),
+            "p_captured_at": capture,
+            "p_values": data,
+        }
+        if online_epoch is not None:
+            params.update(
+                p_authenticated_session_id=authenticated_session_id,
+                p_online_epoch=online_epoch,
+            )
+            result = supabase.rpc("update_live_driver_marker_fenced", params).execute()
+        else:
+            result = supabase.rpc("update_live_driver_marker", params).execute()
         return result.data is True
 
     accepted = await run_sync(_update)

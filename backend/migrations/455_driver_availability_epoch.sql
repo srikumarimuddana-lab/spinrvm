@@ -198,7 +198,7 @@ BEGIN
            last_status_changed_at = CASE WHEN is_online IS DISTINCT FROM v_next_online THEN now() ELSE last_status_changed_at END,
            went_online_at = CASE WHEN is_online IS DISTINCT FROM v_next_online AND v_next_online THEN now() ELSE went_online_at END,
            went_offline_at = CASE WHEN is_online IS DISTINCT FROM v_next_online AND NOT v_next_online THEN now() ELSE went_offline_at END,
-           last_contact_at = CASE WHEN p_action IN ('go_online','go_offline','stop_requests','displace_controller') THEN now() ELSE last_contact_at END,
+           last_contact_at = CASE WHEN p_action IN ('go_online','go_offline','stop_requests','displace_controller') THEN clock_timestamp() ELSE last_contact_at END,
            ready_until = CASE WHEN p_action = 'go_online' THEN clock_timestamp() + interval '62 minutes'
                               WHEN NOT v_next_accepting THEN NULL ELSE ready_until END,
            availability_reason = v_reason
@@ -336,6 +336,51 @@ REVOKE ALL ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz
 GRANT EXECUTE ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz) TO service_role;
 COMMENT ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz) IS
     'Backend-only contact renewal fenced by token session and online epoch; GPS deadline is capture-time based and separately nullable.';
+
+-- Marker commits use the same driver -> user lock order as availability and
+-- auth transitions. This closes the gap between an async integrity check and
+-- the later location write when Go Offline or session displacement wins.
+CREATE OR REPLACE FUNCTION public.update_live_driver_marker_fenced(
+    p_driver_id text,
+    p_captured_at timestamptz,
+    p_values jsonb,
+    p_authenticated_session_id text,
+    p_online_epoch bigint
+) RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    v_driver public.drivers%ROWTYPE;
+    v_current_session_id text;
+BEGIN
+    IF p_driver_id IS NULL OR p_authenticated_session_id IS NULL
+       OR p_online_epoch IS NULL OR p_online_epoch < 0 THEN
+        RETURN false;
+    END IF;
+    SELECT * INTO v_driver FROM public.drivers WHERE id=p_driver_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT u.current_session_id INTO v_current_session_id
+      FROM public.users u WHERE u.id=v_driver.user_id FOR UPDATE;
+    IF v_current_session_id IS DISTINCT FROM p_authenticated_session_id
+       OR v_driver.controller_session_id IS DISTINCT FROM p_authenticated_session_id
+       OR v_driver.online_epoch <> p_online_epoch
+       OR NOT v_driver.is_online
+       OR NOT COALESCE((SELECT s.driver_availability_v2_enabled
+                        FROM public.settings s WHERE s.id='app_settings'),false) THEN
+        RETURN false;
+    END IF;
+    RETURN public.update_live_driver_marker(p_driver_id,p_captured_at,p_values);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.update_live_driver_marker_fenced(text,timestamptz,jsonb,text,bigint)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_live_driver_marker_fenced(text,timestamptz,jsonb,text,bigint)
+    TO service_role;
+COMMENT ON FUNCTION public.update_live_driver_marker_fenced(text,timestamptz,jsonb,text,bigint) IS
+    'Atomically fences v2 live-marker writes by current token session and online epoch before invoking capture ordering.';
 
 -- One MVCC statement returns driver state, active trip, live pending offer,
 -- rollout flag, and database clock. This keeps obligations and epoch aligned

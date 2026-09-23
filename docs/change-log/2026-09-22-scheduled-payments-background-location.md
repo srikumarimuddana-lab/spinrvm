@@ -1,6 +1,6 @@
 # Scheduled cancellation payments and background driver location
 
-## Purpose and impact
+## User experience and remediation
 
 This change addresses two reported failures: canceled/no-driver scheduled rides could retain an unresolved payment or display an unconfirmed refund as complete, and an iOS driver's delayed background uploads could make the Android rider map appear stuck or jump backwards.
 
@@ -17,6 +17,12 @@ The implementation was reviewed by GPT-6 Luna agents in developer and Spinr arch
 | iOS uploads | The existing 10-second per-request limit now includes native preparation and ACK parsing; late preparation cannot dispatch | Background location task, durable outbox |
 
 All money semantics retain the existing fee eligibility policy. No-driver cancellation remains fee-free. A released authorization is a bank hold release, distinct from a refund of captured funds. Scheduled notice-fee policy remains controlled by its existing settings.
+
+## Root cause
+
+Code inspection found that provider acceptance and confirmed refund success were conflated, while ride refund totals and ledger entries were separate writes that could race. Pending polls also consumed a short retry budget. Scheduled dispatch could attach an authorization after cancellation. Location ingestion could promote delayed batches to the live marker, and the iOS upload deadline did not include native preparation or response-body parsing. These findings explain credible failure paths; they do not establish the outcome of any historical customer transaction.
+
+The blast radius spans backend payment recovery, scheduled dispatch, location ingestion and both mobile apps. Riders can see corrected payment states and stale-location indicators during active sessions; drivers retain queued points after upload failures. The payment worker and webhook share the new transaction, and every live location writer shares the marker RPC. Existing fee eligibility and insurance policy are preserved. Rollout must coordinate these writers as described below.
 
 ## Database and rollout order
 
@@ -53,7 +59,7 @@ For previously affected real rides, use the existing reconciliation script in **
 
 No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. Hosted rider tests have three failures in unchanged `shared/components/__tests__/SupportScreen.contact.test.tsx`; the same three failures were reproduced locally on base commit `0b6689b`. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and the complete local PR suite passes 1,895 tests (unchanged base passes 1,891). These checks are not represented as green.
 
-## Guarantees and remaining boundaries
+## Risk & impact on existing functionality
 
 Postgres prevents a delayed writer from replacing a newer stored marker. The rider store orders the samples it has observed. A fresh WebSocket sample whose database write was deliberately coalesced is still delivered for latency reasons; it is not independently proven newer than an unseen persisted position. Polling/resume timestamps provide a baseline once received. Missing sensor times on older client single pings retain a compatibility fallback.
 
@@ -63,7 +69,7 @@ The existing Period 1 accumulator uses absolute read-modify-write values. Its pr
 
 The timeout bounds each upload request, not native scheduling, the entire multi-batch flush, or every earlier storage/auth operation. Durable data remains queued until a valid server acknowledgement.
 
-## Rollback
+## Rollback plan
 
 Disable background REST fanout if delivery causes a problem; polling and durable history remain available. Roll back mobile/backend code together as needed, retaining additive database columns/tables and unresolved payment operations for reconciliation. Do not drop payment obligations or erase timestamps to roll back application code. Stop a faulty retry worker before reviewing unresolved provider actions. Migration 445/446 functions may be removed only after no deployed backend or repair script calls them; schema removal is unnecessary for an application rollback.
 

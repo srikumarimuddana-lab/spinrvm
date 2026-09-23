@@ -1,7 +1,9 @@
 # PR 5722: qualify refund holds only after a cash payout
 
-The atomic refund-hold predicate now recognizes completed `auto`, `instant`,
-and `standard` payouts with positive amounts. It explicitly excludes
+The rollout flag is nullable with `DEFAULT false`; `NULL` is treated as off by
+the RPC. This avoids a table-wide not-null constraint while retaining safe
+default-off behavior. The atomic refund-hold predicate recognizes completed
+`auto`, `instant`, and `standard` payouts with positive amounts. It excludes
 `clawback` adjustments, payouts dated before the ride completed, and future
 dated payout rows. Existing cumulative caps and replay protection remain in
 place.
@@ -22,9 +24,13 @@ completed clawback alone should not. Replay still must not add a second hold.
 
 Rollback: because this migration is still unmerged and verified absent from
 live `schema_migrations`, revert the migration edit before deployment if
-needed. After deployment, disable `settings.driver_refund_holds_enabled`; do
-not delete attributed hold rows or restore the former event writer.
+needed. After deployment, set `settings.driver_refund_holds_enabled` to false
+(or leave it null); do not delete attributed hold rows or restore the former
+event writer.
 
 Validation: PostgreSQL direct-pool regressions cover the positive and negative
 eligibility cases. They require the direct-pool test database and were not run
-in this environment. No live database writes were made.
+in this environment. A local PGlite execution of migrations 451 and 454 also
+verified that the nullable false-default flag supports enabled/disabled paths,
+atomic rollback and retry, and that a closed-period snapshot returns only cash
+payout IDs/count/amount. No live database writes were made.

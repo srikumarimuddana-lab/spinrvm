@@ -8,7 +8,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '2s';
 SET LOCAL statement_timeout = '20s';
-ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS driver_refund_holds_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS driver_refund_holds_enabled boolean DEFAULT false;
 -- Immutable audit attribution, deliberately not a foreign key: seven-year ride
 -- retention must not be blocked by adjustment history.
 ALTER TABLE public.payouts ADD COLUMN IF NOT EXISTS refund_ride_id text;

@@ -68,7 +68,8 @@ async def test_invalid_pending_stop_fails_closed_instead_of_routing_to_dropoff()
     from backend.routes import rides as rides_mod
 
     ride = {
-        "status": "in_progress", "dropoff_lat": 53.0, "dropoff_lng": -107.0,
+        "id": "ride-1", "rider_id": "rider-1", "driver_id": "driver-1", "status": "in_progress",
+        "dropoff_lat": 53.0, "dropoff_lng": -107.0,
         "stops": [{"address": "Ungeocoded stop"}],
     }
     cap = {}

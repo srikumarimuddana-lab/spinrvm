@@ -154,10 +154,12 @@ def test_v2_live_marker_is_fenced_atomically_by_session_and_epoch(presence_db):
         )
         return cur.fetchone()[0]
 
+    cur.execute("SELECT lat,lng FROM drivers WHERE id='presence-driver'")
+    original_coordinates = cur.fetchone()
     assert fenced("sess-A", 11) is False
     assert fenced("old-session", 12) is False
     cur.execute("SELECT lat,lng FROM drivers WHERE id='presence-driver'")
-    assert cur.fetchone() == (None, None)
+    assert cur.fetchone() == original_coordinates
     assert fenced("sess-A", 12) is True
     cur.execute("SELECT lat,lng FROM drivers WHERE id='presence-driver'")
     assert cur.fetchone() == (50.45, -104.6)

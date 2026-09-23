@@ -104,13 +104,13 @@ groups:
           summary: "Payment settlement failure rate (fly) exceeded 1% for 10+ minutes"
           description: >-
             CLAUDE.md KPI: payment success rate >= 99%. ADR-010 §3. Requires
-            >=20 samples in-window to avoid alerting on 1-of-1 failures at low
-            volume -- enforce the sample-count guard when wiring this into
-            Grafana Alerting (Grafana's rule condition model does not express
-            a minimum-sample guard as cleanly as PromQL; a human provisioning
-            this should add an additional `count(...) >= 20` reduce/math step,
-            or an `and` clause, before enabling paging in production).
+            >=20 settlement samples in-window. Lower-volume windows evaluate
+            to NoData rather than a payment-rate breach; monitor telemetry
+            availability separately so a missing scrape is not mistaken for
+            healthy payment data.
           runbook_url: "docs/runbooks/on-call.md"
+        noDataState: NoData
+        execErrState: Alerting
         data:
           - refId: A
             relativeTimeRange:
@@ -119,9 +119,11 @@ groups:
             datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
             model:
               expr: >-
-                sum(rate(spinr_payment_settlement_total{outcome="failed",provider="fly"}[10m]))
+                (sum(increase(spinr_payment_settlement_total{outcome="failed",provider="fly"}[10m]))
                 /
-                sum(rate(spinr_payment_settlement_total{provider="fly"}[10m]))
+                sum(increase(spinr_payment_settlement_total{provider="fly"}[10m])))
+                and on()
+                (sum(increase(spinr_payment_settlement_total{provider="fly"}[10m])) >= 20)
               refId: A
           - refId: C
             datasourceUid: "__expr__"

@@ -264,7 +264,7 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         # NULL is an unbound legacy credential, never proof of a newer login.
         # Check BEFORE replay detection: an old rotated token cannot invalidate
         # the replacement phone merely by being presented again.
-        if not user or int(row.get("token_version") or 0) != int(user.get("token_version") or 0):
+        if not user or not await refresh_token_generation_matches(row, user):
             return None
 
     # Replay attack guard: a revoked refresh token presented by a real
@@ -328,6 +328,36 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         return None
 
     return row
+
+
+async def refresh_token_generation_matches(row: dict, user: dict) -> bool:
+    """Check a refresh row against the current generation, including rollout rows.
+
+    Older API replicas omit ``token_version``. While single-driver-session is
+    dark, those rows remain usable unless they predate a logout-all watermark.
+    Once the flag is enabled, an unbound row cannot prove it belongs to the
+    current generation and is rejected. Explicitly revoked rows are still
+    rejected by ``lookup_refresh_token`` after this check.
+    """
+    current = int(user.get("token_version") or 0)
+    stored = row.get("token_version")
+    if stored is not None:
+        return int(stored) == current
+    if current == 0:
+        return True
+    try:
+        app_settings = await db.find_one("settings", {"id": "app_settings"})
+    except Exception as exc:
+        logger.opt(exception=True).error("refresh: could not read driver-session rollout flag")
+        raise DatabaseError(message="Could not verify session; please try again") from exc
+    if (app_settings or {}).get("driver_single_session_enabled"):
+        return False
+
+    # Dark deployment compatibility must not undo logout-all. Only accept an
+    # unbound credential created after the user's authoritative kill watermark.
+    watermark = _parse_iso_dt(user.get("sessions_invalid_before"))
+    issued_at = _parse_iso_dt(row.get("issued_at"))
+    return bool(watermark and issued_at and issued_at >= watermark)
 
 
 REUSE_AUDIT_ACTION = "refresh_token_reuse_detected"

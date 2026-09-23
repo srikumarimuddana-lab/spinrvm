@@ -310,7 +310,16 @@ async def persist_trip_location_batch(
     if driver_last_known:
         _last_lat = _coord(driver_last_known, "lat", "latitude")
         _last_lng = _coord(driver_last_known, "lng", "longitude")
-        _last_ts = parse_iso_utc(driver_last_known.get("updated_at"))
+        # #5357: location_captured_at is the sensor timestamp for lat/lng
+        # specifically. updated_at is a generic row-modified stamp any
+        # field write bumps (e.g. go-online/go-offline with no fresh GPS
+        # fix) -- seeding from it could pair a stale lat/lng with a
+        # just-now updated_at and understate elapsed_seconds enough to
+        # falsely reject the batch's first real point as a teleport. A
+        # NULL/missing location_captured_at (pre-migration-445 rows, or a
+        # driver never yet marker-written) just means no seed -- the chain
+        # starts cold, same as before this fix existed.
+        _last_ts = parse_iso_utc(driver_last_known.get("location_captured_at"))
         if _last_lat is not None and _last_lng is not None and _valid_lat_lng(_last_lat, _last_lng) and _last_ts:
             prev_lat, prev_lng, prev_captured_at = _last_lat, _last_lng, _last_ts
 
@@ -686,7 +695,16 @@ async def persist_ride_breadcrumbs(
     if driver_last_known:
         _last_lat = _coord(driver_last_known, "lat", "latitude")
         _last_lng = _coord(driver_last_known, "lng", "longitude")
-        _last_ts = parse_iso_utc(driver_last_known.get("updated_at"))
+        # #5357: location_captured_at is the sensor timestamp for lat/lng
+        # specifically. updated_at is a generic row-modified stamp any
+        # field write bumps (e.g. go-online/go-offline with no fresh GPS
+        # fix) -- seeding from it could pair a stale lat/lng with a
+        # just-now updated_at and understate elapsed_seconds enough to
+        # falsely reject the batch's first real point as a teleport. A
+        # NULL/missing location_captured_at (pre-migration-445 rows, or a
+        # driver never yet marker-written) just means no seed -- the chain
+        # starts cold, same as before this fix existed.
+        _last_ts = parse_iso_utc(driver_last_known.get("location_captured_at"))
         if _last_lat is not None and _last_lng is not None and _valid_lat_lng(_last_lat, _last_lng) and _last_ts:
             prev_lat, prev_lng, prev_captured_at = _last_lat, _last_lng, _last_ts
 

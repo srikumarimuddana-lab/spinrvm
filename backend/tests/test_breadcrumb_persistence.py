@@ -319,13 +319,41 @@ async def test_driver_last_known_seeds_teleport_check_for_single_point_batch():
             "drv_1",
             [_pt(50.42, -104.62, "2026-06-01T23:06:00Z")],
             driver_last_known={
-                "lat": 50.10,  # ~35.6 km away, 2 seconds earlier per updated_at
+                "lat": 50.10,  # ~35.6 km away, 2 seconds earlier per location_captured_at
                 "lng": -104.62,
-                "updated_at": "2026-06-01T23:05:58Z",
+                "location_captured_at": "2026-06-01T23:05:58Z",
             },
         )
     assert n == 0
     assert "docs" not in cap
+
+
+@pytest.mark.asyncio
+async def test_driver_last_known_with_no_location_captured_at_starts_cold():
+    """#5357: a `driver_last_known` row with stale lat/lng next to a fresh
+    `updated_at` (e.g. a go-online/go-offline flip that bumped updated_at
+    without a new GPS fix) must NOT seed the chain from `updated_at` — that
+    pairs the stale position with "just now" and falsely rejects the first
+    real point of the next trip as a teleport. With no `location_captured_at`
+    on the row (the sensor timestamp actually tied to lat/lng), the chain
+    starts cold instead, and the same point that test_driver_last_known_seeds_
+    teleport_check_for_single_point_batch rejects (given a real
+    location_captured_at) is accepted here."""
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [_pt(50.42, -104.62, "2026-06-01T23:06:00Z")],
+            driver_last_known={
+                "lat": 50.10,
+                "lng": -104.62,
+                "updated_at": "2026-06-01T23:05:58Z",  # stale row bump, not a GPS timestamp
+                "location_captured_at": None,
+            },
+        )
+    assert n == 1
+    assert cap["docs"][0]["lat"] == 50.42
 
 
 @pytest.mark.asyncio
@@ -743,7 +771,7 @@ def test_v2_batch_rejects_first_point_that_jumps_from_driver_last_known_location
                 driver_last_known={
                     "lat": _REGINA[0],
                     "lng": _REGINA[1],
-                    "updated_at": "2026-06-01T23:06:00Z",  # 3s / 4s before the batch's points
+                    "location_captured_at": "2026-06-01T23:06:00Z",  # 3s / 4s before the batch's points
                 },
             )
         )

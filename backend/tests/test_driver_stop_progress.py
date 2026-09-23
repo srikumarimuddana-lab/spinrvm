@@ -62,3 +62,23 @@ async def test_stop_completion_rejects_a_concurrent_route_edit():
 
     assert exc.value.status_code == 409
     assert exc.value.detail == "Stops changed. Refresh the ride and try again."
+
+
+@pytest.mark.anyio
+async def test_ride_completion_rejects_uncompleted_stops_before_side_effects():
+    from backend.routes.drivers import ride_complete
+
+    driver = {"id": "driver-1"}
+    ride = {
+        "id": "ride-1", "driver_id": "driver-1", "status": "in_progress",
+        "stops": [{"id": "stop-1", "lat": 52.1, "lng": -106.6}],
+    }
+    with (
+        patch.object(ride_complete.db_supabase, "get_rows", AsyncMock(side_effect=[[driver], [ride]])),
+        patch.object(ride_complete, "prepare_completion_location", AsyncMock()) as prepare,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await ride_complete.complete_ride("ride-1", current_user={"id": "user-1"})
+
+    assert exc.value.status_code == 409
+    prepare.assert_not_awaited()

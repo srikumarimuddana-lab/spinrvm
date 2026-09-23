@@ -379,6 +379,14 @@ async def complete_ride(
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
+    # The rider's ordered stops are part of the fare route. Do not settle the
+    # ride while any stop remains, including malformed legacy rows that cannot
+    # be safely routed or acknowledged by the driver.
+    if any(stop.get("completed") is not True for stop in (ride.get("stops") or []) if isinstance(stop, dict)):
+        raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
+    if any(not isinstance(stop, dict) for stop in (ride.get("stops") or [])):
+        raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
+
     # Persist the driver-captured endpoint before the status transition and
     # before legacy aggregation reads the breadcrumb trail. This ensures a
     # 40-minute trip cannot lose its final location merely because finalization

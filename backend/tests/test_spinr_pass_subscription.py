@@ -80,7 +80,7 @@ class TestSubscriptionCheckoutFlow:
 
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
-            patch("backend.db_supabase.update_one") as mock_update,
+            patch("backend.db_supabase.update_one"),
             patch("backend.db_supabase.insert_one") as mock_insert,
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
             patch("stripe.checkout.Session.create") as mock_session_create,
@@ -140,7 +140,7 @@ class TestSubscriptionCheckoutFlow:
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
             patch("backend.db_supabase.update_one"),
-            patch("backend.db_supabase.insert_one") as mock_insert,
+            patch("backend.db_supabase.insert_one"),
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
         ):
             mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
@@ -1453,3 +1453,63 @@ class TestExpiryWarning3Day:
         # No 3d warning push should have fired
         three_day_pushes = [c for c in push_mock.await_args_list if "3" in str(c.args[1]) or "Days" in str(c.args[1])]
         assert len(three_day_pushes) == 0
+
+
+class TestRecurringSubscriptionRealStripeV15Price:
+    """stripe==15.5.1: Price.retrieve returns a StripeObject with no .get() —
+    the recurring-plan price guard raised AttributeError (500) before Checkout."""
+
+    async def test_real_price_object_is_validated(self, mock_driver, mock_settings):
+        import stripe
+        from fastapi import Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        recurring_plan = {
+            "id": "plan-recurring",
+            "name": "Pro Pass",
+            "price": 49.99,
+            "duration_days": 30,
+            "rides_per_day": -1,
+            "description": "Auto-renew",
+            "is_active": True,
+            "subscriber_count": 0,
+            "stripe_price_id": "price_abc123",
+        }
+        price_obj = stripe.Price.construct_from(
+            {
+                "id": "price_abc123",
+                "object": "price",
+                "unit_amount": 4999,
+                "currency": "cad",
+                "recurring": {"interval": "month", "interval_count": 1},
+            },
+            "sk_test_dummy",
+        )
+        assert not isinstance(price_obj, dict)
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one"),
+            patch("backend.db_supabase.insert_one"),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
+            patch("stripe.Price.retrieve", return_value=price_obj),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+        ):
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [recurring_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
+            session = MagicMock()
+            session.url = "https://checkout.stripe.com/pay/recurring"
+            session.id = "cs_recurring_v15"
+            mock_session_create.return_value = session
+
+            result = await subscribe_to_plan(request, {"id": "user-123"})
+
+        assert mock_session_create.call_args[1]["mode"] == "subscription"
+        assert result["checkout_url"] == "https://checkout.stripe.com/pay/recurring"

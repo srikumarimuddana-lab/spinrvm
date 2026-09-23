@@ -25,6 +25,10 @@ def test_target_requires_https_and_exact_allowlisted_origin():
                             ("https://stage.test\n.evil", "https://stage.test.evil"),
                             ("https://stage.test\t.evil", "https://stage.test.evil"),
                             ("https://api-spinr.spinr.ca", "https://api-spinr.spinr.ca"),
+                            ("https://spinr-backend-production.up.railway.app", "https://spinr-backend-production.up.railway.app"),
+                            ("https://spinr-backend.up.railway.app", "https://spinr-backend.up.railway.app"),
+                            ("https://SpInR-BaCkEnD-PrOdUcTiOn.Up.RaIlWaY.ApP.:443", "https://spinr-backend-production.up.railway.app"),
+                            ("https://SPINR-BACKEND.UP.RAILWAY.APP.:443", "https://spinr-backend.up.railway.app"),
                             (STAGING, "https://other-staging.fly.dev")]:
         with pytest.raises(ValueError):
             validate_target(target, allowed)

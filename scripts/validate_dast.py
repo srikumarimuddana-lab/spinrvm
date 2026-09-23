@@ -10,10 +10,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
-PRODUCTION_HOSTS = {
-    "api-spinr.spinr.ca", "api.spinr.ca", "spinr.ca", "www.spinr.ca",
-    "spinr-backend-yyz.fly.dev",
-}
+PRODUCTION_HOSTS = frozenset(
+    json.loads((Path(__file__).resolve().parents[1] / "config/production_api_hosts.json").read_text())
+)
 
 
 def _origin(value: str) -> tuple[str, str, int]:

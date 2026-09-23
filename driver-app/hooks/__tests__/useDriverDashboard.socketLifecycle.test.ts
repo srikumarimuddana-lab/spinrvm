@@ -24,7 +24,7 @@ jest.mock('@react-native-community/netinfo', () => ({
   },
 }), { virtual: true });
 const mockAuth = { user: { id: 'driver-1' }, token: 'token', driver: { is_online: true },
-  refreshProfile: jest.fn(), updateDriverStatus: jest.fn() };
+  refreshProfile: jest.fn(), updateDriverStatus: jest.fn(), logout: jest.fn().mockResolvedValue(undefined) };
 const mockDriver = { rideState: 'idle', incomingRide: null, activeRide: null,
   fetchActiveRide: jest.fn().mockResolvedValue(undefined), hydrateDriverRideState: jest.fn().mockResolvedValue(undefined),
   fetchEarnings: jest.fn(), applyDriverConfig: jest.fn(), resetRideState: jest.fn(),
@@ -145,6 +145,19 @@ it('does not reconnect after the deliberate background close or a background net
   expect(Socket.instances).toHaveLength(1);
   await appState('active'); await networkUp();
   expect(Socket.instances).toHaveLength(2);
+});
+
+it('clears only the local session when another phone supersedes this session', async () => {
+  await mount();
+  await act(async () => Socket.instances[0].authenticate());
+  await act(async () => {
+    Socket.instances[0].onmessage?.({ data: JSON.stringify({
+      type: 'session_revoked', reason: 'session_superseded',
+    }) });
+  });
+
+  expect(mockAuth.logout).toHaveBeenCalledWith({ revokeServerSession: false });
+  expect(mockAuth.updateDriverStatus).not.toHaveBeenCalled();
 });
 
 it('does not open a socket when token refresh completes after unmount', async () => {

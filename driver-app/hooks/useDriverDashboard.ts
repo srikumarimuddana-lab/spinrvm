@@ -1111,7 +1111,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             'This phone was signed out because your account signed in somewhere else.',
           );
           setIsOnline(false);
-          void useAuthStore.getState().logout?.();
+          void useAuthStore.getState().logout({ revokeServerSession: false });
         }
         break;
       case 'auto_offline':

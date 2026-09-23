@@ -388,6 +388,9 @@ interface RideState {
   // asked for *after* that clear. See the guard in fetchRide for why the
   // difference matters.
   _clearEpoch: number;
+  // Latest started /rides/active check. Never reset across logout: outstanding
+  // requests from the previous session must not regain ownership of the store.
+  _activeRideRequestId: number;
   wsConnected: boolean;
   setWsConnected: (v: boolean) => void;
 
@@ -416,6 +419,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   chatMessages: [],
   _clearedRideId: null,
   _clearEpoch: 0,
+  _activeRideRequestId: 0,
   wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
@@ -519,15 +523,29 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   fetchActiveRide: async () => {
+    const { currentRide: rideAtStart, currentDriver: driverAtStart, _clearEpoch: clearEpochAtStart } = get();
+    const requestId = get()._activeRideRequestId + 1;
+    set({ _activeRideRequestId: requestId });
+    // Home, foreground recovery, and booking recovery can overlap. A response
+    // only owns the snapshot it started with: a newer check, booking, poll/WS
+    // update, clear, or logout invalidates it (including inactive/404 results).
+    const isStale = () => {
+      const state = get();
+      return state._activeRideRequestId !== requestId ||
+        state._clearEpoch !== clearEpochAtStart || state.currentRide !== rideAtStart ||
+        state.currentDriver !== driverAtStart;
+    };
     // A just-booked ride can briefly be invisible to /rides/active. The
     // previous ride's cancel latch is still set, so that miss must not
     // clearRide() the new ride (which would latch the new id and bounce home).
     const keepNewerLocalRide = () => {
       const { currentRide, _clearedRideId } = get();
-      return !!(currentRide && _clearedRideId && currentRide.id !== _clearedRideId);
+      return !!(currentRide && !TERMINAL_STATUSES.has(currentRide.status) &&
+        _clearedRideId && currentRide.id !== _clearedRideId);
     };
     try {
       const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
+      if (isStale()) return null;
       if (response.data?.active && response.data.ride) {
         const ride = response.data.ride;
         // The rider just cancelled this ride locally; the server may not have
@@ -553,6 +571,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (get().currentRide) get().clearRide();
       return null;
     } catch (err: unknown) {
+      if (isStale()) return null;
       if (isErrorLike(err) && (err as { response?: { status?: number } }).response?.status === 404) {
         if (keepNewerLocalRide()) return null;
         if (get().currentRide) get().clearRide();
@@ -777,8 +796,16 @@ export const useRideStore = create<RideState>((set, get) => ({
       );
     }
     if (get().currentRide) {
-      const serverCheck = await get().fetchActiveRide();
-      if (serverCheck?.active) {
+      let serverCheck = await get().fetchActiveRide();
+      const remaining = get().currentRide;
+      // A cancel/completion may overtake the first check. Reconcile once with a
+      // fresh snapshot; do not assume a terminal local ride is settled server-side.
+      if (!serverCheck?.active && remaining && TERMINAL_STATUSES.has(remaining.status)) {
+        serverCheck = await get().fetchActiveRide();
+      }
+      // Null also means an obsolete/failed check, not permission to double-book.
+      // A fresh inactive response clears the local ride; otherwise keep blocking.
+      if (serverCheck?.active || get().currentRide) {
         throw new Error('A ride is already active');
       }
     }
@@ -1481,6 +1508,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 // logs in on the same device.
 registerLogoutCallback(() => {
   useRideStore.setState({
+    _activeRideRequestId: useRideStore.getState()._activeRideRequestId + 1,
     currentRide: null,
     currentDriver: null,
     driverEtaSeconds: null,

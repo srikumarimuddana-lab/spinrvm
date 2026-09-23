@@ -27,8 +27,6 @@ function completionConfirmationFromError(error: unknown): { distanceBand?: strin
 }
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
-const PENDING_COMPLETE_KEY = '@spinr:driver_pending_completion';
-let pendingCompletionFlush: Promise<void> | null = null;
 // Upper bound on the pre-completion outbox drain. Long enough for a full
 // 500-point batch on a slow cell link, short enough that a dead network
 // never traps the driver on the completion screen.
@@ -449,7 +447,6 @@ interface DriverState {
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
     completeRide: (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => Promise<CompleteRideResult>;
-    flushPendingCompletion: () => Promise<void>;
     cancelRide: (rideId: string, reason?: string) => Promise<void>;
     reportNoShow: (rideId: string) => Promise<void>;
 
@@ -819,28 +816,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 earningsByPeriod: {},
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-            AsyncStorage.removeItem(PENDING_COMPLETE_KEY).catch(() => {});
             return { confirmationRequired: false };
         } catch (err: unknown) {
             const netStatus = isAxiosError(err) ? err.response?.status : undefined;
-            if (netStatus === undefined && get().rideState === 'trip_in_progress') {
-                AsyncStorage.setItem(
-                    PENDING_COMPLETE_KEY,
-                    JSON.stringify({ rideId, offRouteConfirmation: offRouteConfirmation ?? null }),
-                ).catch(() => {});
-                set({
-                    rideState: 'trip_completed',
-                    activeRide: null,
-                    incomingRide: null,
-                    acceptNetworkHold: false,
-                    error: 'No connection. This trip will finish when you are back online.',
-                    completedRide: {
-                        id: rideId,
-                        pickup_address: get().activeRide?.ride?.pickup_address,
-                        dropoff_address: get().activeRide?.ride?.dropoff_address,
-                        total_earned: get().activeRide?.ride?.driver_earnings,
-                    } as any,
-                });
+            if (isAxiosError(err) && netStatus === undefined) {
+                recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
+                set({ error: 'Trip completion is not confirmed. Check your connection and retry before leaving the drop-off.' });
                 return { confirmationRequired: false };
             }
             const confirmation = completionConfirmationFromError(err);
@@ -861,7 +842,6 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     // Ride is gone server-side — completion already happened.
                     set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [], earningsByPeriod: {} });
                     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-                    AsyncStorage.removeItem(PENDING_COMPLETE_KEY).catch(() => {});
                     return { confirmationRequired: false };
                 }
             }
@@ -871,29 +851,6 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } finally {
             set({ isLoading: false });
         }
-    },
-
-    flushPendingCompletion: async () => {
-        if (pendingCompletionFlush) return pendingCompletionFlush;
-        pendingCompletionFlush = (async () => {
-            const raw = await AsyncStorage.getItem(PENDING_COMPLETE_KEY);
-            if (!raw) return;
-            let parsed: { rideId?: string; offRouteConfirmation?: OffRouteConfirmation | null };
-            try {
-                parsed = JSON.parse(raw);
-            } catch {
-                await AsyncStorage.removeItem(PENDING_COMPLETE_KEY);
-                return;
-            }
-            if (!parsed.rideId) {
-                await AsyncStorage.removeItem(PENDING_COMPLETE_KEY);
-                return;
-            }
-            await get().completeRide(parsed.rideId, parsed.offRouteConfirmation ?? undefined);
-        })().finally(() => {
-            pendingCompletionFlush = null;
-        });
-        return pendingCompletionFlush;
     },
 
     cancelRide: async (rideId: string, reason?: string) => {

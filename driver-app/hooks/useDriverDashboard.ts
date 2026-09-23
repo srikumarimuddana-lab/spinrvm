@@ -1732,9 +1732,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // the question being asked here — it is only null when NetInfo cannot
       // determine it, which is when isConnected is the right fallback.
       const up = state.isInternetReachable ?? state.isConnected ?? false;
-      if (up) {
-        void useDriverStore.getState().flushPendingCompletion();
-      }
       if (!up || !wsLifecycleActiveRef.current || AppState.currentState === 'background' ||
           !isOnlineRef.current || !userRef.current) return;
       // A marginal connection emits "restored" repeatedly, and resetting the

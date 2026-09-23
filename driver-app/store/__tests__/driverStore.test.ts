@@ -489,6 +489,23 @@ describe('driverStore — ride state machine', () => {
     }));
   });
 
+  test('keeps the active trip and recorder open when completion has no server acknowledgement', async () => {
+    const activeRide = makeActiveRideResponse('in_progress').data;
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide });
+    mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });
+
+    await act(async () => {
+      await useDriverStore.getState().completeRide('ride-123');
+    });
+
+    expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
+    expect(useDriverStore.getState().activeRide).toEqual(activeRide);
+    expect(useDriverStore.getState().completedRide).toBeNull();
+    expect(useDriverStore.getState().error).toMatch(/not confirmed.*retry/i);
+    expect(mockTripLocationRecorder.closeRide).not.toHaveBeenCalled();
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+  });
+
   test('completeRide drains the outbox before capturing the completion fix and posting', async () => {
     const callOrder: string[] = [];
     mockTripLocationRecorder.flushPendingWithTimeout.mockImplementation(async () => {

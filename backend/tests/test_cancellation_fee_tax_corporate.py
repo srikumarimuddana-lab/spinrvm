@@ -298,3 +298,87 @@ class TestRiderCancelWiring:
         _, m = await _run_rider_cancel(ride, {**FEE_SETTINGS, **TAX_ON}, {})
         m["bill_corp"].assert_not_awaited()
         m["pay_driver"].assert_not_awaited()
+
+
+# ── mark_rider_noshow wiring (sibling path, same gaps) ───────────────
+
+
+def _noshow_ride(**kw) -> dict:
+    from datetime import datetime, timedelta, timezone
+
+    base = {
+        "id": "ride-ns",
+        "status": "driver_arrived",
+        "driver_id": "drv-1",
+        "rider_id": "rider-1",
+        "driver_arrived_at": (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat(),
+        "service_area_id": "area_sk",
+        "payment_method": "card",
+        "payment_intent_id": None,
+        "auth_status": None,
+        "authorized_amount": 0,
+    }
+    base.update(kw)
+    return base
+
+
+async def _run_noshow(ride: dict, settings: dict):
+    from backend.routes import drivers as drv
+    from backend.utils.stripe_charge import ChargeOutcome
+
+    area = {**SK_AREA, "noshow_wait_seconds": 300}
+    m = {
+        "fresh": AsyncMock(
+            return_value=ChargeOutcome(status="succeeded", payment_intent_id="pi_ns", charged_amount=Decimal("4.73"))
+        ),
+        "ledger": AsyncMock(),
+        "update_ride": AsyncMock(return_value={"id": "ride-ns"}),
+        "pay_driver": AsyncMock(),
+        "bill_corp": AsyncMock(return_value="billed"),
+    }
+    d = "backend.routes.drivers._deps."
+    with (
+        patch(d + "db_supabase.get_rows", AsyncMock(return_value=[{"id": "drv-1", "user_id": "user-1"}])),
+        patch(d + "db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch(d + "db_supabase.update_one", AsyncMock(return_value={"id": "ride-ns"})),
+        patch(d + "db_supabase.update_ride", m["update_ride"]),
+        patch("backend.services.cancellation_service.pay_driver_cancellation_fee", m["pay_driver"]),
+        patch("backend.services.cancellation_service.bill_corporate_cancellation_fee", m["bill_corp"]),
+        patch(d + "db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": True})),
+        patch(d + "record_period_transition", AsyncMock()),
+        patch(d + "manager.broadcast_ride_status", AsyncMock()),
+        patch(d + "manager.broadcast_to_admins", AsyncMock()),
+        patch(d + "send_push_notification", AsyncMock()),
+        patch(d + "spawn", side_effect=lambda c: c.close()),
+        patch("backend.services.ledger_service.record_event", m["ledger"]),
+        patch(d + "db_supabase.get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus_1"})),
+        patch(d + "db_supabase.find_one", AsyncMock(return_value=area)),
+        patch("backend.utils.stripe_charge.charge_ancillary_fee", m["fresh"]),
+    ):
+        await drv.mark_rider_noshow(ride_id="ride-ns", current_user={"id": "user-1"})
+    return m
+
+
+@pytest.mark.unit
+class TestNoShowWiring:
+    async def test_tax_on_charges_fee_plus_tax(self):
+        m = await _run_noshow(_noshow_ride(), {**FEE_SETTINGS, **TAX_ON})
+        assert m["fresh"].await_args.kwargs["amount"] == Decimal("4.73")
+        assert m["ledger"].await_args.kwargs["metadata"]["fee_tax"] == "0.23"
+        assert m["pay_driver"].await_args.kwargs["fee"] == Decimal("4.00")
+        tax_writes = [c.args[1] for c in m["update_ride"].call_args_list if "cancellation_fee_tax_amount" in c.args[1]]
+        assert tax_writes and tax_writes[0]["cancellation_fee_tax_amount"] == 0.23
+
+    async def test_tax_off_unchanged(self):
+        m = await _run_noshow(_noshow_ride(), FEE_SETTINGS)
+        assert m["fresh"].await_args.kwargs["amount"] == Decimal("4.50")
+        assert not any("cancellation_fee_tax_amount" in c.args[1] for c in m["update_ride"].call_args_list)
+
+    async def test_company_allowance_noshow_bills_company(self):
+        ride = _noshow_ride(payment_method="company_allowance", corporate_account_id="co_1")
+        m = await _run_noshow(ride, {**FEE_SETTINGS, **TAX_ON})
+        m["fresh"].assert_not_awaited()
+        kw = m["bill_corp"].await_args.kwargs
+        assert kw["amount"] == Decimal("4.73") and kw["source"] == "noshow_fee"
+        m["pay_driver"].assert_awaited_once()

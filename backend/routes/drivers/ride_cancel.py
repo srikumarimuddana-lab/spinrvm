@@ -328,6 +328,7 @@ async def _collect_noshow_fee_from_card(
     fee_admin: Decimal,
     fee_driver: Decimal,
     driver_id: str,
+    fee_tax: Decimal = Decimal("0"),
 ) -> tuple[Decimal, str | None, bool]:
     """Collect a no-show fee from a card rider.
 
@@ -372,6 +373,8 @@ async def _collect_noshow_fee_from_card(
         "driver_id": driver_id,
         "fee_admin": str(fee_admin.quantize(Decimal("0.01"))),
         "fee_driver": str(fee_driver.quantize(Decimal("0.01"))),
+        # Booked to tax_payable by utils/ledger_projection.py (2026-09-23).
+        "fee_tax": str(fee_tax.quantize(Decimal("0.01"))),
     }
 
     # 1. Take it out of the booking hold. A partial capture releases the rest,
@@ -571,8 +574,29 @@ async def mark_rider_noshow(
     except ImportError:
         from services.cancellation_service import calculate_noshow_fee, pay_driver_cancellation_fee  # type: ignore
 
+    try:
+        from ...services.cancellation_service import (
+            bill_corporate_cancellation_fee,
+            compute_cancellation_fee_tax,
+        )
+    except ImportError:
+        from services.cancellation_service import (  # type: ignore
+            bill_corporate_cancellation_fee,
+            compute_cancellation_fee_tax,
+        )
+
     fee_admin, fee_driver = calculate_noshow_fee(ride, settings, area)
-    total_fee = fee_admin + fee_driver
+    # GST/PST on the fee (2026-09-23, flag cancellation_fee_tax_enabled,
+    # default off -> 0). total_fee is what is COLLECTED, so it carries the
+    # tax; fee_admin/fee_driver keep their pre-tax meaning (driver payout).
+    # A tax-computation failure degrades to an untaxed fee (logged) rather
+    # than aborting a no-show that is already persisted.
+    fee_tax, fee_tax_breakdown = Decimal("0"), {}
+    try:
+        fee_tax, fee_tax_breakdown = await compute_cancellation_fee_tax(fee_admin + fee_driver, settings, area)
+    except Exception as _tax_exc:
+        logger.error("[NOSHOW] fee tax computation failed ride_id=%s: %s", ride_id, _tax_exc, exc_info=True)
+    total_fee = fee_admin + fee_driver + fee_tax
 
     # Charge rider
     #
@@ -644,6 +668,20 @@ async def mark_rider_noshow(
                 fee_admin=fee_admin,
                 fee_driver=fee_driver,
                 driver_id=driver["id"],
+                fee_tax=fee_tax,
+            )
+        elif payment_method == "company_allowance":
+            # Previously nobody was billed while the driver payout below still
+            # fired. Bills the company master wallet (flag-gated) or records a
+            # queryable write-off row. Never raises.
+            await bill_corporate_cancellation_fee(
+                ride=ride,
+                ride_id=ride_id,
+                amount=total_fee,
+                fee_driver=fee_driver,
+                settings=settings or {},
+                actor_user_id=current_user["id"],
+                source="noshow_fee",
             )
     elif _hold_is_live:
         # No fee owed but a live hold: release it so the rider's card isn't
@@ -712,6 +750,27 @@ async def mark_rider_noshow(
     except Exception as exc:
         logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
         await db_supabase.update_ride(ride_id, {"updated_at": _fee_now})
+
+    # Migration 455: tax charged on the fee, for the receipt surfaces. Separate
+    # from _fee_attribution so a missing column (flag flipped before the
+    # migration) can't take the fee attribution down with it. Only written
+    # when tax > 0, so flag-off payloads are unchanged.
+    if fee_tax > 0:
+        try:
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "cancellation_fee_tax_amount": float(fee_tax.quantize(Decimal("0.01"))),
+                    "cancellation_fee_tax_breakdown": fee_tax_breakdown,
+                },
+            )
+        except Exception as _tax_exc:
+            logger.error(
+                "[NOSHOW] cancellation-fee tax write failed ride_id=%s — receipt will under-state the charge: %s",
+                ride_id,
+                _tax_exc,
+                exc_info=True,
+            )
 
     # Use the returned row (not just fire-and-forget) so the invariant
     # is_available ⇒ is_online is respected below — mirrors the same

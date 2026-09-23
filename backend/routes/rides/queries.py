@@ -35,6 +35,11 @@ from ._shared import (  # noqa: F401
     relabel_booked_distance_lines,
 )
 
+try:
+    from ...utils.cancellation_receipt import cancellation_charge, is_cancelled
+except ImportError:
+    from utils.cancellation_receipt import cancellation_charge, is_cancelled  # type: ignore
+
 router = APIRouter()
 
 
@@ -207,6 +212,14 @@ async def get_ride_history(
         else:
             r["fare_breakdown"] = _build_fare_breakdown(r)
             r["grand_total"] = _sum_fare_breakdown(r["fare_breakdown"])
+            r["fare_locked"] = False
+        if is_cancelled(r):
+            # Response-only overlay: a cancelled ride's fare columns hold the
+            # booking-time quote; the history list must show what was actually
+            # charged (2026-09-23, utils/cancellation_receipt.py).
+            _charge = cancellation_charge(r)
+            r["fare_breakdown"] = _charge["lines"]
+            r["grand_total"] = _f(_charge["grand_total"])
             r["fare_locked"] = False
         r["actual_duration_minutes"] = _actual_duration_minutes(r)
         r["show_legacy_badge"] = bool(_legacy_badge_enabled and r.get("legacy_import_metadata"))
@@ -589,6 +602,12 @@ async def get_ride(
     else:
         ride["fare_breakdown"] = _build_fare_breakdown(ride)
         ride["grand_total"] = _sum_fare_breakdown(ride["fare_breakdown"])
+        ride["fare_locked"] = False
+    if is_cancelled(ride):
+        # Same response-only overlay as the history list above.
+        _charge = cancellation_charge(ride)
+        ride["fare_breakdown"] = _charge["lines"]
+        ride["grand_total"] = _f(_charge["grand_total"])
         ride["fare_locked"] = False
     ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 

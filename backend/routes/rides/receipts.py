@@ -189,6 +189,10 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
                 "tax_breakdown": _cancel_charge["tax_breakdown"],
                 "cancellation_fee_tax": _f(_cancel_charge["tax_amount"]),
                 "total_charged": receipt_grand_total,
+                # Tip never applies to a cancellation; the legacy-import
+                # tax_note describes the quote's tax_amount, not the fee's.
+                "tip_amount": 0,
+                "tax_note": None,
             }
         )
 

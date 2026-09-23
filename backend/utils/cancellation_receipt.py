@@ -61,6 +61,12 @@ def cancellation_charge(ride: Dict[str, Any]) -> Dict[str, Any]:
 
     raw_breakdown = ride.get("cancellation_fee_tax_breakdown")
     tax_breakdown: Dict[str, Any] = raw_breakdown if isinstance(raw_breakdown, dict) else {}
+    if fee <= 0:
+        # Tax only ever exists ON a cancellation fee. If the fee split failed
+        # to persist (its attribution write fell back to a minimal payload)
+        # but the separate tax write landed, never render a tax-only receipt.
+        tax_breakdown = {}
+        ride = {**ride, "cancellation_fee_tax_amount": None}
     tax_lines: List[Dict[str, Any]] = []
     breakdown_sum = Decimal("0")
     for name, info in tax_breakdown.items():

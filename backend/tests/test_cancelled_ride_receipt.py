@@ -97,6 +97,12 @@ class TestCancellationCharge:
         assert c["lines"] == [{"label": "Late cancellation fee (scheduled ride)", "amount": 3.0, "type": "fee"}]
         assert c["grand_total"] == Decimal("3.00")
 
+    def test_tax_without_a_persisted_fee_never_renders_tax_only(self):
+        # Fee-attribution write fell back to minimal (split columns 0) but the
+        # separate tax write landed — must not show a "$0.23 total" receipt.
+        c = cancellation_charge(_cancelled(cancellation_fee_admin=0, cancellation_fee_driver=0))
+        assert c["lines"] == [] and c["grand_total"] == Decimal("0.00") and c["tax_amount"] == Decimal("0.00")
+
     def test_tax_amount_without_breakdown_still_disclosed(self):
         c = cancellation_charge(_cancelled(cancellation_fee_tax_breakdown=None))
         assert {"label": "Tax", "amount": 0.23, "type": "tax"} in c["lines"]
@@ -130,6 +136,43 @@ class TestJsonReceipt:
         assert not any("Ride fare" in ln["label"] for ln in r["fare_breakdown"])
         # Pre-existing field keeps its pre-tax meaning.
         assert r["cancellation_fee"] == 4.5
+        assert r["tip_amount"] == 0 and r["tax_note"] is None
+
+    async def test_get_ride_and_history_show_actual_charge_for_cancelled(self):
+        """rider-app's Activity list renders grand_total — it showed the stale
+        quote ($19.32) for every cancelled ride."""
+        from starlette.requests import Request as SR
+
+        from backend.routes.rides import get_ride
+        from backend.routes.rides.queries import get_ride_history
+
+        with (
+            patch(
+                "backend.routes.rides.queries._fetch_ride_history_page",
+                AsyncMock(return_value=[_cancelled(), _cancelled(id="r2", status="completed", surge_multiplier=1.0)]),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"fare_lock_enabled": True})),
+        ):
+            fn = getattr(get_ride_history, "__wrapped__", get_ride_history)
+            page = await fn(request=None, limit=20, before=None, current_user={"id": RIDER_ID})
+        cancelled_row, completed_row = page["rides"]
+        assert cancelled_row["grand_total"] == 4.73 and cancelled_row["fare_locked"] is False
+        # Completed rides untouched: still the fare-lock snapshot path.
+        assert completed_row["fare_locked"] is True and completed_row["grand_total"] == 18.4
+
+        req = SR({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "client": ("t", 1)})
+        ride = _cancelled()
+        with (
+            patch("backend.routes.rides._deps.db_supabase") as db,
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        ):
+            db.get_ride = AsyncMock(return_value=ride)
+            db.get_rows = AsyncMock(return_value=[])
+            db.find_one = AsyncMock(return_value=None)
+            db.get_driver_by_id = AsyncMock(return_value=None)
+            result = await get_ride(request=req, ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+        assert result["grand_total"] == 4.73
+        assert [ln["label"] for ln in result["fare_breakdown"]] == ["Cancellation fee", "GST (5.0%)"]
 
     async def test_fare_lock_snapshot_is_ignored_for_cancelled_rides(self):
         r = await self._receipt(_cancelled(), settings={"fare_lock_enabled": True})

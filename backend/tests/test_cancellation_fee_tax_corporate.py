@@ -271,6 +271,18 @@ class TestRiderCancelWiring:
         assert not any("cancellation_fee_tax_amount" in c.args[1] for c in m["update_ride"].call_args_list)
         assert result["cancellation_fee"] == Decimal("4.50")
 
+    async def test_tax_computation_error_degrades_to_untaxed_fee(self):
+        # Review finding: a tax error used to zero the WHOLE fee (and the
+        # driver's share) on this path while the no-show sibling charged it untaxed.
+        with patch(
+            "backend.routes.rides._deps.compute_cancellation_fee_tax",
+            AsyncMock(side_effect=ValueError("bad rate")),
+        ):
+            result, m = await _run_rider_cancel(_arrived_ride(), {**FEE_SETTINGS, **TAX_ON}, {})
+        assert m["charge"].await_args.kwargs["amount"] == Decimal("4.50")
+        assert m["pay_driver"].await_args.kwargs["fee"] == Decimal("4.00")
+        assert result["cancellation_fee"] == Decimal("4.50")
+
     async def test_tax_column_write_failure_does_not_fail_the_cancel(self):
         async def _update(ride_id, payload):
             if "cancellation_fee_tax_amount" in payload:

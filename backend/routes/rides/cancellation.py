@@ -128,9 +128,20 @@ async def cancel_ride_rider(
         if ride.get("service_area_id"):
             area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
         charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
-        fee_tax, fee_tax_breakdown = await _deps.compute_cancellation_fee_tax(
-            charged_admin + charged_driver, settings, area
-        )
+        # Isolated so a tax-config error degrades to an UNTAXED fee (logged)
+        # rather than zeroing the whole fee and the driver's share — same
+        # outcome as the no-show sibling (routes/drivers/ride_cancel.py).
+        try:
+            fee_tax, fee_tax_breakdown = await _deps.compute_cancellation_fee_tax(
+                charged_admin + charged_driver, settings, area
+            )
+        except Exception as _tax_exc:
+            logger.opt(exception=True).error(
+                "[CANCEL] cancellation fee tax computation failed ride_id={} — charging untaxed: {}",
+                ride_id,
+                _tax_exc,
+            )
+            fee_tax, fee_tax_breakdown = Decimal("0"), {}
         total_cancel_fee = _round(charged_admin + charged_driver + fee_tax)
     except Exception as _fee_exc:
         logger.opt(exception=True).error(

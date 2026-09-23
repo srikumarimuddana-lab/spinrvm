@@ -30,9 +30,9 @@ try:
     from ...services.driver_import_service import sin_source
     from ...services.stripe_kyc_sync import get_legal_name_and_address_from_stripe
     from ...settings_loader import get_app_settings
-    from ...utils import metrics, report_branding
+    from ...utils import metrics, report_branding, t4a_income
     from ...utils.datetime_utils import parse_iso_utc
-    from ...utils.legacy_rides import is_legacy_ride
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, is_legacy_ride
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -42,9 +42,9 @@ except ImportError:
     from services.driver_import_service import sin_source  # type: ignore
     from services.stripe_kyc_sync import get_legal_name_and_address_from_stripe  # type: ignore
     from settings_loader import get_app_settings
-    from utils import metrics, report_branding
+    from utils import metrics, report_branding, t4a_income
     from utils.datetime_utils import parse_iso_utc
-    from utils.legacy_rides import is_legacy_ride
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, is_legacy_ride
     from utils.rate_limiter import default_limiter as limiter
 
 logger = logging.getLogger(__name__)
@@ -831,7 +831,8 @@ async def get_driver_roster(
 async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
     """Per-driver annual earnings (from completed rides, same
     driver_earnings-first definition as routes/drivers/_shared.py's
-    _ride_income, used by the driver-facing T4A summary) for every driver
+    _ride_income, used by the driver-facing T4A summary, plus cancellation
+    fees, driver_bonuses and incentive claims — utils/t4a_income) for every driver
     at or above the $500 CRA threshold in `year`, plus their Stripe-
     verified legal name/mailing address. Reads all of the year's
     completed rides in ONE query and aggregates in Python — avoids an
@@ -840,19 +841,80 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
     end = f"{year + 1}-01-01"
     rides = await _get_all_rows_paginated(
         "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}},
-        columns="driver_id,driver_earnings,base_fare,distance_fare,time_fare,tip_amount",
+        # Previous-app imported rides are excluded exactly as on the driver's
+        # slip and in the $500 check (utils/legacy_rides): that income belongs
+        # to the old app and, where paid through Stripe, is reported via the
+        # synced payouts added below — counting both double-reports to CRA.
+        {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}, **EXCLUDE_LEGACY_RIDES},
+        columns="id,driver_id,driver_earnings,base_fare,distance_fare,time_fare,tip_amount",
+        # Stable offset pagination: an unordered multi-page read can skip or
+        # repeat rides, which would also skip/repeat their incentive claims.
+        order="id",
     )
     truncated = False
 
     earnings_by_driver: dict[str, Decimal] = {}
     trips_by_driver: dict[str, int] = {}
+    ride_driver: dict[str, str] = {}
     for r in rides:
         driver_id = r.get("driver_id")
         if not driver_id:
             continue
         earnings_by_driver[driver_id] = earnings_by_driver.get(driver_id, Decimal("0")) + _ride_income(r)
         trips_by_driver[driver_id] = trips_by_driver.get(driver_id, 0) + 1
+        if r.get("id"):
+            ride_driver[r["id"]] = driver_id
+
+    # Cancellation/no-show fees, quest/referral bonuses and per-ride incentive
+    # claims are paid income on the driver's T4A slip and in the $500
+    # eligibility check (utils/t4a_income) — the filer must see the same
+    # total, and a driver over $500 only once they're counted must qualify.
+    # Fleet-wide reads (no per-driver N+1), ordered for stable pagination.
+    window = {"$gte": start, "$lt": end}
+    cancelled = await _get_all_rows_paginated(
+        "rides",
+        # Only fee-bearing cancellations are income (partial index
+        # idx_rides_cancellation_fee); skips the no-driver/no-fee majority.
+        {"status": "cancelled", "cancelled_at": window, "cancellation_fee_driver": {"$gt": 0}},
+        columns="id,driver_id,cancellation_fee_driver",
+        order="id",
+    )
+    bonuses = await _get_all_rows_paginated(
+        "driver_bonuses", {"created_at": window}, columns="id,driver_id,amount", order="id"
+    )
+    claims = (
+        await db_supabase.get_rows_batched_in(
+            "ride_incentive_claims", "ride_id", list(ride_driver), columns="ride_id,bonus_amount"
+        )
+        if ride_driver
+        else []
+    ) or []
+
+    # Legacy-era income actually PAID through Stripe — same two settled types,
+    # same status='completed' gate, as get_t4a_summary/_driver_annual_earnings.
+    synced = await _get_all_rows_paginated(
+        "payouts",
+        {
+            "payout_type": {"$in": ["stripe_sync", "legacy_outstanding_correction"]},
+            "status": "completed",
+            "created_at": window,
+        },
+        columns="id,driver_id,amount",
+        order="id",
+    )
+
+    def _add(driver_id: Optional[str], amount: Decimal) -> None:
+        if driver_id:
+            earnings_by_driver[driver_id] = earnings_by_driver.get(driver_id, Decimal("0")) + amount
+
+    for p in synced:
+        _add(p.get("driver_id"), Decimal(str(p.get("amount") or "0")))
+    for c in cancelled:
+        _add(c.get("driver_id"), t4a_income.cancellation_fee(c))
+    for b in bonuses:
+        _add(b.get("driver_id"), t4a_income.bonus_amount(b))
+    for cl in claims:
+        _add(ride_driver.get(cl.get("ride_id")), t4a_income.incentive_amount(cl))
 
     qualifying_ids = sorted(did for did, total in earnings_by_driver.items() if total >= _T4A_THRESHOLD)
     if not qualifying_ids:

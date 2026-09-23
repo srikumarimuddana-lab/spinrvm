@@ -68,6 +68,11 @@ try:
 except ImportError:
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES  # type: ignore
 
+try:
+    from ..utils.t4a_income import fetch_supplementary_income, sum_supplementary_income  # type: ignore
+except ImportError:
+    from utils.t4a_income import fetch_supplementary_income, sum_supplementary_income  # type: ignore
+
 _SYSTEM_ACTOR = {"id": "system", "role": "system"}
 
 
@@ -184,6 +189,9 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
     of the ride earnings summed here, and 'legacy_import' offsets pair with
     the now-excluded imported rides, so nothing double-counts.
 
+    Also adds cancellation/no-show fees, driver_bonuses and per-ride incentive
+    claims (utils/t4a_income) — paid income the eligibility check used to miss.
+
     Must stay consistent with routes/drivers/tax_exports.get_t4a_summary (the
     slip the driver downloads).
     """
@@ -221,4 +229,15 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
         (Decimal(str(p.get("amount") or "0")) for p in synced_rows),
         Decimal("0"),
     )
-    return ride_total + synced_total
+    # Cancellation/no-show fees, quest/referral bonuses and per-ride
+    # incentives are paid income too — without them a driver over $500 only
+    # once those are counted was never notified. See utils/t4a_income.
+    cancelled, bonuses, claims = await fetch_supplementary_income(
+        db_supabase,
+        driver_id,
+        f"{year}-01-01T00:00:00+00:00",
+        f"{year + 1}-01-01T00:00:00+00:00",
+        [r.get("id") for r in rides],
+    )
+    cancel_total, bonus_total, incentive_total = sum_supplementary_income(cancelled, bonuses, claims)
+    return ride_total + synced_total + cancel_total + bonus_total + incentive_total

@@ -132,6 +132,144 @@ async def test_driver_annual_earnings_includes_settled_correction_payouts():
 
 
 # ---------------------------------------------------------------------------
+# Supplementary income: cancellation fees, driver_bonuses, incentive claims
+# (2026-09-23 — paid income the T4A used to omit; see utils/t4a_income)
+# ---------------------------------------------------------------------------
+
+
+def _supplementary_get_rows(*, rides=(), cancelled=(), bonuses=(), seen=None):
+    async def _get_rows(table, filters=None, **kw):
+        if seen is not None:
+            seen.append((table, filters))
+        if table == "rides" and filters.get("status") == "completed":
+            return list(rides)
+        if table == "rides" and filters.get("status") == "cancelled":
+            return list(cancelled)
+        if table == "driver_bonuses":
+            return list(bonuses)
+        return []
+
+    return _get_rows
+
+
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_counts_fees_and_bonuses_with_no_completed_rides():
+    """A driver whose only 2025 income was cancellation fees + quest/referral
+    bonuses is over the CRA $500 threshold — previously this summed to $0."""
+    seen: list = []
+    cancelled = [
+        {"id": "c1", "status": "cancelled", "cancellation_fee_driver": "200.00"},
+        {"id": "c2", "status": "cancelled", "cancellation_fee_driver": 100},
+        {"id": "c3", "status": "cancelled", "cancellation_fee_driver": None},  # no fee owed
+    ]
+    bonuses = [{"amount": "150.00", "kind": "quest"}, {"amount": "75.50", "kind": "referral"}]
+
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(
+            side_effect=_supplementary_get_rows(cancelled=cancelled, bonuses=bonuses, seen=seen)
+        )
+        mock_db.get_rows_batched_in = AsyncMock(return_value=[])
+        from utils.t4a_annual_job import _T4A_THRESHOLD, _driver_annual_earnings
+
+        total = await _driver_annual_earnings("d1", 2025)
+
+    assert total == Decimal("525.50")
+    assert total >= _T4A_THRESHOLD
+    # No completed rides -> no incentive-claim lookup at all.
+    mock_db.get_rows_batched_in.assert_not_called()
+    cancel_q = next(f for t, f in seen if t == "rides" and f.get("status") == "cancelled")
+    assert cancel_q["driver_id"] == "d1"
+    assert cancel_q["cancelled_at"] == {"$gte": "2025-01-01T00:00:00+00:00", "$lt": "2026-01-01T00:00:00+00:00"}
+    assert cancel_q["cancellation_fee_driver"] == {"$gt": 0}
+    bonus_q = next(f for t, f in seen if t == "driver_bonuses")
+    assert bonus_q == {
+        "driver_id": "d1",
+        "created_at": {"$gte": "2025-01-01T00:00:00+00:00", "$lt": "2026-01-01T00:00:00+00:00"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_adds_incentive_claims_for_counted_rides():
+    """rides.driver_earnings is fare-only; per-ride incentive claims are paid
+    on top and must be on the slip, looked up for exactly the counted rides."""
+    rides = [{**_make_ride("d1", "300.00"), "id": "r1"}, {**_make_ride("d1", "150.00"), "id": "r2"}]
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(side_effect=_supplementary_get_rows(rides=rides))
+        mock_db.get_rows_batched_in = AsyncMock(return_value=[{"ride_id": "r1", "bonus_amount": "60.00"}])
+        from utils.t4a_annual_job import _driver_annual_earnings
+
+        total = await _driver_annual_earnings("d1", 2025)
+
+    assert total == Decimal("510.00")
+    mock_db.get_rows_batched_in.assert_awaited_once_with("ride_incentive_claims", "ride_id", ["r1", "r2"])
+
+
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_bonus_reversal_reduces_total():
+    """driver_bonuses is append-only; a clawback is a negative row."""
+    bonuses = [{"amount": "100.00"}, {"amount": "-40.00"}]
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(side_effect=_supplementary_get_rows(bonuses=bonuses))
+        mock_db.get_rows_batched_in = AsyncMock(return_value=[])
+        from utils.t4a_annual_job import _driver_annual_earnings
+
+        total = await _driver_annual_earnings("d1", 2025)
+
+    assert total == Decimal("60.00")
+
+
+@pytest.mark.asyncio
+async def test_run_issuance_eligibility_uses_expanded_total():
+    """End to end through the REAL _driver_annual_earnings: $400 of completed
+    rides alone is under $500, but + $50 cancellation fees + $60 bonus is
+    $510 — the driver must now be notified, with the full amount."""
+    rides = [{**_make_ride("dA", "400.00"), "id": "r1"}]
+    cancelled = [{"id": "c1", "cancellation_fee_driver": "50.00"}]
+    bonuses = [{"amount": "60.00"}]
+    inner = _supplementary_get_rows(rides=rides, cancelled=cancelled, bonuses=bonuses)
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "drivers":
+            return [_make_driver("dA", "uA")]
+        return await inner(table, filters, **kw)
+
+    push_mock = AsyncMock()
+    with (
+        patch("utils.t4a_annual_job.db_supabase") as mock_db,
+        patch("utils.t4a_annual_job.send_push_notification", push_mock),
+        patch("utils.t4a_annual_job.log_admin_action", AsyncMock()),
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_get_rows)
+        mock_db.get_rows_batched_in = AsyncMock(return_value=[])
+        from utils.t4a_annual_job import _run_issuance
+
+        await _run_issuance(2025)
+
+    push_mock.assert_awaited_once()
+    assert push_mock.call_args[0][0] == "uA"
+    assert "$510.00" in push_mock.call_args[1]["body"]
+
+
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_supplementary_db_error_propagates():
+    """A failed bonus read must not silently drop that income from the
+    eligibility check — it propagates so _run_issuance logs it at error."""
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_bonuses":
+            raise RuntimeError("db down")
+        return []
+
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(side_effect=_get_rows)
+        mock_db.get_rows_batched_in = AsyncMock(return_value=[])
+        from utils.t4a_annual_job import _driver_annual_earnings
+
+        with pytest.raises(RuntimeError):
+            await _driver_annual_earnings("d1", 2025)
+
+
+# ---------------------------------------------------------------------------
 # _run_issuance
 # ---------------------------------------------------------------------------
 

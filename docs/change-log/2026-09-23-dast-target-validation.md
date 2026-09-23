@@ -18,6 +18,7 @@ No app runtime effect. CI shows a failed DAST check for missing or mismatched co
 | `.github/workflows/dast-zap-baseline.yml` | Hosted fail-closed preflight, locked-runner selector, scanner scope and report validation | No successful no-op; scans cannot use a hosted runner |
 | `scripts/validate_dast.py` | Validate exact target/report, reject parser normalization hazards, validate canonical egress attestation, emit scoped context | Reject unsafe/no-op targets and mismatched origin configuration |
 | `scripts/test_validate_dast.py` | Exercise target/report, exact staging subdomain allowance, attestation and workflow constraints | Pin validation |
+| `docs/runbooks/dast-and-pentest.md` | Document preflight, runner prerequisites, real redirect limitation, and activation boundary | Prevent false claims of live coverage or network isolation |
 | This record | Scope and verification boundary | Required impact record |
 
 ## Before / after
@@ -51,4 +52,5 @@ Revert the isolated helper commit; it does not affect runtime or persisted state
 - [x] This commit does not claim network isolation or run a live scan; workflow integration and operator enforcement remain separate gates.
 - [x] Workflow test asserts preflight/context generation runs before ZAP and report validation follows it; missing-target skip removed.
 - [x] Workflow test requires `fail_action: true` and `always()` post-scan report/artifact steps after successful preflight.
+- [x] Runbook now distinguishes configuration preflight from actual network enforcement and makes no claim that runner labels/attestation prove isolation.
 - [ ] No ZAP scan or report artifact was produced locally; the staging variables and live staging target are not available here.

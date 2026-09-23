@@ -1262,3 +1262,36 @@ async def test_v15_heal_path_reads_real_payment_intent():
     with patch("utils.stripe_reconcile.db_supabase", db_mock):
         assert await stripe_reconcile._heal_one_processing_ride("ride1", stripe_mod) is True
     assert db_mock.update_one.call_args[0][2]["payment_status"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_target_date_backfills_a_specific_day():
+    """Backfill path: target_date reconciles THAT day (window, DB filter, audit
+    entity_id), not yesterday."""
+    target = date.today() - timedelta(days=5)
+    ride = _ride()
+    ride["ride_completed_at"] = datetime.combine(target, time(12, 0), tzinfo=timezone.utc).isoformat()
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _real_pi_list_mock([_real_pi(amount_received=2500)])
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick(target_date=target)
+
+    start = int(datetime.combine(target, time(0, 0), tzinfo=timezone.utc).timestamp())
+    end = int(datetime.combine(target, time(23, 59, 59), tzinfo=timezone.utc).timestamp())
+    assert stripe_mock.PaymentIntent.list.call_args.kwargs["created"] == {"gte": start, "lte": end}
+    rides_call = next(c for c in db_mock.get_rows.await_args_list if c.args and c.args[0] == "rides")
+    window = rides_call.args[1]["ride_completed_at"]
+    assert window["$gte"].startswith(target.isoformat() + "T00:00:00")
+    assert window["$lte"].startswith(target.isoformat() + "T23:59:59")
+    row = db_mock.insert_one.call_args[0][1]
+    assert row["entity_id"] == f"reconcile_{target.isoformat()}"
+    assert row["details"]["db_rides_checked"] == 1
+    assert row["details"]["discrepancies"] == 0

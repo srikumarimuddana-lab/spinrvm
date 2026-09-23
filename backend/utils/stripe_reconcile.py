@@ -125,8 +125,15 @@ def _seconds_until(target_hour_utc: int) -> float:
     return (target - now).total_seconds()
 
 
-async def _run_reconciliation_tick() -> None:
-    """One reconciliation pass for yesterday's transactions."""
+async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
+    """One reconciliation pass for yesterday's transactions.
+
+    ``target_date`` (UTC calendar day) re-runs the pass for a specific past day
+    — the backfill path for days the loop missed (e.g. the stripe v15
+    ``pi.get`` AttributeError that crashed every tick). Detection only: it
+    writes one audit_logs summary row and never moves money. Default None =
+    yesterday, the loop's normal behaviour.
+    """
     settings = await get_app_settings()
     secret_key = settings.get("stripe_secret_key", "")
     if not secret_key:
@@ -142,7 +149,7 @@ async def _run_reconciliation_tick() -> None:
         return
 
     # Yesterday's window in epoch seconds
-    yesterday = date.today() - timedelta(days=_WINDOW_DAYS)
+    yesterday = target_date or (date.today() - timedelta(days=_WINDOW_DAYS))
     window_start = int(datetime.combine(yesterday, time(0, 0), tzinfo=timezone.utc).timestamp())
     window_end = int(datetime.combine(yesterday, time(23, 59, 59), tzinfo=timezone.utc).timestamp())
 
@@ -180,6 +187,14 @@ async def _run_reconciliation_tick() -> None:
                 "rides",
                 {
                     "payment_status": "paid",
+                    # Server-side day window: without it limit=2000 returns an
+                    # arbitrary slice of ALL paid rides, so a backfill of an
+                    # older day (or a busy table) silently misses rides. The
+                    # _in_window pass below stays as the exact inclusive check.
+                    "ride_completed_at": {
+                        "$gte": datetime.fromtimestamp(window_start, tz=timezone.utc).isoformat(),
+                        "$lte": datetime.fromtimestamp(window_end, tz=timezone.utc).isoformat(),
+                    },
                 },
                 columns="id,payment_intent_id,grand_total,total_fare,tip_amount,driver_earnings,admin_earnings,authorized_amount,status,ride_completed_at",
                 limit=2000,

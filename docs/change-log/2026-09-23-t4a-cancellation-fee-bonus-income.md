@@ -191,3 +191,7 @@ The one thing a revert cannot undo: any slip a driver downloads, or filer export
 - [x] Rollback plan is concrete and testable (read-only change; revert and redeploy)
 - [x] Blast radius is stated, not assumed
 - [x] No silent behavior change to an already-shipped flow without the UX field filled in
+
+**Human decisions (2026-09-23, ittalenthire.ca@gmail.com):**
+- **Prior filings:** confirmed no 2025-or-earlier T4A slip or CRA platform-operator return was already filed using the old, understated numbers. No amended-slip/correction process is needed; the forward-looking code fix is sufficient on its own.
+- **Feature-flag exception (gate 3):** explicitly accepted. Ship without a flag — the change is read-only reporting logic with a clean, testable code-revert rollback (§8), consistent with the agent's own reasoning above.

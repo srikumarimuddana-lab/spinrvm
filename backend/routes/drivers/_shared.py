@@ -1036,7 +1036,7 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
     later, same as today.
     """
     try:
-        await db_supabase.update_one(
+        claimed = await db_supabase.update_one(
             "drivers",
             {"id": driver_id, "status": {"$ne": "suspended"}},
             {"is_online": False, "is_available": False, "status": "suspended"},
@@ -1054,6 +1054,13 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
             ", ".join(expired_labels),
             exc_info=True,
         )
+        return
+    if claimed:
+        # Same insurance-period close as utils/document_expiry.py's suspension:
+        # this write forced is_online=False, and once status is 'suspended'
+        # the 12h sweep's CAS matches zero rows, so it will never close the
+        # period for this driver. Never raises on a DB error.
+        await _deps.close_period_for_forced_offline(driver_id, reason="document_expired")
 
 
 async def check_driver_documents_current(driver: Dict[str, Any]) -> None:

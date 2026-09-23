@@ -401,10 +401,7 @@ async def complete_ride(
     # metadata also keeps the gate active if an opted-in trip is later completed
     # by an older client during a rolling mobile release.
     stops = ride.get("stops") or []
-    progress_already_started = any(
-        isinstance(stop, dict) and ("completed" in stop or "id" in stop)
-        for stop in stops
-    )
+    progress_already_started = any(isinstance(stop, dict) and ("completed" in stop or "id" in stop) for stop in stops)
     if parsed_completion_request.stop_progress_enabled or progress_already_started:
         if any(not isinstance(stop, dict) or stop.get("completed") is not True for stop in stops):
             raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
@@ -859,10 +856,13 @@ async def complete_ride(
     # count prior to this ride, so 0 means the ride just finishing is their
     # first. Reading it after would always be >= 1 and never fire.
     _rides_before = int(driver.get("total_rides") or 0)
-    await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
-    # M-5: SGI insurance period audit — ride completed, driver returns to
-    # period 1 (still online, no ride). No ride_id on period 1.
-    await _deps.record_period_transition(driver["id"], 1)
+    _complete_released = await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
+    # M-5: SGI insurance period audit — ride completed, close the open
+    # Period 3. Normally the driver is still online → Period 1, but a driver
+    # forced offline mid-trip (admin suspend, document expiry) comes back
+    # clamped is_available=False and must close to Period 0, not Period 1.
+    # No ride_id on the 0/1 row.
+    await _deps.close_period_after_release(driver["id"], _complete_released, reason="ride_completed", ride_id=ride_id)
 
     # Meta DriverActivated — the driver's first completed trip. The count check
     # is only a cheap filter to avoid a DB round-trip on every subsequent ride;

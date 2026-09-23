@@ -33,6 +33,7 @@ try:
         status_message,
         verification_message,
     )
+    from ...utils.insurance_periods import close_period_for_forced_offline
     from ...utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
@@ -61,6 +62,7 @@ except ImportError:
         status_message,
         verification_message,
     )
+    from utils.insurance_periods import close_period_for_forced_offline  # type: ignore
     from utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit  # noqa: F401
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
@@ -2187,6 +2189,13 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
+    # reject/suspend/ban just forced is_online=False. Close the driver's open
+    # insurance period to what they actually are now (Period 0, or kept 2/3
+    # if a ride/offer is still theirs — see the helper). The reconciler cannot
+    # do this: it only scans online drivers. Never raises on a DB error.
+    if updates.get("is_online") is False:
+        await close_period_for_forced_offline(driver_id, reason=f"admin_{req.action}")
+
     # Auto-log to activity timeline
     action_titles = {
         "approve": "Driver Approved",
@@ -2271,6 +2280,9 @@ async def admin_override_driver_status(
 
     await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
+    # Same insurance-period close as admin_driver_action's forced-offline branches.
+    if req.status != "active":
+        await close_period_for_forced_offline(driver_id, reason="admin_status_override")
     await _log_driver_activity(
         driver_id,
         "status_override",
@@ -3254,11 +3266,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # Everything actually sent — completed, transfer_completed, reserved, and
     # any future status — minus what is still only queued.
     refund_holds_total = sum(
-        (
-            _dec(p.get("amount"))
-            for p in payouts
-            if p.get("payout_type") == "clawback" and _is_money_out(p)
-        ),
+        (_dec(p.get("amount")) for p in payouts if p.get("payout_type") == "clawback" and _is_money_out(p)),
         Decimal("0"),
     )
     total_paid_out = gross_money_out - pending_in_flight - refund_holds_total

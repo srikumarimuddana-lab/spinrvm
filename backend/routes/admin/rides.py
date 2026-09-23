@@ -30,7 +30,7 @@ try:
         places_new_details_url,
         places_new_headers,
     )
-    from ...utils.insurance_periods import record_period_transition
+    from ...utils.insurance_periods import close_period_after_release, record_period_transition
     from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from ...utils.money import dollars_to_cents, to_decimal
     from ...utils.rate_limiter import default_limiter as limiter
@@ -56,7 +56,7 @@ except ImportError:
         places_new_details_url,
         places_new_headers,
     )
-    from utils.insurance_periods import record_period_transition
+    from utils.insurance_periods import close_period_after_release, record_period_transition
     from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import default_limiter as limiter
@@ -742,8 +742,11 @@ async def admin_cancel_ride(
             # Period 1 here would falsely reopen a commercial-insurance window
             # for a driver who is on personal auto only. Mirrors the guarded
             # pattern in routes/rides/matching.py's offer-timeout handler.
-            if isinstance(released, dict) and released.get("is_available"):
-                await record_period_transition(driver_id, 1)
+            # 2026-09-22 audit: a driver forced offline by suspend/ban/document
+            # expiry did NOT log Period 0 (their Period 2/3 is deliberately
+            # kept open while the ride is theirs), so the open row must be
+            # closed here — to Period 0 — not just left alone.
+            await close_period_after_release(driver_id, released, reason="admin_cancelled", ride_id=ride_id)
         except Exception as e:
             logger.error(
                 f"admin_cancel_ride: could not free driver {driver_id}: {e}",
@@ -924,9 +927,10 @@ async def admin_complete_ride(
             # a driver who went offline or was suspended while assigned, and
             # their go-offline already logged Period 0. Recording Period 1 here
             # would falsely reopen a commercial-insurance window for a driver
-            # on personal auto only.
-            if isinstance(released, dict) and released.get("is_available"):
-                await record_period_transition(driver_id, 1)
+            # on personal auto only. Same 2026-09-22 correction as
+            # admin_cancel_ride: close the open Period 3 to Period 0 for an
+            # offline driver rather than leaving it open.
+            await close_period_after_release(driver_id, released, reason="admin_completed", ride_id=ride_id)
         except Exception as e:
             logger.error(
                 f"admin_complete_ride: could not free driver {driver_id}: {e}",

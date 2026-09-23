@@ -657,29 +657,52 @@ class TestPaymentRetryLoop:
         assert sleep_calls == [payment_retry.RETRY_INTERVAL_SECONDS, payment_retry.RETRY_INTERVAL_SECONDS]
 
     @pytest.mark.anyio
-    async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick(self):
-        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
-        instead of silently falling back per-replica. Previously this call
-        sat directly in `while True:` with no surrounding try/except -- an
-        unhandled exception here would have killed the loop task
-        permanently instead of just proceeding without the (throttle-only)
-        lock."""
-        mock_retry = AsyncMock()
+    @pytest.mark.parametrize("first_result", [ConnectionError("redis down"), False])
+    async def test_loop_skips_unavailable_or_contended_lock_then_recovers(self, first_result):
+        ticks = [AsyncMock() for _ in range(4)]
+        sleeps = 0
 
-        async def _fake_sleep(seconds):
-            raise asyncio.CancelledError()
+        async def sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 1:
+                assert all(tick.await_count == 0 for tick in ticks)
+            else:
+                raise asyncio.CancelledError()
 
         with (
-            patch("utils.payment_retry.redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
-            patch("utils.payment_retry.retry_failed_payments", mock_retry),
-            patch("utils.payment_retry.retry_stuck_payouts", AsyncMock()),
-            patch("utils.payment_retry.sweep_guest_corporate_settlements", AsyncMock()),
-            patch("utils.payment_retry.asyncio.sleep", _fake_sleep),
-            patch("utils.payment_retry._record_heartbeat", MagicMock()),
+            patch.object(payment_retry, "redis_set_nx", AsyncMock(side_effect=[first_result, True])),
+            patch.object(payment_retry, "retry_failed_payments", ticks[0]),
+            patch.object(payment_retry, "retry_stuck_payouts", ticks[1]),
+            patch.object(payment_retry, "sweep_guest_corporate_settlements", ticks[2]),
+            patch("utils.payment_operations.reconcile_due_operations", ticks[3]),
+            patch.object(payment_retry.asyncio, "sleep", sleep),
+            patch.object(payment_retry, "_record_heartbeat") as heartbeat,
+            patch.object(payment_retry, "_metric_inc") as metric,
         ):
             with pytest.raises(asyncio.CancelledError):
                 await payment_retry.payment_retry_loop()
-        mock_retry.assert_awaited_once()
+        assert all(tick.await_count == 1 for tick in ticks)
+        assert heartbeat.call_count == 2
+        assert metric.call_count == int(isinstance(first_result, Exception))
+
+    @pytest.mark.anyio
+    async def test_loop_with_no_redis_does_not_run_money_work(self, monkeypatch):
+        from utils import redis_client
+
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        monkeypatch.setattr(redis_client, "_local", {})
+        with (
+            patch.object(payment_retry, "retry_failed_payments", AsyncMock()) as tick,
+            patch.object(payment_retry, "retry_stuck_payouts", AsyncMock()),
+            patch.object(payment_retry, "sweep_guest_corporate_settlements", AsyncMock()),
+            patch("utils.payment_operations.reconcile_due_operations", AsyncMock()),
+            patch.object(payment_retry.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await payment_retry.payment_retry_loop()
+        tick.assert_not_awaited()
+        assert redis_client._local == {}
 
     @pytest.mark.anyio
     async def test_lock_acquired_runs_all_three_substeps_and_isolates_failures(self):

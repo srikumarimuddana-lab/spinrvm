@@ -47,7 +47,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from .datetime_utils import parse_iso_utc
     from .money import cents_to_dollars, dollars_to_cents
-    from .redis_client import redis_set_nx
+    from .redis_client import redis_set_nx_strict as redis_set_nx
     from .rider_emails import send_payment_blocked_email
 except ImportError:
     from db import db
@@ -58,7 +58,7 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.metrics import inc as _metric_inc
     from utils.money import cents_to_dollars, dollars_to_cents
-    from utils.redis_client import redis_set_nx
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx
     from utils.rider_emails import send_payment_blocked_email
 
 logger = logging.getLogger(__name__)
@@ -993,14 +993,9 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
-        # Best-effort throttle (C5): when a real Redis backs redis_set_nx, only
-        # one pod runs a tick, avoiding N simultaneous Stripe-retry scans. But
-        # the in-process fallback (REDIS_URL unset) gives every replica its own
-        # dict, so SET NX returns True everywhere and this is NOT mutual
-        # exclusion. That is acceptable because it is NOT the correctness guard:
-        # double-charge is prevented by the atomic DB claim (payment_status →
-        # 'retrying') + the Stripe idempotency key (see module docstring). The
-        # lock only reduces redundant work; it is never relied on for safety.
+        # Require real Redis ownership before scanning money work. The lease
+        # can expire during a slow tick: DB claims and Stripe idempotency remain
+        # the correctness guards, including after process death or replay.
         # TTL must be SHORTER than the minimum possible sleep below (interval *
         # 0.9, the worst-case jitter draw), or the pod that ran the last tick
         # wakes to find its OWN key still alive, fails SET NX, and sleeps
@@ -1013,14 +1008,9 @@ async def payment_retry_loop():
         try:
             got_lock = await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
-            # redis_set_nx now raises on a real (Redis-configured-but-
-            # unavailable) error instead of silently falling back per-replica
-            # (2026-08-11 P1 fix). As the comment above states, this lock is
-            # never the correctness guard (that's the atomic DB claim +
-            # Stripe idempotency key) — proceed with the tick rather than
-            # skip it.
-            logger.error(f"payment_retry: leader lock unavailable ({lock_err}), proceeding without it")
-            got_lock = True
+            logger.error("payment_retry: leader lock unavailable (%s), skipping tick", type(lock_err).__name__)
+            _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "payment_retry"})
+            got_lock = False
         if not got_lock:
             _record_heartbeat("payment_retry (5min)")
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)

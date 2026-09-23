@@ -230,6 +230,9 @@ _MIGRATION_FILES = (
     # ownership-checked release RPC exercised by batch cancellation tests.
     "421_insurance_period_ride_identity.sql",
     "442_release_cancelled_batch_offer.sql",
+    # 448 replaces timestamp ordering with durable claim UUIDs and adds a
+    # transactionally safe stale-claim recovery RPC.
+    "448_durable_dispatch_claim_identity.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS
@@ -350,8 +353,9 @@ def pg_conn(pg_test_dbname):
 
     # users/drivers/rides -- extracted verbatim, same technique as tests/rls.
     schema_sql = (_BACKEND_DIR / "supabase_schema.sql").read_text()
-    for table in ("users", "drivers", "rides"):
+    for table in ("users", "drivers", "rides", "settings"):
         cur.execute(_extract_create_table(schema_sql, table))
+    cur.execute("INSERT INTO settings (id) VALUES ('app_settings') ON CONFLICT (id) DO NOTHING")
 
     # service_areas is referenced by 100_batch_dispatch.sql's ALTER TABLE --
     # not itself under test, so a minimal stub is enough (same convention as

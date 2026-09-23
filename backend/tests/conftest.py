@@ -9,6 +9,7 @@ import importlib.abc
 import importlib.machinery
 import inspect
 import os
+import socket
 import sys
 from typing import Any, Dict, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -441,6 +442,69 @@ def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
     except RuntimeError:
         asyncio.set_event_loop(policy.new_event_loop())
     yield
+
+
+@pytest.fixture(autouse=True)
+def block_external_network_in_payment_regressions(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Block and report all IP networking attempts in payment regression tests.
+
+    These tests use mocked Stripe/Supabase boundaries; a missing mock must fail
+    locally instead of hanging or reaching a live provider. They use in-process
+    ASGI mocks, so no IPv4/IPv6 connection is expected; Unix socketpairs remain
+    available for asyncio internals. Loopback is allowed because Windows has no
+    AF_UNIX socketpair: asyncio's ProactorEventLoop builds its self-pipe from a
+    127.0.0.1 connection, and blocking it breaks every async test there.
+    """
+    guarded_modules = {
+        "test_payment_retry.py",
+        "test_payment_retry_coverage.py",
+        "test_stripe_reconcile.py",
+        "test_webhooks_main.py",
+    }
+    if os.path.basename(getattr(request.module, "__file__", "")) not in guarded_modules:
+        yield
+        return
+
+    attempts: list[str] = []
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_sendto = socket.socket.sendto
+
+    def _is_loopback(address) -> bool:
+        return isinstance(address, tuple) and bool(address) and address[0] in ("127.0.0.1", "::1")
+
+    def _guarded_getaddrinfo(host, *args, **kwargs):
+        attempts.append(f"DNS lookup: {host!r}")
+        raise socket.gaierror("network disabled in payment regression tests")
+
+    def _guarded_connect(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not _is_loopback(address):
+            attempts.append(f"socket connect: {address!r}")
+            raise OSError("network disabled in payment regression tests")
+        return original_connect(sock, address)
+
+    def _guarded_connect_ex(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not _is_loopback(address):
+            attempts.append(f"socket connect_ex: {address!r}")
+            return 1
+        return original_connect_ex(sock, address)
+
+    def _guarded_sendto(sock, data, *args):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            address = args[-1] if args else None
+            attempts.append(f"socket sendto: {address!r}")
+            raise OSError("network disabled in payment regression tests")
+        return original_sendto(sock, data, *args)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, "sendto", _guarded_sendto)
+    yield
+    if attempts:
+        pytest.fail("payment regression attempted network I/O: " + "; ".join(attempts))
 
 
 @pytest.fixture(autouse=True)

@@ -297,6 +297,11 @@ interface RideState {
   setDropoff: (location: Location | null) => void;
   addStop: (location: Location) => void;
   clearStops: () => void;
+  /**
+   * Start a new Where to? session. Clears the trip draft only.
+   * Does not touch the live ride, the cancel latch, saved places, or GPS.
+   */
+  resetBookingDraft: () => void;
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
   fetchActiveRide: () => Promise<{ active: boolean; ride: Ride } | null>;
@@ -476,6 +481,23 @@ export const useRideStore = create<RideState>((set, get) => ({
     availablePromos: [],
     appliedPromo: null,
     routePolyline: [],
+  }),
+
+  // A new Where to? from home, with no live ride, is a new trip. clearRide
+  // deliberately keeps this draft (wiping it there bounced ride-options home).
+  // The reset happens here, at the moment the rider asks to search again.
+  resetBookingDraft: () => set({
+    pickup: null,
+    dropoff: null,
+    stops: [],
+    estimates: [],
+    selectedVehicle: null,
+    routePolyline: [],
+    availablePromos: [],
+    appliedPromo: null,
+    scheduledTime: null,
+    riderNotes: '',
+    isLoading: false,
   }),
   removeStop: (index) => set((state) => ({
     stops: state.stops.filter((_, i) => i !== index),

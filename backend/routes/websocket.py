@@ -37,7 +37,9 @@ try:
         verify_jwt_token,
     )
     from ..socket_manager import manager
+    from ..utils import metrics
     from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.error_handling import DatabaseError
     from ..utils.location_write_gate import should_write_marker
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
@@ -50,7 +52,9 @@ except ImportError:
         verify_jwt_token,
     )
     from socket_manager import manager
+    from utils import metrics  # type: ignore
     from utils.driver_presence import clear_presence, mark_present
+    from utils.error_handling import DatabaseError  # type: ignore
     from utils.location_write_gate import should_write_marker  # type: ignore
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
@@ -140,15 +144,47 @@ def _live_capture_time(point: dict, *, allow_untimed: bool = False):
     return datetime.fromtimestamp(epoch, timezone.utc)
 
 
+def _report_ws_marker_write_failure(driver_id, path, exc) -> None:
+    """Make a failed live-marker DB write loud without killing the socket.
+
+    2026-09-22 incident: a 42883 from update_live_driver_marker escaped this
+    write, reached websocket_endpoint's generic ``except Exception`` and closed
+    the driver socket as ``handler_error`` (109 server-side disconnects in one
+    hour; drivers missed offers). The error is logged at ERROR (the loguru ->
+    Sentry sink captures it), explicitly sent to Sentry with tags, and counted.
+    """
+    logger.error(f"[WS] live marker write failed driver_id={driver_id} path={path} err={exc}")
+    metrics.inc("spinr_live_marker_write_failures_total", {"path": path})
+    try:
+        import sentry_sdk  # type: ignore
+
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("domain", "dispatch")
+            scope.set_tag("surface", "backend")
+            scope.set_tag("marker_path", path)
+            scope.set_tag("driver_id", str(driver_id))
+            sentry_sdk.capture_exception(exc)
+    except Exception as _sentry_err:  # pragma: no cover - best-effort telemetry only
+        logger.debug(f"[WS] marker-failure Sentry capture skipped: {_sentry_err}")
+
+
 async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
     if await should_write_marker(driver_id, path=path, unthrottled_before=False):
-        accepted = await db_supabase.update_driver_location(
-            driver_id,
-            lat,
-            lng,
-            heading=heading,
-            captured_at=captured_at,
-        )
+        try:
+            accepted = await db_supabase.update_driver_location(
+                driver_id,
+                lat,
+                lng,
+                heading=heading,
+                captured_at=captured_at,
+            )
+        except DatabaseError as exc:
+            # Narrow on purpose: only a DB failure of the marker write is made
+            # non-fatal. The sample itself is fresh and integrity-checked, so
+            # live fan-out and presence continue (same rule as the REST v2
+            # path: live delivery must not depend on the storage write).
+            _report_ws_marker_write_failure(driver_id, path, exc)
+            return True
         return accepted is not False
     # Coalescing limits storage writes, not delivery of fresh sensor samples.
     return True

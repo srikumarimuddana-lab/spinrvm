@@ -22,6 +22,7 @@ backfilled from the rides table) but never raised.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 try:
@@ -372,13 +373,36 @@ async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id
     or ownership mismatch this fails closed: it never falls back to the
     unscoped ``set_driver_available`` helper.
     """
+    try:
+        offers = await db_supabase.get_rows(
+            "ride_offers",
+            {"driver_id": driver_id, "ride_id": ride_id, "status": "cancelled"},
+            limit=1,
+            columns="claim_id",
+        )
+    except Exception:
+        logger.error(
+            "insurance_periods: cancelled-offer identity lookup failed driver_id=%s ride_id=%s; leaving claim unchanged",
+            driver_id,
+            ride_id,
+            exc_info=True,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "claim_identity_lookup_error"})
+        return None
+
+    offer_claim_id = offers[0].get("claim_id") if offers else None
+    rpc_name = (
+        "release_batch_offer_driver_and_close_period_v2"
+        if offer_claim_id
+        else "release_batch_offer_driver_legacy_guard_v2"
+    )
     params = {"p_driver_id": driver_id, "p_ride_id": ride_id}
 
     def _rpc_call():
         sb = db_supabase.supabase
         if sb is None:
             return None
-        response = sb.rpc("release_batch_offer_driver_and_close_period", params).execute()
+        response = sb.rpc(rpc_name, params).execute()
         data = getattr(response, "data", None)
         return data[0] if isinstance(data, list) and data else data
 
@@ -386,8 +410,9 @@ async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id
         result = await db_supabase.run_sync(_rpc_call, retry_policy="write")
     except Exception:
         logger.error(
-            "insurance_periods: batch-offer release RPC failed driver_id=%s ride_id=%s; "
+            "insurance_periods: batch-offer release RPC %s failed driver_id=%s ride_id=%s; "
             "leaving driver claim unchanged",
+            rpc_name,
             driver_id,
             ride_id,
             exc_info=True,
@@ -398,13 +423,24 @@ async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id
     if not isinstance(result, dict) or result.get("status") != "released":
         reason = result.get("status", "no_result") if isinstance(result, dict) else "no_result"
         logger.warning(
-            "insurance_periods: batch-offer release skipped driver_id=%s ride_id=%s reason=%s",
+            "insurance_periods: batch-offer release skipped via %s driver_id=%s ride_id=%s reason=%s",
+            rpc_name,
             driver_id,
             ride_id,
             reason,
         )
         _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": reason})
         return None
+
+    if result.get("period_missing"):
+        logger.error(
+            "insurance_periods: recovered claim with missing open period driver_id=%s ride_id=%s; "
+            "opened current Period %s without fabricating historical Period 2",
+            driver_id,
+            ride_id,
+            result.get("period"),
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "period_missing_recovered"})
 
     period = result.get("period")
     # The RPC changes the driver row outside the repository write helpers;
@@ -426,3 +462,90 @@ async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id
         {"reason": "rider_cancelled", "period": str(period)},
     )
     return period
+
+
+_BENIGN_REAP_SKIPS = frozenset(
+    {
+        "claim_too_recent",
+        "offer_active",
+        "ride_active",
+        "offer_or_ride_active",
+        "not_claimed",
+        "driver_missing",
+        "legacy_claim_changed",
+        "claim_identity_changed",
+    }
+)
+
+
+async def reap_stale_driver_claim(
+    driver_id: str, claim_id: Optional[str] = None, claimed_at: Optional[str] = None
+) -> Optional[dict]:
+    """Ask Postgres to recover one claim using a locked identity or legacy CAS."""
+    rpc_name = "reap_stale_driver_claim_v2" if claim_id else "reap_stale_legacy_driver_claim_v2"
+    params = {"p_driver_id": driver_id}
+    if claim_id:
+        params["p_expected_claim_id"] = claim_id
+    else:
+        params["p_expected_claimed_at"] = claimed_at
+        params["p_stale_before"] = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+
+    def _rpc_call():
+        sb = db_supabase.supabase
+        if sb is None:
+            return None
+        response = sb.rpc(rpc_name, params).execute()
+        data = getattr(response, "data", None)
+        return data[0] if isinstance(data, list) and data else data
+
+    try:
+        result = await db_supabase.run_sync(_rpc_call, retry_policy="write")
+    except Exception:
+        logger.error(
+            "insurance_periods: stale claim recovery RPC failed driver_id=%s; claim remains unchanged",
+            driver_id,
+            exc_info=True,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "rpc_error"})
+        return None
+
+    if not isinstance(result, dict) or result.get("status") != "released":
+        status = result.get("status", "no_result") if isinstance(result, dict) else "no_result"
+        # Busy drivers and claims that changed under us are normal, not errors
+        # (logging them at ERROR paged Sentry every tick per busy driver).
+        if status not in _BENIGN_REAP_SKIPS:
+            logger.error("insurance_periods: stale claim recovery skipped driver_id=%s reason=%s", driver_id, status)
+            _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": status})
+        return result if isinstance(result, dict) else None
+
+    if result.get("stale_period_closed"):
+        logger.warning(
+            "insurance_periods: stale claim recovery closed a Period 2/3 left open by an "
+            "interrupted release driver_id=%s",
+            driver_id,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "stale_period_recovered"})
+
+    if result.get("period_missing"):
+        logger.error(
+            "insurance_periods: recovered stale claim with missing open period driver_id=%s; "
+            "opened current Period %s without fabricating historical Period 2",
+            driver_id,
+            result.get("period"),
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "period_missing_recovered"})
+
+    try:
+        try:
+            from ..repositories._base import invalidate_driver_cache
+        except ImportError:  # pragma: no cover - dual-import mode
+            from repositories._base import invalidate_driver_cache  # type: ignore
+        await invalidate_driver_cache(driver_id=driver_id, user_id=result.get("user_id"))
+    except Exception:
+        logger.warning(
+            "insurance_periods: driver cache invalidation failed after stale claim recovery driver_id=%s",
+            driver_id,
+            exc_info=True,
+        )
+    _metric_inc("spinr_insurance_period_release_total", {"reason": "orphan_claim", "period": str(result.get("period"))})
+    return result

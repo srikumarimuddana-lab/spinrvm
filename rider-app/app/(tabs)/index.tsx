@@ -68,7 +68,7 @@ const PROMO_ROTATE_MS = 6000;
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, triggerRidelessEmergency, fetchActiveRide } = useRideStore();
+  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, triggerRidelessEmergency, fetchActiveRide, resetBookingDraft } = useRideStore();
   const ridelessSosEnabled = useContext(RidelessSosEnabledContext);
   const { t } = useTranslation();
 
@@ -346,8 +346,15 @@ export default function HomeScreen() {
     return 'GOOD EVENING';
   };
 
-  const handleSearchPress = () => {
+  // No live ride means the previous pickup/dropoff is a finished draft, not
+  // a trip to resume. clearRide keeps that draft; this is where it is dropped.
+  const openNewSearch = useCallback(() => {
+    if (!currentRide) resetBookingDraft();
     router.push('/search-destination' as any);
+  }, [currentRide, resetBookingDraft, router]);
+
+  const handleSearchPress = () => {
+    openNewSearch();
   };
 
   const handleAiPress = () => {
@@ -359,7 +366,7 @@ export default function HomeScreen() {
   };
 
   const handleQuickAction = (_type: string) => {
-    router.push('/search-destination' as any);
+    openNewSearch();
   };
 
   const handleLocationPress = async () => {

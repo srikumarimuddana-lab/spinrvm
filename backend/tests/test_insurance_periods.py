@@ -82,6 +82,7 @@ async def test_batch_offer_release_uses_only_transactional_ownership_rpc() -> No
 
     with (
         patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods.db_supabase, "get_rows", AsyncMock(return_value=[{"claim_id": "c1"}])),
         patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(side_effect=_run_sync)),
         patch("backend.repositories._base.invalidate_driver_cache", invalidate),
     ):
@@ -90,7 +91,7 @@ async def test_batch_offer_release_uses_only_transactional_ownership_rpc() -> No
     assert result == 1
     invalidate.assert_awaited_once_with(driver_id="d1", user_id="u1")
     sb.rpc.assert_called_once_with(
-        "release_batch_offer_driver_and_close_period",
+        "release_batch_offer_driver_and_close_period_v2",
         {"p_driver_id": "d1", "p_ride_id": "r1"},
     )
     sb.table.assert_not_called()
@@ -105,16 +106,38 @@ async def test_batch_offer_release_fails_closed_on_ownership_mismatch() -> None:
 
     with (
         patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods.db_supabase, "get_rows", AsyncMock(return_value=[{"claim_id": "c1"}])),
         patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(side_effect=_run_sync)),
     ):
         result = await insurance_periods.release_batch_offer_driver_and_close_period("d1", ride_id="r1")
 
     assert result is None
     sb.rpc.assert_called_once_with(
-        "release_batch_offer_driver_and_close_period",
+        "release_batch_offer_driver_and_close_period_v2",
         {"p_driver_id": "d1", "p_ride_id": "r1"},
     )
-    sb.table.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_batch_offer_release_routes_null_identity_through_guarded_legacy_rpc() -> None:
+    sb = _fake_supabase(rpc_data={"status": "released", "period": 1, "user_id": "u1"})
+
+    async def _run_sync(fn, **kwargs):
+        return fn()
+
+    with (
+        patch.object(insurance_periods.db_supabase, "supabase", sb),
+        patch.object(insurance_periods.db_supabase, "get_rows", AsyncMock(return_value=[{"claim_id": None}])),
+        patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(side_effect=_run_sync)),
+        patch("backend.repositories._base.invalidate_driver_cache", AsyncMock()),
+    ):
+        result = await insurance_periods.release_batch_offer_driver_and_close_period("d1", ride_id="r1")
+
+    assert result == 1
+    sb.rpc.assert_called_once_with(
+        "release_batch_offer_driver_legacy_guard_v2",
+        {"p_driver_id": "d1", "p_ride_id": "r1"},
+    )
 
 
 @pytest.mark.anyio
@@ -279,3 +302,38 @@ async def test_period_3_to_1_on_ride_complete() -> None:
         "record_insurance_period_transition",
         {"p_driver_id": "d1", "p_new_period": 1, "p_ride_id": None},
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["offer_or_ride_active", "legacy_claim_changed", "claim_identity_changed"])
+async def test_reaper_benign_skips_are_not_logged_as_errors(status) -> None:
+    """A busy driver or a claim that changed mid-reap is routine, not a Sentry page."""
+    with (
+        patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(return_value={"status": status})),
+        patch.object(insurance_periods, "logger") as log,
+        patch.object(insurance_periods, "_metric_inc") as metric,
+    ):
+        result = await insurance_periods.reap_stale_driver_claim("d1", claimed_at="2026-09-23T00:00:00+00:00")
+    assert result == {"status": status}
+    log.error.assert_not_called()
+    metric.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_reaper_stale_period_recovery_is_logged_and_counted() -> None:
+    released = {
+        "status": "released",
+        "period": 1,
+        "user_id": "u1",
+        "period_missing": False,
+        "stale_period_closed": True,
+    }
+    with (
+        patch.object(insurance_periods.db_supabase, "run_sync", AsyncMock(return_value=released)),
+        patch.object(insurance_periods, "logger") as log,
+        patch.object(insurance_periods, "_metric_inc") as metric,
+        patch("backend.repositories._base.invalidate_driver_cache", AsyncMock()),
+    ):
+        await insurance_periods.reap_stale_driver_claim("d1", claim_id="c1")
+    log.warning.assert_called()
+    metric.assert_any_call("spinr_insurance_period_release_skipped_total", {"reason": "stale_period_recovered"})

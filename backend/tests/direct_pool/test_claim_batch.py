@@ -112,6 +112,25 @@ def _call_claim_batch_full(cur, ride_id, driver_ids, eta_seconds, max_offers, of
     return cur.fetchall()
 
 
+@pytest.fixture(params=("dispatch_claim_batch", "dispatch_claim_batch_v2"))
+def claim_batch_rpc(request, pg_cur):
+    """Exercise native races through both shipped RPCs, restoring the flag."""
+    rpc = request.param  # explicit param list is the SQL-identifier whitelist
+    pg_cur.execute("SELECT dispatch_claim_identity_enabled FROM settings WHERE id = 'app_settings'")
+    previous_flag = pg_cur.fetchone()[0]
+    pg_cur.execute(
+        "UPDATE settings SET dispatch_claim_identity_enabled = %s WHERE id = 'app_settings'",
+        (rpc.endswith("_v2"),),
+    )
+    try:
+        yield rpc
+    finally:
+        pg_cur.execute(
+            "UPDATE settings SET dispatch_claim_identity_enabled = %s WHERE id = 'app_settings'",
+            (previous_flag,),
+        )
+
+
 # ── Basic claim / offer / insurance semantics ──────────────────────────
 
 
@@ -455,7 +474,7 @@ def _dsn_for_direct_connection(pg_conn) -> str:
     return _u.urlunsplit((parts.scheme, parts.netloc, f"/{info['dbname']}", parts.query, parts.fragment))
 
 
-def test_concurrent_claim_batch_calls_same_driver_only_one_wins(pg_conn):
+def test_concurrent_claim_batch_calls_same_driver_only_one_wins(pg_conn, pg_cur, claim_batch_rpc):
     """The core race test T14 requires: two concurrent dispatch_claim_batch
     calls both attempting to claim the SAME driver for DIFFERENT rides.
     Exactly one must succeed (claimed=True); the other must get
@@ -471,7 +490,7 @@ def test_concurrent_claim_batch_calls_same_driver_only_one_wins(pg_conn):
     """
     dsn = _dsn_for_direct_connection(pg_conn)
 
-    setup_cur = pg_conn.cursor()
+    setup_cur = pg_cur
     _insert_user(setup_cur, "race-u1")
     _insert_driver(setup_cur, "race-d1", "race-u1")
     _insert_user(setup_cur, "race-rider-a")
@@ -492,7 +511,7 @@ def test_concurrent_claim_batch_calls_same_driver_only_one_wins(pg_conn):
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             barrier.wait(timeout=10)  # line both threads up to maximize overlap
             cur.execute(
-                "SELECT driver_id, claimed FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+                f"SELECT driver_id, claimed FROM {claim_batch_rpc}(%s, %s, %s, %s, %s, %s)",
                 (ride_id, ["race-d1"], [100], 1, _NOW, _EXPIRES),
             )
             results[label] = cur.fetchall()
@@ -569,7 +588,7 @@ def test_driver_flipped_unavailable_between_read_and_claim_is_skipped(pg_conn):
     assert check_cur.fetchone()[0] == 0
 
 
-def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_conn):
+def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_conn, pg_cur, claim_batch_rpc):
     """Review fix (2026-09-03) — the SKIP LOCKED proof. Session A holds an
     OPEN transaction that has claimed d1 (the state a concurrent batch is in
     between its claim and its COMMIT). Session B then claims [d1, d2]. With
@@ -580,7 +599,7 @@ def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_c
     """
     dsn = _dsn_for_direct_connection(pg_conn)
 
-    setup_cur = pg_conn.cursor()
+    setup_cur = pg_cur
     _insert_user(setup_cur, "lock-u1")
     _insert_user(setup_cur, "lock-u2")
     _insert_driver(setup_cur, "lock-d1", "lock-u1")
@@ -597,7 +616,7 @@ def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_c
     try:
         cur_a = session_a.cursor()
         cur_a.execute(
-            "SELECT driver_id, claimed FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+            f"SELECT driver_id, claimed FROM {claim_batch_rpc}(%s, %s, %s, %s, %s, %s)",
             ("lock-ride-a", ["lock-d1"], [100], 1, _NOW, _EXPIRES),
         )
         assert cur_a.fetchall() == [("lock-d1", True)]  # A holds d1's row lock, uncommitted
@@ -605,7 +624,7 @@ def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_c
         cur_b = session_b.cursor()
         cur_b.execute("SET statement_timeout = '3000ms'")
         cur_b.execute(
-            "SELECT driver_id, claimed FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+            f"SELECT driver_id, claimed FROM {claim_batch_rpc}(%s, %s, %s, %s, %s, %s)",
             ("lock-ride-b", ["lock-d1", "lock-d2"], [100, 200], 2, _NOW, _EXPIRES),
         )
         rows_b = cur_b.fetchall()

@@ -779,6 +779,9 @@ class AppSettings(BaseModel):
     # rollback switch at all and becomes a boot-time setting — do not make
     # that change without replacing the rollback procedure documented here.
     dispatch_direct_pool_enabled: bool = False
+    # Migration 448. Enables UUID-bound dispatch claims and the v2 recovery
+    # RPCs. Keep off until all backend pods run the compatible release/reaper.
+    dispatch_claim_identity_enabled: bool = False
     # #1231 finding 15 (remaining half) kill switch: when True, matching.py's
     # `_FCM_EXCLUDE` also drops precise pickup/dropoff coordinates and
     # rider_rating from the ride-offer FCM `data` payload (WS `dispatch_payload`

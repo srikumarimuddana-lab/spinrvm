@@ -116,6 +116,7 @@ const mockSetUserLocation = jest.fn();
 const mockTriggerEmergency = jest.fn();
 const mockTriggerRidelessEmergency = jest.fn();
 const mockFetchActiveRide = jest.fn();
+const mockResetBookingDraft = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({ useRideStore: () => mockRideState }));
 
@@ -193,6 +194,7 @@ beforeEach(() => {
     triggerEmergency: mockTriggerEmergency,
     triggerRidelessEmergency: mockTriggerRidelessEmergency,
     fetchActiveRide: mockFetchActiveRide,
+    resetBookingDraft: mockResetBookingDraft,
   };
   mockAiChatState = { enabled: true, mode: 'enabled', loadConfig: jest.fn() };
   mockFetchActiveRide.mockResolvedValue({ active: false });
@@ -336,9 +338,22 @@ describe('HomeScreen', () => {
     const searchBar = findButtonByLabel(r, 'Where to? Search for a destination');
     act(() => { searchBar.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith('/search-destination');
+    expect(mockResetBookingDraft).toHaveBeenCalled();
     mockPush.mockClear();
+    mockResetBookingDraft.mockClear();
     const homeAction = findButtonByLabel(r, 'Go home');
     act(() => { homeAction.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/search-destination');
+    expect(mockResetBookingDraft).toHaveBeenCalled();
+  });
+
+  it('does not reset the booking draft when a live ride is already in the store', async () => {
+    mockRideState.currentRide = { id: 'ride-1' };
+    mockFetchActiveRide.mockResolvedValue({ active: false });
+    const r = await renderScreen();
+    const searchBar = findButtonByLabel(r, 'Where to? Search for a destination');
+    act(() => { searchBar.props.onPress(); });
+    expect(mockResetBookingDraft).not.toHaveBeenCalled();
     expect(mockPush).toHaveBeenCalledWith('/search-destination');
   });
 

@@ -381,7 +381,13 @@ def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> s
 
         refreshed = _stripe.Invoice.retrieve(invoice_id, expand=["payments"], api_key=stripe_secret)
         # stripe-python returns a typed object; normalize to a plain dict.
-        as_dict = refreshed.to_dict_recursive() if hasattr(refreshed, "to_dict_recursive") else dict(refreshed)
+        # v15 has neither to_dict_recursive nor dict() support (TypeError, which
+        # the except below swallowed -> PI never resolved); use the shared helper.
+        try:
+            from ..utils.stripe_config import stripe_object_to_dict
+        except ImportError:
+            from utils.stripe_config import stripe_object_to_dict  # type: ignore
+        as_dict = stripe_object_to_dict(refreshed)
         return _from_payload(as_dict)
     except Exception:
         logger.error(
@@ -1051,7 +1057,6 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 )
                 _payment_status = str(ride.get("payment_status") or "").lower()
                 _settlement_finalized = _payment_status in _SETTLED_PAYMENT_STATUSES
-                _settlement_pending = _payment_status in ("pending", "failed", "processing")
                 if _component_verified and _settlement_finalized:
                     # The authoritative app settlement already wrote paid and
                     # the aggregate ledger proof. A component webhook is only
@@ -1059,13 +1064,14 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     # append another aggregate charge row.
                     await mark_stripe_event_processed(event_id)
                     return {"received": True, "component_payment": True, "event_id": event_id}
-                if _settlement_pending:
-                    # A ledger map proves received funds but cannot finalize a
-                    # ride. Retry while pending/failed/processing until the
-                    # authoritative app settlement completes its paid flip.
+                if _component_verified:
+                    # The exact aggregate map proves the full obligation was
+                    # captured. Keep this component event retryable until the
+                    # authoritative finalizer or processing recovery updates
+                    # the ride; never treat a component as the whole fare.
                     if not await unclaim_stripe_event(event_id):
                         logger.critical(
-                            "Stripe event %s could not be unclaimed before ride %s settlement finished",
+                            "Stripe event %s could not be unclaimed while ride %s settlement was unfinished",
                             event_id,
                             ride_id,
                         )

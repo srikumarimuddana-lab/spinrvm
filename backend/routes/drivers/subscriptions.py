@@ -487,6 +487,13 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # amount/currency mismatch so we never bill a surprise amount.
             try:
                 _price_obj = stripe.Price.retrieve(_price_id, api_key=_stripe_secret)
+                # stripe-python v15: Price is not a dict (.get() raises
+                # AttributeError) — normalize once to a plain nested dict.
+                try:
+                    from ...utils.stripe_config import stripe_object_to_dict
+                except ImportError:
+                    from utils.stripe_config import stripe_object_to_dict  # type: ignore
+                _price_obj = stripe_object_to_dict(_price_obj)
             except Exception as _price_err:
                 logger.exception(f"[SUBSCRIBE] Could not retrieve Stripe Price {_price_id} for plan {plan_id}")
                 raise HTTPException(

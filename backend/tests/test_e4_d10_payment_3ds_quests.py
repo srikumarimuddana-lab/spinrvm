@@ -137,7 +137,7 @@ class TestPayment3DSRetry:
                 # Return a truthy ride dict so the retry loop's atomic-claim
                 # gate (`if claimed is None: continue`) passes; capture every
                 # call so individual tests can locate the post-claim update.
-                AsyncMock(side_effect=lambda t, q, d: (updates.append((q, d)) or {"id": RIDE_ID})),
+                AsyncMock(side_effect=lambda t, q, d: updates.append((q, d)) or {"id": RIDE_ID}),
             ),
             patch(
                 "backend.utils.payment_retry.get_app_settings",
@@ -162,14 +162,23 @@ class TestPayment3DSRetry:
                 return q, d
         raise AssertionError(f"No update found with $set[{key!r}] == {value!r}; got {updates!r}")
 
-    async def test_already_succeeded_intent_marks_paid(self):
-        """If the PaymentIntent already succeeded (webhook missed), mark paid."""
+    async def test_already_succeeded_intent_defers_to_reconciliation(self):
+        """A succeeded PaymentIntent no longer marks paid from the retry loop.
+
+        A successful primary PI does not prove the whole obligation (a hold can
+        cover only the fare while a tip-overflow PI is separate), so the retry
+        loop hands the ride to the stripe_reconcile path as ``processing``
+        instead of promoting ``paid`` itself. No confirm() is issued.
+        """
         updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "succeeded")
 
         assert updates, "No DB update performed"
-        _, data = self._find(updates, "payment_status", "paid")
-        assert data["$set"]["payment_status"] == "paid"
+        query, data = self._find(updates, "payment_status", "processing")
+        assert query == {"id": RIDE_ID, "payment_status": "retrying", "payment_retry_count": 0}
+        assert data["$set"]["payment_status"] == "processing"
+        assert not any(d.get("$set", {}).get("payment_status") == "paid" for _, d in updates)
         mock_stripe.PaymentIntent.confirm.assert_not_called()
+        mock_stripe.PaymentIntent.capture.assert_not_called()
 
     async def test_requires_confirmation_submits_retry(self):
         """PaymentIntent needs confirmation → confirm() called, status=processing."""

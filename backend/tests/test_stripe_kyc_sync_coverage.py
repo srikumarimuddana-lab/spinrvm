@@ -477,3 +477,36 @@ class TestGetLegalNameAndAddress:
         assert result is not None
         assert result["legal_name"] is None
         assert result["address_line1"] == "123 Main St"
+
+
+class TestGetLegalNameAndAddressRealStripeV15Account:
+    """stripe==15.5.1: Account.retrieve returns a StripeObject with no .get() —
+    the T4A export path raised AttributeError for every driver with an account."""
+
+    @pytest.mark.anyio
+    async def test_real_account_object(self, monkeypatch):
+        import stripe
+
+        from backend.services import stripe_kyc_sync
+
+        account = stripe.Account.construct_from(
+            {
+                "id": "acct_v15",
+                "object": "account",
+                "individual": {
+                    "first_name": "Jordan",
+                    "last_name": "Driver",
+                    "address": {"line1": "1 Albert St", "city": "Regina", "state": "SK", "country": "CA"},
+                },
+            },
+            "sk_test_dummy",
+        )
+        assert not isinstance(account, dict)
+        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
+        with patch("stripe.Account.retrieve", return_value=account):
+            result = await stripe_kyc_sync.get_legal_name_and_address_from_stripe(
+                {"id": "d1", "stripe_account_id": "acct_v15"}
+            )
+        assert result["legal_name"] == "Jordan Driver"
+        assert result["city"] == "Regina"
+        assert result["province"] == "SK"

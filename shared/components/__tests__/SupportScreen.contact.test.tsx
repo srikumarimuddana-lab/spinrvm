@@ -165,8 +165,8 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     // placeholder the operator never entered and cannot correct.
     expect(queryByText('support@spinr.ca')).toBeNull();
     expect(queryByLabelText(/^Email support/)).toBeNull();
-    // The Contact tab itself has a mail icon; only company-detail icons must
-    // be absent when no email is configured.
+    // The Contact tab itself always has this icon; no email action chip or
+    // company-card row should add another one when the email is unset.
     expect(queryAllByText('mail-outline')).toHaveLength(1);
     // ...and the former hardcoded identity/address/website placeholders.
     expect(queryByText('SPINR MOBILITY INC.')).toBeNull();
@@ -282,6 +282,38 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
     mockAiConfigPromise = null;
   });
 
+  it('keeps chat out of view while config is pending, then shows it when enabled', async () => {
+    let resolveConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => { resolveConfig = resolve; });
+
+    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+    expect(utils.queryByText('AI Chat')).toBeNull();
+    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
+    expect(utils.getByLabelText('Loading support chat availability')).toBeTruthy();
+
+    await act(async () => {
+      resolveConfig({ data: { enabled: true, mode: 'enabled' } });
+      await mockAiConfigPromise;
+    });
+    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
+  });
+
+  it('falls back to FAQ without exposing chat when config rejects', async () => {
+    let rejectConfig!: (reason: Error) => void;
+    mockAiConfigPromise = new Promise((_resolve, reject) => { rejectConfig = reject; });
+
+    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+
+    await act(async () => {
+      rejectConfig(new Error('configuration unavailable'));
+      await mockAiConfigPromise?.catch(() => undefined);
+    });
+    expect(utils.queryByText('AI Chat')).toBeNull();
+    expect(utils.getByPlaceholderText('Search questions...')).toBeTruthy();
+  });
+
   /** Type a message and send it, letting the rejected POST settle. */
   async function sendChat(utils: ReturnType<typeof render>) {
     await act(async () => {
@@ -315,7 +347,7 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
 
     const utils = await renderTab('chat');
     expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
-    expect(utils.getByLabelText('Loading support options')).toBeTruthy();
+    expect(utils.getByLabelText('Loading support chat availability')).toBeTruthy();
     await act(async () => {
       resolveAiConfig({ data: { enabled: true, mode: 'enabled' } });
       await mockAiConfigPromise;

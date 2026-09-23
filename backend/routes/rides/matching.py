@@ -179,6 +179,10 @@ def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
             "eta_seconds": eta,
             "offered_at": offered_at_iso,
             "expires_at": expires_at_iso,
+            # The v2 claim RPC writes this identity into drivers. Carry it
+            # through explicitly so a delayed offer can never attach itself
+            # to a later claim for the same driver.
+            **({"claim_id": d["availability_claim_id"]} if d.get("availability_claim_id") else {}),
         }
         for d, eta in claimed_drivers
     ]
@@ -1008,6 +1012,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # Phase 3 can see live traffic split by path) is additive on the
         # flag-off path — see test_dispatch_claim_parity.py's
         # flag-off-byte-identical assertion.
+        _claim_identity_enabled = bool(app_settings.get("dispatch_claim_identity_enabled", False))
         _direct_pool_enabled = bool(app_settings.get("dispatch_direct_pool_enabled", False))
         if _direct_pool_enabled and not _dispatch_pool.is_open():
             # Review fix (2026-09-03): the flag is re-read per attempt (the
@@ -1091,13 +1096,18 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 _offer_expires_at = _offer_expires_at_dt.isoformat()
 
                 try:
-                    _pool_results = await _dispatch_pool.claim_batch(
+                    _pool_args = (
                         ride_id,
                         _pool_driver_ids,
                         _pool_eta_seconds,
                         max_offers,
                         now,
                         _offer_expires_at_dt,
+                    )
+                    _pool_results = (
+                        await _dispatch_pool.claim_batch(*_pool_args, claim_identity_enabled=True)
+                        if _claim_identity_enabled
+                        else await _dispatch_pool.claim_batch(*_pool_args)
                     )
                 except Exception as _exc:
                     # Fail loud, no silent fallback to PostgREST (D2 in the plan
@@ -1165,7 +1175,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     for driver, eta_sec, _ in ranked:
                         if len(claimed_drivers) >= max_offers:
                             break
-                        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                        if _claim_identity_enabled:
+                            fresh = await _deps.db_supabase.claim_driver_atomic(
+                                driver["id"], claim_identity_enabled=True
+                            )
+                        else:
+                            fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
                         if fresh:
                             # The claim's own UPDATE returns the post-claim row, so no follow-up
                             # get_driver_by_id is needed — and that read was guaranteed uncached

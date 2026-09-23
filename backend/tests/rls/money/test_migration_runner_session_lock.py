@@ -1,7 +1,15 @@
 """Exercise migration-runner ownership with actual PostgreSQL sessions."""
 
 import psycopg
-from backend.scripts.run_migrations import _acquire_apply_lock
+
+try:
+    from backend.scripts.run_migrations import _acquire_apply_lock
+except ImportError:  # pragma: no cover - package-style test invocation
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3].parent))
+    from backend.scripts.run_migrations import _acquire_apply_lock
 
 
 def test_apply_lock_is_session_owned_across_commit_and_released_on_close(pg_conn):

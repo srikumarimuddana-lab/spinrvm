@@ -151,8 +151,14 @@ const makeActiveRideResponse = (rideStatus = 'driver_accepted') => ({
       pickup_lng: -106.6700,
       dropoff_lat: 52.2,
       dropoff_lng: -106.8,
+      total_fare: '12.50',
+      distance_km: 3.2,
+      duration_minutes: 10,
+      rider_id: 'user-1',
+      created_at: '2026-09-23T00:00:00Z',
     },
     rider: { id: 'user-1', first_name: 'Alice' },
+    vehicle_type: { id: 'standard', name: 'Standard' },
   },
 });
 

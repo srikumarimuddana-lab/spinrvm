@@ -1,0 +1,41 @@
+# trufflehog --exclude-paths list for ci.yml's security-scan job.
+#
+# One regex per line, matched against each file's path in the repo. trufflehog
+# applies this to every commit it walks for a given run (ci.yml's `--since-commit`
+# scoping decides which commits that is — a diff against the PR's base branch,
+# or HEAD~1 on a push to main), not just the current tree, so a path here
+# stays suppressed for any old/stale commit that run reaches, not only new ones.
+#
+# Every entry below is a client-embedded Firebase/Google Maps config file
+# that ships inside the built mobile app bundle by design (Expo/RN requires
+# committing these for `expo prebuild`/EAS builds) — the keys inside are not
+# server secrets and are already effectively public once the app is
+# published, restricted (or restrictable) via Google Cloud Console API
+# key restrictions rather than secrecy. Decided 2026-09-23 (issue #5694):
+# allowlist without rotation, since these keys are client-side config, not
+# credentials with server-side privilege.
+#
+# Accepted risk / re-review trigger: this is a path-based exclusion, so it
+# also suppresses trufflehog on any FUTURE content added to these exact
+# paths — if one of these files (esp. eas.json, which can carry EAS build
+# secrets/env vars beyond Firebase config) ever gains a genuine server
+# credential, this list stops catching it. Re-review this list if that
+# usage changes.
+^driver-app/google-services\.json$
+^rider-app/google-services\.json$
+^driver-app/GoogleService-Info\.plist$
+^rider-app/GoogleService-Info\.plist$
+^driver-app/eas\.json$
+^rider-app/eas\.json$
+^shared/config/firebaseConfig\.ts$
+
+# Dead scratch scripts that hardcoded a Maps API key, committed under the
+# already-fully-deprecated frontend/ prototype (see frontend/DEPRECATED.md)
+# and an old driver-app/ path. The driver-app/ copies are already deleted
+# from the current tree; the frontend/ copies are deleted in the same PR
+# that added this list. Kept here because trufflehog still walks the
+# commits where they existed.
+^driver-app/test-places\.js$
+^driver-app/test-maps\.js$
+^frontend/test-places\.js$
+^frontend/test-maps\.js$

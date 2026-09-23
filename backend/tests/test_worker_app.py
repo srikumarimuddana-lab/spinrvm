@@ -192,15 +192,19 @@ def test_worker_lifespan_calls_firebase_sentry_and_database(monkeypatch):
 def test_worker_production_startup_raises_when_database_init_fails(monkeypatch):
     monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
     monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
     patches = _patch_loops()
     for p in patches:
         p.start()
     try:
         import worker as worker_mod
 
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
         with (
             patch.object(worker_mod, "init_firebase"),
             patch.object(worker_mod, "init_backend_sentry"),
+            patch.object(worker_mod, "_validate_production_config"),
             patch.object(
                 worker_mod,
                 "init_database",
@@ -213,6 +217,125 @@ def test_worker_production_startup_raises_when_database_init_fails(monkeypatch):
     finally:
         for p in patches:
             p.stop()
+
+
+def test_worker_production_rejects_wrong_process_role_before_startup(monkeypatch):
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "all")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(worker_mod, "_validate_production_config") as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="SPINR_PROCESS_ROLE=worker"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_not_called()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def test_worker_production_uses_shared_config_guard_before_startup(monkeypatch):
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "test-metrics-token")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(worker_mod, "_validate_production_config", side_effect=RuntimeError("invalid config")) as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="invalid config"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_called_once()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def test_worker_production_requires_metrics_token_before_startup(monkeypatch):
+    monkeypatch.delenv("METRICS_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SPINR_PROCESS_ROLE", "worker")
+    patches = _patch_loops()
+    for p in patches:
+        p.start()
+    try:
+        import worker as worker_mod
+
+        monkeypatch.setattr(worker_mod.settings, "ENV", "production")
+
+        with (
+            patch.object(worker_mod, "_validate_production_config") as validate,
+            patch.object(worker_mod, "init_firebase") as firebase,
+            patch.object(worker_mod, "init_backend_sentry") as sentry,
+            patch.object(worker_mod, "init_database", new=AsyncMock()) as database,
+        ):
+            with pytest.raises(RuntimeError, match="METRICS_AUTH_TOKEN"):
+                with TestClient(worker_mod.app):
+                    pass
+        validate.assert_called_once()
+        firebase.assert_not_called()
+        sentry.assert_not_called()
+        database.assert_not_awaited()
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.parametrize("first_outcome", ["return", "raise"])
+def test_worker_supervisor_retries_factory_return_and_exception(monkeypatch, first_outcome):
+    import asyncio
+
+    import worker as worker_mod
+
+    calls = 0
+    delays = []
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        if calls == 1 and first_outcome == "raise":
+            raise RuntimeError("loop failed")
+        if calls == 2:
+            raise asyncio.CancelledError
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(worker_mod, "loop_start_offset_seconds", lambda _name: 0)
+    with patch.object(worker_mod.asyncio, "sleep", new=sleep):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(worker_mod._restartable("probe", factory))
+
+    assert calls == 2
+    assert delays == [5]
 
 
 def test_graceful_shutdown_cancels_tasks(monkeypatch):

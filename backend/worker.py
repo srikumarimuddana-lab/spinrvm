@@ -22,17 +22,19 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
 _log = logger.bind(domain="admin", surface="backend")
 
 try:
-    from core.background_loop_registry import WORKER_WAVE1_LOOP_NAMES
+    from core.background_loop_registry import WORKER_WAVE1_LOOP_NAMES, resolve_process_role
     from core.config import settings
     from core.lifespan import init_database
+    from core.middleware import _validate_production_config
     from core.security import init_firebase
     from utils.metrics import render_prometheus, set_gauge
     from utils.outbox_worker import run_outbox_worker
     from utils.sentry_runtime import init_backend_sentry
 except ImportError:
-    from core.background_loop_registry import WORKER_WAVE1_LOOP_NAMES  # type: ignore
+    from core.background_loop_registry import WORKER_WAVE1_LOOP_NAMES, resolve_process_role  # type: ignore
     from core.config import settings  # type: ignore
     from core.lifespan import init_database  # type: ignore
+    from core.middleware import _validate_production_config  # type: ignore
     from core.security import init_firebase  # type: ignore
     from utils.metrics import render_prometheus, set_gauge  # type: ignore
     from utils.outbox_worker import run_outbox_worker  # type: ignore
@@ -118,6 +120,13 @@ def _refresh_task_gauges(tasks: Dict[str, asyncio.Task]) -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    process_role = resolve_process_role(os.environ.get("SPINR_PROCESS_ROLE"), env=settings.ENV)
+    if settings.ENV.lower() == "production" and process_role != "worker":
+        raise RuntimeError("Dedicated worker requires SPINR_PROCESS_ROLE=worker in production.")
+    _validate_production_config()
+    if settings.ENV.lower() == "production" and not _metrics_token():
+        raise RuntimeError("Dedicated worker requires METRICS_AUTH_TOKEN in production for metrics scraping.")
+
     init_backend_sentry(process_name="spinr worker")
     init_firebase()
     await init_database()

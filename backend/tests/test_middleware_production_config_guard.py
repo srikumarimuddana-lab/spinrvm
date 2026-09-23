@@ -86,7 +86,9 @@ def test_invalid_runtime_utility_redis_url_fails_without_echoing_credentials(mon
     assert "secret" not in str(exc.value)
 
 
-@pytest.mark.parametrize("runtime_url", ["redis://user:secret@redis.internal:6379/0", "rediss://user:secret@redis.internal:6380/0"])
+@pytest.mark.parametrize(
+    "runtime_url", ["redis://user:secret@redis.internal:6379/0", "rediss://user:secret@redis.internal:6380/0"]
+)
 def test_valid_runtime_utility_redis_schemes_pass(monkeypatch, runtime_url):
     monkeypatch.setenv("REDIS_URL", runtime_url)
     with patch("core.middleware.settings", _valid_settings()):

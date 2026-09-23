@@ -174,6 +174,7 @@ class TestProcessRoleLoopOwnership:
 
         from fastapi import FastAPI
 
+        import ai.mcp_server as mcp_server
         from backend.core import lifespan as lifespan_module
         from backend.core.background_loop_registry import (
             LOOP_WATCHDOG_NAME,
@@ -181,7 +182,6 @@ class TestProcessRoleLoopOwnership:
             active_api_loop_names,
         )
         from backend.utils import loop_alert
-        import ai.mcp_server as mcp_server
 
         settings = MagicMock(
             ENV=env,
@@ -241,7 +241,8 @@ class TestProcessRoleLoopOwnership:
 
         spawned_names = set(_spawned_loop_names(_find_lifespan_function(_parse_lifespan_module())))
         selected = {
-            name for name in spawned_names
+            name
+            for name in spawned_names
             if name != LOOP_WATCHDOG_NAME and (role == "all" or (role == "api" and name not in WORKER_WAVE1_LOOP_NAMES))
         }
         if role == "worker":
@@ -287,21 +288,19 @@ class TestProcessRoleLoopOwnership:
             "driver_onboarding_reminders (15min)",
         ],
     )
-    async def test_api_role_keeps_unselected_wave_loops_and_watches_them(
-        self, selected_worker_loop, monkeypatch
-    ):
+    async def test_api_role_keeps_unselected_wave_loops_and_watches_them(self, selected_worker_loop, monkeypatch):
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from fastapi import FastAPI
 
+        import ai.mcp_server as mcp_server
         from backend.core import lifespan as lifespan_module
         from backend.core.background_loop_registry import (
             LOOP_CATALOG,
             LOOP_WATCHDOG_NAME,
         )
         from backend.utils import loop_alert
-        import ai.mcp_server as mcp_server
         from utils import ws_pubsub
 
         monkeypatch.setattr(
@@ -360,8 +359,7 @@ class TestProcessRoleLoopOwnership:
         active = {
             name
             for name, placement in LOOP_CATALOG
-            if name != LOOP_WATCHDOG_NAME
-            and (placement != "worker_wave1" or name != selected_worker_loop)
+            if name != LOOP_WATCHDOG_NAME and (placement != "worker_wave1" or name != selected_worker_loop)
         }
         expected = (active | {LOOP_WATCHDOG_NAME}) & spawned_names
         assert {name for name in created_names if name in spawned_names} == expected

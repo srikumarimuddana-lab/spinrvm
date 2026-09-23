@@ -1458,9 +1458,8 @@ class TestErrorSummaryText:
 class TestAutoPayoutLoopRedisGate:
     @pytest.mark.anyio
     async def test_sunday_batch_skips_lock_error_then_resumes_with_lock(self, caplog):
-        from backend.utils import metrics
-
         from backend.utils import auto_payout as m
+        from backend.utils import metrics
 
         class _SundayClock:
             @staticmethod

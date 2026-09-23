@@ -71,6 +71,11 @@ except ImportError:
     )
     from utils.receipt_distance import fare_basis_distance_km  # type: ignore
 
+try:
+    from .cancellation_receipt import cancellation_charge, is_cancelled
+except ImportError:
+    from utils.cancellation_receipt import cancellation_charge, is_cancelled  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
@@ -140,6 +145,20 @@ def _build_fare_rows(
     Falls back to ``base_fare + distance + time + booking + tax + tip``
     for legacy rides written before migration 46.
     """
+    if is_cancelled(ride):
+        # A cancelled ride's fare columns still hold the booking-time quote;
+        # render what was actually charged (2026-09-23,
+        # utils/cancellation_receipt.py). Tip never applies to a cancellation.
+        charge = cancellation_charge(ride)
+        rows = [_line(escape(ln["label"]), f"${_fmt(_d(ln['amount']))}") for ln in charge["lines"]]
+        total = _q(charge["grand_total"])
+        rows.append('<tr><td colspan="2" style="border-top:1px solid #eee;padding:0;"></td></tr>')
+        rows.append(
+            '<tr><td style="color:#1a1a1a;padding:8px 0;font-weight:700;font-size:16px;">Total</td>'
+            f'<td style="text-align:right;color:{accent};font-weight:800;font-size:18px;">${_fmt(total)}</td></tr>'
+        )
+        return "".join(rows), total
+
     base_fare = _d(ride.get("base_fare", 0))
     distance_fare = _d(ride.get("distance_fare", 0))
     time_fare = _d(ride.get("time_fare", 0))
@@ -683,6 +702,9 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     the figure on the email subject matches the body. Prefers the
     persisted ``grand_total`` (set at completion) over re-summing parts.
     """
+    if is_cancelled(ride):
+        # Must match _build_fare_rows' cancelled branch (subject == body).
+        return _q(cancellation_charge(ride)["grand_total"])
     tip_d = _d(tip)
     grand_total = ride.get("grand_total")
     if grand_total not in (None, "", 0):

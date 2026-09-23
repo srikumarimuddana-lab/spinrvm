@@ -27,10 +27,12 @@ from typing import Any, Dict, Optional
 try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
+    from ..utils.stripe_config import stripe_object_to_dict
     from ..utils.stripe_mode import is_missing_on_key, key_mode, stale_by_mode
 except ImportError:
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.stripe_config import stripe_object_to_dict  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, stale_by_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -482,6 +484,9 @@ async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Opti
         )
         return None
 
+    # stripe-python v15: Account is not a dict (.get() raises AttributeError,
+    # which aborted the T4A export for every driver with an account).
+    account = stripe_object_to_dict(account)
     individual = account.get("individual") or {}
     address = individual.get("address") or {}
     legal_name = f"{individual.get('first_name', '') or ''} {individual.get('last_name', '') or ''}".strip()

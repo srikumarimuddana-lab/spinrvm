@@ -3,7 +3,9 @@
 Driver OTP, Firebase, company-email, and reactivation sign-ins now call
 `begin_driver_session` for an authenticated driver when the rollout flag is
 enabled. OTP uses the stored driver identity; client-supplied `client_app` is
-attribution only and cannot disable generation revocation. The database function
+attribution only and cannot disable generation revocation. When user role flags
+do not identify a driver, auth confirms the linked active `drivers` row. The
+database function
 serializes generation bump, session replacement, and refresh-token revocation;
 the minted access and refresh credentials use the returned generation. Refresh
 rotation keeps the parent's generation, including `NULL` for legacy writers.
@@ -14,7 +16,8 @@ tokens are rejected.
 Superseded-driver cleanup now honors the conditional offer and ride update
 results. If acceptance wins the race, cleanup preserves the assigned ride,
 driver availability, and insurance period. A successfully reverted assignment
-notifies the rider and re-dispatches.
+notifies the rider and re-dispatches. Company-email and reactivation logins now
+also tombstone the prior session, kick its sockets, and clean up driver presence.
 
 The alternative of treating every `NULL` generation as zero was rejected: an
 old API replica could issue a credential after a newer generation had been

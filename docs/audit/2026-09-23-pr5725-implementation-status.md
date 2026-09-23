@@ -1,5 +1,7 @@
 # PR 5725 implementation status — 2026-09-23
 
+This is the historical first-wave record. The subsequent all-wave coding and current verification are recorded in [remaining-wave status](2026-09-23-pr5725-remaining-waves-status.md).
+
 The verified first reliability wave is implemented. This is source/test evidence, not approval for production go-live or an A-grade claim. No deployment, merge, live migration, worker activation, or financial replay was performed.
 
 ## Planning decision

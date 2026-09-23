@@ -48,7 +48,7 @@ For previously affected real rides, use the existing reconciliation script in **
 
 - 174 targeted Python location/repository/WS/API tests passed; one pre-existing physical-device test is intentionally xfailed.
 - Complete driver Jest suite and coverage gates: **1,895 passed across 159 suites**. This includes 86 background-location tests. Four new tests fail against the original source and pass with the deadline fix (Firebase init, App Check, fetch ignoring abort, stalled response body). Late native completion cannot start a location request after timeout, and queued points remain unacknowledged.
-- 34 rider Jest tests passed across sensor ordering, stale-state display, cancellation payment messages and ride-detail route contracts.
+- Complete rider Jest suite and coverage gates after the CI follow-up: **2,224 passed across 162 suites**, including the prior 34 focused ride tests. Both mobile TypeScript checks were rerun successfully; the driver help-screen consumer test also passed.
 - Both complete mobile TypeScript checks (`tsc --noEmit`) passed.
 - Migration 445 executed in a local PostgreSQL WASM runtime against a minimal schema: newer/older/stale/future captures, preservation of insurance fields, and denial of client-role execution checked. This is SQL execution, not a live Supabase or multi-replica load test.
 - Final integrated backend verification: **548 passed**, one physical-device-only xfail across 29 targeted payment, cancellation, scheduling, marker, WebSocket, API and existing refund/orphan contract files. All changed Python files pass Ruff.
@@ -57,7 +57,7 @@ For previously affected real rides, use the existing reconciliation script in **
 - Migration 444 also executed in local PostgreSQL WASM: backend access, unique operation key, nonnegative cents and client-role denial passed.
 - GPT-6 Luna architect review found no remaining money or location blockers after the atomic accounting, separate-fee replay, orphan handling and email-preservation corrections.
 
-No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. Hosted rider tests have three failures in unchanged `shared/components/__tests__/SupportScreen.contact.test.tsx`; the same three failures were reproduced locally on base commit `0b6689b`. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and the complete local PR suite passes 1,895 tests (unchanged base passes 1,891). These checks are not represented as green.
+No native build, physical-device trip, live Stripe transaction or live Supabase migration was run. Full repository coverage gates and hosted CI remain separate checks. The three hosted rider SupportScreen failures reproduced on base `0b6689b` and were then repaired in this PR; the complete local rider suite now passes. Final hosted results are tracked in the PR. A hosted driver `locationIntegrity` mock assertion also failed; isolated tests pass on both base and PR source, and the complete local PR suite passes 1,895 tests (unchanged base passes 1,891). These checks are not represented as green.
 
 ## Risk & impact on existing functionality
 
@@ -79,3 +79,20 @@ Disable background REST fanout if delivery causes a problem; polling and durable
 - [Stripe idempotency retention and replay semantics](https://docs.stripe.com/api/idempotent_requests)
 - [Expo location background requirements](https://docs.expo.dev/versions/v54.0.0/sdk/location/)
 - [Apple background location configuration](https://developer.apple.com/documentation/corelocation/cllocationmanager/allowsbackgroundlocationupdates)
+
+## CI follow-up: support-screen loading race (23 September)
+
+**Root cause / before:** `aiMode='hidden'` represented both unresolved configuration and a confirmed disabled assistant. The redirect effect discarded `initialTab='chat'` before `/ai/config` returned. A separate icon assertion counted the static Contact tab icon as company contact information.
+
+**Fix / after:** `aiMode=null` represents loading. A requested chat tab shows a loading indicator, then renders the configured chat/coming-soon view or falls back to FAQ when hidden. A user switching to Contact during loading remains there. The contact test accounts for the tab icon and still rejects unconfigured email/contact details.
+
+**Risk & impact / user experience:** Shared consumers are `rider-app/app/support.tsx` and `driver-app/app/driver/help.tsx`. The rider's requested tab is preserved; driver default FAQ behavior and the configured AI kill switch remain intact. No backend AI or authentication policy changes.
+
+| File | Change |
+|---|---|
+| `shared/components/SupportScreen.tsx` | Separate loading from hidden configuration and render loading state |
+| `shared/components/__tests__/SupportScreen.contact.test.tsx` | Correct icon scope; cover delayed configuration, hidden fallback and user selection |
+
+**Verification performed:** 15 focused support tests, full rider 2,224 tests with coverage gates, driver help-screen test, and both mobile TypeScript checks pass. GPT-6 Luna architect review found no blockers. The preceding mobile bundle exports passed on GitHub; final follow-up exports and other hosted checks are tracked in the PR. No native release build or physical-device visual test was performed.
+
+**Rollback plan:** Revert the shared component change and republish a compatible mobile update if required. This isolated UI change writes no financial or location data; there is no data rollback. The payment/location rollback instructions above remain applicable to the rest of this PR.

@@ -231,17 +231,18 @@ class TestUpdateDriverLocation:
 
         captured = {}
 
-        def _update(payload):
-            captured["payload"] = payload
+        def _update(name, payload):
+            captured["payload"] = payload["p_values"]
             m = MagicMock()
-            m.eq.return_value.execute.return_value = _mk_result([{"id": "d1"}])
+            m.execute.return_value = MagicMock(data=True)
             return m
 
         sb = MagicMock()
-        sb.table.return_value.update.side_effect = _update
+        sb.rpc.side_effect = _update
         with (
             patch.object(driver_repo, "supabase", sb),
             patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+            patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
         ):
             result = await driver_repo.update_driver_location("d1", 50.0, -104.0, heading=395)
         assert captured["payload"]["heading"] == pytest.approx(35.0)
@@ -252,17 +253,18 @@ class TestUpdateDriverLocation:
 
         captured = {}
 
-        def _update(payload):
-            captured["payload"] = payload
+        def _update(name, payload):
+            captured["payload"] = payload["p_values"]
             m = MagicMock()
-            m.eq.return_value.execute.return_value = _mk_result([{"id": "d1"}])
+            m.execute.return_value = MagicMock(data=True)
             return m
 
         sb = MagicMock()
-        sb.table.return_value.update.side_effect = _update
+        sb.rpc.side_effect = _update
         with (
             patch.object(driver_repo, "supabase", sb),
             patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+            patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
         ):
             await driver_repo.update_driver_location("d1", 50.0, -104.0, heading="not-a-number")
         assert "heading" not in captured["payload"]
@@ -272,17 +274,18 @@ class TestUpdateDriverLocation:
 
         captured = {}
 
-        def _update(payload):
-            captured["payload"] = payload
+        def _update(name, payload):
+            captured["payload"] = payload["p_values"]
             m = MagicMock()
-            m.eq.return_value.execute.return_value = _mk_result([{"id": "d1"}])
+            m.execute.return_value = MagicMock(data=True)
             return m
 
         sb = MagicMock()
-        sb.table.return_value.update.side_effect = _update
+        sb.rpc.side_effect = _update
         with (
             patch.object(driver_repo, "supabase", sb),
             patch.object(driver_repo, "run_sync", _passthrough_run_sync),
+            patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
         ):
             await driver_repo.update_driver_location("d1", 50.0, -104.0)
         assert "heading" not in captured["payload"]

@@ -37,6 +37,7 @@ class DriverPublicView(BaseModel):
     vehicle_year: Optional[int] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    location_captured_at: Optional[str] = None
 
 
 class SendOTPRequest(BaseModel):

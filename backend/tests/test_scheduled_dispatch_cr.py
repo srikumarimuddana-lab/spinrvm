@@ -64,6 +64,7 @@ class TestScheduledDispatch:
         # module — patch there, not the `backend.`-qualified alias.
         with (
             patch.object(sr.db, "update_one", AsyncMock(side_effect=_update_one)),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"id": RIDE_ID, "status": "searching"}])),
             patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "first_name": "Ada"})),
             patch("routes.rides.matching.match_driver_to_ride", match_mock),
             patch("routes.rides.matching.ride_search_timeout", _timeout),
@@ -111,6 +112,7 @@ class TestScheduledDispatch:
 
         with (
             patch.object(sr.db, "update_one", AsyncMock(return_value={**ride, "status": "searching"})),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"id": RIDE_ID, "status": "searching"}])),
             patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID})),
             patch("routes.rides.matching.match_driver_to_ride", AsyncMock(side_effect=RuntimeError("boom"))),
             patch("routes.rides.matching.ride_search_timeout", AsyncMock()) as timeout_fn,
@@ -143,6 +145,7 @@ class TestScheduledDispatch:
         with (
             caplog.at_level("ERROR"),
             patch.object(sr.db, "update_one", AsyncMock(return_value={**ride, "status": "searching"})),
+            patch.object(sr.db, "get_rows", AsyncMock(return_value=[{"id": RIDE_ID, "status": "searching"}])),
             patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID})),
             patch("routes.rides.matching.match_driver_to_ride", AsyncMock()),
             patch("routes.rides.matching.ride_search_timeout", _timeout),

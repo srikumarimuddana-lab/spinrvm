@@ -739,7 +739,7 @@ class TestChargeRefundedFullDispatch:
         data_obj = {"payment_intent": "pi_refund_1", "amount_refunded": 1500, "currency": "cad"}
         raw = _make_stripe_event("charge.refunded", data_obj, event_id="evt_refund_1")
         update_one_mock = AsyncMock()
-        record_refund_mock = AsyncMock()
+        record_refund_mock = AsyncMock(return_value={"outcome": "applied", "delta_cents": 1500})
         push_mock = AsyncMock()
 
         with (
@@ -752,22 +752,18 @@ class TestChargeRefundedFullDispatch:
                 AsyncMock(return_value=[{"id": "ride_refunded", "rider_id": "rider_1"}]),
             ),
             patch("backend.routes.webhooks.db_supabase.update_one", update_one_mock),
-            patch("backend.services.payment_service.record_refund_event", record_refund_mock),
-            patch("services.payment_service.record_refund_event", record_refund_mock),
+            patch("backend.services.payment_service.reconcile_confirmed_stripe_refund", record_refund_mock),
+            patch("services.payment_service.reconcile_confirmed_stripe_refund", record_refund_mock),
             patch("backend.routes.webhooks.send_push_notification", push_mock),
+            patch("backend.routes.webhooks.send_refund_email", AsyncMock()),
         ):
             result = asyncio.run(wh.stripe_webhook(request=_req()))
 
         assert result["received"] is True
-        upd_table, upd_filter, upd_fields = update_one_mock.await_args.args[:3]
-        assert upd_table == "rides"
-        # F1 CAS: filter now also pins the pre-read refund_amount (None here,
-        # since the mocked ride row has no refund_amount key at all).
-        assert upd_filter == {"id": "ride_refunded", "refund_amount": None}
-        assert upd_fields["payment_status"] == "refunded"
-        assert upd_fields["refund_amount"] == "15.00"
-        record_refund_mock.assert_awaited_once()
-        assert record_refund_mock.await_args.kwargs["refund_cents"] == 1500
+        update_one_mock.assert_not_awaited()
+        record_refund_mock.assert_awaited_once_with(
+            ride_id="ride_refunded", payment_intent_id="pi_refund_1",
+        )
         push_mock.assert_awaited_once()
         assert push_mock.await_args.args[0] == "rider_1"
 
@@ -787,8 +783,11 @@ class TestChargeRefundedFullDispatch:
                 AsyncMock(return_value=[{"id": "ride_pf", "rider_id": "rider_pf"}]),
             ),
             patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
-            patch("backend.services.payment_service.record_refund_event", AsyncMock()),
-            patch("services.payment_service.record_refund_event", AsyncMock()),
+            patch("backend.services.payment_service.reconcile_confirmed_stripe_refund", AsyncMock(
+                return_value={"outcome": "applied", "delta_cents": 500})),
+            patch("services.payment_service.reconcile_confirmed_stripe_refund", AsyncMock(
+                return_value={"outcome": "applied", "delta_cents": 500})),
+            patch("backend.routes.webhooks.send_refund_email", AsyncMock()),
             patch(
                 "backend.routes.webhooks.send_push_notification",
                 AsyncMock(side_effect=Exception("push down")),

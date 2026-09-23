@@ -133,11 +133,12 @@ export default function SupportScreen({
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
   // AI kill switch: 'enabled' shows the AI Chat tab; 'coming_soon' shows it
-  // with a placeholder; 'hidden' removes it. Defaults to hidden until
-  // /ai/config resolves so a disabled assistant never flashes into view.
-  const [aiMode, setAiMode] = useState<'enabled' | 'coming_soon' | 'hidden'>('hidden');
+  // with a placeholder; 'hidden' removes it. Keep the unresolved state
+  // separate so an initially requested chat tab is not mistaken for hidden.
+  const [aiMode, setAiMode] = useState<'enabled' | 'coming_soon' | 'hidden' | null>(null);
   const aiEnabled = aiMode === 'enabled';
-  const showChatTab = aiMode !== 'hidden';
+  const aiConfigLoaded = aiMode !== null;
+  const showChatTab = aiConfigLoaded && aiMode !== 'hidden';
 
   // FAQ — fetched from API filtered by audience.
   const [faqs, setFaqs] = useState<Faq[]>([]);
@@ -229,8 +230,8 @@ export default function SupportScreen({
   // If the assistant is fully hidden, never leave the user stranded on the
   // chat tab (e.g. when opened via initialTab='chat').
   useEffect(() => {
-    if (!showChatTab && activeTab === 'chat') setActiveTab('faq');
-  }, [showChatTab, activeTab]);
+    if (aiConfigLoaded && !showChatTab && activeTab === 'chat') setActiveTab('faq');
+  }, [aiConfigLoaded, showChatTab, activeTab]);
 
   const filteredFaqs = useMemo(() => {
     if (!faqSearch.trim()) return faqs;
@@ -516,7 +517,16 @@ export default function SupportScreen({
       )}
 
       {/* AI Chat Tab — coming-soon placeholder while disabled (not hidden) */}
-      {activeTab === 'chat' && !aiEnabled && (
+      {activeTab === 'chat' && !aiConfigLoaded && (
+        <View style={styles.comingSoon}>
+          <ActivityIndicator
+            size="small"
+            color={colors.primary}
+            accessibilityLabel="Loading support options"
+          />
+        </View>
+      )}
+      {activeTab === 'chat' && aiConfigLoaded && !aiEnabled && (
         <View style={styles.comingSoon}>
           <View style={styles.comingSoonIcon}>
             <Ionicons name="sparkles" size={32} color={colors.primary} />

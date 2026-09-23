@@ -68,6 +68,7 @@ def _install_driver_and_ride(monkeypatch: pytest.MonkeyPatch, ride: dict) -> Asy
     update_one = AsyncMock()
     monkeypatch.setattr(location.db_supabase, "get_rows", get_rows)
     monkeypatch.setattr(location.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(location.db_supabase, "update_driver_location", update_one)
     return update_one
 
 
@@ -90,7 +91,7 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     marker-update task is *scheduled*, and running that scheduled task is
     what actually performs the marker write."""
     events = []
-    update_one = _install_driver_and_ride(monkeypatch, _ride())
+    _install_driver_and_ride(monkeypatch, _ride())
 
     async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")
@@ -105,7 +106,7 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     async def update(*args, **kwargs):
         events.append("marker")
 
-    update_one.side_effect = update
+    monkeypatch.setattr(location, "_write_marker_if_due", AsyncMock(side_effect=update))
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
     # This test is about persist-then-marker sequencing, not the ordering
     # guard (covered separately) -- avoid cross-test Redis-fallback pollution
@@ -113,7 +114,15 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     monkeypatch.setattr(location, "_newer_than_last_written_marker", AsyncMock(return_value=True))
 
     bg = BackgroundTasks()
-    response = _run(location.update_location_batch(_payload(), background_tasks=bg, current_user={"id": "user_1"}))
+    response = _run(
+        location.update_location_batch(
+            _payload(
+                [_point(1, datetime.now(timezone.utc).isoformat()), _point(2, datetime.now(timezone.utc).isoformat())]
+            ),
+            background_tasks=bg,
+            current_user={"id": "user_1"},
+        )
+    )
 
     assert response == _result().ack.to_dict()
     assert events == ["persist"]
@@ -134,7 +143,11 @@ def test_v2_batch_rejects_a_ride_assigned_to_another_driver_as_not_found(monkeyp
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
 
     with pytest.raises(HTTPException) as excinfo:
-        _run(location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}))
+        _run(
+            location.update_location_batch(
+                _payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}
+            )
+        )
 
     assert excinfo.value.status_code == 404
     persist.assert_not_called()
@@ -260,7 +273,11 @@ def test_v2_batch_returns_503_when_durable_persistence_fails(monkeypatch: pytest
     monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", fail_persist)
 
     with pytest.raises(HTTPException) as exc_info:
-        _run(location.update_location_batch(_payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}))
+        _run(
+            location.update_location_batch(
+                _payload(), background_tasks=BackgroundTasks(), current_user={"id": "user_1"}
+            )
+        )
 
     assert exc_info.value.status_code == 503
 

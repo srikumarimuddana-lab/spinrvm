@@ -12,6 +12,7 @@ try:
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
+    from ..utils.gps_filtering import point_epoch_seconds
     from ..utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
     from ..utils.session_revocation import is_session_revoked
 except ImportError:
@@ -22,6 +23,7 @@ except ImportError:
         FirebaseIdentityRejected,
         enforce_customer_eligibility,
     )
+    from utils.gps_filtering import point_epoch_seconds
     from utils.location_integrity import check_location_integrity, evaluate_gps_plausibility  # type: ignore
     from utils.session_revocation import is_session_revoked  # type: ignore
 
@@ -117,6 +119,39 @@ def _parse_live_coordinate(value):
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _live_capture_time(point: dict, *, allow_untimed: bool = False):
+    epoch = point_epoch_seconds(point)
+    if epoch is None:
+        # Older single-ping clients sent no time. Buffered batches cannot use
+        # this compatibility fallback or old history would become "live".
+        return (
+            datetime.now(timezone.utc)
+            if allow_untimed
+            and not any(
+                point.get(key) is not None
+                for key in ("captured_at", "device_timestamp", "recorded_at", "timestamp", "ts")
+            )
+            else None
+        )
+    if not -5 <= datetime.now(timezone.utc).timestamp() - epoch <= 60:
+        return None
+    return datetime.fromtimestamp(epoch, timezone.utc)
+
+
+async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
+    if await should_write_marker(driver_id, path=path, unthrottled_before=False):
+        accepted = await db_supabase.update_driver_location(
+            driver_id,
+            lat,
+            lng,
+            heading=heading,
+            captured_at=captured_at,
+        )
+        return accepted is not False
+    # Coalescing limits storage writes, not delivery of fresh sensor samples.
+    return True
 
 
 def _valid_live_coordinates(lat: float, lng: float) -> bool:
@@ -906,6 +941,11 @@ async def websocket_endpoint(
                 driver_id = current_driver_id if client_type == "driver" else None
 
                 if driver_id and lat is not None and lng is not None and _valid_live_coordinates(lat, lng):
+                    live_captured_at = _live_capture_time(data, allow_untimed=True)
+                    if live_captured_at is None:
+                        if data.get("durable", True) and not await _ws_session_revoked():
+                            await buffer_ride_breadcrumb(driver_id, data)
+                        continue
                     trusted, reason = await check_location_integrity(
                         driver_id,
                         lat,
@@ -929,8 +969,12 @@ async def websocket_endpoint(
                     # survives reconnects — the previous per-connection timer
                     # did neither, so a driver flushing REST while pinging over
                     # WS wrote this row from two uncoordinated throttles.
-                    if await should_write_marker(driver_id, path="ws_single", unthrottled_before=False):
-                        await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
+                    if not await _write_ws_marker(
+                        driver_id, lat, lng, data.get("heading"), live_captured_at, "ws_single"
+                    ):
+                        if data.get("durable", True) and not await _ws_session_revoked():
+                            await buffer_ride_breadcrumb(driver_id, data)
+                        continue
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
@@ -957,7 +1001,6 @@ async def websocket_endpoint(
                             logger.opt(exception=True).debug("Maps API key refresh failed; retaining stale key")
                         _maps_key_fetched_at = now_mono
 
-                    live_captured_at = parse_iso_utc(data.get("captured_at"))
                     location_update = {
                         "type": "driver_location_update",
                         "driver_id": driver_id,
@@ -1146,14 +1189,20 @@ async def websocket_endpoint(
                     inserted = await persist_ride_breadcrumbs(driver_id, plausible_points)
                     # Live marker from the most recent point (best-effort). Accept
                     # both compact lat/lng and REST-style latitude/longitude keys.
-                    last_pt = dict_points[-1]
+                    last_pt = max(dict_points, key=lambda point: point_epoch_seconds(point) or 0)
+                    _batch_captured_at = _live_capture_time(last_pt)
                     _lat = _parse_live_coordinate(
                         last_pt.get("latitude") if last_pt.get("latitude") is not None else last_pt.get("lat")
                     )
                     _lng = _parse_live_coordinate(
                         last_pt.get("longitude") if last_pt.get("longitude") is not None else last_pt.get("lng")
                     )
-                    if _lat is not None and _lng is not None and _valid_live_coordinates(_lat, _lng):
+                    if (
+                        _batch_captured_at is not None
+                        and _lat is not None
+                        and _lng is not None
+                        and _valid_live_coordinates(_lat, _lng)
+                    ):
                         trusted, _reason = await check_location_integrity(
                             driver_id,
                             _lat,
@@ -1162,14 +1211,9 @@ async def websocket_endpoint(
                             accuracy=last_pt.get("accuracy"),
                             mocked=last_pt.get("mocked"),
                         )
-                        if trusted:
-                            # Same shared write gate as the single-ping
-                            # handler — one window per driver across every GPS
-                            # ingestion route (utils/location_write_gate).
-                            if await should_write_marker(driver_id, path="ws_batch", unthrottled_before=False):
-                                await db_supabase.update_driver_location(
-                                    driver_id, _lat, _lng, heading=last_pt.get("heading")
-                                )
+                        if trusted and await _write_ws_marker(
+                            driver_id, _lat, _lng, last_pt.get("heading"), _batch_captured_at, "ws_batch"
+                        ):
                             await mark_present(driver_id)
 
                             # Fan-out latest batch position to riders — the single-ping
@@ -1190,7 +1234,6 @@ async def websocket_endpoint(
                                 },
                                 limit=10,
                             )
-                            _batch_captured_at = parse_iso_utc(last_pt.get("captured_at"))
                             _batch_loc_update = {
                                 "type": "driver_location_update",
                                 "driver_id": driver_id,

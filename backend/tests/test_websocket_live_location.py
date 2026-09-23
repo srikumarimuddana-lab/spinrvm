@@ -112,7 +112,7 @@ def test_single_ping_breadcrumb_buffer_runs_after_fanout() -> None:
     rider/admin ever saw the location update.
     """
     fanout_at = SOURCE.find("await manager.broadcast_driver_location_to_admins(")
-    breadcrumb_at = SOURCE.find("await buffer_ride_breadcrumb(")
+    breadcrumb_at = SOURCE.rfind("await buffer_ride_breadcrumb(")  # fresh-ping path; stale pings have no fanout
     assert fanout_at != -1 and breadcrumb_at != -1
     assert fanout_at < breadcrumb_at, "buffer_ride_breadcrumb must run after the admin fan-out, not before it"
 

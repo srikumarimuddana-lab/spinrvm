@@ -216,6 +216,49 @@ describe('background durable trip recording', () => {
     await tripLocationRecorder.startRide('ride-1');
   });
 
+  it.each(['App Check', 'Firebase', 'fetch', 'body'])('bounds background %s and retains unacknowledged history', async stage => {
+    const platform = require('react-native').Platform;
+    const firebase = require('@shared/services/firebase');
+    const originalOS = platform.OS;
+    const originalState = AppState.currentState;
+    jest.useFakeTimers();
+    platform.OS = 'ios';
+    AppState.currentState = 'background';
+    let release!: (value?: unknown) => void;
+    const stalled = new Promise(resolve => { release = resolve; });
+    const signals: AbortSignal[] = [];
+    if (stage === 'App Check') firebase.getAppCheckToken.mockReturnValue(stalled);
+    if (stage === 'Firebase') firebase.initFirebaseServices.mockReturnValue(stalled);
+    if (stage === 'fetch' || stage === 'body') {
+      (global.fetch as jest.Mock).mockImplementation((_url: string, options: RequestInit) => {
+        signals.push(options.signal as AbortSignal);
+        return stage === 'fetch' ? stalled : Promise.resolve({ ok: true, status: 200, json: () => stalled });
+      });
+    }
+    try {
+      const task = handleBackgroundLocationTask({ data: { locations: [{ ...makeLocation(0), timestamp: Date.now() }] } as any });
+      await jest.advanceTimersByTimeAsync(10_000);
+      await expect(task).resolves.toBeUndefined();
+      expect(mockQueuedPoints).toHaveLength(1);
+      expect(mockedOutbox.acknowledge).not.toHaveBeenCalled();
+      if (stage === 'App Check' || stage === 'Firebase') {
+        expect(global.fetch).not.toHaveBeenCalled();
+        release('late-token');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(global.fetch).not.toHaveBeenCalled();
+      } else {
+        expect(signals.some(signal => signal.aborted)).toBe(true);
+      }
+    } finally {
+      firebase.getAppCheckToken.mockImplementation(async () => 'app-check');
+      firebase.initFirebaseServices.mockImplementation(async () => undefined);
+      jest.useRealTimers();
+      _resetForegroundUploadPacing();
+      platform.OS = originalOS;
+      AppState.currentState = originalState;
+    }
+  }, 1500);
+
   it.each(['auth lock', 'App Check'])('drops captured work when login changes during %s', async stage => {
     const { installSessionLock } = require('../../../shared/auth/sessionLock');
     const { getAppCheckToken } = require('@shared/services/firebase');

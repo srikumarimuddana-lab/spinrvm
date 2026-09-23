@@ -27,6 +27,7 @@ Run:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -42,7 +43,7 @@ def _point(lat: float = 52.1332, lng: float = -106.6700, seq: int = 1) -> dict:
         "longitude": lng,
         "heading": 90.0,
         "accuracy": 5.0,
-        "timestamp": f"2025-01-01T00:00:0{seq}Z",
+        "timestamp": (datetime.now(timezone.utc) - timedelta(seconds=5) + timedelta(milliseconds=seq)).isoformat(),
     }
 
 
@@ -79,8 +80,12 @@ class TestUpdateLocationBatch:
 
         with (
             patch(
-                "backend.routes.drivers._deps.db_supabase.update_one",
-                AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+                "backend.routes.drivers._deps.db_supabase.update_driver_location",
+                AsyncMock(
+                    side_effect=lambda driver_id, lat, lng, **kw: db_updates.append(
+                        ("drivers", {"id": driver_id}, {"lat": lat, "lng": lng, **kw})
+                    )
+                ),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
@@ -165,7 +170,7 @@ class TestUpdateLocationBatch:
         result, updates = await self._batch([_point()])
 
         _, query, _ = updates[0]
-        assert query.get("user_id") == DRIVER_USER_ID
+        assert query == {"id": "driver_row_p3"}  # server-resolved authenticated driver
 
     async def test_no_driver_row_skips_marker_write(self):
         """No drivers row → no marker write, no gate window, clean success.
@@ -182,8 +187,12 @@ class TestUpdateLocationBatch:
         db_updates = []
         with (
             patch(
-                "backend.routes.drivers._deps.db_supabase.update_one",
-                AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+                "backend.routes.drivers._deps.db_supabase.update_driver_location",
+                AsyncMock(
+                    side_effect=lambda driver_id, lat, lng, **kw: db_updates.append(
+                        ("drivers", {"id": driver_id}, {"lat": lat, "lng": lng, **kw})
+                    )
+                ),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
@@ -227,7 +236,7 @@ class TestUpdateLocationBatch:
 
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
-            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_driver_location", AsyncMock()),
             patch("backend.routes.drivers._deps.mark_present", mark_present),
             patch("utils.location_integrity.redis_get", AsyncMock(return_value=None)),
         ):

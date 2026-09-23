@@ -58,9 +58,11 @@ except ImportError:
 try:
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
+    from .redis_client import loop_pod_id, redis_set_nx_strict as redis_set_nx
 except ImportError:
     from utils.metrics import inc as _metric_inc
     from utils.metrics import set_gauge as _metric_gauge
+    from utils.redis_client import loop_pod_id, redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
     from ..services.corporate_stripe_identity import (  # type: ignore
@@ -77,6 +79,9 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+_LOCK_KEY = "spinr:corporate_autotopup:lock"
+_LOCK_TTL_SECONDS = 510  # below the 540 s minimum jittered interval
+_LOOP_NAME = "corporate_autotopup (10min)"
 
 
 async def run_autotopup_tick() -> None:
@@ -200,12 +205,20 @@ async def corporate_autotopup_loop() -> None:
         _t0 = time.monotonic()
         _had_error = False
         try:
-            await run_autotopup_tick()
+            got_lock = await redis_set_nx(_LOCK_KEY, loop_pod_id(), _LOCK_TTL_SECONDS)
+        except Exception as lock_err:
+            logger.error("autotopup: leader lock unavailable (%s), skipping tick", type(lock_err).__name__)
+            _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "corporate_autotopup"})
+            _had_error = True
+            got_lock = False
+        try:
+            if got_lock:
+                await run_autotopup_tick()
         except Exception as e:
             logger.error("autotopup loop error: %s", e, exc_info=True)
             _had_error = True
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_autotopup"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_autotopup"})
-        _record_heartbeat("corporate_autotopup (10min)")
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(600 * (0.9 + random.random() * 0.2))

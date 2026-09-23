@@ -58,11 +58,13 @@ except ImportError:
 try:
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
-    from .redis_client import loop_pod_id, redis_set_nx_strict as redis_set_nx
+    from .redis_client import loop_pod_id
+    from .redis_client import redis_set_nx_strict as redis_set_nx
 except ImportError:
     from utils.metrics import inc as _metric_inc
     from utils.metrics import set_gauge as _metric_gauge
-    from utils.redis_client import loop_pod_id, redis_set_nx_strict as redis_set_nx  # type: ignore
+    from utils.redis_client import loop_pod_id  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx
 
 try:
     from ..services.corporate_stripe_identity import (  # type: ignore

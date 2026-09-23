@@ -158,8 +158,11 @@ async def _get_redis():
         from redis.backoff import NoBackoff
 
         _redis = aioredis.from_url(
-            url, encoding="utf-8", decode_responses=True,
-            socket_connect_timeout=2, socket_timeout=2,
+            url,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
             retry=Retry(NoBackoff(), 0),
         )
         _redis_url = url

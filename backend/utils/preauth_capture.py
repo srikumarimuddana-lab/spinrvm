@@ -39,15 +39,15 @@ try:
     from ..services.outbox_receipts import maybe_send_auto_receipt
     from ..services.payment_service import send_ride_receipt, settle_card
     from .datetime_utils import parse_iso_utc
-    from .redis_client import redis_set_nx_strict as redis_set_nx
     from .metrics import inc as _metric_inc
+    from .redis_client import redis_set_nx_strict as redis_set_nx
 except ImportError:
     from db import db  # type: ignore
     from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
     from .loop_monitor import record_heartbeat as _record_heartbeat

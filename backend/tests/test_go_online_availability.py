@@ -408,6 +408,22 @@ class TestGoOnlineEligibilityRecheck:
         assert result["success"] is True
         assert writes
 
+    @pytest.mark.parametrize("field,value", [
+        ("date_of_birth", "not-a-date"),
+        ("date_of_birth", ""),
+        ("license_issue_date", "not-a-date"),
+        ("license_issue_date", ""),
+        ("vehicle_year", "20xx"),
+        ("vehicle_year", ""),
+    ])
+    async def test_malformed_required_eligibility_values_block_go_online(self, field, value):
+        from backend.utils.error_handling import ErrorCode, SpinrException
+
+        with pytest.raises(SpinrException) as excinfo:
+            await self._go_online({field: value})
+        assert excinfo.value.error_code == ErrorCode.DRIVER_DOCUMENTS_PENDING
+        assert "Update your profile" in excinfo.value.action_hint
+
 
 @pytest.mark.anyio
 async def test_published_crc_consent_blocks_go_online_until_current():

@@ -4,6 +4,8 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+from datetime import date
+
 from . import _deps, _shared
 
 try:
@@ -431,17 +433,20 @@ async def update_driver_status(
         # The flag stays the rollout switch so a deploy does not block
         # every driver whose profile was never backfilled.
         if bool(app_settings.get("enforce_driver_eligibility_recheck", False)):
+            invalid_eligibility = []
             dob_raw = driver.get("date_of_birth")
             dob_date = None
             if isinstance(dob_raw, datetime):
                 dob_date = dob_raw.date()
+            elif isinstance(dob_raw, date):
+                dob_date = dob_raw
             elif isinstance(dob_raw, str) and dob_raw.strip():
                 try:
-                    dob_date = datetime.fromisoformat(dob_raw.replace("Z", "+00:00")).date()
+                    dob_date = date.fromisoformat(dob_raw)
                 except ValueError:
-                    dob_date = None
-            elif dob_raw is not None and hasattr(dob_raw, "year") and hasattr(dob_raw, "month"):
-                dob_date = dob_raw
+                    invalid_eligibility.append("date of birth")
+            elif dob_raw not in (None, ""):
+                invalid_eligibility.append("date of birth")
             if dob_date is not None:
                 age_years = now.year - dob_date.year - ((now.month, now.day) < (dob_date.month, dob_date.day))
                 if age_years < 18:
@@ -484,10 +489,16 @@ async def update_driver_status(
             # onboarding for every driver) is left unblocked rather than
             # guessed at.
             vehicle_year = driver.get("vehicle_year")
-            if vehicle_year:
+            if vehicle_year not in (None, ""):
                 try:
+                    if isinstance(vehicle_year, bool) or not str(vehicle_year).strip().isdigit():
+                        raise ValueError("invalid vehicle year")
                     vehicle_age = now.year - int(vehicle_year)
                 except (TypeError, ValueError):
+                    invalid_eligibility.append("vehicle year")
+                    vehicle_age = None
+                if vehicle_age is not None and int(vehicle_year) > now.year:
+                    invalid_eligibility.append("vehicle year")
                     vehicle_age = None
                 if vehicle_age is not None and vehicle_age >= 10:
                     raise SpinrException(
@@ -509,12 +520,23 @@ async def update_driver_status(
             # rather than guessed at — same fail-safe direction as the
             # license_class/vehicle_year sub-checks above.
             license_issue_date = driver.get("license_issue_date")
-            if license_issue_date:
-                if isinstance(license_issue_date, str):
+            if license_issue_date not in (None, ""):
+                if isinstance(license_issue_date, datetime):
+                    pass
+                elif isinstance(license_issue_date, date):
+                    license_issue_date = datetime.combine(license_issue_date, datetime.min.time(), tzinfo=timezone.utc)
+                elif isinstance(license_issue_date, str):
                     try:
-                        license_issue_date = datetime.fromisoformat(license_issue_date.replace("Z", "+00:00"))
+                        license_issue_date = datetime.combine(
+                            date.fromisoformat(license_issue_date), datetime.min.time(), tzinfo=timezone.utc
+                        )
                     except ValueError:
+                        invalid_eligibility.append("licence issue date")
                         license_issue_date = None
+                else:
+                    invalid_eligibility.append("licence issue date")
+                if license_issue_date is not None and not isinstance(license_issue_date, datetime):
+                    invalid_eligibility.append("licence issue date")
                 if isinstance(license_issue_date, datetime):
                     if license_issue_date.tzinfo is None:
                         license_issue_date = license_issue_date.replace(tzinfo=timezone.utc)
@@ -540,6 +562,7 @@ async def update_driver_status(
                 missing_eligibility.append("licence issue date")
             if not driver.get("date_of_birth"):
                 missing_eligibility.append("date of birth")
+            missing_eligibility.extend(field for field in invalid_eligibility if field not in missing_eligibility)
             if missing_eligibility:
                 raise SpinrException(
                     message=("Complete your " + ", ".join(missing_eligibility) + " before going online."),

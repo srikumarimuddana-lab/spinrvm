@@ -607,9 +607,18 @@ async def decline_ride(
             ),
         )
 
-    # Service-animal accommodation is mandatory. Any decline of a flagged
-    # trip is rejected, not only a decline that names the reason.
-    if ride.get("service_animal") or reason == "service_animal":
+    # Accommodation is mandatory, but a service-animal trip may still be
+    # declined for an unrelated safety or vehicle issue. Do not infer motive
+    # from the rider's accessibility requirement (including a reasonless tap).
+    if reason == "service_animal":
+        if ride.get("driver_id") != driver["id"]:
+            offered = await db_supabase.get_rows(
+                "ride_offers",
+                {"ride_id": ride_id, "driver_id": driver["id"], "status": "pending"},
+                limit=1,
+            )
+            if not offered:
+                raise HTTPException(status_code=403, detail="Not authorized to decline this ride")
         try:
             import uuid as _sa_uuid
 

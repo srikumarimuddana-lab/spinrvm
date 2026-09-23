@@ -13760,6 +13760,36 @@ record of what was assumed vs. what was actually true</summary>
   proactively applied from the sibling A-track review before this agent was ever reviewed —
   were already correctly implemented.
 
+### C135. `routes/webhooks.py` — 7 of 8 `unclaim_stripe_event()` call sites don't check its return value before telling Stripe to retry
+- [ ] **Status:** partially mitigated 2026-09-23 (branch `fix/unclaim-stripe-event-error-severity`),
+  root cause still open.
+- **What's wrong:** `unclaim_stripe_event()`'s docstring says a `False` return means the DB
+  delete failed, the claim row stays held, and "the caller must escalate (the event needs a
+  manual replay via the admin endpoint)." Only the call site at `routes/webhooks.py:855`
+  actually checks the return value (escalates to `logger.critical`). The other 7 call sites
+  (lines ~937, 1030, 1072, 1136, 1358, 1453, 1495) call `await unclaim_stripe_event(event_id)`
+  and immediately raise an `HTTPException` telling Stripe to retry — regardless of whether the
+  unclaim actually succeeded. If it silently failed, Stripe's retry gets deduped against the
+  still-claimed row and the event is lost until a manual admin replay, with no signal beyond a
+  log line.
+- **Found via:** a proactive repo-wide sweep for the "silently swallow a DB/auth/payment error"
+  anti-pattern CLAUDE.md already documents as recurring (10 independent re-discoveries,
+  2026-07-24 to 2026-09-05 — see `spinr-observability-reviewer`'s agent description).
+- **Interim fix shipped:** `unclaim_stripe_event()` now logs its own failure at `error` (was
+  `warning`) via `logger.opt(exception=True).error(...)`, which the loguru→Sentry bridge
+  (`utils/sentry_runtime.py`'s `_loguru_sentry_sink`, registered at `level="ERROR"`) picks up —
+  confirmed by `spinr-money-auditor` review that this is a real, previously-missing Sentry
+  capture, not cosmetic. This makes the failure visible somewhere, but is explicitly a
+  stopgap — reviewer's words: "don't let this diff be mistaken for having closed that gap."
+- **Real fix still needed:** make the 7 unchecked call sites check the return value and
+  escalate explicitly with their own ride/event context (mirroring the pattern already at
+  line 855), the same way a `[CR]`-style follow-up would close out a partially-fixed gate.
+- **Files:** `backend/routes/webhooks.py` (7 call sites above), `backend/repositories/wallet_repo.py`
+  (`unclaim_stripe_event`, already touched by the interim fix).
+- **Acceptance:** every `unclaim_stripe_event()` call site in `webhooks.py` checks the boolean
+  return and escalates (log level + Sentry visibility) on `False`, matching line 855's pattern;
+  add/extend a test per call site confirming the escalation fires on a simulated DB failure.
+
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify
   boot log shows "Sentry SDK initialized for error monitoring")

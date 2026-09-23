@@ -100,6 +100,10 @@ class StagingWorkflowTests(unittest.TestCase):
         deploy = self.source.index("Deploy staging candidate")
         self.assertLess(capture, stage)
         self.assertLess(stage, deploy)
+        stage_block = self.source[stage:deploy]
+        self.assertIn('METRICS_AUTH_TOKEN="$metrics_token"', stage_block)
+        self.assertIn('METRICS_AUTH_TOKEN_STAGING: ${{ secrets.METRICS_AUTH_TOKEN_STAGING }}', stage_block)
+        self.assertIn('metrics_token="${METRICS_AUTH_TOKEN_STAGING}"', stage_block)
         self.assertIn('git show "${served_sha}:backend/fly.staging.toml"', self.source)
         self.assertIn("METRICS_AUTH_TOKEN_STAGING", self.source)
         self.assertIn("/ready", self.source)

@@ -114,8 +114,12 @@ Every candidate must pass `/ready` and return its exact `GITHUB_SHA` from
 `/deploy-info`. After a candidate deploy/readiness/SHA failure, recovery deploys
 the recorded image digest with the saved config, then checks `/ready` and the
 prior served SHA. The candidate workflow remains failed even if restore succeeds.
-Fly runtime secrets are not snapshotted; do not rotate staging secrets during a
-recovery drill. A failed initial bootstrap has no image to restore.
+Before each candidate deployment, the workflow stages `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, and `METRICS_AUTH_TOKEN` from the corresponding
+staging-only GitHub secrets into the staging Fly app. The metrics token is
+required for `/deploy-info` probes after deployment. Fly runtime secrets are
+not snapshotted; do not rotate staging secrets during a recovery drill. A failed
+initial bootstrap has no image to restore.
 
 After the first successful bootstrap, test the recovery path from a **different
 commit SHA** so prior and candidate build stamps are distinguishable. Create a

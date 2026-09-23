@@ -190,22 +190,26 @@ jobs:
             ${{ runner.temp }}/staging-recovery/fly.staging.toml
           retention-days: 30
 
-      # Stage the staging Supabase credentials as Fly runtime secrets on the
-      # staging app only. FLY_API_TOKEN_STAGING is scoped to
+      # Stage the staging Supabase credentials and metrics auth token as Fly
+      # runtime secrets on the staging app only. FLY_API_TOKEN_STAGING is
+      # scoped to
       # spinr-backend-staging (per the deploy-token command above), so even a
       # misconfigured token cannot reach the production app.
       - name: Stage staging Supabase credentials in Fly secrets
         run: |
           url="${SUPABASE_STAGING_URL}"
           key="${SUPABASE_STAGING_SERVICE_ROLE_KEY}"
+          metrics_token="${METRICS_AUTH_TOKEN_STAGING}"
           flyctl secrets set \
             SUPABASE_URL="$url" \
             SUPABASE_SERVICE_ROLE_KEY="$key" \
+            METRICS_AUTH_TOKEN="$metrics_token" \
             --stage -a "${FLY_APP}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+          METRICS_AUTH_TOKEN_STAGING: ${{ secrets.METRICS_AUTH_TOKEN_STAGING }}
 
       - name: Stamp staging build info
         run: |

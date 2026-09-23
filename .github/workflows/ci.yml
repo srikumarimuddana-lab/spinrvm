@@ -1070,7 +1070,13 @@ jobs:
           else
             SINCE="HEAD~1"
           fi
-          trufflehog git file://. --since-commit "$SINCE" --fail
+          # #5694 (2026-09-23): --exclude-paths suppresses a documented,
+          # reviewed allowlist of client-embedded Firebase/Maps config files
+          # and dead scratch scripts -- see .github/trufflehog-exclude-paths.txt
+          # for the full list and reasoning. Everything else stays scanned
+          # and blocking.
+          trufflehog git file://. --since-commit "$SINCE" \
+            --exclude-paths=.github/trufflehog-exclude-paths.txt --fail
 
       - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -349,6 +349,12 @@ interface IncomingRide {
     // flag in the ride offer panel; non-WAV drivers should not receive
     // these offers at all (backend filters dispatch).
     requires_wav?: boolean;
+    // Rider travels with a service animal — Saskatchewan Transportation Act
+    // s.22 accommodation; drivers cannot refuse. Matches RideOfferPanel's
+    // local IncomingRide shape.
+    service_animal?: boolean;
+    // Intermediate stops between pickup and dropoff, if the rider added any.
+    stops?: { address?: string }[];
     // Rider requested a quiet ride (minimal conversation) — migration 62.
     // Surfaced as a badge in the offer panel so the driver knows before
     // accepting; purely informational, no dispatch filtering.

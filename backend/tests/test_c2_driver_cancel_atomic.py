@@ -239,8 +239,13 @@ def test_driver_noshow_skips_period1_when_driver_already_offline():
     is_available->False when the driver had already gone offline before this
     no-show cancel landed (raceable against the subscription-expiry loop or
     an admin ban). Mirrors the same guard already applied to
-    cancellation.py's rider-cancel path (#4597 Finding 3)."""
+    cancellation.py's rider-cancel path (#4597 Finding 3).
+
+    2026-09-22 insurance-period audit: skipping Period 1 is not enough — the
+    driver's open Period 2 must be closed to Period 0, or it stays open
+    forever (the reconciler only scans online drivers)."""
     from backend.routes import drivers as drv
+    from backend.utils import insurance_periods
 
     driver = {"id": "drv-1", "user_id": "user-1"}
     arrived = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
@@ -253,6 +258,7 @@ def test_driver_noshow_skips_period1_when_driver_already_offline():
         "service_area_id": None,
     }
 
+    period_mock = AsyncMock()
     with (
         patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
@@ -269,13 +275,15 @@ def test_driver_noshow_skips_period1_when_driver_already_offline():
             "backend.routes.drivers._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"id": "drv-1", "is_available": False}),
         ),
-        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period_mock,
+        # Capture both the legacy direct call and the shared close helper's call.
+        patch("backend.routes.drivers._deps.record_period_transition", period_mock),
+        patch.object(insurance_periods, "record_period_transition", period_mock),
         patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
     ):
         asyncio.run(drv.mark_rider_noshow(ride_id="ride-1", current_user={"id": "user-1"}))
 
-    period_mock.assert_not_awaited()
+    period_mock.assert_awaited_once_with("drv-1", 0)
 
 
 def test_driver_noshow_records_period1_when_driver_still_online():
@@ -283,6 +291,7 @@ def test_driver_noshow_records_period1_when_driver_still_online():
     the driver available (the normal case), Period 1 must still be
     recorded as before -- the guard must not over-suppress."""
     from backend.routes import drivers as drv
+    from backend.utils import insurance_periods
 
     driver = {"id": "drv-1", "user_id": "user-1"}
     arrived = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
@@ -295,6 +304,7 @@ def test_driver_noshow_records_period1_when_driver_still_online():
         "service_area_id": None,
     }
 
+    period_mock = AsyncMock()
     with (
         patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
@@ -310,7 +320,9 @@ def test_driver_noshow_records_period1_when_driver_still_online():
             "backend.routes.drivers._deps.db_supabase.set_driver_available",
             AsyncMock(return_value={"id": "drv-1", "is_available": True}),
         ),
-        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period_mock,
+        # Capture both the legacy direct call and the shared close helper's call.
+        patch("backend.routes.drivers._deps.record_period_transition", period_mock),
+        patch.object(insurance_periods, "record_period_transition", period_mock),
         patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
         patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
     ):

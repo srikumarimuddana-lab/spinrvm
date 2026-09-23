@@ -73,7 +73,10 @@ def _base_patches(settings=None):
         patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
         patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
         patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")),
-        patch("backend.routes.rides._deps.reconcile_confirmed_stripe_refund", AsyncMock(return_value={"outcome": "applied"})),
+        patch(
+            "backend.routes.rides._deps.reconcile_confirmed_stripe_refund",
+            AsyncMock(return_value={"outcome": "applied"}),
+        ),
         patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("cancelled"))),
         patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
         patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
@@ -210,11 +213,14 @@ class TestAlreadyCapturedHoldRefund:
 
     async def test_pending_refund_is_exposed_without_finalizing_refund_accounting(self):
         update_ride_mock = AsyncMock()
-        refund_mock = AsyncMock(return_value=ChargeOutcome(
-            status="pending", payment_intent_id="pi_already_captured",
-            charged_amount=Decimal("2.10"),
-            raw={"refund_id": "re_pending_1", "refund_status": "pending"},
-        ))
+        refund_mock = AsyncMock(
+            return_value=ChargeOutcome(
+                status="pending",
+                payment_intent_id="pi_already_captured",
+                charged_amount=Decimal("2.10"),
+                raw={"refund_id": "re_pending_1", "refund_status": "pending"},
+            )
+        )
         with _patch_all(
             patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
             patch("backend.routes.rides._deps.refund_excess_capture", refund_mock),
@@ -286,7 +292,10 @@ class TestAlreadyCapturedHoldRefund:
             patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
             patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")),
-            patch("backend.routes.rides._deps.reconcile_confirmed_stripe_refund", AsyncMock(return_value={"outcome": "applied"})),
+            patch(
+                "backend.routes.rides._deps.reconcile_confirmed_stripe_refund",
+                AsyncMock(return_value={"outcome": "applied"}),
+            ),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("cancelled"))),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
@@ -302,3 +311,65 @@ class TestAlreadyCapturedHoldRefund:
             await _run_cancel()
 
         refund_mock.assert_not_awaited()
+
+    async def test_capture_race_between_initial_read_and_claim_uses_post_claim_state(self):
+        """ACTION_ITEMS.md C133: the hold was LIVE when `_require_ride_in_state_rider`
+        first read the ride (auth_status="authorized"), but something else (e.g.
+        payment_retry's requires_capture branch) captured it in the window before
+        this function's own atomic cancel claim. The claim's own UPDATE...RETURNING
+        reflects that capture -- the hold-handling logic must branch on THAT, not
+        on the stale pre-claim snapshot, or it tries to partially capture an
+        already-fully-captured PaymentIntent and falls through to a fresh charge
+        on top of money already taken."""
+        live_hold_ride = _ride("driver_arrived", auth_status="authorized")
+        # The claim UPDATE's own returned row shows the capture already happened.
+        post_claim_row = _ride("cancelled", auth_status="captured")
+
+        capture_mock = AsyncMock()
+        refund_mock = AsyncMock(
+            return_value=ChargeOutcome(
+                status="refunded", payment_intent_id="pi_already_captured", charged_amount=Decimal("0.00")
+            )
+        )
+        charge_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=live_hold_ride)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=NO_FEE_SETTINGS)),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": RIDER_ID, "stripe_customer_id": "cus_test_123"}),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+                AsyncMock(return_value={"id": DRIVER_ID, "user_id": DRIVER_USER_ID, "name": "T"}),
+            ),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value=post_claim_row)),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")),
+            patch(
+                "backend.routes.rides._deps.reconcile_confirmed_stripe_refund",
+                AsyncMock(return_value={"outcome": "applied"}),
+            ),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("cancelled"))),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.capture_cancellation_fee", capture_mock),
+            patch("backend.routes.rides._deps.cancel_authorization", AsyncMock(return_value=True)),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", charge_mock),
+            patch("backend.routes.rides._deps.refund_excess_capture", refund_mock),
+        ):
+            result = await _run_cancel()
+
+        assert result["success"] is True
+        # Must NOT try to partially capture an already-fully-captured PI.
+        capture_mock.assert_not_awaited()
+        # Must go through the already-captured branch's refund path instead.
+        refund_mock.assert_awaited_once()
+        assert refund_mock.call_args.kwargs["payment_intent_id"] == "pi_already_captured"
+        # Must NOT fall through to a fresh charge on top of money already taken.
+        charge_mock.assert_not_awaited()

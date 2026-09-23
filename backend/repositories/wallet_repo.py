@@ -461,5 +461,9 @@ async def unclaim_stripe_event(event_id: str) -> bool:
         await run_sync(_fn)
         return True
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Failed to unclaim stripe event {event_id}: {e}")
+        # error, not warning: most callers (routes/webhooks.py) don't check this
+        # return value before raising a 5xx that tells Stripe to retry — if this
+        # delete itself failed, the claim row stays held and that retry will be
+        # deduped away, silently losing the event until a manual admin replay.
+        logger.opt(exception=True).error(f"Failed to unclaim stripe event {event_id}: {e}")
         return False

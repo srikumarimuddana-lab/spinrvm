@@ -27,6 +27,11 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.receipt_distance import fare_basis_distance_km  # type: ignore
 
+try:
+    from .cancellation_receipt import cancellation_charge, is_cancelled
+except ImportError:
+    from utils.cancellation_receipt import cancellation_charge, is_cancelled  # type: ignore
+
 _CENT = Decimal("0.01")
 _BRAND = (238, 43, 43)  # #ee2b2b
 logger = logging.getLogger(__name__)
@@ -81,6 +86,15 @@ def _split_surge_delta(
 
 def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str]], Decimal]:
     """Build (label, amount) rows + the grand total, mirroring email_receipt."""
+    if is_cancelled(ride):
+        # A cancelled ride's fare columns still hold the booking-time quote;
+        # the PDF must show what was actually charged (2026-09-23).
+        charge = cancellation_charge(ride)
+        rows = [(ln["label"], _money(ln["amount"])) for ln in charge["lines"]]
+        if not rows:
+            rows.append(("Cancellation fee", _money(0)))
+        return rows, _q(charge["grand_total"])
+
     base = _d(ride.get("base_fare"))
     dist = _d(ride.get("distance_fare"))
     time_ = _d(ride.get("time_fare"))

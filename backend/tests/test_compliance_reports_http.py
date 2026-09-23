@@ -578,6 +578,98 @@ def test_t4a_filer_handoff_503_on_db_failure(admin_client):
     assert resp.status_code == 503
 
 
+def test_t4a_filer_handoff_counts_cancellation_fees_bonuses_and_incentives(admin_client):
+    """2026-09-23: the filer handoff must use the same income the driver's
+    T4A slip and the $500 eligibility check use. d2 has only $300 of
+    completed rides (under $500 on rides alone) plus a $150 cancellation fee,
+    $40 of bonuses and a $20 incentive claim = $510 -> qualifies. d3 has no
+    completed rides at all, only $600 of quest bonuses -> qualifies."""
+    ride_d2 = {"id": "r2", "driver_id": "d2", "driver_earnings": 300.00}
+    driver_d2 = dict(_T4A_DRIVER_ROW, id="d2")
+    driver_d3 = dict(_T4A_DRIVER_ROW, id="d3")
+    seen: list = []
+
+    async def get_rows_side(table, filters=None, **kw):
+        seen.append((table, filters, kw))
+        if table == "rides" and filters.get("status") == "completed":
+            return [ride_d2]
+        if table == "rides" and filters.get("status") == "cancelled":
+            return [{"id": "c1", "driver_id": "d2", "cancellation_fee_driver": "150.00"}]
+        if table == "driver_bonuses":
+            return [
+                {"id": "b1", "driver_id": "d2", "amount": "40.00"},
+                {"id": "b2", "driver_id": "d3", "amount": "600.00"},
+            ]
+        if table == "drivers":
+            return [driver_d2, driver_d3]
+        return []
+
+    batched = AsyncMock(return_value=[{"ride_id": "r2", "bonus_amount": "20.00"}])
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.get_rows_batched_in", batched),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8").splitlines()
+    header = lines[0].split(",")
+    earnings = sorted(line.split(",")[header.index("total_earnings")] for line in lines[1:] if line)
+    assert earnings == ["510.00", "600.00"]
+    drivers_q = next(f for t, f, _ in seen if t == "drivers")
+    assert drivers_q["id"]["$in"] == ["d2", "d3"]
+    batched.assert_awaited_once()
+    assert batched.call_args[0][:3] == ("ride_incentive_claims", "ride_id", ["r2"])
+    cancel_q = next(f for t, f, _ in seen if t == "rides" and f.get("status") == "cancelled")
+    assert cancel_q["cancelled_at"] == {"$gte": "2026-01-01", "$lt": "2027-01-01"}
+    assert cancel_q["cancellation_fee_driver"] == {"$gt": 0}
+    rides_q_kw = next(kw for t, f, kw in seen if t == "rides" and f.get("status") == "completed")
+    assert rides_q_kw.get("order") == "id"
+
+
+def test_t4a_filer_handoff_matches_slip_legacy_rules(admin_client):
+    """The filer must apply the slip's legacy rules: previous-app imported
+    rides are excluded server-side, and settled legacy Stripe payouts
+    (stripe_sync / completed legacy_outstanding_correction) are income.
+    d4's only income is $520 of synced legacy payouts -> qualifies, as it
+    does on their slip and in the $500 check."""
+    seen: list = []
+
+    async def get_rows_side(table, filters=None, **kw):
+        seen.append((table, filters))
+        if table == "payouts":
+            return [{"id": "p1", "driver_id": "d4", "amount": "520.00"}]
+        if table == "drivers":
+            return [dict(_T4A_DRIVER_ROW, id="d4")]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8").splitlines()
+    header = lines[0].split(",")
+    assert lines[1].split(",")[header.index("total_earnings")] == "520.00"
+    rides_q = next(f for t, f in seen if t == "rides" and f.get("status") == "completed")
+    assert rides_q["legacy_import_metadata"] == {"$eq": {}}
+    payouts_q = next(f for t, f in seen if t == "payouts")
+    assert payouts_q["payout_type"] == {"$in": ["stripe_sync", "legacy_outstanding_correction"]}
+    assert payouts_q["status"] == "completed"
+    assert payouts_q["created_at"] == {"$gte": "2026-01-01", "$lt": "2027-01-01"}
+
+
 # ── Insurance billing (SGI / Knight Archer, per-trip per-phase) ─────────────
 
 _PD_PERIOD_2 = {

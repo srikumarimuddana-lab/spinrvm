@@ -257,17 +257,22 @@ async def cancel_ride(
             logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
 
     # Make driver available again
-    await db_supabase.set_driver_available(driver["id"], True)
+    _cancel_released = await db_supabase.set_driver_available(driver["id"], True)
     # M-5: SGI insurance period audit — driver-side cancel after the
-    # driver was assigned/accepted/arrived returns them to period 1.
+    # driver was assigned/accepted/arrived closes their open Period 2.
     # If the ride was still in searching the driver was never in period
-    # 2; skip to avoid a phantom 1→1 transition.
+    # 2; skip to avoid a phantom 1→1 transition. The close derives 0-vs-1
+    # from the released row (is_available clamped to is_online): a driver
+    # forced offline mid-assignment (admin suspend, document expiry) must
+    # close to Period 0, not get an unconditional Period 1.
     if ride.get("status") in (
         RideStatus.DRIVER_ASSIGNED,
         RideStatus.DRIVER_ACCEPTED,
         RideStatus.DRIVER_ARRIVED,
     ):
-        await _deps.record_period_transition(driver["id"], 1)
+        await _deps.close_period_after_release(
+            driver["id"], _cancel_released, reason="driver_cancelled", ride_id=ride_id
+        )
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -328,6 +333,7 @@ async def _collect_noshow_fee_from_card(
     fee_admin: Decimal,
     fee_driver: Decimal,
     driver_id: str,
+    fee_tax: Decimal = Decimal("0"),
 ) -> tuple[Decimal, str | None, bool]:
     """Collect a no-show fee from a card rider.
 
@@ -372,6 +378,8 @@ async def _collect_noshow_fee_from_card(
         "driver_id": driver_id,
         "fee_admin": str(fee_admin.quantize(Decimal("0.01"))),
         "fee_driver": str(fee_driver.quantize(Decimal("0.01"))),
+        # Booked to tax_payable by utils/ledger_projection.py (2026-09-23).
+        "fee_tax": str(fee_tax.quantize(Decimal("0.01"))),
     }
 
     # 1. Take it out of the booking hold. A partial capture releases the rest,
@@ -571,8 +579,29 @@ async def mark_rider_noshow(
     except ImportError:
         from services.cancellation_service import calculate_noshow_fee, pay_driver_cancellation_fee  # type: ignore
 
+    try:
+        from ...services.cancellation_service import (
+            bill_corporate_cancellation_fee,
+            compute_cancellation_fee_tax,
+        )
+    except ImportError:
+        from services.cancellation_service import (  # type: ignore
+            bill_corporate_cancellation_fee,
+            compute_cancellation_fee_tax,
+        )
+
     fee_admin, fee_driver = calculate_noshow_fee(ride, settings, area)
-    total_fee = fee_admin + fee_driver
+    # GST/PST on the fee (2026-09-23, flag cancellation_fee_tax_enabled,
+    # default off -> 0). total_fee is what is COLLECTED, so it carries the
+    # tax; fee_admin/fee_driver keep their pre-tax meaning (driver payout).
+    # A tax-computation failure degrades to an untaxed fee (logged) rather
+    # than aborting a no-show that is already persisted.
+    fee_tax, fee_tax_breakdown = Decimal("0"), {}
+    try:
+        fee_tax, fee_tax_breakdown = await compute_cancellation_fee_tax(fee_admin + fee_driver, settings, area)
+    except Exception as _tax_exc:
+        logger.error("[NOSHOW] fee tax computation failed ride_id=%s: %s", ride_id, _tax_exc, exc_info=True)
+    total_fee = fee_admin + fee_driver + fee_tax
 
     # Charge rider
     #
@@ -644,6 +673,20 @@ async def mark_rider_noshow(
                 fee_admin=fee_admin,
                 fee_driver=fee_driver,
                 driver_id=driver["id"],
+                fee_tax=fee_tax,
+            )
+        elif payment_method == "company_allowance":
+            # Previously nobody was billed while the driver payout below still
+            # fired. Bills the company master wallet (flag-gated) or records a
+            # queryable write-off row. Never raises.
+            await bill_corporate_cancellation_fee(
+                ride=ride,
+                ride_id=ride_id,
+                amount=total_fee,
+                fee_driver=fee_driver,
+                settings=settings or {},
+                actor_user_id=current_user["id"],
+                source="noshow_fee",
             )
     elif _hold_is_live:
         # No fee owed but a live hold: release it so the rider's card isn't
@@ -713,6 +756,27 @@ async def mark_rider_noshow(
         logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
         await db_supabase.update_ride(ride_id, {"updated_at": _fee_now})
 
+    # Migration 455: tax charged on the fee, for the receipt surfaces. Separate
+    # from _fee_attribution so a missing column (flag flipped before the
+    # migration) can't take the fee attribution down with it. Only written
+    # when tax > 0, so flag-off payloads are unchanged.
+    if fee_tax > 0:
+        try:
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "cancellation_fee_tax_amount": float(fee_tax.quantize(Decimal("0.01"))),
+                    "cancellation_fee_tax_breakdown": fee_tax_breakdown,
+                },
+            )
+        except Exception as _tax_exc:
+            logger.error(
+                "[NOSHOW] cancellation-fee tax write failed ride_id=%s — receipt will under-state the charge: %s",
+                ride_id,
+                _tax_exc,
+                exc_info=True,
+            )
+
     # Use the returned row (not just fire-and-forget) so the invariant
     # is_available ⇒ is_online is respected below — mirrors the same
     # guard already applied to matching.py's offer-timeout handler and
@@ -723,8 +787,10 @@ async def mark_rider_noshow(
     # no-show cancel landed (raceable against the subscription-expiry
     # loop or an admin ban) would otherwise get a false Period 1
     # (TNC contingent) row written over what should be Period 0.
-    if isinstance(_noshow_released, dict) and _noshow_released.get("is_available"):
-        await _deps.record_period_transition(driver["id"], 1)
+    # 2026-09-22 audit: that offline driver must still have their open
+    # Period 2 closed — to Period 0 — or it stays open forever (the
+    # reconciler only scans online drivers). The shared close does both.
+    await _deps.close_period_after_release(driver["id"], _noshow_released, reason="rider_noshow", ride_id=ride_id)
 
     rider_id = ride.get("rider_id")
     if rider_id:

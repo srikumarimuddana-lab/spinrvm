@@ -878,7 +878,10 @@ async def test_unclaim_stripe_event_returns_false_on_db_error():
     """The failure IS signalled to the caller via the boolean return (unlike
     mark_stripe_event_processed above) -- the docstring says the caller must
     escalate on False. This is the documented, deliberate degrade-with-signal
-    pattern, not a swallow."""
+    pattern, not a swallow. Logged at error (not warning) because most
+    webhooks.py call sites don't check the return value before raising a 5xx
+    that tells Stripe to retry -- if this delete failed, that retry will be
+    deduped away and silently lose the event."""
     mock_sb = MagicMock()
     mock_sb.table.return_value.delete.return_value.eq.return_value.is_.return_value.execute.side_effect = RuntimeError(
         "db down"
@@ -892,4 +895,5 @@ async def test_unclaim_stripe_event_returns_false_on_db_error():
         result = await unclaim_stripe_event("evt_1")
 
     assert result is False
-    mock_logger.warning.assert_called_once()
+    mock_logger.opt.assert_called_once_with(exception=True)
+    mock_logger.opt.return_value.error.assert_called_once()

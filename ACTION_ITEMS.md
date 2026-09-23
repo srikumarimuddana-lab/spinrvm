@@ -13760,6 +13760,36 @@ record of what was assumed vs. what was actually true</summary>
   proactively applied from the sibling A-track review before this agent was ever reviewed —
   were already correctly implemented.
 
+### C135. `routes/webhooks.py` — 7 of 8 `unclaim_stripe_event()` call sites don't check its return value before telling Stripe to retry
+- [ ] **Status:** partially mitigated 2026-09-23 (branch `fix/unclaim-stripe-event-error-severity`),
+  root cause still open.
+- **What's wrong:** `unclaim_stripe_event()`'s docstring says a `False` return means the DB
+  delete failed, the claim row stays held, and "the caller must escalate (the event needs a
+  manual replay via the admin endpoint)." Only the call site at `routes/webhooks.py:855`
+  actually checks the return value (escalates to `logger.critical`). The other 7 call sites
+  (lines ~937, 1030, 1072, 1136, 1358, 1453, 1495) call `await unclaim_stripe_event(event_id)`
+  and immediately raise an `HTTPException` telling Stripe to retry — regardless of whether the
+  unclaim actually succeeded. If it silently failed, Stripe's retry gets deduped against the
+  still-claimed row and the event is lost until a manual admin replay, with no signal beyond a
+  log line.
+- **Found via:** a proactive repo-wide sweep for the "silently swallow a DB/auth/payment error"
+  anti-pattern CLAUDE.md already documents as recurring (10 independent re-discoveries,
+  2026-07-24 to 2026-09-05 — see `spinr-observability-reviewer`'s agent description).
+- **Interim fix shipped:** `unclaim_stripe_event()` now logs its own failure at `error` (was
+  `warning`) via `logger.opt(exception=True).error(...)`, which the loguru→Sentry bridge
+  (`utils/sentry_runtime.py`'s `_loguru_sentry_sink`, registered at `level="ERROR"`) picks up —
+  confirmed by `spinr-money-auditor` review that this is a real, previously-missing Sentry
+  capture, not cosmetic. This makes the failure visible somewhere, but is explicitly a
+  stopgap — reviewer's words: "don't let this diff be mistaken for having closed that gap."
+- **Real fix still needed:** make the 7 unchecked call sites check the return value and
+  escalate explicitly with their own ride/event context (mirroring the pattern already at
+  line 855), the same way a `[CR]`-style follow-up would close out a partially-fixed gate.
+- **Files:** `backend/routes/webhooks.py` (7 call sites above), `backend/repositories/wallet_repo.py`
+  (`unclaim_stripe_event`, already touched by the interim fix).
+- **Acceptance:** every `unclaim_stripe_event()` call site in `webhooks.py` checks the boolean
+  return and escalates (log level + Sentry visibility) on `False`, matching line 855's pattern;
+  add/extend a test per call site confirming the escalation fires on a simulated DB failure.
+
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify
   boot log shows "Sentry SDK initialized for error monitoring")
@@ -17780,11 +17810,20 @@ record of what was assumed vs. what was actually true</summary>
 
 ### C133. `cancel_ride_rider` reads `auth_status`/`payment_intent_id` before its own atomic cancel claim, so a hold captured in that window can still hit the fresh-charge fallback against an already-captured PI
 
-- [ ] **Status:** OPEN — found 2026-09-21 by a `spinr-money-auditor` review of the
-  already-captured-hold refund fix (see `docs/change-log/2026-09-21-cancellation-refund-already-captured-hold.md`'s
-  "Adversarial review" section). Deferred, not fixed there — narrower in scope than that
-  fix and would need re-reading the ride's payment fields after the claim throughout the
-  function, not just in the one new branch.
+- [x] **Status:** closed 2026-09-23 on `fix/cancel-ride-claim-race-c133`. Fixed by reading
+  `payment_intent_id`/`auth_status`/`authorized_amount` from the atomic claim's own
+  `UPDATE...RETURNING` row (`_cancel_claim`) instead of the pre-claim `ride` snapshot —
+  `update_one()` already returns the full updated row for free (confirmed via
+  `repositories/_base.py`'s `_single_row_from_res`), so no extra DB round-trip was needed.
+  Found via a proactive edge-case/error-handling sweep. A regression test
+  (`test_capture_race_between_initial_read_and_claim_uses_post_claim_state`) was added and
+  verified via `git stash` to fail without the fix and pass with it; two existing tests with
+  unrealistic `update_one` mocks (fabricating a post-claim row the real UPDATE's column set
+  could never produce) were also corrected. `spinr-money-auditor` reviewed: SHIP IT AS-IS —
+  confirmed the PostgREST-return-value claim independently, checked every other stale-`ride`
+  read site in the function (none missed), and confirmed the `isinstance(..., dict)` fallback
+  is test-only scaffolding, never a live path. See
+  `docs/change-log/2026-09-23-cancel-ride-claim-race-c133.md` for the full trace.
 - **Issue/gap:** `backend/routes/rides/cancellation.py::cancel_ride_rider` reads
   `ride.get("auth_status")`/`ride.get("payment_intent_id")` from the `ride` dict fetched at
   the top of the function (before the atomic `status -> cancelled` claim a few lines later)

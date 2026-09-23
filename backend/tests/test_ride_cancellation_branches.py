@@ -40,6 +40,7 @@ def test_postgrest_conditional_update_returns_representation_without_select():
     assert not hasattr(query, "select")
     assert query.request.headers["Prefer"] == "return=representation"
 
+
 pytestmark = pytest.mark.anyio
 
 _RIDER_ID = "rider-cxl-1"
@@ -153,7 +154,11 @@ async def test_preauth_release_failure_is_non_fatal():
     from backend.routes.rides.cancellation import cancel_ride_rider
 
     searching = _ride(status="searching", payment_intent_id="pi_123", auth_status="authorized")
-    cancelled = _ride(status="cancelled", payment_intent_id="pi_123", auth_status="released")
+    # The atomic claim's own UPDATE...RETURNING only touches status/cancelled_at/
+    # updated_at -- auth_status/payment_intent_id are unchanged at claim time,
+    # same as the pre-claim row. This function's own logic is what would later
+    # write "released"/"captured" into the FINAL update, not the claim itself.
+    cancelled = _ride(status="cancelled", payment_intent_id="pi_123", auth_status="authorized")
     req = _starlette_request()
 
     with (
@@ -194,7 +199,9 @@ async def test_preauth_release_success_marks_auth_released():
     from backend.routes.rides.cancellation import cancel_ride_rider
 
     searching = _ride(status="searching", payment_intent_id="pi_123", auth_status="fare_only")
-    cancelled = _ride(status="cancelled")
+    # The atomic claim's own UPDATE...RETURNING only touches status/cancelled_at/
+    # updated_at -- auth_status/payment_intent_id are unchanged at claim time.
+    cancelled = _ride(status="cancelled", payment_intent_id="pi_123", auth_status="fare_only")
     req = _starlette_request()
 
     with (

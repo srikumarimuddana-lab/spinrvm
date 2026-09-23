@@ -224,6 +224,7 @@ class TestFirebaseAuthLoginHappyPaths:
             patch("backend.routes.auth.settings.FIREBASE_DRIVER_APP_ID", "driver-app"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(existing))),
             patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+            patch("backend.routes.auth.db_supabase.rpc", AsyncMock(return_value=[{"enabled": False}])),
             patch(
                 "backend.routes.auth.issue_refresh_token",
                 AsyncMock(return_value=("raw-refresh-2", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
@@ -909,3 +910,78 @@ class TestGetMeFailureBranches:
         assert verified_result.email_verified_at == verified_ts
         assert unverified_result.email_verified is False
         assert unverified_result.email_verified_at is None
+
+
+@pytest.mark.anyio
+async def test_legacy_null_refresh_generation_respects_dark_flag_and_logout_watermark(monkeypatch):
+    from backend.utils import refresh_tokens
+
+    row = {"token_version": None, "issued_at": "2026-09-20T00:00:00+00:00"}
+    user = {"token_version": 4, "sessions_invalid_before": "2026-09-19T00:00:00+00:00"}
+    lookup = AsyncMock(return_value={"driver_single_session_enabled": False})
+    monkeypatch.setattr(refresh_tokens.db, "find_one", lookup)
+    assert await refresh_tokens.refresh_token_generation_matches(row, user)
+
+    old = {**row, "issued_at": "2026-09-18T00:00:00+00:00"}
+    assert not await refresh_tokens.refresh_token_generation_matches(old, user)
+
+    lookup.return_value = {"driver_single_session_enabled": True}
+    assert not await refresh_tokens.refresh_token_generation_matches(row, user)
+
+
+@pytest.mark.anyio
+async def test_driver_session_rpc_returns_atomic_generation_and_previous_session(monkeypatch):
+    from backend.routes import auth
+
+    rpc = AsyncMock(return_value=[
+        {"enabled": True, "token_version": 8, "previous_session_id": "prior-session"}
+    ])
+    monkeypatch.setattr(auth.db_supabase, "rpc", rpc)
+    enabled, version, previous = await auth._begin_driver_session(
+        {"id": "driver-user", "is_driver": True, "token_version": 7}, "next-session"
+    )
+
+    assert (enabled, version, previous) == (True, 8, "prior-session")
+    rpc.assert_awaited_once_with(
+        "begin_driver_session",
+        {"p_user_id": "driver-user", "p_session_id": "next-session"},
+    )
+
+
+@pytest.mark.anyio
+async def test_refresh_does_not_upgrade_null_generation_parent(monkeypatch):
+    from backend.routes import auth
+
+    user = {
+        "id": "legacy-driver",
+        "phone": "+13065550000",
+        "token_version": 4,
+        "sessions_invalid_before": "2026-09-19T00:00:00+00:00",
+        "current_session_id": "session-now",
+    }
+    find_one = AsyncMock(side_effect=[
+        user,
+        {"driver_single_session_enabled": False},
+        user,
+        {"driver_single_session_enabled": False},
+    ])
+    issue = AsyncMock(return_value=("child-token", "child-row", datetime.now(timezone.utc)))
+    jwt_spy = MagicMock(return_value="access-token")
+    monkeypatch.setattr(auth.db, "find_one", find_one)
+    monkeypatch.setattr(auth, "lookup_refresh_token", AsyncMock(return_value={
+        "id": "parent-row",
+        "user_id": user["id"],
+        "audience": "driver",
+        "token_version": None,
+        "issued_at": "2026-09-20T00:00:00+00:00",
+    }))
+    monkeypatch.setattr(auth, "issue_refresh_token", issue)
+    monkeypatch.setattr(auth, "create_jwt_token", jwt_spy)
+
+    class _Body:
+        refresh_token = "parent-token"
+
+    await auth.refresh_access_token(_request(), MagicMock(), _Body())
+
+    assert issue.await_args.kwargs["token_version"] is None
+    assert jwt_spy.call_args.kwargs["token_version"] == 4

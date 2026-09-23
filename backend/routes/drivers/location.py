@@ -443,7 +443,12 @@ async def _persist_v2_location_batch(
             driver_last_known={
                 "lat": driver.get("lat"),
                 "lng": driver.get("lng"),
-                "updated_at": driver.get("updated_at"),
+                # #5357: location_captured_at (the sensor timestamp for
+                # lat/lng specifically) instead of updated_at (a
+                # generic row-modified stamp any field write bumps,
+                # e.g. go-online/go-offline) -- see breadcrumbs.py's
+                # chain-seed for why the distinction matters.
+                "location_captured_at": driver.get("location_captured_at"),
             },
         )
     except HTTPException:

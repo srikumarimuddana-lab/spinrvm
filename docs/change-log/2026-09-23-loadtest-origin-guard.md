@@ -18,6 +18,7 @@ Load-test startup fails before requests on absent/malformed/mismatched configura
 | `loadtest/target_guard.py` | Exact-origin positive allowlist, production deny, redirect controls, token-cache binding | Keep traffic at the intended staging origin |
 | `loadtest/test_target_guard.py` | Tests valid/invalid origins, production denial, cache binding, redirect options | Pin the guard behavior |
 | `loadtest/locustfile.py` | Validate target/cache before login and guard HTTP/WebSocket requests | Enforce target constraints in the timed harness |
+| `loadtest/README.md` | Document exact allowlist and seeder project-ref environment | Give operators the required configuration |
 | This record | Risk and verification boundary | Required change impact record |
 
 ## Before / after

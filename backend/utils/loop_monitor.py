@@ -47,12 +47,20 @@ LOOP_THRESHOLDS: Dict[str, float] = {
 
 _lock = threading.Lock()
 _heartbeats: Dict[str, float] = {}  # loop_name → monotonic timestamp of last tick
+_failures: Dict[str, str] = {}  # loop_name → safe, operator-facing failure category
 
 
 def record_heartbeat(loop_name: str) -> None:
     """Record a successful tick for the named loop.  Thread-safe; O(1)."""
     with _lock:
         _heartbeats[loop_name] = time.monotonic()
+        _failures.pop(loop_name, None)
+
+
+def record_dependency_failure(loop_name: str) -> None:
+    """Mark a required dependency unavailable until the next successful tick."""
+    with _lock:
+        _failures[loop_name] = "required_dependency_unavailable"
 
 
 def get_loop_status(registered_names: Optional[list] = None) -> Dict[str, object]:
@@ -60,14 +68,14 @@ def get_loop_status(registered_names: Optional[list] = None) -> Dict[str, object
 
     Args:
         registered_names: list of loop names known to lifespan.py.  If None,
-                          only loops that have already ticked are included.
+                          loops that have ticked or reported a failure are included.
 
     Returns a dict:
       {
-        "healthy": bool,               # False if any registered loop is stale
+        "healthy": bool,               # False if any loop is stale or failed
         "loops": {
           "<name>": {
-            "status": "ok" | "stale" | "never_ticked",
+            "status": "ok" | "stale" | "never_ticked" | "unhealthy",
             "seconds_since_tick": float | None,
             "threshold_seconds": float,
           }
@@ -77,15 +85,25 @@ def get_loop_status(registered_names: Optional[list] = None) -> Dict[str, object
     now = time.monotonic()
     with _lock:
         snapshot = dict(_heartbeats)
+        failures = dict(_failures)
 
-    names = registered_names or list(snapshot.keys())
+    names = registered_names or list(dict.fromkeys([*snapshot, *failures]))
     loops: Dict[str, object] = {}
     overall_healthy = True
 
     for name in names:
         threshold = LOOP_THRESHOLDS.get(name, _DEFAULT_THRESHOLD)
         last = snapshot.get(name)
-        if last is None:
+        failure = failures.get(name)
+        if failure is not None:
+            loops[name] = {
+                "status": "unhealthy",
+                "failure": failure,
+                "seconds_since_tick": round(now - last, 1) if last is not None else None,
+                "threshold_seconds": threshold,
+            }
+            overall_healthy = False
+        elif last is None:
             # Loop has not ticked yet since startup — could be waiting for its
             # first scheduled window (e.g. stripe_reconcile waits until 02:00 UTC).
             # Don't flag as unhealthy on startup; only flag if a loop was

@@ -38,6 +38,11 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.company_details import load_company_details  # type: ignore
     from utils.legacy_rides import drop_legacy_rides  # type: ignore
 
+try:
+    from ...utils import t4a_income
+except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from utils import t4a_income  # type: ignore
+
 router = APIRouter()
 
 # Matches the Saskatchewan trip-record retention window (7 years, see
@@ -108,21 +113,43 @@ async def get_t4a_years(current_user: dict = Depends(get_current_user)):
     totals: dict[int, Decimal] = {}
     trips: dict[int, int] = {}
 
-    def _year_of(row: dict) -> int | None:
-        stamp = str(row.get("created_at") or "")[:4]
+    def _year_of(row: dict, field: str = "created_at") -> int | None:
+        stamp = str(row.get(field) or "")[:4]
         return int(stamp) if stamp.isdigit() else None
 
+    def _add(y: int | None, amount: Decimal) -> None:
+        if y is not None:
+            totals[y] = totals.get(y, Decimal("0")) + amount
+
+    ride_year: dict[str, int | None] = {}
     for r in rides:
         y = _year_of(r)
+        if r.get("id"):
+            ride_year[r["id"]] = y
         if y is None:
             continue
         totals[y] = totals.get(y, Decimal("0")) + _ride_income(r)
         trips[y] = trips.get(y, 0) + 1
     for p in synced_rows:
-        y = _year_of(p)
-        if y is None:
-            continue
-        totals[y] = totals.get(y, Decimal("0")) + Decimal(str(p.get("amount") or "0"))
+        _add(_year_of(p), Decimal(str(p.get("amount") or "0")))
+
+    # Same supplementary income the slip adds (utils/t4a_income), bucketed the
+    # way the slip attributes it: a fee by cancelled_at, a bonus by
+    # created_at, an incentive claim by its ride's year — so a driver whose
+    # only income in a year was fees/bonuses is still offered that slip.
+    cancelled, bonuses, claims = await t4a_income.fetch_supplementary_income(
+        db_supabase,
+        driver["id"],
+        f"{earliest}-01-01T00:00:00+00:00",
+        f"{this_year + 1}-01-01T00:00:00+00:00",
+        list(ride_year),
+    )
+    for c in cancelled:
+        _add(_year_of(c, "cancelled_at"), t4a_income.cancellation_fee(c))
+    for b in bonuses:
+        _add(_year_of(b), t4a_income.bonus_amount(b))
+    for cl in claims:
+        _add(ride_year.get(cl.get("ride_id")), t4a_income.incentive_amount(cl))
 
     years = [
         {
@@ -194,10 +221,30 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     )
     synced_earnings = sum((Decimal(str(p.get("amount") or "0")) for p in synced_rows), Decimal("0"))
 
+    # Cancellation/no-show fees, quest/referral bonuses and per-ride
+    # incentives — paid income the driver's own earnings statement already
+    # shows, which this slip used to omit (utils/t4a_income).
+    cancelled, bonuses, claims = await t4a_income.fetch_supplementary_income(
+        db_supabase,
+        driver["id"],
+        f"{year}-01-01T00:00:00+00:00",
+        f"{year + 1}-01-01T00:00:00+00:00",
+        [r.get("id") for r in rides],
+    )
+    cancel_earnings, bonus_earnings, incentive_earnings = t4a_income.sum_supplementary_income(
+        cancelled, bonuses, claims
+    )
+
     # T4A reports the driver's INCOME — sum driver_earnings (see _ride_income),
     # not the gross fare; that would misreport income to the CRA if they ever
     # diverge under a future fee model.
-    total_earnings = _money_str(sum((_ride_income(r) for r in rides), Decimal("0")) + synced_earnings)
+    total_earnings = _money_str(
+        sum((_ride_income(r) for r in rides), Decimal("0"))
+        + synced_earnings
+        + cancel_earnings
+        + bonus_earnings
+        + incentive_earnings
+    )
 
     driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {
@@ -209,6 +256,10 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         # Slice of total_earnings that came from the Stripe-synced legacy
         # history — shown so a driver (or auditor) can reconcile the slip.
         "legacy_synced_earnings": _money_str(synced_earnings),
+        # Further slices of total_earnings, for the same reconciliation.
+        "cancellation_fee_earnings": _money_str(cancel_earnings),
+        "bonus_earnings": _money_str(bonus_earnings),
+        "incentive_earnings": _money_str(incentive_earnings),
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
         # Last 4 only. The driver's slip shows it masked so they can confirm we

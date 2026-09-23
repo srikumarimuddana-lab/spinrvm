@@ -489,6 +489,115 @@ class TestGetT4ASummary:
 
         assert result["years"] == []
 
+    async def test_t4a_includes_cancellation_fees_and_bonuses_with_no_trips(self):
+        """2026-09-23: a driver whose only income for the year was
+        cancellation/no-show fees and quest/referral bonuses — already shown
+        on their earnings statement — must see it on the T4A slip too. Before
+        this fix the slip read $0.00."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()
+        seen: list = []
+
+        async def _get_rows(table, query=None, **kwargs):
+            seen.append((table, query))
+            if table == "drivers":
+                return [driver]
+            if table == "rides" and query.get("status") == "cancelled":
+                return [
+                    {"id": "c1", "status": "cancelled", "cancellation_fee_driver": 4.00},
+                    {"id": "c2", "status": "cancelled", "cancellation_fee_driver": "5.50"},
+                ]
+            if table == "driver_bonuses":
+                return [{"amount": "500.00", "kind": "quest"}, {"amount": 25, "kind": "referral"}]
+            return []
+
+        batched = AsyncMock(return_value=[])
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows_batched_in", batched),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["total_earnings"] == "534.50"
+        assert result["net_earnings"] == "534.50"
+        assert result["cancellation_fee_earnings"] == "9.50"
+        assert result["bonus_earnings"] == "525.00"
+        assert result["incentive_earnings"] == "0.00"
+        assert result["total_trips"] == 0  # cancelled rides are not trips
+        batched.assert_not_called()
+        cancel_q = next(q for t, q in seen if t == "rides" and q.get("status") == "cancelled")
+        assert cancel_q["driver_id"] == DRIVER_ID
+        assert cancel_q["cancelled_at"] == {
+            "$gte": "2025-01-01T00:00:00+00:00",
+            "$lt": "2026-01-01T00:00:00+00:00",
+        }
+
+    async def test_t4a_includes_incentive_claims_for_slip_rides(self):
+        """Per-ride incentives live in ride_incentive_claims, not in
+        driver_earnings (fare-only) — they are paid income and belong on the
+        slip. Looked up only for the non-legacy rides actually on the slip."""
+        from backend.routes.drivers import get_t4a_summary
+
+        legacy = {**_ride_row(400.00), "id": "legacy-1", "legacy_import_metadata": {"source": "x"}}
+        rides = [_ride_row(20.00), legacy]
+
+        async def _get_rows(table, query=None, **kwargs):
+            return [_driver_row()] if table == "drivers" else []
+
+        batched = AsyncMock(return_value=[{"ride_id": "ride-001", "bonus_amount": "5.25"}])
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=rides)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows_batched_in", batched),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["total_earnings"] == "25.25"
+        assert result["incentive_earnings"] == "5.25"
+        batched.assert_awaited_once_with("ride_incentive_claims", "ride_id", ["ride-001"])
+
+    async def test_t4a_years_offers_year_with_only_fees_and_bonuses(self):
+        """The tax-year list must offer a slip for a year whose only income
+        was cancellation fees / bonuses, bucketed by cancelled_at / created_at
+        — otherwise the app never shows the slip the driver is owed."""
+        from backend.routes.drivers import get_t4a_years
+
+        r2025 = {**_ride_row(120.00), "created_at": "2025-04-02T00:00:00+00:00"}
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [_driver_row()]
+            if table == "rides" and query.get("status") == "cancelled":
+                return [
+                    {"cancellation_fee_driver": "4.00", "cancelled_at": "2024-05-01T00:00:00+00:00"},
+                    # created_at in 2023 but cancelled in 2024 -> 2024.
+                    {
+                        "cancellation_fee_driver": "6.00",
+                        "created_at": "2023-12-31T23:00:00+00:00",
+                        "cancelled_at": "2024-01-01T01:00:00+00:00",
+                    },
+                ]
+            if table == "driver_bonuses":
+                return [{"amount": "50.00", "created_at": "2024-07-07T00:00:00+00:00"}]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[r2025])),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows_batched_in",
+                AsyncMock(return_value=[{"ride_id": "ride-001", "bonus_amount": "3.00"}]),
+            ),
+        ):
+            result = await get_t4a_years(current_user={"id": DRIVER_USER_ID})
+
+        assert [y["year"] for y in result["years"]] == [2025, 2024]
+        assert result["years"][0]["total_earnings"] == "123.00"  # ride + its incentive
+        assert result["years"][1]["total_earnings"] == "60.00"
+        assert result["years"][1]["total_trips"] == 0
+
     async def test_driver_not_found_raises_404(self):
         from fastapi import HTTPException
 

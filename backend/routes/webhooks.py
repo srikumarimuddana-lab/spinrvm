@@ -117,6 +117,7 @@ def _verified_split_component(
             return True
     return False
 
+
 # metadata.source stamped by utils/stripe_charge.authorize_ride on the
 # booking-time hold. That PaymentIntent is created BEFORE the ride row exists
 # (routes/rides/booking.py pre-authorizes, then calls _insert_ride_with_code),
@@ -934,19 +935,15 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             # reconciler use. Checking grand_total alone would let a fare-only
             # capture settle a ride that also has a persisted driver tip.
             _payment_source = meta.get("source")
-            _booking_hold_in_flight = (
-                _payment_source == _PREAUTH_METADATA_SOURCE
-                and payment_intent_id == ride.get("payment_intent_id")
+            _booking_hold_in_flight = _payment_source == _PREAUTH_METADATA_SOURCE and payment_intent_id == ride.get(
+                "payment_intent_id"
             )
             _completion_charge_in_flight = (
                 _payment_source == "ride_completion_charge"
                 # charge_ride stamps rider_id, not the generic webhook user_id.
                 and meta.get("rider_id") == ride.get("rider_id")
             )
-            if (
-                ride.get("payment_status") == "processing"
-                and (_booking_hold_in_flight or _completion_charge_in_flight)
-            ):
+            if ride.get("payment_status") == "processing" and (_booking_hold_in_flight or _completion_charge_in_flight):
                 # The main hold/fresh PI may succeed before the overflow PI
                 # and before process_payment persists the requested tip. Defer
                 # until the app's atomic finalizer has written its ledger proof.
@@ -1418,7 +1415,11 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
         refund_id = refund.get("id")
         status = str(refund.get("status") or ("failed" if event_type == "refund.failed" else "pending"))
         status = status if status in {"pending", "succeeded", "failed", "canceled", "requires_action"} else "pending"
-        operation = await db_supabase.find_one("ride_payment_operations", {"provider_object_id": refund_id}) if refund_id else None
+        operation = (
+            await db_supabase.find_one("ride_payment_operations", {"provider_object_id": refund_id})
+            if refund_id
+            else None
+        )
         metadata = refund.get("metadata") or {}
         operation_id = str((operation or {}).get("id") or metadata.get("ride_payment_operation_id") or "")
         ride_id = str((operation or {}).get("ride_id") or metadata.get("ride_id") or "")
@@ -1426,20 +1427,29 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
         if operation_id:
             operation_metadata = dict((operation or {}).get("metadata") or {})
             operation_metadata["error_attempt_count"] = 0
-            await db_supabase.update_one("ride_payment_operations", {"id": operation_id}, {
-                # Succeeded Refund events remain due until the worker verifies
-                # the complete succeeded-refund aggregate and atomically books it.
-                "status": "pending" if status == "succeeded" else status,
-                "provider_object_id": refund_id,
-                "collected_cents": int(refund.get("amount") or 0),
-                "next_attempt_at": datetime.now(timezone.utc).isoformat(),
-                "metadata": operation_metadata,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            await db_supabase.update_one(
+                "ride_payment_operations",
+                {"id": operation_id},
+                {
+                    # Succeeded Refund events remain due until the worker verifies
+                    # the complete succeeded-refund aggregate and atomically books it.
+                    "status": "pending" if status == "succeeded" else status,
+                    "provider_object_id": refund_id,
+                    "collected_cents": int(refund.get("amount") or 0),
+                    "next_attempt_at": datetime.now(timezone.utc).isoformat(),
+                    "metadata": operation_metadata,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
         if ride_id:
-            await db_supabase.update_one("rides", {"id": ride_id}, {
-                "refund_id": refund_id, "refund_status": status,
-            })
+            await db_supabase.update_one(
+                "rides",
+                {"id": ride_id},
+                {
+                    "refund_id": refund_id,
+                    "refund_status": status,
+                },
+            )
         if status == "succeeded" and ride_id and payment_intent_id:
             try:
                 from ..services.payment_service import reconcile_confirmed_stripe_refund
@@ -1447,7 +1457,8 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 from services.payment_service import reconcile_confirmed_stripe_refund  # type: ignore
             try:
                 projection = await reconcile_confirmed_stripe_refund(
-                    ride_id=ride_id, payment_intent_id=payment_intent_id,
+                    ride_id=ride_id,
+                    payment_intent_id=payment_intent_id,
                 )
                 if projection.get("outcome") == "stale":
                     logger.error("refund.updated is stale against accounting ride=%s refund=%s", ride_id, refund_id)
@@ -1463,7 +1474,9 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
         payment_intent_id = charge.get("payment_intent")
         if payment_intent_id:
             rides = await db_supabase.get_rows(
-                "rides", {"payment_intent_id": payment_intent_id}, limit=1,
+                "rides",
+                {"payment_intent_id": payment_intent_id},
+                limit=1,
             )
             if rides:
                 ride = rides[0]
@@ -1474,7 +1487,8 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     from services.payment_service import reconcile_confirmed_stripe_refund  # type: ignore
                 try:
                     projection = await reconcile_confirmed_stripe_refund(
-                        ride_id=ride_id, payment_intent_id=str(payment_intent_id),
+                        ride_id=ride_id,
+                        payment_intent_id=str(payment_intent_id),
                     )
                 except Exception as exc:
                     logger.error("charge.refunded accounting deferred ride=%s: %s", ride_id, exc)
@@ -1505,12 +1519,16 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                             logger.debug("Refund email failed: %s", exc)
             else:
                 await _record_orphan_refund(
-                    charge=charge, payment_intent_id=str(payment_intent_id), event_id=event_id,
+                    charge=charge,
+                    payment_intent_id=str(payment_intent_id),
+                    event_id=event_id,
                     reason="no_ride_for_pi",
                 )
         else:
             await _record_orphan_refund(
-                charge=charge, payment_intent_id=None, event_id=event_id,
+                charge=charge,
+                payment_intent_id=None,
+                event_id=event_id,
                 reason="no_payment_intent",
             )
     elif event_type == "charge.dispute.created":

@@ -762,7 +762,8 @@ class TestChargeRefundedFullDispatch:
         assert result["received"] is True
         update_one_mock.assert_not_awaited()
         record_refund_mock.assert_awaited_once_with(
-            ride_id="ride_refunded", payment_intent_id="pi_refund_1",
+            ride_id="ride_refunded",
+            payment_intent_id="pi_refund_1",
         )
         push_mock.assert_awaited_once()
         assert push_mock.await_args.args[0] == "rider_1"
@@ -783,10 +784,14 @@ class TestChargeRefundedFullDispatch:
                 AsyncMock(return_value=[{"id": "ride_pf", "rider_id": "rider_pf"}]),
             ),
             patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
-            patch("backend.services.payment_service.reconcile_confirmed_stripe_refund", AsyncMock(
-                return_value={"outcome": "applied", "delta_cents": 500})),
-            patch("services.payment_service.reconcile_confirmed_stripe_refund", AsyncMock(
-                return_value={"outcome": "applied", "delta_cents": 500})),
+            patch(
+                "backend.services.payment_service.reconcile_confirmed_stripe_refund",
+                AsyncMock(return_value={"outcome": "applied", "delta_cents": 500}),
+            ),
+            patch(
+                "services.payment_service.reconcile_confirmed_stripe_refund",
+                AsyncMock(return_value={"outcome": "applied", "delta_cents": 500}),
+            ),
             patch("backend.routes.webhooks.send_refund_email", AsyncMock()),
             patch(
                 "backend.routes.webhooks.send_push_notification",

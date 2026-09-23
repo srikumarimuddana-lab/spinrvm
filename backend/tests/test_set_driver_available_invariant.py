@@ -77,3 +77,16 @@ async def test_total_rides_increment_still_clamps_when_offline():
     await _call_set_available(is_online=False, captured=captured, total_rides_inc=1)
     assert captured["payload"]["is_available"] is False
     assert captured["payload"]["total_rides"] == 6
+
+
+async def test_release_never_writes_migration_448_claim_id_column():
+    """availability_claim_id is cleared by migration 448's release trigger.
+
+    The release write must not name the column itself: backend deploys on
+    every push to main without running migrations, so a write naming a column
+    that does not exist yet fails every release with PGRST204.
+    """
+    captured: dict = {}
+    await _call_set_available(is_online=True, captured=captured)
+    assert captured["payload"]["availability_claimed_at"] is None
+    assert "availability_claim_id" not in captured["payload"]

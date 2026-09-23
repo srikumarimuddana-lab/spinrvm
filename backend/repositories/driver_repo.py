@@ -179,7 +179,10 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
         # consider them orphaned. (Claiming sets it; releasing unsets it.)
         if available:
             payload["availability_claimed_at"] = None
-            payload["availability_claim_id"] = None
+            # availability_claim_id (migration 448) is cleared by the
+            # drivers_clear_availability_claim_on_release trigger. Writing it
+            # here would make every release fail (PGRST204) if this code ever
+            # runs before 448 is applied.
 
         # Enforce the invariant is_available ⇒ is_online. is_online is
         # driver-toggled, so we must NOT flip it on here; instead, when asked

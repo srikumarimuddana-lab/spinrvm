@@ -30,7 +30,13 @@ on:
       - 'backend/**'
       - 'backend/fly.staging.toml'
       - '.github/workflows/deploy-backend-staging.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_recovery_test_failure:
+        description: "After a successful staging deploy, force recovery (requires a verified baseline)."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize deploys the same way deploy-fly.yml does for production — queue,
 # never cancel an in-flight rollout.
@@ -169,6 +175,10 @@ jobs:
           else
             echo "has_baseline=false" >> "${GITHUB_OUTPUT}"
           fi
+          if [ "${{ inputs.force_recovery_test_failure }}" = "true" ] && [ ! -s "${recovery_dir}/snapshot.json" ]; then
+            echo "::error::Recovery drill requires an existing verified staging baseline."
+            exit 1
+          fi
 
       - name: Preserve recovery snapshot artifact
         if: steps.snapshot.outputs.has_baseline == 'true'
@@ -240,3 +250,66 @@ jobs:
           done
           echo "::error title=Wrong staging build::Expected ${GITHUB_SHA}, got ${running:-<none>}."
           exit 1
+
+      # This controlled post-deploy fault exercises only the staging restore path.
+      - name: Inject staging recovery drill failure
+        id: force_failure
+        if: ${{ inputs.force_recovery_test_failure == true }}
+        run: |
+          echo "::error::Forced staging recovery drill failure after readiness and SHA checks."
+          exit 1
+
+      - name: Restore verified staging baseline after candidate failure
+        id: recovery_restore
+        if: ${{ failure() && steps.snapshot.outputs.has_baseline == 'true' && (steps.deploy.outcome == 'failure' || steps.ready.outcome == 'failure' || steps.sha.outcome == 'failure' || steps.force_failure.outcome == 'failure') }}
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          RECOVERY_DIR: ${{ runner.temp }}/staging-recovery
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.fly_staging_recovery import validate_snapshot
+
+          recovery_dir = Path(os.environ["RECOVERY_DIR"])
+          snapshot = json.loads((recovery_dir / "snapshot.json").read_text())
+          config = (recovery_dir / "fly.staging.toml").read_text()
+          validate_snapshot(snapshot, config)
+          PY
+          image_ref=$(jq -er '.image_ref' "${RECOVERY_DIR}/snapshot.json")
+          expected_sha=$(jq -er '.served_sha' "${RECOVERY_DIR}/snapshot.json")
+          if ! flyctl deploy --image "${image_ref}" --config "${RECOVERY_DIR}/fly.staging.toml" --ha=false > "${RUNNER_TEMP}/staging-restore.log" 2>&1; then
+            echo "::error::Staging baseline image restore command failed; candidate failure remains failed."
+            exit 1
+          fi
+          ready=000
+          for i in $(seq 1 18); do
+            ready=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/ready" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo 000)
+            [ "${ready}" = 200 ] && break
+            sleep 10
+          done
+          if [ "${ready}" != 200 ]; then
+            echo "::error::Restored staging image did not pass /ready."
+            exit 1
+          fi
+          running=
+          for i in $(seq 1 12); do
+            running=$(curl -sf --max-time 5 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN_STAGING}" \
+              "${FLY_HEALTH_URL_STAGING}/deploy-info" | jq -r '.build.sha // empty' 2>/dev/null || true)
+            if [ "${running}" = "${expected_sha}" ]; then
+              echo "Staging restored to verified baseline ${expected_sha}; candidate run remains failed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Staging restore not verified::Expected ${expected_sha}, got ${running:-<none>}."
+          exit 1
+
+      - name: Report bootstrap failure without a prior baseline
+        if: ${{ failure() && steps.snapshot.outputs.has_baseline != 'true' && (steps.deploy.outcome == 'failure' || steps.ready.outcome == 'failure' || steps.sha.outcome == 'failure' || steps.force_failure.outcome == 'failure') }}
+        run: echo "::error::Candidate failed during initial staging bootstrap; no prior image existed to restore."

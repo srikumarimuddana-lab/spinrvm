@@ -112,6 +112,18 @@ class StagingWorkflowTests(unittest.TestCase):
         self.assertIn("fly.staging.toml", artifact)
         self.assertNotIn("machines.json", artifact)
 
+    def test_candidate_failure_restores_and_reverifies_only_a_verified_baseline(self):
+        self.assertIn("force_recovery_test_failure", self.source)
+        self.assertIn("failure() && steps.snapshot.outputs.has_baseline == 'true'", self.source)
+        self.assertIn("steps.deploy.outcome == 'failure'", self.source)
+        self.assertIn("steps.ready.outcome == 'failure'", self.source)
+        self.assertIn("steps.sha.outcome == 'failure'", self.source)
+        self.assertIn("flyctl deploy --image", self.source)
+        self.assertIn("expected_sha=$(jq -er '.served_sha'", self.source)
+        self.assertIn('if [ "${running}" = "${expected_sha}" ]', self.source)
+        self.assertIn("candidate run remains failed", self.source)
+        self.assertIn("Report bootstrap failure without a prior baseline", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

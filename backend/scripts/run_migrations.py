@@ -324,7 +324,7 @@ def _connect():
             sys.exit(2)
 
 
-def _ensure_tracking_table(conn) -> None:
+def _ensure_tracking_table(conn, *, allow_create: bool = True) -> bool:
     """Apply 24_schema_migrations.sql if the tracking table doesn't exist.
 
     Chicken-and-egg bootstrap: we can't query schema_migrations to see
@@ -337,7 +337,9 @@ def _ensure_tracking_table(conn) -> None:
         exists = cur.fetchone() is not None
 
     if exists:
-        return
+        return True
+    if not allow_create:
+        return False
 
     tracking_path = MIGRATIONS_DIR / TRACKING_TABLE_MIGRATION
     if not tracking_path.exists():
@@ -352,6 +354,7 @@ def _ensure_tracking_table(conn) -> None:
             (TRACKING_TABLE_MIGRATION, _checksum(tracking_path)),
         )
     conn.commit()
+    return True
 
 
 def _fetch_applied(conn) -> dict[str, str]:
@@ -507,8 +510,8 @@ def main() -> int:
 
     conn = _connect()
     try:
-        _ensure_tracking_table(conn)
-        applied = _fetch_applied(conn)
+        tracking_exists = _ensure_tracking_table(conn, allow_create=not (args.status or args.dry_run))
+        applied = _fetch_applied(conn) if tracking_exists else {}
         pending, already, drifted, skipped = _classify(files, applied)
 
         if drifted:

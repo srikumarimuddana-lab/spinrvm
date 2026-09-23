@@ -2,7 +2,7 @@
 
 import unittest
 
-from fly_deploy_gate import GateDenied, evaluate_deploy_evidence
+from fly_deploy_gate import GateDenied, evaluate_deploy_evidence, wait_for_deploy_evidence
 
 
 REPO = "acme/spinrvm"
@@ -96,6 +96,54 @@ class DeployEvidenceTests(unittest.TestCase):
     def test_stale_main_tip_is_denied_after_wait(self):
         with self.assertRaises(GateDenied):
             evidence(current_main_sha="c" * 40)
+
+    def test_wait_retries_missing_evidence_and_reads_main_after_gates_pass(self):
+        runs_by_poll = [
+            [run("CI/CD Pipeline", run_id=1)],
+            [run(name, run_id=i) for i, name in enumerate(WORKFLOWS, 1)],
+        ]
+        poll_count = 0
+        sleeps = []
+        main_reads = []
+
+        def fetch_runs(_sha):
+            nonlocal poll_count
+            result = runs_by_poll[poll_count]
+            poll_count += 1
+            return result
+
+        def fetch_jobs(run_id):
+            names = list(WORKFLOWS.values())[run_id - 1]
+            return successful_jobs(names)
+
+        ready = wait_for_deploy_evidence(
+            expected_sha=SHA,
+            repository=REPO,
+            fetch_runs=fetch_runs,
+            fetch_jobs=fetch_jobs,
+            read_main_sha=lambda: main_reads.append(True) or SHA,
+            required_workflows=WORKFLOWS,
+            max_attempts=2,
+            sleep=sleeps.append,
+        )
+        self.assertTrue(ready.ready)
+        self.assertEqual(sleeps, [60])
+        self.assertEqual(main_reads, [True])
+
+    def test_wait_timeout_denies_missing_evidence_without_reading_main(self):
+        main_reads = []
+        with self.assertRaises(GateDenied):
+            wait_for_deploy_evidence(
+                expected_sha=SHA,
+                repository=REPO,
+                fetch_runs=lambda _sha: [],
+                fetch_jobs=lambda _run_id: {},
+                read_main_sha=lambda: main_reads.append(True) or SHA,
+                required_workflows=WORKFLOWS,
+                max_attempts=2,
+                sleep=lambda _seconds: None,
+            )
+        self.assertEqual(main_reads, [])
 
 
 if __name__ == "__main__":

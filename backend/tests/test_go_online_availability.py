@@ -394,6 +394,13 @@ class TestGoOnlineEligibilityRecheck:
         assert result["success"] is True
         assert writes
 
+    async def test_iso_datetime_eligibility_values_remain_supported(self):
+        adult = (datetime.now(timezone.utc) - timedelta(days=365 * 25)).isoformat()
+        issue_date = (datetime.now(timezone.utc) - timedelta(days=365 * 4)).isoformat()
+        result, writes = await self._go_online({"date_of_birth": adult, "license_issue_date": issue_date})
+        assert result["success"] is True
+        assert writes
+
     async def test_missing_date_of_birth_is_not_blocked(self):
         result, writes = await self._go_online({"date_of_birth": None}, flag_enabled=False)
         assert result["success"] is True

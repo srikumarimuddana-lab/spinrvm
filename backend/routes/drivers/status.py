@@ -444,7 +444,10 @@ async def update_driver_status(
                 try:
                     dob_date = date.fromisoformat(dob_raw)
                 except ValueError:
-                    invalid_eligibility.append("date of birth")
+                    try:
+                        dob_date = datetime.fromisoformat(dob_raw.replace("Z", "+00:00")).date()
+                    except ValueError:
+                        invalid_eligibility.append("date of birth")
             elif dob_raw not in (None, ""):
                 invalid_eligibility.append("date of birth")
             if dob_date is not None:
@@ -531,8 +534,11 @@ async def update_driver_status(
                             date.fromisoformat(license_issue_date), datetime.min.time(), tzinfo=timezone.utc
                         )
                     except ValueError:
-                        invalid_eligibility.append("licence issue date")
-                        license_issue_date = None
+                        try:
+                            license_issue_date = datetime.fromisoformat(license_issue_date.replace("Z", "+00:00"))
+                        except ValueError:
+                            invalid_eligibility.append("licence issue date")
+                            license_issue_date = None
                 else:
                     invalid_eligibility.append("licence issue date")
                 if license_issue_date is not None and not isinstance(license_issue_date, datetime):

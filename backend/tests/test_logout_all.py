@@ -216,7 +216,9 @@ class TestLogoutAllRiderDriver:
         get_rows = AsyncMock(
             side_effect=[
                 [{"id": "drv-1", "user_id": "user-drv-1", "is_online": True}],
-                [],  # no obligated ride
+                [],  # no obligated ride (first check)
+                [],  # no pending offers to reap
+                [],  # obligated_after_declines recheck: still not obligated
             ]
         )
         revoke_all = AsyncMock(return_value=1)
@@ -284,11 +286,20 @@ class TestLogoutAllRiderDriver:
         not roll it back or 500 the button."""
         from backend.routes.auth import logout_all
 
+        # 1st update_one = the users.token_version bump in logout_all itself;
+        # 2nd = the drivers-row flip inside _offline_driver_for_logout_all,
+        # which is the one this test means to fail. get_rows must supply all
+        # 4 reads that path makes (drivers, obligated check, pending-offers
+        # reap, obligated_after_declines recheck) before that write happens,
+        # or the earlier get_rows exhaustion would raise first and this
+        # RuntimeError would never actually be reached.
         update_one = AsyncMock(side_effect=[{"id": "user-drv-3"}, RuntimeError("drivers 503")])
         get_rows = AsyncMock(
             side_effect=[
                 [{"id": "drv-3", "user_id": "user-drv-3", "is_online": True}],
-                [],
+                [],  # no obligated ride (first check)
+                [],  # no pending offers to reap
+                [],  # obligated_after_declines recheck: still not obligated
             ]
         )
 

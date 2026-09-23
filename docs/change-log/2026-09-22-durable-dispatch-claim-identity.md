@@ -6,13 +6,13 @@
 
 ## Root cause and fix
 
-Timestamps were being used both as age estimates and as ownership evidence. Migration 444 adds nullable UUID identity columns to drivers, offers, and insurance periods. Feature-flagged v2 claim RPCs assign the UUID and database timestamp atomically; offers and Period 2 retain that same ID. Cancellation and reaping lock the driver and require matching identity, active-offer/ride guards, and matching period ownership. Missing Period 2 does not create a synthetic historical row; the recovery opens the current Period 1/0 and logs the historical gap. NULL/mismatched identity or missing v2 stamp fails closed. Legacy claim/reaper and release paths remain guarded and compatible while the flag is off.
+Timestamps were being used both as age estimates and as ownership evidence. Migration 448 adds nullable UUID identity columns to drivers, offers, and insurance periods. Feature-flagged v2 claim RPCs assign the UUID and database timestamp atomically; offers and Period 2 retain that same ID. Cancellation and reaping lock the driver and require matching identity, active-offer/ride guards, and matching period ownership. Missing Period 2 does not create a synthetic historical row; the recovery opens the current Period 1/0 and logs the historical gap. NULL/mismatched identity or missing v2 stamp fails closed. Legacy claim/reaper and release paths remain guarded and compatible while the flag is off.
 
 An age window alone was not selected as the ownership check: tolerating timestamp skew still makes ownership depend on two clocks and can confuse retries of one claim with a replacement. A durable UUID is assigned once in the database and copied to each dependent row. The legacy path keeps its app-clock age comparison and adds a locked timestamp compare-and-set so dark rollout does not reintroduce cross-clock comparison.
 
 | File area | Change |
 | --- | --- |
-| Migration 444 | Nullable identity columns, settings switch, validation/cleanup triggers, identity-aware release/reapers and v2 claim RPCs |
+| Migration 448 | Nullable identity columns, settings switch, validation/cleanup triggers, identity-aware release/reapers and v2 claim RPCs |
 | Dispatch repositories and matching/settings routes | Feature-gated claim selection and identity propagation |
 | Insurance-period helper and claim reaper | Per-offer/per-claim RPC routing, guarded recovery and anomaly reporting |
 | Tests and change log | Direct-pool fixture settings, legacy/v2 routing coverage, rollout/impact record |
@@ -32,7 +32,7 @@ after:  v2 owner proven by one DB-issued UUID on driver + offer + Period 2; reco
 
 ## Rollout and rollback
 
-Apply migration 444 first; deploy all backend instances with v2-aware routing and reaper code while the flag remains off. Confirm the candidate release is stable, then enable the flag. The direct-pool path still requires its own flag. To roll back new issuance, turn `dispatch_claim_identity_enabled` off. Keep migration 444's columns, triggers, and RPCs in place while non-NULL claim IDs drain; never drop identity columns or rewrite historical insurance rows. Flag-off stops new identity claim issuance and keeps the legacy protocol's known timestamp-based limitations.
+Apply migration 448 first; deploy all backend instances with v2-aware routing and reaper code while the flag remains off. Confirm the candidate release is stable, then enable the flag. The direct-pool path still requires its own flag. To roll back new issuance, turn `dispatch_claim_identity_enabled` off. Keep migration 448's columns, triggers, and RPCs in place while non-NULL claim IDs drain; never drop identity columns or rewrite historical insurance rows. Flag-off stops new identity claim issuance and keeps the legacy protocol's known timestamp-based limitations.
 
 ## Verification performed
 

@@ -70,6 +70,7 @@ recorded in the updated PR rather than inferred from unit-test success.
   statements and passed 17 cases in PostgreSQL 18.3 via PGlite 0.5.8.
   Migration 444 SHA-256:
   `371b968530df2006bc88424820e32a86681f953164cad1b9a81dfa31b59c0338`.
+  _2026-09-23: renumbered 444 → 448 after #5717 (444–446) and #5718 (447) landed; the header comment changed, so this hash is historical._
 - Foreground auth tests passed in both driver and rider Jest configurations
   (20 each), and driver background auth passed 18 tests. Both apps exported
   Android, iOS, and web JavaScript bundles with their production patches.

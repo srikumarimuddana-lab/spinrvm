@@ -1,4 +1,4 @@
--- 444: Durable claim identity and transactional orphan recovery.
+-- 448: Durable claim identity and transactional orphan recovery.
 -- Rollback: set settings.dispatch_claim_identity_enabled=false to stop new
 -- UUID-bound claims; leave columns and v2 RPCs in place until all current
 -- claim IDs have drained. Do not drop identity columns or rewrite audit rows.

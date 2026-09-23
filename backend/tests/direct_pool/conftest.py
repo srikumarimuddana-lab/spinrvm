@@ -230,9 +230,9 @@ _MIGRATION_FILES = (
     # ownership-checked release RPC exercised by batch cancellation tests.
     "421_insurance_period_ride_identity.sql",
     "442_release_cancelled_batch_offer.sql",
-    # 444 replaces timestamp ordering with durable claim UUIDs and adds a
+    # 448 replaces timestamp ordering with durable claim UUIDs and adds a
     # transactionally safe stale-claim recovery RPC.
-    "444_durable_dispatch_claim_identity.sql",
+    "448_durable_dispatch_claim_identity.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

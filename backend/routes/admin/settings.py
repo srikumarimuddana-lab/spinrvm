@@ -568,7 +568,7 @@ class SettingsUpdateRequest(BaseModel):
     # above (scheduled_dispatch_enabled etc.). Default False; Phase 2 (T12/T13,
     # not yet built) is the only thing that reads this as True having any effect.
     dispatch_direct_pool_enabled: Optional[bool] = None
-    # Migration 444 dark-launch switch. Disable stops new v2 claims; any
+    # Migration 448 dark-launch switch. Disable stops new v2 claims; any
     # existing UUID-bound claims continue through the v2 release/reaper path.
     dispatch_claim_identity_enabled: Optional[bool] = None
     # #1231 finding 15 kill switch (schemas.AppSettings.minimal_fcm_offer_payload_enabled

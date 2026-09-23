@@ -173,10 +173,12 @@ class TestPayment3DSRetry:
         updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "succeeded")
 
         assert updates, "No DB update performed"
-        _, data = self._find(updates, "payment_status", "processing")
+        query, data = self._find(updates, "payment_status", "processing")
+        assert query == {"id": RIDE_ID, "payment_status": "retrying", "payment_retry_count": 0}
         assert data["$set"]["payment_status"] == "processing"
         assert not any(d.get("$set", {}).get("payment_status") == "paid" for _, d in updates)
         mock_stripe.PaymentIntent.confirm.assert_not_called()
+        mock_stripe.PaymentIntent.capture.assert_not_called()
 
     async def test_requires_confirmation_submits_retry(self):
         """PaymentIntent needs confirmation → confirm() called, status=processing."""

@@ -219,6 +219,7 @@ async def test_admin_get_disputes_empty_list_skips_user_ride_queries():
 
 
 async def _resolve(req, dispute=None, ride=None, get_rows=None, extra_patches=None):
+    ride = {"id": "ride_1", "rider_id": "user_1", **(ride or {})}
     overrides = {
         "backend.routes.disputes.db_supabase.get_rows": get_rows
         or AsyncMock(return_value=[dispute] if dispute else []),
@@ -425,17 +426,17 @@ async def test_resolve_notification_wording_rejected():
     assert captured["body"] == "Your dispute has been rejected."
 
 
-async def test_resolve_dispute_no_rider_id_skips_notification():
-    """dispute.get('user_id') falsy -> the notification block is skipped
-    entirely (covers the `if rider_id:` False path)."""
+async def test_resolve_dispute_no_claimant_requires_manual_review():
+    """Missing ownership must not silently resolve a historical claim."""
     dispute = {**DISPUTE_ROW, "user_id": None}
     req = ResolveDisputeRequest(resolution="rejected")
     push = AsyncMock()
-    result = await _resolve(
-        req,
-        dispute=dispute,
-        ride=None,
-        extra_patches={"backend.routes.disputes.send_push_notification": push},
-    )
-    assert result["success"] is True
+    with pytest.raises(Exception) as error:
+        await _resolve(
+            req,
+            dispute=dispute,
+            ride=None,
+            extra_patches={"backend.routes.disputes.send_push_notification": push},
+        )
+    assert error.value.status_code == 409
     push.assert_not_awaited()

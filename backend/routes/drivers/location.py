@@ -43,9 +43,13 @@ from ._shared import (  # noqa: F401
 )
 
 try:
+    from ...utils import metrics
+    from ...utils.error_handling import DatabaseError
     from ...utils.gps_filtering import point_epoch_seconds
     from ...utils.location_write_gate import should_write_marker
 except ImportError:  # pragma: no cover - top-level execution fallback
+    from utils import metrics  # type: ignore
+    from utils.error_handling import DatabaseError  # type: ignore
     from utils.gps_filtering import point_epoch_seconds
     from utils.location_write_gate import should_write_marker  # type: ignore
 
@@ -66,14 +70,21 @@ async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id
     if await should_write_marker(driver_id, path=path, force=bool(extra)):
         # An untimed queued point is history, never a current position.
         captured_at = update_data.get("location_captured_at") or datetime.fromtimestamp(0, timezone.utc)
-        return await db_supabase.update_driver_location(
-            driver_id,
-            update_data["lat"],
-            update_data["lng"],
-            heading=update_data.get("heading"),
-            captured_at=captured_at,
-            extra_fields=extra,
-        )
+        try:
+            return await db_supabase.update_driver_location(
+                driver_id,
+                update_data["lat"],
+                update_data["lng"],
+                heading=update_data.get("heading"),
+                captured_at=captured_at,
+                extra_fields=extra,
+            )
+        except DatabaseError:
+            # Count every REST marker-write DB failure (same counter as the WS
+            # path) and re-raise: each caller keeps its existing response
+            # contract and its own ERROR log / Sentry capture.
+            metrics.inc("spinr_live_marker_write_failures_total", {"path": path})
+            raise
     return None
 
 
@@ -159,8 +170,18 @@ async def _apply_v2_live_marker_update(
             if accepted is False:
                 return
         except Exception:
+            # Stable, path-neutral message (this task serves /location-live AND
+            # /location-batch; the old "location-batch v2:" prefix mislabelled
+            # live pings). ERROR + exc_info is captured to Sentry by the stdlib
+            # LoggingIntegration (see utils/sentry_runtime.py) -- one event, no
+            # duplicate capture. Response contract unchanged: the durable ack was
+            # already returned before this background task ran.
             logger.error(
-                "location-batch v2: marker write failed for driver_id=%s ride_id=%s", driver_id, ride_id, exc_info=True
+                "live marker write failed driver_id=%s ride_id=%s path=rest_v2_trip",
+                driver_id,
+                ride_id,
+                exc_info=True,
+                extra={"domain": "dispatch"},
             )
         # Live delivery must not depend on whether the DB write was coalesced.
         if -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:

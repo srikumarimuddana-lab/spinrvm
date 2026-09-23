@@ -536,6 +536,16 @@ class TestCompleteRideGuards:
 
 
 class TestCompleteRideNonFatalBranches:
+    async def test_legacy_direct_call_with_unmanaged_stops_uses_body_sentinel_safely(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        _install_success_mocks(
+            monkeypatch,
+            ride=_ride(stops=[{"address": "Legacy", "lat": 50.1, "lng": -104.1}]),
+        )
+        response = await _complete()
+        assert response["status"] == "completed"
+
     async def test_breadcrumb_flush_failure_does_not_block_completion(self, monkeypatch: pytest.MonkeyPatch):
         _install_success_mocks(monkeypatch)
         monkeypatch.setattr(ride_complete, "flush_driver_breadcrumbs", AsyncMock(side_effect=RuntimeError("ws gone")))

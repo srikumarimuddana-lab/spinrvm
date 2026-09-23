@@ -391,12 +391,21 @@ async def complete_ride(
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
-    # New driver clients opt in to persisted stop progression. Keep old mobile
-    # clients compatible during rolling releases; the dashboard independently
-    # blocks completion while stops remain, and this API gate protects opted-in
-    # clients from stale or reordered completion.
-    if completion_request and completion_request.stop_progress_enabled:
-        stops = ride.get("stops") or []
+    # Direct unit callers receive FastAPI's ``Body`` sentinel rather than
+    # ``None`` when omitting this parameter; production requests have already
+    # been parsed into RideCompletionRequest by FastAPI.
+    parsed_completion_request = (
+        completion_request if isinstance(completion_request, RideCompletionRequest) else RideCompletionRequest()
+    )
+    # New driver clients opt in to persisted stop progression. Existing stop
+    # metadata also keeps the gate active if an opted-in trip is later completed
+    # by an older client during a rolling mobile release.
+    stops = ride.get("stops") or []
+    progress_already_started = any(
+        isinstance(stop, dict) and ("completed" in stop or "id" in stop)
+        for stop in stops
+    )
+    if parsed_completion_request.stop_progress_enabled or progress_already_started:
         if any(not isinstance(stop, dict) or stop.get("completed") is not True for stop in stops):
             raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
 
@@ -404,12 +413,6 @@ async def complete_ride(
     # before legacy aggregation reads the breadcrumb trail. This ensures a
     # 40-minute trip cannot lose its final location merely because finalization
     # starts before the normal outbox flush returns.
-    # Direct unit callers receive FastAPI's ``Body`` sentinel rather than
-    # ``None`` when omitting this parameter; production requests have already
-    # been parsed into RideCompletionRequest by FastAPI.
-    parsed_completion_request = (
-        completion_request if isinstance(completion_request, RideCompletionRequest) else RideCompletionRequest()
-    )
     completion_location = await prepare_completion_location(
         ride,
         driver["id"],

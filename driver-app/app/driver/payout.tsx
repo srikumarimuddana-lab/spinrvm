@@ -101,10 +101,14 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean }>('/drivers/balance');
-            setStripeAccountStatus(
-                res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
-            );
+            const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean; payouts_enabled?: boolean }>('/drivers/balance');
+            if (res.data.stripe_account_onboarded && res.data.payouts_enabled === false) {
+                setStripeAccountStatus('restricted');
+            } else {
+                setStripeAccountStatus(
+                    res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
+                );
+            }
             setStripeIdOnFile(!!res.data.stripe_id_number_provided);
         } catch {
             setStripeAccountStatus('not_onboarded');
@@ -622,12 +626,23 @@ function PayoutScreen() {
                 )}
 
                 {/* Payouts-ready confirmation */}
-                {allReady && (
+                {stripeAccountStatus === 'restricted' && (
+                    <View style={styles.section}>
+                        <View style={styles.readyCard}>
+                            <Ionicons name="alert-circle" size={22} color={colors.warning ?? colors.primary} />
+                            <Text style={styles.readyText}>
+                                Stripe needs more information before payouts can be sent. Weekly payouts stay paused until this is fixed. Earnings are paid every Sunday once payouts are enabled, with a $10 minimum.
+                            </Text>
+                        </View>
+                    </View>
+                )}
+
+                {allReady && stripeAccountStatus !== 'restricted' && (
                     <View style={styles.section}>
                         <View style={styles.readyCard}>
                             <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                             <Text style={styles.readyText}>
-                                You&apos;re all set — your earnings are paid out automatically every Sunday.
+                                You&apos;re all set — earnings are paid every Sunday, with a $10 minimum.
                             </Text>
                         </View>
                     </View>

@@ -139,6 +139,7 @@ marketing can never drift from the product.
 - Location updates rate-limited
 - OTP screen for identity verification
 - Document expiry warnings surface before going online
+- Edge cases, launch gaps, and out-of-scope items: `docs/prds/driver-app-edge-cases.md`
 
 ### Admin Dashboard (Next.js)
 - HttpOnly cookie auth with CSRF token on all state-changing requests

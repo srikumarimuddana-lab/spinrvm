@@ -11,18 +11,13 @@ import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Default driver-facing cancellation reasons (last = free-text only).
 //
-// 'Service animal — could not accommodate' is matched (case-insensitive
-// substring) by backend/routes/drivers/ride_cancel.py to flag the refusal
-// for trust & safety — service animal accommodation is mandatory (CLAUDE.md
-// Accessibility). Keep the wording containing "service animal" if you edit
-// this string, or update the backend matcher in the same change.
+// Service-animal accommodation is mandatory. That reason is not offered
+// here; the backend rejects it if a client still sends it.
 export const DRIVER_CANCEL_REASONS = [
-  'Rider no-show',
   "Can't reach rider",
   'Unsafe or wrong pickup',
   'Vehicle issue',
   'Pickup too far',
-  'Service animal — could not accommodate',
   'Other',
 ];
 

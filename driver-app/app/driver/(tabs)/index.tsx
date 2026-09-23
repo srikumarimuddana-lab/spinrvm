@@ -112,6 +112,7 @@ function DriverDashboard() {
     startRide,
     completeRide,
     cancelRide,
+    reportNoShow,
     resetRideState,
     clearError,
     earnings,
@@ -622,6 +623,7 @@ function DriverDashboard() {
     setCountdownState(countdownSeconds);
     const interval = setInterval(() => {
       setCountdownState((prev) => {
+        if (useDriverStore.getState().acceptNetworkHold) return prev;
         if (prev <= 1) {
           clearInterval(interval);
           setCountdown(0);
@@ -1833,6 +1835,11 @@ function DriverDashboard() {
                 );
                 return res.data;
               }}
+              onFalseAlarm={async (incidentId) => {
+                await api.post(`/rides/${activeRide.ride.id}/emergency/false-alarm`, {
+                  incident_id: incidentId,
+                });
+              }}
               t={t}
             />
           </View>
@@ -1970,6 +1977,7 @@ function DriverDashboard() {
             await requestRideCompletion();
           }}
           onCancelRide={(reason) => cancelRide(activeRide!.ride.id, reason)}
+          onReportNoShow={() => reportNoShow(activeRide!.ride.id)}
           routeEtaMinutes={routeEtaMinutes}
           routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}

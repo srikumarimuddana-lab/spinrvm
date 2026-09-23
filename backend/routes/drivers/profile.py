@@ -796,12 +796,20 @@ async def register_driver(
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
         "documents",
+        "license_class",
+        "license_issue_date",
+        "date_of_birth",
     }
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
 
     if existing:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
         payload["submitted_at"] = datetime.now(timezone.utc).isoformat()
+        # A rejected driver who resubmits the application goes back to review.
+        # Leaving status=rejected made the resubmit a silent no-op.
+        if existing.get("status") == "rejected":
+            payload["status"] = "pending"
+            payload["is_verified"] = False
         await db_supabase.update_one("drivers", {"id": existing["id"]}, await _shared._encrypt_driver_pii(payload))
         driver = await db_supabase.get_driver_by_id(existing["id"])
         return serialize_doc(await _shared._decrypt_driver_pii(driver))

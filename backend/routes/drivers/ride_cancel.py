@@ -96,6 +96,31 @@ async def cancel_ride(
             ),
         )
 
+    reason_text = (reason or "").strip()
+    if reason_text and "service animal" in reason_text.lower():
+        try:
+            await db_supabase.insert_one(
+                "audit_logs",
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": "ride_cancel_service_animal_refusal",
+                    "entity_type": "ride",
+                    "entity_id": ride_id,
+                    "actor_id": driver["id"],
+                    "details": {"driver_id": driver["id"]},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as _sa_exc:
+            logger.error(
+                f"Could not log service-animal cancel refusal ride_id={ride_id}: {_sa_exc}",
+                exc_info=True,
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="Service animal accommodation is required. You cannot cancel for that reason.",
+        )
+
     now = datetime.now(timezone.utc)
     base_update = {
         "status": RideStatus.CANCELLED,

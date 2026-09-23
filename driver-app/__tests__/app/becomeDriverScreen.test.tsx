@@ -263,7 +263,7 @@ describe('BecomeDriverScreen', () => {
     act(() => { inputs.find((i) => i.props.placeholder === '2019')!.props.onChangeText('2010'); });
     const nextBtn = findButtonByText(r, 'Next: Documents');
     act(() => { nextBtn.props.onPress(); });
-    expect(Alert.alert).toHaveBeenCalledWith('Invalid Year', 'Vehicle must be 9 years old or newer.');
+    expect(Alert.alert).toHaveBeenCalledWith('Invalid Year', 'Vehicles must be under 10 years old.');
   });
 
   it('opens the upload source picker and uploads a document successfully', async () => {

@@ -145,15 +145,25 @@ export default function OtpScreen() {
         // consent-version tracking. Dark-shipped: while
         // app_settings.legacy_consent_notice_enabled is off, /consent/status
         // always reports needs_notice: false, so this is a no-op today.
-        api.get('/consent/status').then(
-          (res) => {
-            if ((res.data as any)?.needs_notice) {
-              router.replace('/legacy-consent-notice' as any);
-            } else {
-              router.replace('/driver');
+        api.get('/drivers/me').then(
+          (me) => {
+            const driverStatus = (me.data as { status?: string } | undefined)?.status;
+            if (driverStatus === 'banned' || driverStatus === 'suspended') {
+              router.replace({ pathname: '/account-deactivated', params: { status: driverStatus } } as any);
+              return;
             }
+            api.get('/consent/status').then(
+              (res) => {
+                if ((res.data as any)?.needs_notice) {
+                  router.replace('/legacy-consent-notice' as any);
+                } else {
+                  router.replace('/driver');
+                }
+              },
+              () => router.replace('/driver'),
+            );
           },
-          () => router.replace('/driver'), // fail open — never block login on this check
+          () => router.replace({ pathname: '/account-deactivated', params: { status: 'unknown' } } as any),
         );
       } else {
         router.replace('/profile-setup');

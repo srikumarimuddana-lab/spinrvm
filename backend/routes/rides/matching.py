@@ -1435,6 +1435,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     "rider_rating": (rider_user or {}).get("rating"),
                     "rider_profile_image": (rider_user or {}).get("profile_image"),
                     "requires_wav": bool(ride.get("requires_wav")),
+                    "service_animal": bool(ride.get("service_animal")),
+                    "stops": ride.get("stops") or [],
                     # Rider-set preference (migration 62). Surfaced to the driver in the
                     # offer panel so they know a quiet ride was requested before accepting.
                     "quiet_mode": bool(ride.get("quiet_mode")),

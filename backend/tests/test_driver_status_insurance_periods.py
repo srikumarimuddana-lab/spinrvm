@@ -47,7 +47,14 @@ def _patches(*, current_online: bool, requested_online: bool, busy_rides: list):
     async def _get_rows(table, filters=None, **kw):
         if table == "rides":
             return busy_rides
-        if table in ("driver_documents", "ride_offers", "service_areas", "settings", "app_settings"):
+        if table in (
+            "driver_documents",
+            "ride_offers",
+            "service_areas",
+            "settings",
+            "app_settings",
+            "legal_documents",
+        ):
             return []
         raise AssertionError(f"unexpected table {table}")
 

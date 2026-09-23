@@ -62,7 +62,13 @@ async def create_dispute(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("rider_id") != current_user["id"]:
+    is_rider = ride.get("rider_id") == current_user["id"]
+    is_assigned_driver = False
+    if not is_rider:
+        driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        driver_row = driver_rows[0] if driver_rows else None
+        is_assigned_driver = bool(driver_row and ride.get("driver_id") == driver_row.get("id"))
+    if not is_rider and not is_assigned_driver:
         raise HTTPException(status_code=403, detail="Not authorized for this ride")
 
     if ride.get("status") not in ("completed", "cancelled"):
@@ -85,7 +91,11 @@ async def create_dispute(
         "user_id": current_user["id"],
         "reason": req.reason,
         "description": req.description,
-        "requested_amount": req.requested_amount or ride.get("total_fare", 0),
+        "requested_amount": (
+            ride.get("driver_earnings")
+            if is_assigned_driver and req.requested_amount is None
+            else (req.requested_amount or ride.get("total_fare", 0))
+        ),
         "original_fare": ride.get("total_fare", 0),
         "status": "open",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -94,15 +104,16 @@ async def create_dispute(
 
     await db_supabase.insert_one("disputes", dispute)
 
-    rider_id = ride.get("rider_id") or current_user["id"]
-    if rider_id:
+    notify_user_id = current_user["id"] if is_assigned_driver else (ride.get("rider_id") or current_user["id"])
+    notify_app = "driver" if is_assigned_driver else "rider"
+    if notify_user_id:
         try:
             await send_push_notification(
-                rider_id,
+                notify_user_id,
                 "Dispute received",
                 "We've received your dispute and will review it within 1-2 business days.",
                 data={"type": "dispute_created", "dispute_id": str(dispute["id"])},
-                target_app="rider",
+                target_app=notify_app,
             )
         except Exception as notif_err:
             logger.debug(f"Dispute created notification failed: {notif_err}")

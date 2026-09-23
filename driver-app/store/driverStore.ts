@@ -27,6 +27,8 @@ function completionConfirmationFromError(error: unknown): { distanceBand?: strin
 }
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
+const PENDING_COMPLETE_KEY = '@spinr:driver_pending_completion';
+let pendingCompletionFlush: Promise<void> | null = null;
 // Upper bound on the pre-completion outbox drain. Long enough for a full
 // 500-point batch on a slow cell link, short enough that a dead network
 // never traps the driver on the completion screen.
@@ -433,6 +435,7 @@ interface DriverState {
 
     // Loading states
     isLoading: boolean;
+    acceptNetworkHold: boolean;
     isCancellingRide: boolean;
     error: string | null;
 
@@ -446,7 +449,9 @@ interface DriverState {
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
     completeRide: (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => Promise<CompleteRideResult>;
+    flushPendingCompletion: () => Promise<void>;
     cancelRide: (rideId: string, reason?: string) => Promise<void>;
+    reportNoShow: (rideId: string) => Promise<void>;
 
     // Fetch
     fetchActiveRide: () => Promise<void>;
@@ -521,6 +526,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     chatMessages: [],
     riderTyping: false,
     isLoading: false,
+    acceptNetworkHold: false,
     isCancellingRide: false,
     error: null,
 
@@ -562,7 +568,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     setCountdown: (seconds) => {
         set({ countdownSeconds: seconds });
-        if (seconds <= 0 && get().rideState === 'ride_offered') {
+        if (seconds <= 0 && get().rideState === 'ride_offered' && !get().acceptNetworkHold) {
             // Auto-decline on timeout + show a clear toast so the driver
             // knows the offer expired (G10). Previously the offer just
             // silently disappeared with no feedback.
@@ -575,10 +581,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     },
 
     acceptRide: async (rideId: string) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, acceptNetworkHold: true, error: null });
         try {
             await api.post(`/drivers/rides/${rideId}/accept`);
-            set({ rideState: 'navigating_to_pickup', incomingRide: null, countdownSeconds: 0 });
+            set({ rideState: 'navigating_to_pickup', incomingRide: null, countdownSeconds: 0, acceptNetworkHold: false });
             // Fetch the full active ride data
             await get().fetchActiveRide();
             _persistDriverState('navigating_to_pickup', get().activeRide);
@@ -604,6 +610,30 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const alreadyTakenStatus =
                 status === 404 || status === 409 || (status === 400 && alreadyTakenDetail);
 
+            if (status === undefined) {
+                set({ error: 'No connection — this offer may have expired.' });
+                try {
+                    await get().fetchActiveRide();
+                } catch {
+                    // Still offline. Leave the message; the panel stays only if
+                    // the local offer is still the one we tried to accept.
+                }
+                const st = get();
+                const stillThisOffer =
+                    st.rideState === 'ride_offered' && st.incomingRide?.ride_id === rideId;
+                if (!stillThisOffer) {
+                    set({
+                        rideState: st.rideState === 'ride_offered' ? 'idle' : st.rideState,
+                        incomingRide: null,
+                        countdownSeconds: 0,
+                        acceptNetworkHold: false,
+                        error: 'No connection — this offer may have expired.',
+                    });
+                } else {
+                    set({ acceptNetworkHold: true, error: 'No connection — this offer may have expired.' });
+                }
+                return;
+            }
             if (!alreadyTakenStatus) {
                 recordNonFatal(err, { store: 'driverStore', action: 'acceptRide' });
             }
@@ -631,10 +661,11 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     rideState: 'idle',
                     incomingRide: null,
                     countdownSeconds: 0,
+                    acceptNetworkHold: false,
                     error: 'This ride was already taken by another driver. You\'ll see the next offer when it comes in.',
                 });
             } else {
-                set({ error: detail || 'Failed to accept ride' });
+                set({ acceptNetworkHold: false, error: detail || 'Failed to accept ride' });
             }
         } finally {
             set({ isLoading: false });
@@ -788,8 +819,30 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 earningsByPeriod: {},
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+            AsyncStorage.removeItem(PENDING_COMPLETE_KEY).catch(() => {});
             return { confirmationRequired: false };
         } catch (err: unknown) {
+            const netStatus = isAxiosError(err) ? err.response?.status : undefined;
+            if (netStatus === undefined && get().rideState === 'trip_in_progress') {
+                AsyncStorage.setItem(
+                    PENDING_COMPLETE_KEY,
+                    JSON.stringify({ rideId, offRouteConfirmation: offRouteConfirmation ?? null }),
+                ).catch(() => {});
+                set({
+                    rideState: 'trip_completed',
+                    activeRide: null,
+                    incomingRide: null,
+                    acceptNetworkHold: false,
+                    error: 'No connection. This trip will finish when you are back online.',
+                    completedRide: {
+                        id: rideId,
+                        pickup_address: get().activeRide?.ride?.pickup_address,
+                        dropoff_address: get().activeRide?.ride?.dropoff_address,
+                        total_earned: get().activeRide?.ride?.driver_earnings,
+                    } as any,
+                });
+                return { confirmationRequired: false };
+            }
             const confirmation = completionConfirmationFromError(err);
             if (confirmation) {
                 return { confirmationRequired: true, ...confirmation };
@@ -808,6 +861,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     // Ride is gone server-side — completion already happened.
                     set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [], earningsByPeriod: {} });
                     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                    AsyncStorage.removeItem(PENDING_COMPLETE_KEY).catch(() => {});
                     return { confirmationRequired: false };
                 }
             }
@@ -817,6 +871,29 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } finally {
             set({ isLoading: false });
         }
+    },
+
+    flushPendingCompletion: async () => {
+        if (pendingCompletionFlush) return pendingCompletionFlush;
+        pendingCompletionFlush = (async () => {
+            const raw = await AsyncStorage.getItem(PENDING_COMPLETE_KEY);
+            if (!raw) return;
+            let parsed: { rideId?: string; offRouteConfirmation?: OffRouteConfirmation | null };
+            try {
+                parsed = JSON.parse(raw);
+            } catch {
+                await AsyncStorage.removeItem(PENDING_COMPLETE_KEY);
+                return;
+            }
+            if (!parsed.rideId) {
+                await AsyncStorage.removeItem(PENDING_COMPLETE_KEY);
+                return;
+            }
+            await get().completeRide(parsed.rideId, parsed.offRouteConfirmation ?? undefined);
+        })().finally(() => {
+            pendingCompletionFlush = null;
+        });
+        return pendingCompletionFlush;
     },
 
     cancelRide: async (rideId: string, reason?: string) => {
@@ -843,6 +920,27 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
             set({ error: getApiErrorMessage(err, 'Failed to cancel ride') });
+        } finally {
+            set({ isLoading: false, isCancellingRide: false });
+        }
+    },
+
+    reportNoShow: async (rideId: string) => {
+        set({ isLoading: true, isCancellingRide: true, error: null });
+        try {
+            await api.post(`/drivers/rides/${rideId}/noshow`);
+            set({
+                rideState: 'idle',
+                activeRide: null,
+                incomingRide: null,
+                chatMessages: [],
+                earningsByPeriod: {},
+            });
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+        } catch (err: unknown) {
+            recordNonFatal(err, { store: 'driverStore', action: 'reportNoShow' });
+            set({ error: getApiErrorMessage(err, 'Could not report a no-show') });
+            throw err;
         } finally {
             set({ isLoading: false, isCancellingRide: false });
         }
@@ -933,6 +1031,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             payment_method: ride.payment_method ?? existing?.payment_method,
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
+                            service_animal: (ride as any).service_animal ?? existing?.service_animal,
+                            stops: (ride as any).stops ?? existing?.stops,
                             quiet_mode: ride.quiet_mode ?? existing?.quiet_mode,
                             is_scheduled: (ride as any).is_scheduled ?? existing?.is_scheduled,
                             scheduled_time: (ride as any).scheduled_time ?? existing?.scheduled_time,

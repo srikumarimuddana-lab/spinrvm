@@ -242,50 +242,28 @@ async def update_driver_status(
                 detail="Cannot go offline during an active trip. Please complete the current ride first.",
             )
 
-        # Flag-gated per CLAUDE.md gate #3 (see schemas.py's
-        # go_offline_live_offer_guard_enabled for the full rationale). The
-        # `active_ride` check above only ever finds a `rides` row — batch
-        # dispatch holds its claim in `ride_offers` with no `rides.driver_id`
-        # link pre-acceptance, so a driver mid-batch-offer walks straight
-        # past it despite this block's own comment above saying "To go
-        # offline during an offer, decline it first." Nothing enforced that
-        # until now, and only when this flag is on.
+        # Batch dispatch holds its claim in `ride_offers` with no
+        # `rides.driver_id` link pre-acceptance, so the active-ride check
+        # above misses it. Going offline during a live offer is always
+        # rejected — the driver declines the offer first. The
+        # `go_offline_live_offer_guard_enabled` setting no longer gates
+        # this (docs/prds/driver-app-edge-cases.md).
         #
-        # docs/change-log/2026-09-20-insurance-period-derivation.md fixed
-        # what this same gap did to the *insurance audit record* by routing
-        # the classification through `derive_insurance_period` — a change
-        # invisible to the driver. This is the other half: it changes driver
-        # behaviour (a previously-allowed toggle now 409s), which is why it
-        # is a separate flag rather than folded into that one.
-        try:
-            from ...settings_loader import get_app_settings as _get_offline_guard_settings  # type: ignore
-        except ImportError:
-            from settings_loader import get_app_settings as _get_offline_guard_settings  # type: ignore
-        # Only on a genuine online -> offline FLIP. `status_flipped` proper
-        # isn't computed until later in this function, but for this branch
-        # (target is_online=False) it reduces to bool(driver.get("is_online"))
-        # using data already fetched above — no need to move that computation
-        # earlier just for this check. Guarding on it matters: without it, a
-        # driver already offline in the DB (app relaunch, admin force-offline,
-        # a dropped connection) who re-taps "Go offline" as a no-op would 409
-        # on a stale/orphaned `ride_offers` row they have no way to see or
-        # clear from the UI — a driver-stuck scenario, not a decline-the-offer
-        # prompt. Found in review; see the Change Impact Log's "corrected
-        # during review" note.
+        # Only on a genuine online -> offline FLIP. A driver already
+        # offline who re-taps "Go offline" must not 409 on a stale offer
+        # they cannot see.
         if bool(driver.get("is_online")):
-            _offline_guard_settings = await _get_offline_guard_settings()
-            if bool(_offline_guard_settings.get("go_offline_live_offer_guard_enabled", False)):
-                _pending_offline_offers = await db_supabase.get_rows(
-                    "ride_offers",
-                    {"driver_id": driver_id, "status": "pending"},
-                    limit=5,
-                    columns="id,offered_at,ride_id",
+            _pending_offline_offers = await db_supabase.get_rows(
+                "ride_offers",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=5,
+                columns="id,offered_at,ride_id",
+            )
+            if _fresh_pending_offers(_pending_offline_offers):
+                raise HTTPException(
+                    status_code=409,
+                    detail="You have a pending ride offer. Please accept or decline it before going offline.",
                 )
-                if _fresh_pending_offers(_pending_offline_offers):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=("You have a pending ride offer. Please accept or decline it before going offline."),
-                    )
 
     if is_online:
         now = datetime.now(timezone.utc)
@@ -447,27 +425,34 @@ async def update_driver_status(
             from settings_loader import get_app_settings  # type: ignore
         app_settings = await get_app_settings()
 
-        # SK regulatory eligibility re-check (audit finding #10,
-        # docs/audit/2026-08-18-full-fleet-whole-app-audit.md): CLAUDE.md's
-        # driver-eligibility rules (Class 5 licence, vehicle < 10 years old,
-        # minimum 3 years licensed driving experience) were previously
-        # validated once at onboarding only, never re-checked here alongside
-        # the document-expiry gate above. A driver's vehicle can age past 10
-        # years, or a licence-class correction can land, while the driver
-        # keeps going online unchecked indefinitely.
-        #
-        # Flag-gated per CLAUDE.md gate #3 ("feature-flag anything
-        # user-visible and non-trivial ... new validation rules that could
-        # reject previously-valid input"): these two fields (license_class,
-        # vehicle_year) were only ever validated once at onboarding/import,
-        # so an unknown number of currently-active drivers could have stale
-        # or legacy data that would newly fail here. Defaults OFF (dark
-        # ship) via the existing app_settings-in-DB pattern so it can be
-        # verified in staging/canary against real driver data before an
-        # operator flips it on — no redeploy needed either way. See
-        # docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md
-        # for the rollout recommendation.
+        # SK eligibility and background-check consent run only when
+        # enforce_driver_eligibility_recheck is on. Missing fields are
+        # rejected in that mode so a published rollout cannot skip them.
+        # The flag stays the rollout switch so a deploy does not block
+        # every driver whose profile was never backfilled.
         if bool(app_settings.get("enforce_driver_eligibility_recheck", False)):
+            dob_raw = driver.get("date_of_birth")
+            dob_date = None
+            if isinstance(dob_raw, datetime):
+                dob_date = dob_raw.date()
+            elif isinstance(dob_raw, str) and dob_raw.strip():
+                try:
+                    dob_date = datetime.fromisoformat(dob_raw.replace("Z", "+00:00")).date()
+                except ValueError:
+                    dob_date = None
+            elif dob_raw is not None and hasattr(dob_raw, "year") and hasattr(dob_raw, "month"):
+                dob_date = dob_raw
+            if dob_date is not None:
+                age_years = now.year - dob_date.year - ((now.month, now.day) < (dob_date.month, dob_date.day))
+                if age_years < 18:
+                    raise SpinrException(
+                        message="You must be 18 or older to drive for Spinr.",
+                        error_code=ErrorCode.DRIVER_UNDERAGE,
+                        status_code=400,
+                        message_key=ErrorKeys.DRIVER_UNDERAGE,
+                        action_hint="Contact support",
+                    )
+
             # License class: Class 5 (standard) is required; Class 1-4 needs
             # separate approval. There is no dedicated "separately approved
             # for non-standard class" flag in the schema (checked every
@@ -545,6 +530,70 @@ async def update_driver_status(
                             message_key=ErrorKeys.DRIVER_INSUFFICIENT_EXPERIENCE,
                             action_hint="Contact support",
                         )
+
+            missing_eligibility = []
+            if not (driver.get("license_class") or "").strip():
+                missing_eligibility.append("licence class")
+            if not driver.get("vehicle_year"):
+                missing_eligibility.append("vehicle year")
+            if not driver.get("license_issue_date"):
+                missing_eligibility.append("licence issue date")
+            if not driver.get("date_of_birth"):
+                missing_eligibility.append("date of birth")
+            if missing_eligibility:
+                raise SpinrException(
+                    message=("Complete your " + ", ".join(missing_eligibility) + " before going online."),
+                    error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                    status_code=400,
+                    message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+                    action_hint="Update your profile",
+                )
+
+        if bool(app_settings.get("enforce_driver_eligibility_recheck", False)):
+            for req_row in mandatory_reqs:
+                req_name = req_row.get("label") or req_row.get("key") or "Document"
+                docs = [d for d in approved_docs if _matches_req(d, req_row)]
+                if docs:
+                    continue
+                nm = (req_name or "").lower()
+                legacy_value = None
+                if "license" in nm or "driving" in nm or "permit" in nm:
+                    legacy_value = driver.get("license_expiry_date")
+                elif "insurance" in nm:
+                    legacy_value = driver.get("insurance_expiry_date")
+                elif "inspection" in nm:
+                    legacy_value = driver.get("vehicle_inspection_expiry_date")
+                elif "background" in nm:
+                    legacy_value = driver.get("background_check_expiry_date")
+                if not legacy_value:
+                    raise SpinrException(
+                        message=f"{req_name} is required before going online.",
+                        error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                        status_code=400,
+                        message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+                        action_hint="Upload documents in Profile",
+                    )
+
+            crc_rows = await db_supabase.get_rows(
+                "legal_documents",
+                {"audience": "driver", "doc_type": "background-check-consent"},
+                limit=1,
+            )
+            crc_doc = crc_rows[0] if crc_rows else None
+            crc_version = crc_doc.get("version") if crc_doc else None
+            if crc_doc and str(crc_doc.get("content") or "").strip() and crc_version is not None:
+                try:
+                    from ...services import driver_crc_consent as consent_service  # type: ignore
+                except ImportError:
+                    from services import driver_crc_consent as consent_service  # type: ignore
+                if not await consent_service.is_consent_current(driver_id, crc_version):
+                    raise SpinrException(
+                        message="Agree to the background-check consent before going online.",
+                        error_code=ErrorCode.DRIVER_CRC_CONSENT_REQUIRED,
+                        status_code=400,
+                        message_key=ErrorKeys.DRIVER_CRC_CONSENT_REQUIRED,
+                        action_hint="Open background-check consent",
+                    )
 
         # is_verified check removed — status field is the single source of truth now.
         # Only status='active' drivers reach this point (blocked above).
@@ -870,7 +919,7 @@ async def update_driver_status(
         except ImportError:
             from settings_loader import get_app_settings as _get_period_settings  # type: ignore
         _period_settings = await _get_period_settings()
-        _live_offer_period_enabled = bool(_period_settings.get("insurance_period_live_offer_enabled", False))
+        _live_offer_period_enabled = bool(_period_settings.get("insurance_period_live_offer_enabled", True))
 
         if _live_offer_period_enabled and not is_online and _live_offer_ride_id is None:
             # The Go Offline path skips the busy-ride/offer lookups above

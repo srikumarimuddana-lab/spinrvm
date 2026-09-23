@@ -1109,6 +1109,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
             logger.info("User exists, creating token")
             session_id = str(uuid.uuid4())
+            previous_session_id = existing_user.get("current_session_id")
             try:
                 _session_update: dict = {"current_session_id": session_id}
                 if existing_user.get("is_guest"):
@@ -1123,6 +1124,27 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                     _session_update,
                 )
                 existing_user["current_session_id"] = session_id
+                if previous_session_id and str(previous_session_id) != session_id:
+                    try:
+                        await revoke_session(str(previous_session_id))
+                    except Exception:
+                        logger.error("verify_otp: failed to revoke previous session", exc_info=True)
+                    try:
+                        try:
+                            from ..socket_manager import manager as ws_manager
+                        except ImportError:
+                            from socket_manager import manager as ws_manager
+                        await ws_manager.kick_user(
+                            existing_user["id"],
+                            client_types=["driver", "rider"],
+                            reason="session_superseded",
+                        )
+                    except Exception:
+                        logger.error("verify_otp: failed to kick previous device", exc_info=True)
+                    try:
+                        await _offline_driver_for_logout_all(existing_user["id"])
+                    except Exception:
+                        logger.error("verify_otp: failed to offline previous driver session", exc_info=True)
                 if existing_user.get("is_guest"):
                     existing_user["is_guest"] = False
             except Exception as e:
@@ -2132,6 +2154,28 @@ async def _offline_driver_for_logout_all(user_id: str) -> None:
         if obligated:
             return
         now_iso = datetime.now(timezone.utc).isoformat()
+        pending_offers = await db.get_rows(
+            "ride_offers",
+            {"driver_id": driver_id, "status": "pending"},
+            limit=5,
+        )
+        for offer in pending_offers or []:
+            await db.update_one(
+                "ride_offers",
+                {"id": offer.get("id"), "status": "pending"},
+                {"status": "declined", "responded_at": now_iso},
+            )
+            offer_ride_id = offer.get("ride_id")
+            if offer_ride_id:
+                await db.update_one(
+                    "rides",
+                    {"id": offer_ride_id, "driver_id": driver_id, "status": RideStatus.DRIVER_ASSIGNED},
+                    {
+                        "status": RideStatus.SEARCHING,
+                        "driver_id": None,
+                        "updated_at": now_iso,
+                    },
+                )
         await db.update_one(
             "drivers",
             {"id": driver_id},

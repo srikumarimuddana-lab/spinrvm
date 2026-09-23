@@ -48,6 +48,8 @@ interface IncomingRide {
     rider_rating?: number;
     rider_profile_image?: string;
     requires_wav?: boolean;
+    service_animal?: boolean;
+    stops?: { address?: string }[];
     quiet_mode?: boolean;
     // C35: true when this ride was originally booked in advance. Optional/
     // falsy-default so an offer payload from a backend that hasn't shipped
@@ -155,9 +157,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
     if (!incomingRide) return null;
 
-    const baseFare = typeof incomingRide.fare === 'string'
-        ? parseFloat(incomingRide.fare) || 0
-        : (incomingRide.fare || 0);
+    const fareRaw = incomingRide.fare;
+    const parsedFare = typeof fareRaw === 'string' ? parseFloat(fareRaw) : fareRaw;
+    const fareMissing = fareRaw == null || fareRaw === '' || typeof parsedFare !== 'number' || !Number.isFinite(parsedFare);
+    const baseFare = fareMissing ? 0 : parsedFare;
     const totalBonus = incomingRide.total_bonus ?? 0;
     const totalEarnings = baseFare + totalBonus;
     const hasSurge = (incomingRide.surge_multiplier ?? 0) > 1.0;
@@ -183,17 +186,11 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     // (the fast, common path on a ~15s countdown) is completely unchanged —
     // this is additive only, reachable but not in the way.
     const handleDeclineLongPress = () => {
+        if (!incomingRide?.service_animal) return;
         showAlert(
-            'Report a reason?',
-            "If you're declining because you can't accommodate a service animal, let us know. Service animal accommodation is mandatory and refusals are reviewed.",
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Service animal — report & decline',
-                    style: 'destructive',
-                    onPress: () => handleDecline(DECLINE_REASON_SERVICE_ANIMAL),
-                },
-            ],
+            'Service animal',
+            'Service animals ride with the passenger. You cannot decline for that reason. Use the safety report if there is a safety concern.',
+            [{ text: 'OK' }],
         );
     };
 
@@ -312,9 +309,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         <View style={styles.earningsHero}>
                             <View style={styles.earningsLeft}>
                                 <View style={styles.earningsRow}>
-                                    <Text style={styles.earningsDollar}>$</Text>
+                                    <Text style={styles.earningsDollar}>{fareMissing ? '' : '$'}</Text>
                                     <Text style={styles.earningsAmount} allowFontScaling={false}>
-                                        {totalEarnings.toFixed(2)}
+                                        {fareMissing ? '—' : totalEarnings.toFixed(2)}
                                     </Text>
                                 </View>
                                 {hasBonus && (
@@ -358,7 +355,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                         })}</Text>
                     )}
-                    {(incomingRide.is_scheduled || hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
+                    {(incomingRide.is_scheduled || hasSurge || incomingRide.requires_wav || incomingRide.service_animal || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
                             {incomingRide.is_scheduled && (
                                 <View style={[styles.badge, { backgroundColor: SCHEDULED_INDIGO + '20' }]}>
@@ -378,6 +375,12 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                 <View style={[styles.badge, { backgroundColor: '#3B82F620' }]}>
                                     <Ionicons name="accessibility" size={13} color={colors.info} />
                                     <Text style={[styles.badgeText, { color: colors.info }]}>WAV</Text>
+                                </View>
+                            )}
+                            {incomingRide.service_animal && (
+                                <View style={[styles.badge, { backgroundColor: '#3B82F620' }]}>
+                                    <Ionicons name="paw" size={13} color={colors.info} />
+                                    <Text style={[styles.badgeText, { color: colors.info }]}>Service animal</Text>
                                 </View>
                             )}
                             {incomingRide.quiet_mode && (
@@ -437,6 +440,20 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                 </Text>
                             </View>
                         </View>
+                        {(incomingRide.stops ?? []).map((stop, idx) => (
+                            <React.Fragment key={`${stop.address ?? 'stop'}-${idx}`}>
+                                <View style={styles.routeLine} />
+                                <View style={styles.routeStop}>
+                                    <View style={[styles.routeDot, { backgroundColor: colors.warning }]} />
+                                    <View style={styles.routeContent}>
+                                        <Text style={styles.routeLabel}>STOP {idx + 1}</Text>
+                                        <Text style={styles.routeAddress} numberOfLines={2}>
+                                            {stop.address || 'Stop'}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </React.Fragment>
+                        ))}
                         <View style={styles.routeLine} />
                         <View style={styles.routeStop}>
                             <View style={[styles.routeDot, { backgroundColor: colors.error }]} />
@@ -486,9 +503,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         <TouchableOpacity
                             style={styles.acceptBtn}
                             onPress={handleAccept}
-                            disabled={isLoading}
+                            disabled={isLoading || fareMissing}
                             activeOpacity={0.85}
                             accessibilityLabel="Accept ride"
+                            accessibilityState={{ disabled: isLoading || fareMissing }}
                         >
                             <LinearGradient
                                 colors={[ACCENT, ACCENT_DARK]}
@@ -500,7 +518,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                 ) : (
                                     <>
                                         <Text style={styles.acceptBtnText}>Accept</Text>
-                                        <Text style={styles.acceptBtnFare}>${totalEarnings.toFixed(2)}</Text>
+                                        <Text style={styles.acceptBtnFare}>{fareMissing ? 'Fare unavailable' : `$${totalEarnings.toFixed(2)}`}</Text>
                                     </>
                                 )}
                             </LinearGradient>

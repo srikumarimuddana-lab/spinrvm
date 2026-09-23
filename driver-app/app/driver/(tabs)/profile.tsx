@@ -684,6 +684,14 @@ function ProfileScreenInner() {
             <View style={styles.section}>
             <Text style={styles.sectionTitle}>Support</Text>
             <View style={styles.card}>
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/upcoming' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
+                        <Ionicons name="calendar" size={18} color="#6366F1" />
+                    </View>
+                    <Text style={styles.actionText}>Upcoming trips</Text>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/addresses' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
                         <Ionicons name="location" size={18} color="#38BDF8" />

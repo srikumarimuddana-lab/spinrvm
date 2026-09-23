@@ -452,6 +452,33 @@ class TestRegisterDriver:
 
         mock_resolve.assert_not_awaited()
 
+    def test_rejected_resubmit_returns_to_pending(self):
+        from backend.routes import drivers as drv
+
+        driver = _driver(status="rejected", is_verified=True)
+        captured = {}
+
+        async def _capture_update(table, filters, payload):
+            captured["payload"] = payload
+            return driver
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            asyncio.run(
+                drv.register_driver(
+                    body={"first_name": "Existing"},
+                    current_user={"id": USER_ID, "phone": "+15550001111"},
+                )
+            )
+
+        assert captured["payload"]["status"] == "pending"
+        assert captured["payload"]["is_verified"] is False
+
 
 # ---------------------------------------------------------------------------
 # _resolve_regulatory_defaults
@@ -1039,9 +1066,11 @@ class TestUpdateLocationBatch:
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
             patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         ):
-            result = asyncio.run(drv.update_location_batch(
-                batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID}
-            ))
+            result = asyncio.run(
+                drv.update_location_batch(
+                    batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID}
+                )
+            )
 
         assert result == {"success": True}
 
@@ -1090,7 +1119,9 @@ class TestUpdateLocationBatch:
             patch("backend.routes.drivers._deps.mark_present", AsyncMock()) as mp,
         ):
             asyncio.run(
-                drv.update_location_batch(batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID})
+                drv.update_location_batch(
+                    batch=points, background_tasks=BackgroundTasks(), current_user={"id": USER_ID}
+                )
             )
 
         mp.assert_not_awaited()
@@ -1610,15 +1641,17 @@ class TestCancelRide:
             patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
             patch("backend.routes.drivers._deps.db_supabase.insert_one", insert_mock),
         ):
-            result = asyncio.run(
-                drv.cancel_ride(
-                    ride_id=RIDE_ID,
-                    reason="Service animal — could not accommodate",
-                    current_user={"id": USER_ID},
-                )
-            )
+            from fastapi import HTTPException
 
-        assert result == {"success": True}
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.cancel_ride(
+                        ride_id=RIDE_ID,
+                        reason="Service animal — could not accommodate",
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 400
         insert_mock.assert_awaited_once()
         table_name = insert_mock.call_args.args[0]
         row = insert_mock.call_args.args[1]
@@ -1782,20 +1815,22 @@ class TestDeclineRide:
             patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
             patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
         ):
-            result = asyncio.run(
-                drv.decline_ride(
-                    ride_id=RIDE_ID,
-                    request=_FakeRequest({"reason": "service_animal"}),
-                    current_user={"id": USER_ID},
-                )
-            )
+            from fastapi import HTTPException
 
-        assert result == {"success": True}
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.decline_ride(
+                        ride_id=RIDE_ID,
+                        request=_FakeRequest({"reason": "service_animal"}),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 400
         insert_mock.assert_awaited_once()
         table_name = insert_mock.call_args.args[0]
         row = insert_mock.call_args.args[1]
         assert table_name == "audit_logs"
-        assert row["action"] == "ride_declined"
+        assert row["action"] == "ride_decline_service_animal_refusal"
         assert row["entity_id"] == RIDE_ID
         assert row["details"] == {"driver_id": DRIVER_ID, "reason": "service_animal"}
         # PIPEDA: no rider/driver names, phone numbers, emails, or exact

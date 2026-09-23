@@ -105,7 +105,9 @@
       "offline": "The driver is currently offline.",
       "license_class_ineligible": "This driver's licence class requires separate approval.",
       "vehicle_too_old": "This driver's vehicle no longer meets Spinr's eligibility requirements.",
-      "insufficient_experience": "This driver does not yet meet Spinr's eligibility requirements."
+      "insufficient_experience": "This driver does not yet meet Spinr's eligibility requirements.",
+      "underage": "This driver does not meet the minimum age to drive for Spinr.",
+      "crc_consent_required": "This driver has not completed the required background-check consent."
     },
     "ride": {
       "not_found": "We couldn't find that ride. It may have been removed.",

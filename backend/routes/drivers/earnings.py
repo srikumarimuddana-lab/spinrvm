@@ -306,6 +306,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "total_tax": _money_str(total_tax),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
+        "payouts_enabled": bool(driver.get("stripe_payouts_enabled", False)),
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,

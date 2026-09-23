@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Animated,
-  Linking,
   PanResponder,
   AppState,
   BackHandler,
@@ -82,6 +81,7 @@ interface ActiveRidePanelProps {
   onStartRide: () => void;
   onCompleteRide: () => void;
   onCancelRide: (reason?: string) => void;
+  onReportNoShow?: () => void;
   routeEtaMinutes?: number | null;
   routeDistanceKm?: number | null;
   slideUpAnim: Animated.Value;
@@ -134,6 +134,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   onStartRide,
   onCompleteRide,
   onCancelRide,
+  onReportNoShow,
   routeEtaMinutes,
   routeDistanceKm,
   slideUpAnim,
@@ -638,16 +639,6 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 </View>
               ) : null}
             </View>
-            {rider?.phone ? (
-              <TouchableOpacity
-                style={[styles.contactBtn, { backgroundColor: colors.successBg }]}
-                accessibilityRole="button"
-                accessibilityLabel={`Call ${riderName}`}
-                onPress={() => Linking.openURL(`tel:${rider.phone}`)}
-              >
-                <Ionicons name="call" size={18} color={colors.success} />
-              </TouchableOpacity>
-            ) : null}
             <TouchableOpacity
               style={[styles.contactBtn, styles.contactBtnNeutral]}
               accessibilityRole="button"
@@ -671,6 +662,20 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <View style={styles.routeLineContainer}>
               <View style={styles.routeLine} />
             </View>
+            {Array.isArray((ride as any).stops) && (ride as any).stops.map((stop: { address?: string }, idx: number) => (
+              <View key={`${stop.address ?? 'stop'}-${idx}`}>
+                <View style={styles.routeRow}>
+                  <View style={[styles.dot, { backgroundColor: colors.warning }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text allowFontScaling={false} style={styles.routeLabel}>STOP {idx + 1}</Text>
+                    <Text style={styles.routeAddress} numberOfLines={2}>{stop.address || 'Stop'}</Text>
+                  </View>
+                </View>
+                <View style={styles.routeLineContainer}>
+                  <View style={styles.routeLine} />
+                </View>
+              </View>
+            ))}
             <View style={styles.routeRow}>
               <View style={styles.destSquare} />
               <View style={{ flex: 1 }}>
@@ -856,6 +861,26 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             </TouchableOpacity>
           </View>
         ) : null}
+
+        {rideState === 'arrived_at_pickup' && onReportNoShow ? (() => {
+          const serverRemaining = (ride as any)?.noshow_seconds_remaining;
+          const serverEligible = (ride as any)?.noshow_eligible;
+          const noShowReady = typeof serverEligible === 'boolean' ? serverEligible : waitSeconds >= 300;
+          const noShowLeft = typeof serverRemaining === 'number' ? serverRemaining : Math.max(0, 300 - waitSeconds);
+          return (
+          <TouchableOpacity
+            style={[styles.actionPrimary, { backgroundColor: colors.text, marginBottom: 8 }, (isLoading || !noShowReady) && { opacity: 0.4 }]}
+            disabled={isLoading || !noShowReady}
+            accessibilityRole="button"
+            accessibilityLabel="Report no-show"
+            onPress={onReportNoShow}
+          >
+            <Text allowFontScaling={false} style={styles.actionPrimaryText}>
+              {noShowReady ? 'Report no-show' : `Report no-show in ${noShowLeft}s`}
+            </Text>
+          </TouchableOpacity>
+          );
+        })() : null}
 
         {/* ── Cancel link (pickup phases only) ────────────── */}
         {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (

@@ -652,7 +652,7 @@ export default function BecomeDriverScreen() {
                 To maintain safety and compliance with Saskatchewan regulations, we need to collect your personal, vehicle, and document information.
               </Text>
               <Text style={styles.subtitle}>
-                Your vehicle must be 9 years old or newer (2017+).
+                Vehicles must be under 10 years old.
               </Text>
               <TouchableOpacity style={styles.primaryButton} onPress={() => setCurrentStep(1)}>
                 <Text style={styles.primaryButtonText}>Get Started</Text>

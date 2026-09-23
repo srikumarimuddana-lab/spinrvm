@@ -40,6 +40,7 @@ Drivers may recover a durable ride event that could previously be skipped during
 | `backend/utils/ws_pubsub.py` | Atomic Redis sequence, outbox, retention, and publish operation | Prevent append order from diverging from sequence order |
 | `backend/tests/test_ws_pubsub_coverage.py` | Interleaving, fallback, envelope, and retention assertions | Verify ordering fix and preserved behavior |
 | `backend/tests/test_websocket_auth.py` | Route-level replay cursor assertion | Verify reconnect filters and sends only messages newer than `last_seq` |
+| `backend/tests/test_ws_pubsub_redis_integration.py` | Real-Redis concurrency, payload, ordering, retention, and TTL test (loopback DB 15 only) | Execute the Lua contract against Redis rather than only a mock |
 
 ## 7. Before / after
 
@@ -61,8 +62,8 @@ This changes no persisted application data outside the existing expiring Redis s
 
 ## 9. Verification performed
 
-- [x] Automated tests run: `backend/tests/test_ws_pubsub_coverage.py` (64 passed), `backend/tests/test_websocket_auth.py` (16 passed), and `backend/tests/test_websocket_live_location.py` (9 passed); one pre-existing Starlette warning.
-- [x] Local real-Redis verification: Redis 6.2.14 on a disposable loopback server with no persistence; 52 concurrent publishes preserved JSON payloads, published sequences 1–52 in order, retained sequences 3–52, and set an approximately 300-second TTL. Unique test keys were deleted afterward.
+- [x] Automated tests run: `backend/tests/test_ws_pubsub_coverage.py` (64 passed), `backend/tests/test_websocket_auth.py` (16 passed), `backend/tests/test_websocket_live_location.py` (9 passed), and `backend/tests/test_ws_pubsub_redis_integration.py` with `WS_TEST_REDIS_URL=redis://127.0.0.1:6399/15` (1 passed); one pre-existing Starlette warning in each run.
+- [x] Real-Redis verification: Redis 6.2.14 on a disposable loopback server with no persistence; the integration test exercised 52 concurrent publishes, preserved JSON payloads, published sequences 1–52 in order, retained sequences 3–52, and set an approximately 300-second TTL. Unique test keys were deleted afterward.
 - [ ] Manual staging repro: not run; no staging or production Redis was used.
 - [x] Blast-radius grep performed: `pubsub.publish`, `get_outbox`, and WS outbox/sequence keys; callers are named above.
 - [x] Reviewed backend `CLAUDE.md` WS fan-out/reconnect conventions.

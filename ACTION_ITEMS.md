@@ -17810,11 +17810,20 @@ record of what was assumed vs. what was actually true</summary>
 
 ### C133. `cancel_ride_rider` reads `auth_status`/`payment_intent_id` before its own atomic cancel claim, so a hold captured in that window can still hit the fresh-charge fallback against an already-captured PI
 
-- [ ] **Status:** OPEN — found 2026-09-21 by a `spinr-money-auditor` review of the
-  already-captured-hold refund fix (see `docs/change-log/2026-09-21-cancellation-refund-already-captured-hold.md`'s
-  "Adversarial review" section). Deferred, not fixed there — narrower in scope than that
-  fix and would need re-reading the ride's payment fields after the claim throughout the
-  function, not just in the one new branch.
+- [x] **Status:** closed 2026-09-23 on `fix/cancel-ride-claim-race-c133`. Fixed by reading
+  `payment_intent_id`/`auth_status`/`authorized_amount` from the atomic claim's own
+  `UPDATE...RETURNING` row (`_cancel_claim`) instead of the pre-claim `ride` snapshot —
+  `update_one()` already returns the full updated row for free (confirmed via
+  `repositories/_base.py`'s `_single_row_from_res`), so no extra DB round-trip was needed.
+  Found via a proactive edge-case/error-handling sweep. A regression test
+  (`test_capture_race_between_initial_read_and_claim_uses_post_claim_state`) was added and
+  verified via `git stash` to fail without the fix and pass with it; two existing tests with
+  unrealistic `update_one` mocks (fabricating a post-claim row the real UPDATE's column set
+  could never produce) were also corrected. `spinr-money-auditor` reviewed: SHIP IT AS-IS —
+  confirmed the PostgREST-return-value claim independently, checked every other stale-`ride`
+  read site in the function (none missed), and confirmed the `isinstance(..., dict)` fallback
+  is test-only scaffolding, never a live path. See
+  `docs/change-log/2026-09-23-cancel-ride-claim-race-c133.md` for the full trace.
 - **Issue/gap:** `backend/routes/rides/cancellation.py::cancel_ride_rider` reads
   `ride.get("auth_status")`/`ride.get("payment_intent_id")` from the `ride` dict fetched at
   the top of the function (before the atomic `status -> cancelled` claim a few lines later)

@@ -16,9 +16,9 @@ Usage:
 
 How it works
 ------------
-1. Requires DATABASE_URL (direct Postgres connection, typically the
-   Supabase pooler URL — `…pooler.supabase.com:6543` with the service
-   role password). We intentionally do NOT go through the Supabase
+1. Apply requires DATABASE_URL to be a direct Postgres connection, not a
+   transaction pooler: session ownership must survive per-file commits.
+   We intentionally do NOT go through the Supabase
    REST client here because multi-statement DDL + transactional guards
    need a raw psycopg session.
 2. Reads `backend/migrations/24_schema_migrations.sql` first if the
@@ -45,9 +45,11 @@ import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import parse_qs, urlparse
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 TRACKING_TABLE_MIGRATION = "24_schema_migrations.sql"
+MIGRATION_ADVISORY_LOCK_ID = 0x5350494E52
 
 # Files that must NEVER be applied even though they are real, merged files in
 # backend/migrations/ — applying them as written would be a security
@@ -287,7 +289,39 @@ def _discover_migrations() -> List[Path]:
     return files
 
 
-def _connect():
+def _validate_apply_dsn(url: str) -> None:
+    """Session locks require a direct connection, never transaction pooling."""
+    try:
+        parsed = urlparse(url)
+        valid = (
+            parsed.scheme in {"postgres", "postgresql"}
+            and parsed.hostname
+            and not parsed.hostname.endswith(".pooler.supabase.com")
+            and parsed.port != 6543
+            and "pgbouncer" not in parse_qs(parsed.query)
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("Migration apply requires a direct PostgreSQL URL, not a pooler connection.")
+
+
+def _acquire_apply_lock(conn) -> bool:
+    """Hold database-wide ownership across per-file commits until close()."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (MIGRATION_ADVISORY_LOCK_ID,))
+            acquired = cur.fetchone()[0] is True
+        conn.commit()  # End the SELECT transaction; session lock survives.
+    except Exception as exc:
+        print(f"ERROR: migration ownership unavailable ({type(exc).__name__}); no migrations applied.", file=sys.stderr)
+        return False
+    if not acquired:
+        print("ERROR: another migration runner owns this database; no migrations applied.", file=sys.stderr)
+    return acquired
+
+
+def _connect(*, require_direct_session: bool = False):
     """Open a psycopg connection from DATABASE_URL.
 
     psycopg v3 is preferred; fall back to psycopg2 if only v2 is
@@ -298,12 +332,14 @@ def _connect():
     if not url:
         print(
             "ERROR: DATABASE_URL is not set. Export the Postgres URL "
-            "(e.g. the Supabase pooler URL with the service role password) "
+            "(a direct connection for apply; never a transaction pooler) "
             "before running migrations.",
             file=sys.stderr,
         )
         sys.exit(2)
 
+    if require_direct_session:
+        _validate_apply_dsn(url)
     try:
         import psycopg  # type: ignore
 
@@ -508,8 +544,11 @@ def main() -> int:
 
     files = _discover_migrations()
 
-    conn = _connect()
+    audit_only = args.status or args.dry_run
+    conn = _connect() if audit_only else _connect(require_direct_session=True)
     try:
+        if not audit_only and not _acquire_apply_lock(conn):
+            return 1
         tracking_exists = _ensure_tracking_table(conn, allow_create=not (args.status or args.dry_run))
         applied = _fetch_applied(conn) if tracking_exists else {}
         pending, already, drifted, skipped = _classify(files, applied)
@@ -545,6 +584,9 @@ def main() -> int:
             print("No pending migrations.")
             return 0
 
+        # Classification only reads data. Close that transaction before an
+        # autocommit migration; the session-level ownership remains held.
+        conn.commit()
         return _apply_pending(conn, pending)
     finally:
         conn.close()

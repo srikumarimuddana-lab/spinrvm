@@ -20,6 +20,7 @@ No rider, driver, or admin UX change. Staging deploys now fail closed when probe
 |---|---|---|
 | `.github/workflows/deploy-backend-staging.yml` | Snapshot, required probes, candidate SHA check, guarded restore and forced-failure input | Exercise recoverable staging promotion |
 | `scripts/test_fly_staging_recovery.py` | Snapshot and workflow wiring assertions | Verify baseline gate and restoration wiring |
+| `docs/runbooks/staging-environment.md` | Required probe secrets, bootstrap and recovery drill steps | Guide safe staging setup and acceptance |
 | `docs/change-log/2026-09-23-staging-recovery.md` | Impact record | Record scope and verification boundary |
 
 ## Before/after

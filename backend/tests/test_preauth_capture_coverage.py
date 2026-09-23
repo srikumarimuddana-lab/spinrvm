@@ -124,13 +124,16 @@ async def test_loop_lock_not_acquired_skips_tick_and_sleeps():
         patch(P + "redis_set_nx", AsyncMock(return_value=False)),
         patch(P + "_capture_tick", tick),
         patch(P + "asyncio.sleep", fake_sleep),
-        patch(P + "_record_heartbeat"),
+        patch(P + "_record_heartbeat") as heartbeat,
+        patch(P + "_record_dependency_failure") as failure,
     ):
         from backend.utils.preauth_capture import preauth_capture_loop
 
         with pytest.raises(asyncio.CancelledError):
             await preauth_capture_loop()
     tick.assert_not_awaited()
+    heartbeat.assert_called_once()
+    failure.assert_not_called()
 
 
 async def test_loop_lock_acquired_runs_tick():
@@ -165,13 +168,15 @@ async def test_loop_survives_a_redis_lock_error_without_running_the_tick():
         patch(P + "_capture_tick", tick),
         patch(P + "asyncio.sleep", fake_sleep),
         patch(P + "_record_heartbeat") as mock_hb,
+        patch(P + "_record_dependency_failure") as failure,
     ):
         from backend.utils.preauth_capture import preauth_capture_loop
 
         with pytest.raises(asyncio.CancelledError):
             await preauth_capture_loop()
     tick.assert_not_awaited()
-    mock_hb.assert_called_once()
+    mock_hb.assert_not_called()
+    failure.assert_called_once_with("preauth_capture (5min)")
 
 
 async def test_loop_recovers_after_lock_error_and_cancellation_propagates(caplog):
@@ -196,6 +201,7 @@ async def test_loop_recovers_after_lock_error_and_cancellation_propagates(caplog
         patch(P + "_capture_tick", tick),
         patch(P + "asyncio.sleep", fake_sleep),
         patch(P + "_record_heartbeat") as mock_hb,
+        patch(P + "_record_dependency_failure") as failure,
     ):
         from backend.utils.preauth_capture import preauth_capture_loop
 
@@ -203,7 +209,8 @@ async def test_loop_recovers_after_lock_error_and_cancellation_propagates(caplog
             await preauth_capture_loop()
     assert lock.await_count == 2
     tick.assert_awaited_once()
-    assert mock_hb.call_count == 2
+    assert mock_hb.call_count == 1
+    failure.assert_called_once_with("preauth_capture (5min)")
     assert "credential-bearing redis detail" not in caplog.text
     assert "ConnectionError" in caplog.text
     after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][lock_unavailable_key]

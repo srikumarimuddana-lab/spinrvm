@@ -50,10 +50,18 @@ except ImportError:
     from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
-    from .loop_monitor import record_heartbeat as _record_heartbeat
+    from .loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from .loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:  # pragma: no cover
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
         pass
 
 
@@ -199,6 +207,7 @@ async def preauth_capture_loop() -> None:
         # latency) even after the +10% sleep jitter; the atomic DB claim is the
         # real double-capture guard if a second replica ever races in.
         lock_ttl = int(CAPTURE_INTERVAL_SECONDS * 2)
+        lock_failed = False
         try:
             got_lock = await redis_set_nx("spinr:preauth:capture:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
@@ -207,9 +216,12 @@ async def preauth_capture_loop() -> None:
                 type(lock_err).__name__,
             )
             _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "preauth_capture"})
+            _record_dependency_failure(_LOOP_NAME)
+            lock_failed = True
             got_lock = False
         if not got_lock:
-            _record_heartbeat(_LOOP_NAME)
+            if not lock_failed:
+                _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(CAPTURE_INTERVAL_SECONDS)
             continue
         try:

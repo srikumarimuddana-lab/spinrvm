@@ -15,6 +15,5 @@ $20 completed cash payout, and a $5 completed refund hold should report $20
 paid, $5 held, and $5 pending balance.
 
 Rollback: revert this code change; it has no persisted data or schema effects.
-Validation: a targeted mocked regression was added to
-`test_admin_drivers_coverage.py`. Pytest could not run because pytest is absent
-from this environment. No live DB or Stripe calls were made.
+Validation: the targeted mocked regression in `test_admin_drivers_coverage.py`
+passed. No live DB or Stripe calls were made.

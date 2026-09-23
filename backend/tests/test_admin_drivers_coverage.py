@@ -2207,6 +2207,7 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=self._rpc_for(lifetime_earnings="30.00"))),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text

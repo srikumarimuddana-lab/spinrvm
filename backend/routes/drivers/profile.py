@@ -30,6 +30,24 @@ from ._shared import (  # noqa: F401
 router = APIRouter()
 
 
+def _validate_eligibility_date(field: str, value: str) -> None:
+    """Validate a newly supplied eligibility date independently of rollout flags."""
+    label = "Date of birth" if field == "date_of_birth" else "Licence issue date"
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
+    if parsed.isoformat() != value:
+        raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.")
+
+    today = datetime.now(timezone.utc).date()
+    elapsed_years = today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
+    if field == "date_of_birth" and elapsed_years < 18:
+        raise HTTPException(status_code=422, detail="You must be 18 or older to drive for Spinr.")
+    if field == "license_issue_date" and elapsed_years < 3:
+        raise HTTPException(status_code=422, detail="Your licence must be at least 3 years old to drive for Spinr.")
+
+
 @router.get("/config")
 async def get_driver_config(current_user: dict = Depends(get_current_user)):
     """Return operational settings the driver-app should honor at runtime.
@@ -178,10 +196,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
         if field in updates:
-            try:
-                datetime.strptime(updates[field], "%Y-%m-%d")
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
+            _validate_eligibility_date(field, updates[field])
 
     # Validate the SIN before anything else touches it. A typo is not caught
     # until CRA rejects the T4A months later, by which time the driver may be
@@ -813,12 +828,9 @@ async def register_driver(
     }
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
 
-    for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
+    for field in ("date_of_birth", "license_issue_date"):
         if field in payload:
-            try:
-                datetime.strptime(payload[field], "%Y-%m-%d")
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
+            _validate_eligibility_date(field, payload[field])
     if "vehicle_year" in payload:
         try:
             year = payload["vehicle_year"]

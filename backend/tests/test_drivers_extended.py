@@ -220,8 +220,13 @@ class TestUpdateMyDriver:
 
         assert saved[field] == "2000-01-02"
 
-    @pytest.mark.parametrize("field", ["date_of_birth", "license_issue_date"])
-    def test_malformed_eligibility_date_is_rejected(self, field):
+    @pytest.mark.parametrize(("field", "value"), [
+        ("date_of_birth", "not-a-date"),
+        ("date_of_birth", "2000-1-2"),
+        ("date_of_birth", "2010-01-01"),
+        ("license_issue_date", "2025-01-01"),
+    ])
+    def test_invalid_eligibility_date_is_rejected(self, field, value):
         from fastapi import HTTPException
 
         from backend.routes import drivers as drv
@@ -230,7 +235,7 @@ class TestUpdateMyDriver:
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()) as update,
         ):
-            request = drv.UpdateDriverProfileRequest(**{field: "not-a-date"})
+            request = drv.UpdateDriverProfileRequest(**{field: value})
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.update_my_driver(body=request, current_user={"id": USER_ID}))
 
@@ -437,6 +442,9 @@ class TestRegisterDriver:
     @pytest.mark.parametrize("field,value", [
         ("date_of_birth", "not-a-date"),
         ("license_issue_date", "2020-02-30"),
+        ("date_of_birth", "2000-1-2"),
+        ("date_of_birth", "2010-01-01"),
+        ("license_issue_date", "2025-01-01"),
         ("vehicle_year", "20xx"),
     ])
     def test_rejects_malformed_eligibility_registration_values(self, field, value):

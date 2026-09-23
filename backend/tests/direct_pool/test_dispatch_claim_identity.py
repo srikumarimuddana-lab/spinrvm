@@ -146,7 +146,8 @@ def test_cancel_release_fails_closed_on_null_p2_identity(pg_cur, period_ride, pe
 @pytest.mark.parametrize(
     ("period_ride", "period_claim", "expected_status"),
     [
-        ("identity-reap-null-target", None, "period_ownership_mismatch"),
+        # A NULL-identity Period 2 on a cancelled ride is a leftover from a
+        # crashed release, not someone else's claim: recovered (see below).
         (None, "current", "period_offer_identity_mismatch"),
     ],
 )
@@ -207,3 +208,113 @@ def test_missing_period_stale_reaper_recovers_to_p1_once_without_fabricating_p2(
     )
     assert pg_cur.fetchall() == [(1, None, None)]
     assert _reap(pg_cur, "identity-reaper-no-period-driver", claim_id)["status"] == "not_claimed"
+
+
+def _open_period(cur, driver_id):
+    cur.execute(
+        "SELECT period, ride_id, claim_id FROM driver_insurance_periods WHERE driver_id = %s AND ended_at IS NULL",
+        (driver_id,),
+    )
+    return cur.fetchall()
+
+
+def _age_claim(cur, driver_id):
+    cur.execute(
+        "UPDATE drivers SET availability_claimed_at = now() - interval '2 minutes' WHERE id = %s",
+        (driver_id,),
+    )
+
+
+def _legacy_claim(cur, driver_id):
+    cur.execute(
+        """UPDATE drivers SET is_available = FALSE, availability_claimed_at = now() - interval '2 minutes'
+           WHERE id = %s RETURNING availability_claimed_at""",
+        (driver_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def _legacy_reap(cur, driver_id, claimed_at):
+    cur.execute(
+        "SELECT public.reap_stale_legacy_driver_claim_v2(%s, %s, now() - interval '90 seconds')",
+        (driver_id, claimed_at),
+    )
+    return cur.fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    ("period", "ride_status", "offer_status"),
+    [
+        (2, "cancelled", "cancelled"),  # rider cancelled; release crashed
+        (2, "searching", "declined"),  # driver declined; ride still searching for others
+        (2, "searching", "preempted"),  # driver lost the race
+        (2, "cancelled", "accepted"),  # rider cancelled after the driver accepted
+        (3, "completed", "accepted"),  # trip completed; release crashed
+    ],
+)
+def test_v2_reaper_recovers_stale_period_left_by_crashed_release(pg_cur, period, ride_status, offer_status):
+    _rider(pg_cur)
+    _driver(pg_cur, "stale-v2-driver")
+    _ride(pg_cur, "stale-v2-ride", ride_status)
+    _enable_identity(pg_cur)
+    claim_id = _claim(pg_cur, "stale-v2-driver")
+    _offer(pg_cur, "stale-v2-ride", "stale-v2-driver", offer_status, None)
+    pg_cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id, period, ride_id) VALUES (%s, %s, %s)",
+        ("stale-v2-driver", period, "stale-v2-ride"),
+    )
+    _age_claim(pg_cur, "stale-v2-driver")
+
+    result = _reap(pg_cur, "stale-v2-driver", claim_id)
+
+    assert result["status"] == "released"
+    assert result["stale_period_closed"] is True
+    assert _open_period(pg_cur, "stale-v2-driver") == [(1, None, None)]
+    pg_cur.execute("SELECT is_available, availability_claim_id FROM drivers WHERE id = %s", ("stale-v2-driver",))
+    assert pg_cur.fetchone() == (True, None)
+
+
+@pytest.mark.parametrize(
+    ("period", "ride_status", "offer_status"),
+    [
+        (2, "searching", "declined"),
+        (2, "searching", "preempted"),
+        (2, "cancelled", "accepted"),
+        (3, "completed", "accepted"),
+    ],
+)
+def test_legacy_reaper_recovers_stale_period_left_by_crashed_release(pg_cur, period, ride_status, offer_status):
+    _rider(pg_cur)
+    _driver(pg_cur, "stale-legacy-driver")
+    _ride(pg_cur, "stale-legacy-ride", ride_status)
+    _offer(pg_cur, "stale-legacy-ride", "stale-legacy-driver", offer_status, None)
+    pg_cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id, period, ride_id) VALUES (%s, %s, %s)",
+        ("stale-legacy-driver", period, "stale-legacy-ride"),
+    )
+    claimed_at = _legacy_claim(pg_cur, "stale-legacy-driver")
+
+    result = _legacy_reap(pg_cur, "stale-legacy-driver", claimed_at)
+
+    assert result["status"] == "released"
+    assert result["stale_period_closed"] is True
+    assert _open_period(pg_cur, "stale-legacy-driver") == [(1, None, None)]
+    pg_cur.execute("SELECT is_available FROM drivers WHERE id = %s", ("stale-legacy-driver",))
+    assert pg_cur.fetchone() == (True,)
+
+
+def test_reapers_still_refuse_a_driver_with_a_live_offer(pg_cur):
+    _rider(pg_cur)
+    _driver(pg_cur, "live-offer-driver")
+    _ride(pg_cur, "live-offer-ride", "searching")
+    _ride(pg_cur, "old-cancelled-ride", "cancelled")
+    _offer(pg_cur, "live-offer-ride", "live-offer-driver", "pending", None)
+    pg_cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id, period, ride_id) VALUES (%s, 2, %s)",
+        ("live-offer-driver", "old-cancelled-ride"),
+    )
+    claimed_at = _legacy_claim(pg_cur, "live-offer-driver")
+
+    assert _legacy_reap(pg_cur, "live-offer-driver", claimed_at)["status"] == "offer_or_ride_active"
+    pg_cur.execute("SELECT is_available FROM drivers WHERE id = %s", ("live-offer-driver",))
+    assert pg_cur.fetchone() == (False,)

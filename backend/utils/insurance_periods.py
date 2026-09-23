@@ -464,6 +464,20 @@ async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id
     return period
 
 
+_BENIGN_REAP_SKIPS = frozenset(
+    {
+        "claim_too_recent",
+        "offer_active",
+        "ride_active",
+        "offer_or_ride_active",
+        "not_claimed",
+        "driver_missing",
+        "legacy_claim_changed",
+        "claim_identity_changed",
+    }
+)
+
+
 async def reap_stale_driver_claim(
     driver_id: str, claim_id: Optional[str] = None, claimed_at: Optional[str] = None
 ) -> Optional[dict]:
@@ -497,10 +511,20 @@ async def reap_stale_driver_claim(
 
     if not isinstance(result, dict) or result.get("status") != "released":
         status = result.get("status", "no_result") if isinstance(result, dict) else "no_result"
-        if status not in {"claim_too_recent", "offer_active", "ride_active", "not_claimed", "driver_missing"}:
+        # Busy drivers and claims that changed under us are normal, not errors
+        # (logging them at ERROR paged Sentry every tick per busy driver).
+        if status not in _BENIGN_REAP_SKIPS:
             logger.error("insurance_periods: stale claim recovery skipped driver_id=%s reason=%s", driver_id, status)
             _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": status})
         return result if isinstance(result, dict) else None
+
+    if result.get("stale_period_closed"):
+        logger.warning(
+            "insurance_periods: stale claim recovery closed a Period 2/3 left open by an "
+            "interrupted release driver_id=%s",
+            driver_id,
+        )
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": "stale_period_recovered"})
 
     if result.get("period_missing"):
         logger.error(

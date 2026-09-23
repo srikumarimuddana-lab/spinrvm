@@ -26,6 +26,7 @@ import logging
 import os
 import random
 import socket
+
 try:
     from ..db import db
     from .insurance_periods import reap_stale_driver_claim
@@ -48,6 +49,8 @@ logger = logging.getLogger(__name__)
 RECLAIM_THRESHOLD_SECONDS = 90  # well past the ~15s offer window
 REAP_INTERVAL_SECONDS = 60
 _LOOP_NAME = "driver_claim_reaper (60s)"
+
+
 def _pod_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
@@ -86,7 +89,14 @@ async def _reap_tick() -> None:
         elif isinstance(result, dict):
             status = result.get("status")
             if status not in {
-                "claim_too_recent", "offer_active", "ride_active", "offer_or_ride_active", "not_claimed", "driver_missing"
+                "claim_too_recent",
+                "offer_active",
+                "ride_active",
+                "offer_or_ride_active",
+                "not_claimed",
+                "driver_missing",
+                "legacy_claim_changed",
+                "claim_identity_changed",
             }:
                 logger.error("[claim-reaper] recovery skipped for driver %s reason=%s", driver_id, status)
 

@@ -244,6 +244,7 @@ DECLARE
     v_new_period smallint;
     v_transition jsonb;
     v_period_missing boolean := false;
+    v_period_stale boolean := false;
 BEGIN
     SELECT is_online, is_available, availability_claim_id, availability_claimed_at, user_id
       INTO v_online, v_available, v_claim_id, v_claimed_at, v_user_id
@@ -278,13 +279,23 @@ BEGIN
     SELECT period, ride_id, claim_id INTO v_period, v_period_ride_id, v_period_claim_id
       FROM driver_insurance_periods WHERE driver_id = p_driver_id AND ended_at IS NULL FOR UPDATE;
     IF FOUND THEN
-        IF NOT COALESCE((
+        -- A Period 2/3 left open by a release that crashed between freeing the
+        -- driver and writing the period (terminal ride or terminal offer).
+        -- Safe to close: the checks above prove no live offer or ride exists.
+        v_period_stale := v_period IN (2, 3) AND v_period_ride_id IS NOT NULL AND (
+            EXISTS (SELECT 1 FROM public.rides r WHERE r.id = v_period_ride_id
+                    AND r.status IN ('completed', 'cancelled'))
+            OR (v_period = 2 AND EXISTS (
+                SELECT 1 FROM public.ride_offers ro
+                 WHERE ro.driver_id = p_driver_id AND ro.ride_id = v_period_ride_id
+                   AND ro.status IN ('declined', 'preempted', 'expired', 'cancelled'))));
+        IF NOT v_period_stale AND NOT COALESCE((
             (v_period = 2 AND v_period_claim_id = v_claim_id)
             OR (v_period = 1 AND v_period_ride_id IS NULL AND v_period_claim_id IS NULL)
         ), false) THEN
             RETURN jsonb_build_object('status', 'period_ownership_mismatch');
         END IF;
-        IF v_period = 2 AND NOT EXISTS (
+        IF NOT v_period_stale AND v_period = 2 AND NOT EXISTS (
             SELECT 1 FROM ride_offers ro
              WHERE ro.driver_id = p_driver_id AND ro.claim_id = v_claim_id
                AND ro.ride_id = v_period_ride_id
@@ -304,7 +315,7 @@ BEGIN
             p_driver_id, v_transition USING ERRCODE = 'P0001';
     END IF;
     RETURN jsonb_build_object('status', 'released', 'period', v_new_period, 'user_id', v_user_id,
-                              'period_missing', v_period_missing);
+                              'period_missing', v_period_missing, 'stale_period_closed', v_period_stale);
 END;
 $$;
 
@@ -334,6 +345,7 @@ DECLARE
     v_period_claim_id uuid;
     v_transition jsonb;
     v_period_missing boolean := false;
+    v_period_stale boolean := false;
 BEGIN
     SELECT is_online, is_available, availability_claim_id, availability_claimed_at, user_id
       INTO v_online, v_available, v_claim_id, v_claimed_at, v_user_id
@@ -362,7 +374,15 @@ BEGIN
     SELECT period, ride_id, claim_id INTO v_period, v_period_ride_id, v_period_claim_id
       FROM public.driver_insurance_periods WHERE driver_id = p_driver_id AND ended_at IS NULL FOR UPDATE;
     IF FOUND THEN
-        IF NOT COALESCE(
+        -- Same stale Period 2/3 recovery as the v2 reaper above.
+        v_period_stale := v_period IN (2, 3) AND v_period_ride_id IS NOT NULL AND (
+            EXISTS (SELECT 1 FROM public.rides r WHERE r.id = v_period_ride_id
+                    AND r.status IN ('completed', 'cancelled'))
+            OR (v_period = 2 AND EXISTS (
+                SELECT 1 FROM public.ride_offers ro
+                 WHERE ro.driver_id = p_driver_id AND ro.ride_id = v_period_ride_id
+                   AND ro.status IN ('declined', 'preempted', 'expired', 'cancelled'))));
+        IF NOT v_period_stale AND NOT COALESCE(
             (v_period = 2 AND v_period_claim_id IS NULL AND v_period_ride_id IS NOT NULL
              AND EXISTS (SELECT 1 FROM public.ride_offers ro WHERE ro.driver_id = p_driver_id
                          AND ro.ride_id = v_period_ride_id AND ro.status IN ('expired', 'cancelled')))
@@ -380,7 +400,7 @@ BEGIN
             p_driver_id, v_transition USING ERRCODE = 'P0001';
     END IF;
     RETURN jsonb_build_object('status', 'released', 'period', 1, 'user_id', v_user_id,
-                              'period_missing', v_period_missing);
+                              'period_missing', v_period_missing, 'stale_period_closed', v_period_stale);
 END;
 $$;
 REVOKE ALL ON FUNCTION public.reap_stale_legacy_driver_claim_v2(text, timestamptz, timestamptz)

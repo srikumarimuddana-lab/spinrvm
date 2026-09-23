@@ -70,6 +70,7 @@ jest.mock('@shared/theme/ThemeContext', () => ({
 
 let mockCompanyInfo: Record<string, string> = {};
 let mockAiEnabled = false;
+let mockAiConfigPromise: Promise<{ data: { enabled: boolean; mode: string } }> | null = null;
 const mockApiPost = jest.fn((..._args: any[]) => Promise.resolve({ data: {} as any }));
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
@@ -77,6 +78,7 @@ jest.mock('@shared/api/client', () => ({
     get: (url?: string) => {
       if (url === '/company-info') return Promise.resolve({ data: mockCompanyInfo });
       if (url === '/ai/config') {
+        if (mockAiConfigPromise) return mockAiConfigPromise;
         return Promise.resolve({
           data: { enabled: mockAiEnabled, mode: mockAiEnabled ? 'enabled' : 'hidden' },
         });
@@ -270,11 +272,45 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
   beforeEach(() => {
     mockCompanyInfo = {};
     mockAiEnabled = true;
+    mockAiConfigPromise = null;
     jest.clearAllMocks();
   });
 
   afterEach(() => {
     mockAiEnabled = false;
+    mockAiConfigPromise = null;
+  });
+
+  it('keeps chat out of view while config is pending, then shows it when enabled', async () => {
+    let resolveConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => { resolveConfig = resolve; });
+
+    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+    expect(utils.queryByText('AI Chat')).toBeNull();
+    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
+    expect(utils.getByLabelText('Loading support chat availability')).toBeTruthy();
+
+    await act(async () => {
+      resolveConfig({ data: { enabled: true, mode: 'enabled' } });
+      await mockAiConfigPromise;
+    });
+    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
+  });
+
+  it('falls back to FAQ without exposing chat when config rejects', async () => {
+    let rejectConfig!: (reason: Error) => void;
+    mockAiConfigPromise = new Promise((_resolve, reject) => { rejectConfig = reject; });
+
+    const utils = render(<SupportScreen role="rider" initialTab="chat" />);
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+
+    await act(async () => {
+      rejectConfig(new Error('configuration unavailable'));
+      await mockAiConfigPromise?.catch(() => undefined);
+    });
+    expect(utils.queryByText('AI Chat')).toBeNull();
+    expect(utils.getByPlaceholderText('Search questions...')).toBeTruthy();
   });
 
   /** Type a message and send it, letting the rejected POST settle. */

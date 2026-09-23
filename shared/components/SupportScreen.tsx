@@ -515,8 +515,16 @@ export default function SupportScreen({
         </ScrollView>
       )}
 
+      {/* Configuration is unresolved; avoid presenting the disabled state until
+          the server confirms it. */}
+      {activeTab === 'chat' && aiMode === 'loading' && (
+        <View style={styles.comingSoon} accessibilityLabel="Loading support chat availability">
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      )}
+
       {/* AI Chat Tab — coming-soon placeholder while disabled (not hidden) */}
-      {activeTab === 'chat' && !aiEnabled && (
+      {activeTab === 'chat' && aiMode === 'coming_soon' && (
         <View style={styles.comingSoon}>
           <View style={styles.comingSoonIcon}>
             <Ionicons name="sparkles" size={32} color={colors.primary} />

@@ -6,9 +6,23 @@ from loguru import logger
 
 try:
     from core.config import settings
+    from core.background_loop_registry import (
+        LOOP_PLACEMENT,
+        LOOP_WATCHDOG_NAME,
+        active_api_loop_names,
+        resolve_process_role,
+        should_spawn_on_api,
+    )
     from db_supabase import run_sync
 except ImportError:  # pragma: no cover - import style varies by entrypoint
     from ..core.config import settings  # type: ignore
+    from ..core.background_loop_registry import (  # type: ignore
+        LOOP_PLACEMENT,
+        LOOP_WATCHDOG_NAME,
+        active_api_loop_names,
+        resolve_process_role,
+        should_spawn_on_api,
+    )
     from ..db_supabase import run_sync  # type: ignore
 
 from supabase_client import supabase
@@ -163,6 +177,9 @@ async def lifespan(app: FastAPI):
     import os as _os
     from concurrent.futures import ThreadPoolExecutor as _Executor
 
+    process_role = resolve_process_role(_os.environ.get("SPINR_PROCESS_ROLE"), env=settings.ENV)
+    logger.info(f"Background loop process role: {process_role}")
+
     executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "16"))
     loop = _asyncio_lifespan.get_event_loop()
     loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-misc"))
@@ -276,9 +293,17 @@ async def lifespan(app: FastAPI):
     # verify every loop is registered regardless of whether this process
     # actually ran them.
     _spawned_loop_names: list[str] = []
+    _active_loop_names: list[str] = []
 
     def _spawn(name: str, coro_factory):
         _spawned_loop_names.append(name)
+        if name not in LOOP_PLACEMENT:
+            raise RuntimeError(f"Background loop {name!r} has no process-role classification")
+        if not should_spawn_on_api(name, process_role):
+            logger.info(f"Skipped background task for process role {process_role}: {name}")
+            return
+        if name != LOOP_WATCHDOG_NAME:
+            _active_loop_names.append(name)
         if _skip_background_loops:
             logger.info(f"Skipped background task in ENV=test: {name}")
             return
@@ -759,62 +784,9 @@ async def lifespan(app: FastAPI):
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
-    # This list must contain every loop name passed to _spawn() above (minus
-    # loop_watchdog itself, which watches the others rather than watching
-    # itself) — see test_lifespan_watchdog_coverage.py for a regression guard
-    # that fails the build if a spawned loop is added here without also being
-    # registered below, or vice versa.
-    _WATCHDOG_LOOP_NAMES = list(
-        [
-            "subscription_expiry (6h)",
-            "surge_engine (2min)",
-            "scheduled_dispatcher (60s)",
-            "payment_retry (5min)",
-            "preauth_capture (5min)",
-            "referral_payout (5min)",
-            "driver_claim_reaper (60s)",
-            "document_expiry (12h)",
-            "driver_onboarding_reminders (15min)",
-            "corporate_autotopup (10min)",
-            "corporate_low_balance (1h)",
-            "allowance_reset (1h)",
-            "kyb_reverification (24h)",
-            "route_finalizer (15s)",
-            "route_gap_monitor (15s)",
-            "stale_intent_reconciler (15min)",
-            "safety_checkin (30s)",
-            "route_deviation_alerter (30s)",
-            "retention_purge (24h)",
-            "data_export_purge (1h)",
-            "reconciliation (daily 02:00 UTC)",
-            "stripe_reconcile (24h)",
-            "dispute_evidence_reminder (6h)",
-            "ledger_projection (15min)",
-            "distance_reconciliation (daily 04:00 UTC)",
-            "period1_distance_finalizer (5min)",
-            "t4a_annual_job (yearly Feb 28)",
-            "driver_statements (30min)",
-            "stuck_ride_sweeper (60s)",
-            "stale_in_progress_ride_alerter (5min)",
-            "retention_guard_monitor (6h)",
-            "orphaned_hold_reconciler (15m)",
-            "offer_expiry_reaper (10s)",
-            "suspension_reactivation (10min)",
-            "push_retry (30s)",
-            "zoho_desk_sync (10min)",
-            "support_sla_breach_sweep (5min)",
-            "capacity_watchdog (60s)",
-            "auto_payout (1h, Sundays)",
-            # Insurance/GPS pipeline loops added with the tracking overhaul.
-            # The route finalizer, gap monitor, period-1 finalizer and
-            # distance reconciliation are already listed above (main added
-            # them in the same watchdog-coverage pass); these two are new.
-            "stale_p3_closer (15min)",
-            "driver_daily_rollup (30min)",
-            # WS-12 §3 / C55: self-heals missed insurance-period opens.
-            "insurance_period_reconciler (10min)",
-        ]
-    )
+    # Derive expectations from the selected role and only the loops present in
+    # lifespan, so deferred registry entries (for example H3) stay dormant.
+    _WATCHDOG_LOOP_NAMES = [name for name in active_api_loop_names(process_role) if name in _active_loop_names]
 
     async def _loop_watchdog():
         import asyncio as _asyncio
@@ -845,7 +817,11 @@ async def lifespan(app: FastAPI):
     # unregistered or duplicated loop name defeats the entire point of the
     # watchdog (ranked audit blocker #27), so this must surface loudly rather
     # than be swallowed like a soft warning.
-    _watchable_names = [n for n in _spawned_loop_names if n != "loop_watchdog (5min)"]
+    _unclassified_names = sorted(set(_spawned_loop_names) - set(LOOP_PLACEMENT))
+    if _unclassified_names:
+        raise RuntimeError(f"Background loops missing process-role classification: {_unclassified_names}")
+
+    _watchable_names = _active_loop_names
     _watched_counts: dict[str, int] = {}
     for _n in _WATCHDOG_LOOP_NAMES:
         _watched_counts[_n] = _watched_counts.get(_n, 0) + 1

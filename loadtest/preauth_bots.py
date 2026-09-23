@@ -23,6 +23,7 @@ untouched (it still fires exactly as designed if a real client hits it).
 Usage:
     cd loadtest
     export LOADTEST_BASE_URL=https://spinr-backend-staging.fly.dev
+    export LOADTEST_ALLOWED_ORIGINS=https://spinr-backend-staging.fly.dev
     python preauth_bots.py --riders 45 --drivers 15
 
 Writes results/bot_tokens.json (path overridable via LOADTEST_TOKEN_CACHE,
@@ -42,13 +43,13 @@ import argparse
 import json
 import os
 import sys
-import urllib.parse
 import time
 from pathlib import Path
 
 import requests
 
 from bot_common import API, BASE_OTP, TOKEN_CACHE_PATH, next_phone
+from target_guard import guard_requests_session, validate_api_target
 
 DEFAULT_RATE_PER_MIN = float(os.environ.get("LOADTEST_PREAUTH_RATE", "4"))
 
@@ -73,11 +74,6 @@ def _login_one(base_url: str, session: requests.Session, phone: str) -> dict:
     }
 
 
-_PRODUCTION_HOSTS = frozenset(
-    {"api-spinr.spinr.ca", "api.spinr.ca", "spinr.ca", "www.spinr.ca"}
-)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--riders", type=int, default=45)
@@ -94,17 +90,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Review fix (2026-09-03): never against production. The server refuses
-    # the dev OTP there anyway, but this script should not even try -- it
-    # hammers verify-otp with 60 accounts.
-    host = (urllib.parse.urlsplit(args.base_url).hostname or "").lower()
-    if host in _PRODUCTION_HOSTS or (
-        host.endswith("spinr.ca") and "staging" not in host
-    ):
-        print(
-            f"REFUSING: --base-url host {host!r} looks like production.",
-            file=sys.stderr,
-        )
+    try:
+        args.base_url = validate_api_target(args.base_url)
+    except ValueError as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
         return 2
 
     if args.rate_per_min >= 5:
@@ -126,7 +115,7 @@ def main() -> int:
 
     riders: list[dict] = []
     drivers: list[dict] = []
-    session = requests.Session()
+    session = guard_requests_session(requests.Session(), args.base_url)
 
     plan = [("rider", i) for i in range(args.riders)] + [
         ("driver", i) for i in range(args.drivers)

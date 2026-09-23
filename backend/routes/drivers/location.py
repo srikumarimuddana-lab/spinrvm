@@ -45,12 +45,14 @@ from ._shared import (  # noqa: F401
 try:
     from ...utils import metrics
     from ...utils.driver_presence import renew_driver_presence as renew_scoped_presence
+    from ...utils.driver_presence import scoped_present_driver_ids_checked
     from ...utils.error_handling import DatabaseError
     from ...utils.gps_filtering import point_epoch_seconds
     from ...utils.location_write_gate import should_write_marker
 except ImportError:  # pragma: no cover - top-level execution fallback
     from utils import metrics  # type: ignore
     from utils.driver_presence import renew_driver_presence as renew_scoped_presence  # type: ignore
+    from utils.driver_presence import scoped_present_driver_ids_checked  # type: ignore
     from utils.error_handling import DatabaseError  # type: ignore
     from utils.gps_filtering import point_epoch_seconds
     from utils.location_write_gate import should_write_marker  # type: ignore
@@ -89,14 +91,41 @@ async def _current_online_epoch(user_id: str, token_session_id: str | None) -> s
         return None
 
 
+async def _require_current_token_session(user_id: str, token_session_id: str | None) -> None:
+    """Durably reject replaced credentials before acknowledging v2 trip history."""
+    if not token_session_id:
+        raise HTTPException(status_code=409, detail={"code": "SESSION_RECONCILE_REQUIRED"})
+    try:
+        rows = await db_supabase.get_rows(
+            "users", {"id": user_id}, limit=1, columns="current_session_id"
+        )
+    except Exception as exc:
+        logger.error("could not verify current token session for trip batch", exc_info=True)
+        raise HTTPException(status_code=503, detail={"code": "SESSION_AUTHORITY_UNAVAILABLE"}) from exc
+    current_session_id = rows[0].get("current_session_id") if rows else None
+    if current_session_id != token_session_id:
+        raise HTTPException(status_code=409, detail={"code": "SESSION_SUPERSEDED"})
+
+
 async def _require_presence_epoch(
-    user_id: str, token_session_id: str | None, supplied_epoch: str | int | None
+    user_id: str,
+    token_session_id: str | None,
+    supplied_epoch: str | int | None,
+    *,
+    availability_v2: bool | None = None,
 ) -> int | None:
     """Require decimal epoch and token session only while the v2 gate is on."""
-    if not await _availability_v2_enabled():
+    if availability_v2 is None:
+        availability_v2 = await _availability_v2_enabled()
+    if not availability_v2:
         return None
     valid_epoch = None
-    if isinstance(supplied_epoch, str) and supplied_epoch.isascii() and supplied_epoch.isdecimal() and len(supplied_epoch) <= 19:
+    if (
+        isinstance(supplied_epoch, str)
+        and supplied_epoch.isascii()
+        and supplied_epoch.isdecimal()
+        and len(supplied_epoch) <= 19
+    ):
         valid_epoch = int(supplied_epoch)
     elif type(supplied_epoch) is int:
         valid_epoch = supplied_epoch
@@ -368,6 +397,7 @@ class LocationBatchRequest(BaseModel):
 
     ride_id: str = Field(min_length=1)
     recording_session_id: uuid.UUID
+    online_epoch: str | None = None
     points: List[TripLocationPoint] = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
@@ -386,6 +416,7 @@ class IdleLocationBatchRequest(BaseModel):
 
     session_kind: Literal["online_idle"]
     recording_session_id: uuid.UUID
+    online_epoch: str | None = None
     ride_id: None = None
     points: List[TripLocationPoint] = Field(min_length=1, max_length=500)
 
@@ -431,7 +462,9 @@ def _completed_batch_is_within_retention(request: LocationBatchRequest, ride: di
     )
 
 
-async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user: dict) -> dict:
+async def _persist_v2_idle_batch(
+    request: IdleLocationBatchRequest, current_user: dict, token_session_id: str | None = None
+) -> dict:
     """Authorize and persist one durable Period-1 (online-idle) outbox batch.
 
     409s are TERMINAL for the client outbox (it drains the batch), so they are
@@ -444,6 +477,14 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
     if not driver_rows:
         raise HTTPException(status_code=403, detail="Driver profile required")
     driver = driver_rows[0]
+    availability_v2 = await _availability_v2_enabled()
+    presence_epoch = (
+        await _require_presence_epoch(
+            current_user["id"], token_session_id, request.online_epoch, availability_v2=True
+        )
+        if availability_v2
+        else None
+    )
 
     try:
         try:
@@ -458,6 +499,12 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
         raise HTTPException(status_code=409, detail="Idle location recording is not enabled")
     if not driver.get("is_online"):
         raise HTTPException(status_code=409, detail="Driver is not online")
+
+    if availability_v2:
+        contact = await renew_scoped_presence(driver["id"], token_session_id, presence_epoch)
+        conflict = _presence_conflict(contact)
+        if conflict:
+            raise conflict
 
     try:
         from ...utils.breadcrumbs import persist_idle_location_batch, resolve_active_ride
@@ -500,15 +547,36 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
                         update_data["period1_accum_since"] = datetime.now(timezone.utc)
             except Exception:
                 logger.error("period1 accumulator update failed for driver %s", driver["id"], exc_info=True)
-        await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_idle")
+        if availability_v2:
+            gps_presence = await renew_scoped_presence(
+                driver["id"], token_session_id, presence_epoch, location_captured_at=latest["captured_at"]
+            )
+            if gps_presence.get("status") == "renewed":
+                await _write_marker_if_due(
+                    {"id": driver["id"]},
+                    update_data,
+                    str(driver["id"]),
+                    "rest_v2_idle",
+                    presence_session_id=token_session_id,
+                    presence_epoch=presence_epoch,
+                )
+        else:
+            await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_idle")
 
-    if accepted_rows and -5 <= (datetime.now(timezone.utc).timestamp() - (point_epoch_seconds(latest) or 0)) <= 60:
+    if (
+        not availability_v2
+        and accepted_rows
+        and -5 <= (datetime.now(timezone.utc).timestamp() - (point_epoch_seconds(latest) or 0)) <= 60
+    ):
         await _deps.mark_present(driver["id"])
     return result.ack.to_dict()
 
 
 async def _persist_v2_location_batch(
-    request: LocationBatchRequest, current_user: dict, background_tasks: BackgroundTasks
+    request: LocationBatchRequest,
+    current_user: dict,
+    background_tasks: BackgroundTasks,
+    token_session_id: str | None,
 ) -> dict:
     """Authorize and persist one acknowledged v2 outbox batch before marker updates."""
     # The driver row and the ride row are independent reads; issue them
@@ -529,6 +597,14 @@ async def _persist_v2_location_batch(
     if not driver_rows:
         raise HTTPException(status_code=403, detail="Driver profile required")
     driver = driver_rows[0]
+    availability_v2 = await _availability_v2_enabled()
+    if availability_v2:
+        await _require_current_token_session(current_user["id"], token_session_id)
+    presence_epoch = None
+    if availability_v2 and request.online_epoch is not None:
+        presence_epoch = await _require_presence_epoch(
+            current_user["id"], token_session_id, request.online_epoch, availability_v2=True
+        )
 
     # Same contract as the previous {id, driver_id} filter: a ride that is not
     # this driver's — including an unassigned one — is "not found", never a
@@ -613,8 +689,11 @@ async def _persist_v2_location_batch(
             latest.mocked,
             bool(driver.get("is_online")),
             parse_iso_utc(latest.captured_at.isoformat()),
+            token_session_id=token_session_id,
+            online_epoch=presence_epoch,
+            availability_v2=availability_v2,
         )
-    elif driver.get("is_online"):
+    elif driver.get("is_online") and not availability_v2:
         background_tasks.add_task(_deps.mark_present, driver["id"])
 
     return result.ack.to_dict()
@@ -706,7 +785,10 @@ async def get_nearby_drivers_public(
     try:
         driver_ids = [d["id"] for d in drivers if d.get("id")]
         if driver_ids:
-            present, reachable = await present_driver_ids_checked(driver_ids)
+            presence_reader = (
+                scoped_present_driver_ids_checked if await _availability_v2_enabled() else present_driver_ids_checked
+            )
+            present, reachable = await presence_reader(driver_ids)
             if reachable:
                 drivers = [d for d in drivers if d["id"] in present]
             else:
@@ -903,7 +985,9 @@ async def update_live_location(
     captured_at = parse_iso_utc(point.captured_at.isoformat())
     if not -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60:
         raise HTTPException(status_code=422, detail="A recent position is required")
-    presence_epoch = await _require_presence_epoch(current_user["id"], token_session_id, point.online_epoch)
+    presence_epoch = await _require_presence_epoch(
+        current_user["id"], token_session_id, point.online_epoch, availability_v2=availability_enabled
+    )
     availability_v2 = presence_epoch is not None
     # Query the assigned ride before renewal so a fenced idle session returns a
     # conflict, while active-trip location delivery remains available for the
@@ -980,9 +1064,9 @@ async def update_location_batch(
     await _guard_revoked_session(token_session_id)
     v2_request = _parse_v2_location_batch(batch)
     if isinstance(v2_request, IdleLocationBatchRequest):
-        return await _persist_v2_idle_batch(v2_request, current_user)
+        return await _persist_v2_idle_batch(v2_request, current_user, token_session_id)
     if v2_request is not None:
-        return await _persist_v2_location_batch(v2_request, current_user, background_tasks)
+        return await _persist_v2_location_batch(v2_request, current_user, background_tasks, token_session_id)
 
     try:
         from ...utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
@@ -1010,6 +1094,43 @@ async def update_location_batch(
         # GPS spoofing check
         driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
+        availability_v2 = await _availability_v2_enabled()
+        presence_epoch = None
+        v2_active_ride = None
+        if availability_v2:
+            if driver_rows:
+                active_rows = await db_supabase.get_rows(
+                    "rides",
+                    {"driver_id": driver_id, "status": {"$in": list(_V2_ACTIVE_RIDE_STATUSES)}},
+                    limit=1,
+                )
+                v2_active_ride = active_rows[0] if active_rows else None
+            raw_epoch = batch.get("online_epoch") if isinstance(batch, dict) else None
+            raw_epoch = raw_epoch if raw_epoch is not None else latest.get("online_epoch")
+            if raw_epoch is not None:
+                try:
+                    presence_epoch = await _require_presence_epoch(
+                        current_user["id"], token_session_id, raw_epoch, availability_v2=True
+                    )
+                except HTTPException:
+                    if v2_active_ride is None:
+                        raise
+            else:
+                if not token_session_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "SESSION_RECONCILE_REQUIRED", "reason_code": "SESSION_MISSING"},
+                    )
+                if driver_rows and driver_rows[0].get("is_online") and v2_active_ride is None:
+                    current_epoch = await _current_online_epoch(current_user["id"], token_session_id)
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "AVAILABILITY_UPGRADE_REQUIRED",
+                            "reason_code": "ONLINE_EPOCH_REQUIRED",
+                            "online_epoch": current_epoch,
+                        },
+                    )
         fresh = -5 <= (datetime.now(timezone.utc) - captured_at).total_seconds() <= 60
         trusted = False
         if fresh:
@@ -1034,6 +1155,38 @@ async def update_location_batch(
                 update_data["heading"] = float(heading) % 360
             except (TypeError, ValueError):
                 pass
+
+        marker_fence_valid = not availability_v2
+        if availability_v2 and presence_epoch is not None:
+            presence_result = await renew_scoped_presence(driver_id, token_session_id, presence_epoch)
+            if presence_result.get("code") == "SESSION_SUPERSEDED":
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "SESSION_SUPERSEDED", "online_epoch": presence_result.get("online_epoch")},
+                )
+            if presence_result.get("status") in {"stale_epoch", "offline"} and v2_active_ride is None:
+                conflict = _presence_conflict(presence_result)
+                if conflict:
+                    raise conflict
+            marker_fence_valid = presence_result.get("status") in {"renewed", "unavailable"}
+            if marker_fence_valid and fresh and trusted:
+                gps_result = await renew_scoped_presence(
+                    driver_id,
+                    token_session_id,
+                    presence_epoch,
+                    location_captured_at=captured_at,
+                )
+                if gps_result.get("code") == "SESSION_SUPERSEDED":
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "SESSION_SUPERSEDED", "online_epoch": gps_result.get("online_epoch")},
+                    )
+                if gps_result.get("status") in {"stale_epoch", "offline"}:
+                    marker_fence_valid = False
+                    if v2_active_ride is None:
+                        conflict = _presence_conflict(gps_result)
+                        if conflict:
+                            raise conflict
 
         # Period-1 (online, no active ride) deadhead-distance scalar accumulator.
         # Off by default; a deliberate opt-in since it measures a contractor's
@@ -1119,10 +1272,17 @@ async def update_location_batch(
         # window keyed on a users.id no other path shares and, worse, counted
         # outcome="written" for a write that never happened, polluting the
         # exact counter the shadow measurement reads.
-        if driver_rows and (trusted or any(key in update_data for key in _PERIOD1_COLUMNS)):
+        if driver_rows and marker_fence_valid and (trusted or any(key in update_data for key in _PERIOD1_COLUMNS)):
             if not trusted:
                 update_data["location_captured_at"] = datetime.fromtimestamp(0, timezone.utc)
-            await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(driver_id), "rest_v1")
+            await _write_marker_if_due(
+                {"user_id": current_user["id"]},
+                update_data,
+                str(driver_id),
+                "rest_v1",
+                presence_session_id=token_session_id if availability_v2 else None,
+                presence_epoch=presence_epoch if availability_v2 else None,
+            )
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
@@ -1160,7 +1320,7 @@ async def update_location_batch(
         # above) only ever touches lat/lng/updated_at/heading/
         # period1_accum_* -- never `is_online` -- so a second read could not
         # observe a different value than the first.
-        if fresh and trusted and driver_row and driver_row.get("is_online"):
+        if fresh and trusted and driver_row and driver_row.get("is_online") and not availability_v2:
             await _deps.mark_present(driver_row["id"])
 
     return {"success": True}

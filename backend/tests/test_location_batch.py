@@ -57,16 +57,19 @@ def _ride(status: str = "in_progress", **overrides) -> dict:
     return ride
 
 
-def _install_driver_and_ride(monkeypatch: pytest.MonkeyPatch, ride: dict) -> AsyncMock:
+def _install_driver_and_ride(monkeypatch: pytest.MonkeyPatch, ride: dict, *, online: bool = False) -> AsyncMock:
     async def get_rows(table, filters, **kwargs):
         if table == "drivers":
-            return [{"id": "driver_1", "user_id": "user_1", "is_online": False}]
+            return [{"id": "driver_1", "user_id": "user_1", "is_online": online}]
         if table == "rides":
             return [ride]
+        if table == "users":
+            return [{"current_session_id": "session-1"}]
         raise AssertionError(f"unexpected table: {table}")
 
     update_one = AsyncMock()
     monkeypatch.setattr(location.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(location, "_availability_v2_enabled", AsyncMock(return_value=False))
     monkeypatch.setattr(location.db_supabase, "update_one", update_one)
     monkeypatch.setattr(location.db_supabase, "update_driver_location", update_one)
     return update_one
@@ -131,6 +134,97 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
 
     _run(bg())
     assert events == ["persist", "marker"]
+
+
+def test_v2_trip_batch_without_epoch_keeps_history_but_never_writes_marker(monkeypatch: pytest.MonkeyPatch):
+    """Trip history remains acknowledged while idle marker authority is missing."""
+    _install_driver_and_ride(monkeypatch, _ride(), online=True)
+    monkeypatch.setattr(location, "_availability_v2_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
+    persist = AsyncMock(return_value=_result())
+    renew = AsyncMock()
+    marker = AsyncMock()
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+    monkeypatch.setattr(location, "renew_scoped_presence", renew)
+    monkeypatch.setattr(location, "_write_marker_if_due", marker)
+    monkeypatch.setattr("utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, None)))
+
+    bg = BackgroundTasks()
+    response = _run(
+        location.update_location_batch(
+            _payload([_point(1, datetime.now(timezone.utc).isoformat())]),
+            background_tasks=bg,
+            current_user={"id": "user_1"},
+            token_session_id="session-1",
+        )
+    )
+    assert response == _result().ack.to_dict()
+    persist.assert_awaited_once()
+    assert len(bg.tasks) == 1
+    _run(bg())
+    renew.assert_not_awaited()
+    marker.assert_not_awaited()
+
+
+def test_v2_trip_batch_rejects_superseded_session_before_history_persist(monkeypatch: pytest.MonkeyPatch):
+    persist = AsyncMock(return_value=_result())
+    _install_driver_and_ride(monkeypatch, _ride(), online=True)
+    monkeypatch.setattr(location, "_availability_v2_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
+
+    async def get_rows(table, filters, **kwargs):
+        if table == "drivers":
+            return [{"id": "driver_1", "user_id": "user_1", "is_online": True}]
+        if table == "rides":
+            return [_ride()]
+        if table == "users":
+            return [{"current_session_id": "replacement-session"}]
+        return []
+
+    monkeypatch.setattr(location.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+    with pytest.raises(HTTPException) as exc:
+        _run(
+            location.update_location_batch(
+                _payload(),
+                background_tasks=BackgroundTasks(),
+                current_user={"id": "user_1"},
+                token_session_id="session-1",
+            )
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "SESSION_SUPERSEDED"
+    persist.assert_not_awaited()
+
+
+def test_v2_trip_batch_stale_epoch_keeps_history_for_current_session(monkeypatch: pytest.MonkeyPatch):
+    _install_driver_and_ride(monkeypatch, _ride(), online=True)
+    monkeypatch.setattr(location, "_availability_v2_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(location, "_guard_revoked_session", AsyncMock())
+    persist = AsyncMock(return_value=_result())
+    renew = AsyncMock(return_value={"status": "stale_epoch", "code": "ONLINE_EPOCH_STALE"})
+    marker = AsyncMock()
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+    monkeypatch.setattr(location, "renew_scoped_presence", renew)
+    monkeypatch.setattr(location, "_write_marker_if_due", marker)
+    monkeypatch.setattr("utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, None)))
+    payload = _payload([_point(1, datetime.now(timezone.utc).isoformat())])
+    payload["online_epoch"] = "4"
+
+    bg = BackgroundTasks()
+    response = _run(
+        location.update_location_batch(
+            payload,
+            background_tasks=bg,
+            current_user={"id": "user_1"},
+            token_session_id="session-1",
+        )
+    )
+    assert response == _result().ack.to_dict()
+    persist.assert_awaited_once()
+    _run(bg())
+    renew.assert_awaited_once()
+    marker.assert_not_awaited()
 
 
 def test_v2_batch_rejects_a_ride_assigned_to_another_driver_as_not_found(monkeypatch: pytest.MonkeyPatch):

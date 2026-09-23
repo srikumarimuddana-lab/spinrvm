@@ -7,6 +7,9 @@
 --
 -- Rollback: re-run the CREATE OR REPLACE FUNCTION bodies from migrations 162
 -- and 384, which restore the prior aggregate semantics. No data is changed.
+-- migration-override-ok: intentionally replaces admin_payout_stats and
+-- admin_payout_window_stats with identical signatures to exclude noncash
+-- clawbacks from fleet cash reports; execute grants remain restricted below.
 --
 -- Dry-run: admin_payout_stats and admin_payout_window_stats should not count
 -- completed clawback rows as paid or as payout volume; regular auto, standard,
@@ -34,7 +37,8 @@ COMMENT ON FUNCTION public.admin_payout_stats() IS
     'Payout totals by status + counts for /payouts/stats. Replaces a '
     'whole-table fetch + Python sum.';
 
-REVOKE EXECUTE ON FUNCTION public.admin_payout_stats() FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_payout_stats() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_payout_stats() TO service_role;
 
 CREATE OR REPLACE FUNCTION public.admin_payout_window_stats(
     p_cur_start  timestamptz,
@@ -200,4 +204,7 @@ COMMENT ON FUNCTION public.admin_payout_window_stats(
 
 REVOKE EXECUTE ON FUNCTION public.admin_payout_window_stats(
     timestamptz, timestamptz, timestamptz, timestamptz, text
-) FROM anon, authenticated;
+) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_payout_window_stats(
+    timestamptz, timestamptz, timestamptz, timestamptz, text
+) TO service_role;

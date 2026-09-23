@@ -23,9 +23,19 @@ def test_window_cash_totals_and_counts_exclude_clawbacks():
 
 
 def test_read_only_security_grants_remain_restricted():
-    for body in (STATS, WINDOW):
+    for body, signature in (
+        (STATS, "public.admin_payout_stats()"),
+        (
+            WINDOW,
+            "public.admin_payout_window_stats(",
+        ),
+    ):
+        normalized = " ".join(body.split())
         assert "STABLE" in body
         assert "SECURITY DEFINER" in body
         assert "SET search_path = public, pg_catalog" in body
-        assert "REVOKE EXECUTE" in body
-        assert "FROM anon, authenticated" in body
+        assert f"REVOKE EXECUTE ON FUNCTION {signature}" in normalized
+        assert "FROM PUBLIC, anon, authenticated" in normalized
+        assert f"GRANT EXECUTE ON FUNCTION {signature}" in normalized
+        assert "TO service_role" in normalized
+    assert "timestamptz, timestamptz, timestamptz, timestamptz, text )" in " ".join(WINDOW.split())

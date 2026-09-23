@@ -94,7 +94,7 @@ def _stop(patches):
         p.stop()
 
 
-async def _call_verify_otp(patches, code=CODE, consent_accepted=True):
+async def _call_verify_otp(patches, code=CODE, consent_accepted=True, client_app=None):
     from backend.routes.auth import verify_otp
     from backend.schemas import VerifyOTPRequest
 
@@ -102,7 +102,10 @@ async def _call_verify_otp(patches, code=CODE, consent_accepted=True):
     # consent-gating tests below is exercising unrelated behaviour (existing
     # user login, OTP validation branches, etc.) and would otherwise trip the
     # new-user consent gate incidentally.
-    body = VerifyOTPRequest(phone=PHONE, code=code, consent_accepted=consent_accepted)
+    body_fields = {"phone": PHONE, "code": code, "consent_accepted": consent_accepted}
+    if client_app is not None:
+        body_fields["client_app"] = client_app
+    body = VerifyOTPRequest(**body_fields)
     request = MagicMock()
     request.client = MagicMock(host="127.0.0.1")
     request.headers = {"user-agent": "pytest"}
@@ -146,6 +149,37 @@ async def test_existing_user_login_returns_auth_response():
     assert result.is_new_user is False
     assert result.token
     assert result.refresh_token == "raw-refresh"
+
+
+@pytest.mark.parametrize("client_app", [None, "rider", "driver"])
+@pytest.mark.asyncio
+async def test_existing_driver_login_always_uses_generation_rpc(client_app):
+    """The client app field is attribution only and cannot disable driver revocation."""
+    user = {
+        "id": "driver-u1",
+        "phone": PHONE,
+        "role": "driver",
+        "is_rider": True,
+        "is_driver": True,
+        "token_version": 6,
+        "profile_complete": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    rpc = AsyncMock(return_value=[{"enabled": False}])
+    patches = _base_patches(otp_record=_valid_otp_record(), user_lookup_result=dict(user))
+    patches += [
+        patch("backend.routes.auth.db_supabase.rpc", rpc),
+        patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+        patch(
+            "backend.routes.auth.issue_refresh_token",
+            AsyncMock(return_value=("raw-refresh", "row-1", datetime.now(timezone.utc) + timedelta(days=30))),
+        ),
+    ]
+
+    await _call_verify_otp(patches, client_app=client_app)
+
+    rpc.assert_awaited_once()
+    assert rpc.await_args.args[0] == "begin_driver_session"
 
 
 @pytest.mark.asyncio

@@ -639,6 +639,21 @@ async def _issue_company_email_session(
         if status == "pending_deletion":
             raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
         user = dict(existing_user)
+        driver_session_enabled = False
+        token_version = int(user.get("token_version") or 0)
+        if user.get("is_driver") or user.get("role") == "driver":
+            try:
+                driver_session_enabled, token_version, _ = await _begin_driver_session(user, session_id)
+                if driver_session_enabled:
+                    user["token_version"] = token_version
+            except Exception as e:
+                logger.error("company email auth: atomic driver-session setup failed", exc_info=True)
+                raise SpinrException(
+                    message="Could not update session, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from e
         try:
             # Completing this OTP IS proof the person controls the inbox, so
             # stamp email_verified alongside the session. Without it the flag
@@ -648,12 +663,14 @@ async def _issue_company_email_session(
             # email_verified gate then 403'd exactly the employees it exists
             # for (2026-09-20 review, C5).
             _verify_patch = {
-                "current_session_id": session_id,
                 "email_verified": True,
                 "email_verified_at": datetime.now(timezone.utc).isoformat(),
             }
+            if not driver_session_enabled:
+                _verify_patch["current_session_id"] = session_id
             await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
             user.update(_verify_patch)
+            user["current_session_id"] = session_id
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -712,14 +729,14 @@ async def _issue_company_email_session(
         user["id"],
         email,
         session_id=session_id,
-        token_version=int(user.get("token_version") or 0),
+        token_version=token_version if not is_new_user else int(user.get("token_version") or 0),
     )
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
         user["id"],
         audience="rider",
         user_agent=user_agent,
         ip=client_ip,
-        token_version=int(user.get("token_version") or 0),
+        token_version=token_version if not is_new_user else int(user.get("token_version") or 0),
     )
     csrf = generate_csrf_token()
     set_csrf_cookie(
@@ -1118,9 +1135,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             previous_session_id = existing_user.get("current_session_id")
             driver_session_enabled = False
             token_version = int(existing_user.get("token_version") or 0)
-            if body.client_app == "driver" and (
-                existing_user.get("is_driver") or existing_user.get("role") == "driver"
-            ):
+            if existing_user.get("is_driver") or existing_user.get("role") == "driver":
                 try:
                     driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session(
                         existing_user, session_id
@@ -1447,8 +1462,24 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
 
     # Log the user back in (fresh session + tokens), mirroring verify-otp.
     session_id = str(uuid.uuid4())
+    driver_session_enabled = False
+    token_version = int(user.get("token_version") or 0)
+    if user.get("is_driver") or user.get("role") == "driver":
+        try:
+            driver_session_enabled, token_version, _ = await _begin_driver_session(user, session_id)
+            if driver_session_enabled:
+                user["token_version"] = token_version
+        except Exception as e:
+            logger.error("reactivate: atomic driver-session setup failed", exc_info=True)
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
     try:
-        await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
+        if not driver_session_enabled:
+            await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
         user["current_session_id"] = session_id
     except Exception as e:
         # Same defect verify_otp and firebase_auth_login guard against: without
@@ -1468,7 +1499,6 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
     await redis_set(f"session:{user_id}", session_id, ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
-    token_version = int(user.get("token_version") or 0)
     await _alert_if_new_device(user, user_agent)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)

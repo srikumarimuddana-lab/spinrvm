@@ -384,15 +384,19 @@ class TestReactivateAccount:
         user = {
             "id": "u-react-1",
             "phone": "+13065551111",
+            "role": "driver",
+            "is_driver": True,
             "status": "pending_deletion",
             "token_version": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         update_mock = AsyncMock(return_value=True)
+        session_rpc = AsyncMock(return_value=[{"enabled": False}])
         with (
             patch("backend.routes.auth.verify_reactivation_token", return_value="u-react-1"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(user))),
             patch("backend.routes.auth.db_supabase.update_one", update_mock),
+            patch("backend.routes.auth.db_supabase.rpc", session_rpc),
             patch("backend.routes.auth.redis_set", AsyncMock()),
             patch(
                 "backend.routes.auth.issue_refresh_token",
@@ -410,6 +414,7 @@ class TestReactivateAccount:
         # First update_one call restores status; called with users table + user id
         calls = [c.args for c in update_mock.await_args_list]
         assert any(c[0] == "users" and c[1] == {"id": "u-react-1"} and c[2].get("status") == "active" for c in calls)
+        session_rpc.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_reactivation_checks_for_new_device(self):
@@ -1015,3 +1020,40 @@ async def test_refresh_does_not_upgrade_null_generation_parent(monkeypatch):
 
     assert issue.await_args.kwargs["token_version"] is None
     assert jwt_spy.call_args.kwargs["token_version"] == 4
+
+
+@pytest.mark.anyio
+async def test_company_email_login_for_driver_uses_generation_rpc():
+    from backend.routes import auth
+
+    user = {
+        "id": "driver-email-user",
+        "phone": "+13065550001",
+        "email": "driver@example.ca",
+        "role": "driver",
+        "is_driver": True,
+        "profile_complete": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "token_version": 5,
+    }
+    rpc = AsyncMock(return_value=[{"enabled": False}])
+    with (
+        patch.object(auth, "_find_user_by_email", AsyncMock(return_value=user)),
+        patch.object(auth.db_supabase, "rpc", rpc),
+        patch.object(auth.db_supabase, "update_one", AsyncMock(return_value=True)),
+        patch.object(auth, "redis_set", AsyncMock()),
+        patch.object(auth, "_activate_pending_company_invites", AsyncMock()),
+        patch.object(auth, "_alert_if_new_device", AsyncMock()),
+        patch.object(auth, "issue_refresh_token", AsyncMock(return_value=("refresh", "row", datetime.now(timezone.utc)))),
+        patch.object(auth, "create_jwt_token", return_value="access"),
+        patch.object(auth, "set_csrf_cookie"),
+    ):
+        result = await auth._issue_company_email_session(
+            request=_request(), response=MagicMock(), email="driver@example.ca"
+        )
+
+    assert result.token == "access"
+    rpc.assert_awaited_once()
+    assert rpc.await_args.args[0] == "begin_driver_session"
+    assert rpc.await_args.args[1]["p_user_id"] == "driver-email-user"
+    assert rpc.await_args.args[1]["p_session_id"]

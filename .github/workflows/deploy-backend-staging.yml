@@ -7,7 +7,8 @@ name: Deploy Backend to Fly.io (Staging)
 # # THIS WORKFLOW WILL FAIL UNTIL A HUMAN COMPLETES MANUAL SETUP.           #
 # #                                                                          #
 # # The secrets it references — FLY_API_TOKEN_STAGING, SUPABASE_STAGING_URL,#
-# # SUPABASE_STAGING_SERVICE_ROLE_KEY — do not exist in this repo yet, and  #
+# # SUPABASE_STAGING_SERVICE_ROLE_KEY, FLY_HEALTH_URL_STAGING and           #
+# # METRICS_AUTH_TOKEN_STAGING — do not exist in this repo yet, and        #
 # # the Fly app (spinr-backend-staging) and the staging Supabase project    #
 # # have not been created either. Every run of this workflow before that    #
 # # setup happens will fail fast at the "Verify required secrets" step and  #
@@ -34,7 +35,7 @@ on:
 # Serialize deploys the same way deploy-fly.yml does for production — queue,
 # never cancel an in-flight rollout.
 concurrency:
-  group: deploy-fly-staging-${{ github.ref }}
+  group: deploy-fly-spinr-backend-staging
   cancel-in-progress: false
 
 jobs:
@@ -48,8 +49,12 @@ jobs:
     if: github.repository == 'srikumarimuddana-lab/spinrvm'
     env:
       FLY_APP: spinr-backend-staging
+      FLY_HEALTH_URL_STAGING: ${{ secrets.FLY_HEALTH_URL_STAGING }}
+      METRICS_AUTH_TOKEN_STAGING: ${{ secrets.METRICS_AUTH_TOKEN_STAGING }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Verify required secrets are set
         run: |
@@ -64,6 +69,14 @@ jobs:
           fi
           if [ -z "${SUPABASE_STAGING_SERVICE_ROLE_KEY}" ]; then
             echo "::error title=Missing secret::SUPABASE_STAGING_SERVICE_ROLE_KEY is not set."
+            missing=1
+          fi
+          if [ "${FLY_HEALTH_URL_STAGING}" != "https://spinr-backend-staging.fly.dev" ]; then
+            echo "::error title=Invalid secret::FLY_HEALTH_URL_STAGING must target the staging Fly app."
+            missing=1
+          fi
+          if [ -z "${METRICS_AUTH_TOKEN_STAGING}" ]; then
+            echo "::error title=Missing secret::METRICS_AUTH_TOKEN_STAGING is not set."
             missing=1
           fi
           if [ "$missing" = "1" ]; then
@@ -83,17 +96,89 @@ jobs:
             echo "        SUPABASE_STAGING_URL, SUPABASE_STAGING_SERVICE_ROLE_KEY"
             exit 1
           fi
-          echo "All three staging secrets are present."
+          echo "All required staging secrets and probes are configured."
         env:
           FLY_API_TOKEN_STAGING: ${{ secrets.FLY_API_TOKEN_STAGING }}
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+          FLY_HEALTH_URL_STAGING: ${{ secrets.FLY_HEALTH_URL_STAGING }}
+          METRICS_AUTH_TOKEN_STAGING: ${{ secrets.METRICS_AUTH_TOKEN_STAGING }}
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
 
       - name: Show flyctl version
         run: flyctl version
+
+      # Capture the serving digest and source config before secret staging or
+      # candidate mutation. An empty app is an explicit first-deploy bootstrap.
+      - name: Capture verified staging recovery baseline
+        id: snapshot
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+        run: |
+          set -euo pipefail
+          recovery_dir="${RUNNER_TEMP}/staging-recovery"
+          mkdir -p "${recovery_dir}"
+          flyctl machine list -a "${FLY_APP}" --json > "${recovery_dir}/machines.json"
+          count=$(jq -er 'length' "${recovery_dir}/machines.json")
+          if [ "${count}" -eq 0 ]; then
+            cp backend/fly.staging.toml "${recovery_dir}/fly.staging.toml"
+            printf '{}\n' > "${recovery_dir}/deploy-info.json"
+          else
+            ready=000
+            for i in $(seq 1 18); do
+              ready=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/ready" \
+                -o /dev/null -w "%{http_code}" 2>/dev/null || echo 000)
+              [ "${ready}" = 200 ] && break
+              sleep 10
+            done
+            if [ "${ready}" != 200 ]; then
+              echo "::error::Existing staging baseline is not ready; refusing candidate deployment."
+              exit 1
+            fi
+            flyctl machine list -a "${FLY_APP}" --json > "${recovery_dir}/machines.json"
+            curl -sf --max-time 10 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN_STAGING}" \
+              "${FLY_HEALTH_URL_STAGING}/deploy-info" > "${recovery_dir}/deploy-info.json"
+            served_sha=$(jq -er '.build.sha' "${recovery_dir}/deploy-info.json")
+            if ! [[ "${served_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Served staging SHA is invalid; refusing candidate deployment."
+              exit 1
+            fi
+            git show "${served_sha}:backend/fly.staging.toml" > "${recovery_dir}/fly.staging.toml"
+          fi
+          python3 scripts/fly_staging_recovery.py \
+            --app "${FLY_APP}" \
+            --machines "${recovery_dir}/machines.json" \
+            --deploy-info "${recovery_dir}/deploy-info.json" \
+            --config "${recovery_dir}/fly.staging.toml" \
+            --output "${recovery_dir}/snapshot.json"
+          if [ -s "${recovery_dir}/snapshot.json" ]; then
+            RECOVERY_DIR="${recovery_dir}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.fly_staging_recovery import validate_snapshot
+
+          recovery_dir = Path(os.environ["RECOVERY_DIR"])
+          snapshot = json.loads((recovery_dir / "snapshot.json").read_text())
+          config = (recovery_dir / "fly.staging.toml").read_text()
+          validate_snapshot(snapshot, config)
+          PY
+            echo "has_baseline=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_baseline=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Preserve recovery snapshot artifact
+        if: steps.snapshot.outputs.has_baseline == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: staging-recovery-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/staging-recovery/snapshot.json
+            ${{ runner.temp }}/staging-recovery/fly.staging.toml
+          retention-days: 30
 
       # Stage the staging Supabase credentials as Fly runtime secrets on the
       # staging app only. FLY_API_TOKEN_STAGING is scoped to
@@ -112,31 +197,46 @@ jobs:
           SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
 
-      - name: Deploy to Fly.io (staging)
+      - name: Stamp staging build info
+        run: |
+          printf '{"sha":"%s","ref":"%s","built_at":"%s","provider":"fly"}\n' \
+            "${GITHUB_SHA}" "${GITHUB_REF}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > backend/build_info.json
+
+      - name: Deploy staging candidate
+        id: deploy
         working-directory: backend
         run: flyctl deploy --remote-only --config fly.staging.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
 
-      # Optional health probe, same pattern as deploy-fly.yml. Set
-      # FLY_HEALTH_URL_STAGING (e.g. https://spinr-backend-staging.fly.dev)
-      # once the app exists; skipped until then.
-      - name: Health check
-        id: health
-        if: ${{ env.FLY_HEALTH_URL_STAGING != '' }}
-        env:
-          FLY_HEALTH_URL_STAGING: ${{ secrets.FLY_HEALTH_URL_STAGING }}
+      - name: Staging readiness check
+        id: ready
         run: |
-          echo "Polling ${FLY_HEALTH_URL_STAGING}/health …"
           for i in $(seq 1 18); do
-            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/health" \
-              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
-            echo "  attempt ${i}/18 → HTTP ${STATUS}"
-            if [ "$STATUS" = "200" ]; then
-              echo "Staging service is healthy."
+            status=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/ready" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo 000)
+            if [ "${status}" = 200 ]; then
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Health check timed out after 3 minutes."
+          echo "::error::Staging /ready failed after candidate deploy."
+          exit 1
+
+      - name: Verify staging build SHA is serving
+        id: sha
+        run: |
+          set -euo pipefail
+          running=
+          for i in $(seq 1 12); do
+            running=$(curl -sf --max-time 5 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN_STAGING}" \
+              "${FLY_HEALTH_URL_STAGING}/deploy-info" | jq -r '.build.sha // empty' 2>/dev/null || true)
+            if [ "${running}" = "${GITHUB_SHA}" ]; then
+              echo "sha=${running}" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Wrong staging build::Expected ${GITHUB_SHA}, got ${running:-<none>}."
           exit 1

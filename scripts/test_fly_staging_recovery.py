@@ -1,6 +1,7 @@
 """Offline safety tests for staging Fly image recovery snapshots."""
 
 import unittest
+from pathlib import Path
 
 from fly_staging_recovery import RecoveryDenied, capture_snapshot, validate_snapshot
 
@@ -77,6 +78,39 @@ class SnapshotTests(unittest.TestCase):
         snapshot["image_ref"] = "registry.fly.io/spinr-backend-staging:latest"
         with self.assertRaises(RecoveryDenied):
             validate_snapshot(snapshot, CONFIG)
+
+
+class StagingWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = (Path(__file__).resolve().parents[1] / ".github/workflows/deploy-backend-staging.yml").read_text()
+
+    def test_workflow_is_staging_only_and_fetches_history(self):
+        self.assertIn("FLY_APP: spinr-backend-staging", self.source)
+        self.assertIn("fetch-depth: 0", self.source)
+        self.assertIn("group: deploy-fly-spinr-backend-staging", self.source)
+        self.assertNotIn("deploy-fly-staging-${{ github.ref }}", self.source)
+        self.assertIn("FLY_API_TOKEN_STAGING", self.source)
+        self.assertNotIn("secrets.FLY_API_TOKEN }}", self.source)
+        self.assertNotIn("spinr-backend-yyz", self.source)
+
+    def test_baseline_and_probes_are_mandatory_before_candidate_mutation(self):
+        capture = self.source.index("Capture verified staging recovery baseline")
+        stage = self.source.index("Stage staging Supabase credentials in Fly secrets")
+        deploy = self.source.index("Deploy staging candidate")
+        self.assertLess(capture, stage)
+        self.assertLess(stage, deploy)
+        self.assertIn('git show "${served_sha}:backend/fly.staging.toml"', self.source)
+        self.assertIn("METRICS_AUTH_TOKEN_STAGING", self.source)
+        self.assertIn("/ready", self.source)
+        self.assertIn("/deploy-info", self.source)
+        self.assertIn("validate_snapshot", self.source)
+        self.assertIn("Preserve recovery snapshot artifact", self.source)
+        self.assertLess(self.source.index("validate_snapshot"), stage)
+        artifact = self.source[self.source.index("Preserve recovery snapshot artifact"):stage]
+        self.assertIn("snapshot.json", artifact)
+        self.assertIn("fly.staging.toml", artifact)
+        self.assertNotIn("machines.json", artifact)
 
 
 if __name__ == "__main__":

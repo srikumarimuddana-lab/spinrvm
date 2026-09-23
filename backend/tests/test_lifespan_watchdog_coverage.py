@@ -69,12 +69,10 @@ def _watchdog_loop_names(fn: ast.AsyncFunctionDef) -> list[str]:
             and isinstance(node.targets[0], ast.Name)
             and node.targets[0].id == "_WATCHDOG_LOOP_NAMES"
         ):
-            # RHS is `list([...])` — a Call to list() with one list-literal arg.
             value = node.value
             assert isinstance(value, ast.Call), "_WATCHDOG_LOOP_NAMES must be assigned via list([...])"
             assert len(value.args) == 1 and isinstance(value.args[0], ast.List)
-            elts = value.args[0].elts
-            return [e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            return [e.value for e in value.args[0].elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
     raise AssertionError("could not find `_WATCHDOG_LOOP_NAMES = list([...])` in lifespan()")
 
 
@@ -101,6 +99,14 @@ class TestWatchdogCoversEverySpawnedLoop:
 
         extra = sorted(set(watched) - watchable)
         assert extra == [], f"watchdog names with no matching _spawn() call (stale/typo'd): {extra}"
+
+    def test_every_spawned_loop_has_a_role_and_h3_stays_dormant(self, _lifespan_fn):
+        from backend.core.background_loop_registry import LOOP_PLACEMENT
+
+        spawned = set(_spawned_loop_names(_lifespan_fn))
+        assert spawned <= set(LOOP_PLACEMENT)
+        assert "h3_index_reconciler (2min)" in LOOP_PLACEMENT
+        assert "h3_index_reconciler (2min)" not in spawned
 
     def test_watchdog_list_has_no_duplicate_names(self, _lifespan_fn):
         """A duplicate entry is a silent naming collision — one loop's

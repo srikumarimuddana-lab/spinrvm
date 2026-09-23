@@ -56,6 +56,7 @@ COMMENT ON TABLE public.ride_payment_operations IS
 
 ALTER TABLE public.drivers ADD COLUMN IF NOT EXISTS location_captured_at timestamptz;
 
+-- migration-override-ok: intentionally supersedes 445's uuid-typed definition (445 is NEVER_APPLY).
 -- Drop the broken uuid overload so PostgREST never sees two same-named
 -- candidates (PGRST203).
 DROP FUNCTION IF EXISTS public.update_live_driver_marker(uuid, timestamptz, jsonb);

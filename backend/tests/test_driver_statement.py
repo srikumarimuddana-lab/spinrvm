@@ -170,6 +170,36 @@ async def test_build_statement_excludes_over_cap_hold_from_paid_totals():
 
 
 @pytest.mark.asyncio
+async def test_build_statement_lists_refund_hold_without_counting_it_as_cash_paid():
+    payouts = [
+        {
+            "created_at": "2026-07-21T10:00:00+00:00",
+            "amount": "5.00",
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "clawback",
+        },
+        {
+            "created_at": "2026-07-22T10:00:00+00:00",
+            "amount": "20.00",
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "standard",
+        },
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables(rides=(), payouts=payouts)
+        out = await stmt.build_statement({"id": "d1", "name": "Test Driver"}, "weekly", date(2026, 7, 20))
+
+    assert out["payouts_total"] == "20.00"
+    assert out["payouts_spinr_total"] == "20.00"
+    assert len(out["payouts"]) == 2
+    hold = out["payouts"][0]
+    assert hold["type"] == "clawback"
+    assert hold["label"] == "Refund hold adjustment"
+
+
+@pytest.mark.asyncio
 async def test_build_statement_tax_snapshot_fallback():
     rides = [
         {

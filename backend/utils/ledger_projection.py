@@ -154,12 +154,24 @@ def _decompose(event: Dict[str, Any], ride: Optional[Dict[str, Any]]) -> tuple:
             return legs, False, None
         return _degraded_legs(event_type, amount), True, "refund_build_failed"
 
-    if source == "cancellation_fee":
+    # noshow_fee (routes/drivers/ride_cancel.py) carries the same fee split
+    # metadata. It previously fell through to the fare branch below, which —
+    # once the no-show stamps payment_status="paid" — decomposed the FEE
+    # against the ride row's stale pre-trip quote (tax_amount/driver_earnings
+    # of a trip that never happened). Same fee-split decomposition instead.
+    if source in ("cancellation_fee", "noshow_fee"):
         fee_driver = meta.get("fee_driver")
         if fee_driver is None:
             # Historical rows predate the fee-split metadata (added 2026-08-07).
             return _degraded_legs(event_type, amount), True, "no_fee_split_metadata"
-        legs = ledger_service.build_charge_legs(total_cents=amount, driver_cents=to_cents(fee_driver), tax_cents=0)
+        # fee_tax (2026-09-23): GST/PST charged on the fee when
+        # cancellation_fee_tax_enabled is on. Absent on older rows -> 0, which
+        # is exactly what those rows collected.
+        legs = ledger_service.build_charge_legs(
+            total_cents=amount,
+            driver_cents=to_cents(fee_driver),
+            tax_cents=to_cents(meta.get("fee_tax") or 0),
+        )
         if legs:
             return legs, False, None
         return _degraded_legs(event_type, amount), True, "fee_split_inconsistent"

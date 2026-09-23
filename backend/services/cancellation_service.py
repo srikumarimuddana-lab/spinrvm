@@ -20,6 +20,13 @@ except ImportError:
     from models.ride_status import RideStatus  # type: ignore
 
 try:
+    from ..features import calculate_all_fees
+    from . import corporate_wallet_service
+except ImportError:
+    from features import calculate_all_fees  # type: ignore
+    from services import corporate_wallet_service  # type: ignore
+
+try:
     from ..utils.datetime_utils import parse_iso_utc
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
@@ -133,6 +140,188 @@ def calculate_noshow_fee(
     """
     fee_admin, fee_driver, _ = _resolve_cancel_fees(settings, area)
     return fee_admin, fee_driver
+
+
+async def compute_cancellation_fee_tax(
+    fee: Decimal,
+    settings: dict,
+    area: dict | None,
+) -> Tuple[Decimal, dict]:
+    """Return (tax_amount, tax_breakdown) owed ON TOP OF a cancellation/no-show fee.
+
+    POLICY DECISION ENCODED HERE — pending legal/tax confirmation
+    (docs/change-log/2026-09-23-cancellation-fee-tax-receipt-corporate.md):
+    this implements the tax-inclusive interpretation, i.e. that a
+    cancellation/no-show fee is consideration for a taxable supply and
+    attracts the same GST/PST/HST as the ride fare in that service area.
+    Gated behind ``cancellation_fee_tax_enabled`` (default OFF) so it ships
+    dark until that interpretation is confirmed.
+
+    Reuses ``features.calculate_all_fees`` — the canonical fare-path tax
+    computation (per-area GST/PST/HST enablement + rates, each tax quantized
+    independently) — rather than a second tax-rate lookup. The already-
+    resolved ``area`` is passed as ``_matched_area`` and ``_area_fees=[]`` so
+    only tax is computed: area fees (airport/night/custom surcharges) belong
+    to a trip and must never be added to a cancellation fee. Pure: no DB
+    reads with those overrides.
+
+    Returns (0, {}) when the flag is off, the fee is zero, or the ride has no
+    service area (same as the fare path, which charges no tax without a
+    matched area).
+    """
+    if fee <= 0 or not settings.get("cancellation_fee_tax_enabled", False) or not area:
+        return _d(0), {}
+    result = await calculate_all_fees(
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        _round(_d(fee)),
+        _all_areas=[],
+        _matched_area=area,
+        _area_fees=[],
+    )
+    return _round(_d(result.get("tax_amount") or 0)), dict(result.get("tax_breakdown") or {})
+
+
+async def _record_corporate_fee_writeoff(
+    *,
+    ride_id: str,
+    company_id: Optional[str],
+    amount: Decimal,
+    fee_driver: Decimal,
+    reason: str,
+    source: str,
+    actor_user_id: str,
+) -> None:
+    """Queryable per-ride record that a corporate cancellation fee was NOT billed.
+
+    ``audit_logs`` action ``corporate_cancellation_fee_unbilled`` — finance
+    can list every ride where the driver was paid a cancellation fee out of
+    Spinr's own funds with no corporate debit behind it.
+    """
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "corporate_cancellation_fee_unbilled",
+                "entity_type": "rides",
+                "entity_id": ride_id,
+                "actor_id": actor_user_id,
+                "details": {
+                    "company_id": company_id,
+                    "amount": str(_round(_d(amount))),
+                    "fee_driver": str(_round(_d(fee_driver))),
+                    "reason": reason,
+                    "source": source,
+                },
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.opt(exception=True).error(
+            "[CANCEL] corporate fee write-off audit row failed ride={} company={} reason={} amount={}",
+            ride_id,
+            company_id,
+            reason,
+            _round(_d(amount)),
+        )
+
+
+async def bill_corporate_cancellation_fee(
+    *,
+    ride: dict,
+    ride_id: str,
+    amount: Decimal,
+    fee_driver: Decimal,
+    settings: dict,
+    actor_user_id: str,
+    source: str,
+) -> str:
+    """Bill a company_allowance ride's cancellation/no-show fee to the company.
+
+    Previously nothing billed anyone for a corporate ride's cancellation fee
+    while ``pay_driver_cancellation_fee`` still paid the driver — an
+    untracked Spinr-funded write-off per ride.
+
+    Debits the company MASTER wallet via
+    ``corporate_wallet_service.apply_adjustment`` — the same wrapper and
+    ``corporate_wallet_apply_delta`` row-locking RPC ``settle_corporate``'s
+    master-fallback debit uses, with ``ride_id`` set so the RPC's ride-scoped
+    idempotency (migration 297: wallet + ride_id + type + scope) makes a
+    replayed cancellation a no-op. A cancelled ride never reaches
+    settle_corporate, so this row can never collide with a settlement debit
+    for the same ride. ``floor=0`` matches settle_corporate. The member's
+    allowance is deliberately NOT consumed (a fee is not a trip; see the
+    change log's open questions).
+
+    Gated by ``corporate_cancellation_fee_billing_enabled`` (default OFF —
+    a new debit on a company's ledger is corporate-admin-visible) and by the
+    ``corporate_billing_enabled`` incident kill switch. Whenever the fee is
+    not billed — flag off, kill switch, no wallet, or the debit failing — a
+    ``corporate_cancellation_fee_unbilled`` audit row is written instead.
+
+    Returns "billed" | "deduped" | "unbilled". Never raises: the cancel is
+    already persisted and the driver must still be released.
+    """
+    company_id = ride.get("corporate_account_id")
+    amount = _round(_d(amount))
+    if amount <= 0:
+        return "unbilled"
+
+    async def _writeoff(reason: str) -> str:
+        await _record_corporate_fee_writeoff(
+            ride_id=ride_id,
+            company_id=company_id,
+            amount=amount,
+            fee_driver=fee_driver,
+            reason=reason,
+            source=source,
+            actor_user_id=actor_user_id,
+        )
+        return "unbilled"
+
+    if not company_id:
+        logger.error("[CANCEL] company_allowance ride {} has no corporate_account_id — fee unbilled", ride_id)
+        return await _writeoff("no_corporate_account")
+    if not settings.get("corporate_cancellation_fee_billing_enabled", False):
+        logger.info("[CANCEL] corporate cancellation fee billing flag off ride={} amount={}", ride_id, amount)
+        return await _writeoff("billing_flag_off")
+    if not settings.get("corporate_billing_enabled", True):
+        logger.error("[CANCEL] corporate billing kill switch on — fee unbilled ride={} amount={}", ride_id, amount)
+        return await _writeoff("corporate_billing_disabled")
+
+    try:
+        corp_wallet = await db_supabase.get_corporate_wallet_by_company(company_id) or {}
+        if not corp_wallet.get("id"):
+            logger.error("[CANCEL] company {} has no wallet — cancellation fee unbilled ride={}", company_id, ride_id)
+            return await _writeoff("no_wallet")
+        result = await corporate_wallet_service.apply_adjustment(
+            wallet_id=corp_wallet["id"],
+            amount=-amount,
+            notes=f"ride:{ride_id}:{source}",
+            actor_user_id=actor_user_id,
+            floor=Decimal("0"),
+            ride_id=ride_id,
+        )
+    except Exception as exc:
+        details = getattr(exc, "details", None)
+        logger.opt(exception=True).error(
+            "[CANCEL] corporate cancellation fee debit failed ride={} company={} amount={}: {}",
+            ride_id,
+            company_id,
+            amount,
+            details.get("original", exc) if isinstance(details, dict) else exc,
+        )
+        return await _writeoff("debit_failed")
+
+    if isinstance(result, dict) and result.get("deduped"):
+        logger.info("[CANCEL] corporate cancellation fee already billed ride={} (idempotent replay)", ride_id)
+        return "deduped"
+    logger.info("[CANCEL] corporate cancellation fee billed ride={} company={} amount={}", ride_id, company_id, amount)
+    return "billed"
 
 
 async def pay_driver_cancellation_fee(

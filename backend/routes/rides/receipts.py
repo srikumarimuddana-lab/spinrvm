@@ -31,6 +31,11 @@ try:
 except ImportError:
     from utils.legacy_rides import legacy_tax_note_for_ride, tax_basis_for_ride  # type: ignore
 
+try:
+    from ...utils.cancellation_receipt import cancellation_charge, is_cancelled
+except ImportError:
+    from utils.cancellation_receipt import cancellation_charge, is_cancelled  # type: ignore
+
 router = APIRouter()
 
 
@@ -101,6 +106,16 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
             + (ride.get("tip_amount", 0) or 0)
         )
 
+    # A cancelled ride's fare columns still hold the booking-time QUOTE (they
+    # are deliberately not overwritten on cancel). Render the receipt from
+    # what was actually charged — the cancellation/no-show fee and its tax —
+    # never from the quote (2026-09-23; utils/cancellation_receipt.py).
+    _cancel_charge = cancellation_charge(ride) if is_cancelled(ride) else None
+    if _cancel_charge is not None:
+        fare_lines = _cancel_charge["lines"]
+        receipt_grand_total = _f(_cancel_charge["grand_total"])
+        fare_locked = False
+
     receipt_data = {
         "ride_id": ride_id,
         "ride_code": ride.get("ride_code"),
@@ -157,6 +172,29 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         ),
         "vehicle_type": vehicle.get("name") if vehicle else "Standard",
     }
+    if _cancel_charge is not None:
+        # Zero the trip components so no field on a cancelled receipt carries
+        # the quote; ``cancellation_fee`` keeps its pre-tax meaning.
+        receipt_data.update(
+            {
+                "base_fare": 0,
+                "distance_fare": 0,
+                "time_fare": 0,
+                "airport_fee": 0,
+                "booking_fee": 0,
+                "surge_multiplier": 1.0,
+                "area_fees_total": 0,
+                "area_fees_breakdown": [],
+                "tax_amount": _f(_cancel_charge["tax_amount"]),
+                "tax_breakdown": _cancel_charge["tax_breakdown"],
+                "cancellation_fee_tax": _f(_cancel_charge["tax_amount"]),
+                "total_charged": receipt_grand_total,
+                # Tip never applies to a cancellation; the legacy-import
+                # tax_note describes the quote's tax_amount, not the fee's.
+                "tip_amount": 0,
+                "tax_note": None,
+            }
+        )
 
     return {"success": True, "receipt": receipt_data}
 

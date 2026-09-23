@@ -407,3 +407,36 @@ async def test_prod_refund_writer_passes_no_legs():
     assert rec.call_args.kwargs.get("legs") is None
     # The projection's refund input must still be present.
     assert "tax_reversed" in rec.call_args.kwargs["metadata"]
+
+
+def test_cancellation_fee_tax_books_to_tax_payable():
+    """2026-09-23: fee_tax metadata (cancellation_fee_tax_enabled) is GST/PST
+    owed, not platform revenue."""
+    ev = _event(
+        delta_cents=473,
+        metadata={"source": "cancellation_fee", "fee_admin": "0.50", "fee_driver": "4.00", "fee_tax": "0.23"},
+    )
+    legs, degraded, reason = lp._decompose(ev, None)
+    assert not degraded and reason is None
+    ls.assert_balanced(legs)
+    by = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by[(ls.ACCT_DRIVER_PAYABLE, ls.CREDIT)] == 400
+    assert by[(ls.ACCT_TAX_PAYABLE, ls.CREDIT)] == 23
+    assert by[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 50
+
+
+def test_noshow_fee_uses_fee_split_not_stale_ride_quote():
+    """noshow_fee used to fall through to the fare branch and read the
+    cancelled ride's stale quote (tax_amount 2.20 / driver_earnings 15.00
+    against a $4.50 fee)."""
+    ev = _event(
+        delta_cents=450,
+        metadata={"source": "noshow_fee", "fee_admin": "0.50", "fee_driver": "4.00"},
+    )
+    legs, degraded, reason = lp._decompose(ev, _ride())
+    assert not degraded and reason is None
+    ls.assert_balanced(legs)
+    by = {(leg.account, leg.side): leg.amount_cents for leg in legs}
+    assert by[(ls.ACCT_DRIVER_PAYABLE, ls.CREDIT)] == 400
+    assert (ls.ACCT_TAX_PAYABLE, ls.CREDIT) not in by
+    assert by[(ls.ACCT_PLATFORM_REVENUE, ls.CREDIT)] == 50

@@ -1024,6 +1024,17 @@ def pg_conn(pg_test_dbname):
     cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON subscription_payments FROM authenticated")
     cur.execute("GRANT SELECT ON subscription_payments TO authenticated")
 
+    # ACTION_ITEMS.md C129 fix (migration 456): replaces
+    # financial_event_entries_select / recon_admin_only's unreachable
+    # users.role = 'admin' checks with an explicit USING (false) deny, and
+    # adds subscription_payments_no_mutate (blocks UPDATE/DELETE, unlike
+    # financial_event_entries_no_update's UPDATE-only scope -- this table has
+    # no FK/cascade relationship to any parent row). Applied last, after the
+    # base 59/286/151 migrations above, so it replaces their original policies.
+    cur.execute(
+        (migrations_dir / "456_financial_ledger_rls_unreachable_and_subscription_payments_append_only.sql").read_text()
+    )
+
     yield conn
 
     cur.execute("RESET ROLE")

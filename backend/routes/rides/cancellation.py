@@ -187,9 +187,21 @@ async def cancel_ride_rider(
     #   no fee, or a non-card ride -> FULL RELEASE, exactly as before.
     #
     # Either way this happens BEFORE any payment field is overwritten.
-    _booking_pi = ride.get("payment_intent_id")
-    _auth = (ride.get("auth_status") or "").lower()
-    _held_amount = _round(_d(ride.get("authorized_amount") or 0))
+    #
+    # ACTION_ITEMS.md C133: read payment_intent_id/auth_status/authorized_amount
+    # from _cancel_claim (the row the atomic claim UPDATE above just returned),
+    # not from `ride` (fetched by _require_ride_in_state_rider BEFORE that
+    # claim). If a concurrent capture landed in that window, `ride` is a stale
+    # snapshot and _hold_is_live would still read True on an already-captured
+    # PI -- capture_cancellation_fee then fails against it, and the
+    # fallback-on-failure path below charges a FRESH PaymentIntent on top of
+    # money already taken. update_one() already returns PostgREST's full
+    # updated row for free (no extra DB round-trip); a bare dict guard covers
+    # the (test-only) case where a mock doesn't return one.
+    _claim_row = _cancel_claim if isinstance(_cancel_claim, dict) else ride
+    _booking_pi = _claim_row.get("payment_intent_id")
+    _auth = (_claim_row.get("auth_status") or "").lower()
+    _held_amount = _round(_d(_claim_row.get("authorized_amount") or 0))
     _hold_is_live = bool(_booking_pi) and _auth in ("authorized", "fare_only")
     _is_card_ride = (ride.get("payment_method") or "card").lower() == "card"
 

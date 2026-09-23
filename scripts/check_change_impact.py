@@ -27,6 +27,13 @@ FIELDS = {
     "Rollback plan": "rollback plan",
     "Verification performed": "verification performed",
 }
+ALIASES = {
+    "root cause": ("root cause",),
+    "risk and impact": ("risk and impact", "risk blast radius", "risk impact"),
+    "user experience": ("user experience", "ux effect"),
+    "rollback plan": ("rollback plan", "rollback"),
+    "verification performed": ("verification performed", "verification"),
+}
 _PLACEHOLDER = re.compile(
     r"^(?:\s*|[-*|`_\s]+|\[\s*[x ]?\s*\]|<[^>]+>|"
     r"(?:tbd|todo|fill\s+in|n/?a\s*\(.*\)|\.{3,}))$",
@@ -56,14 +63,19 @@ def _sections(text: str) -> dict[str, str]:
 
 
 def _field_content(sections: dict[str, str], expected: str) -> str:
+    wanted_values = ALIASES.get(expected, (expected,))
+    wanted_values = tuple(" ".join(re.sub(r"[^a-z0-9 ]", " ", re.sub(r"&", " and ", item)).split())
+                          for item in wanted_values)
     for title, content in sections.items():
         normalized = re.sub(r"&", " and ", title)
         normalized = re.sub(r"[^a-z0-9 ]", " ", normalized)
         normalized = " ".join(normalized.split())
-        expected = re.sub(r"&", " and ", expected)
-        wanted = " ".join(re.sub(r"[^a-z0-9 ]", " ", expected).split())
-        if wanted in normalized:
+        if any(wanted in normalized for wanted in wanted_values):
             return content
+    for row in re.finditer(r"(?m)^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", "\n".join(sections.values())):
+        label = " ".join(re.sub(r"[^a-z0-9 ]", " ", row.group(1).lower()).split())
+        if any(wanted in label for wanted in wanted_values):
+            return row.group(2)
     return ""
 
 
@@ -86,7 +98,16 @@ def _record(paths: list[str], text: str) -> set[str]:
         if not lines or len(" ".join(lines)) < 12:
             return set()
     file_section = _field_content(sections, "files modified")
-    return {path for path in paths if path in file_section}
+    file_section += "\n" + "\n".join(re.findall(r"(?m)^Files?:\s*(.+)$", text))
+    in_file_table = False
+    for line in text.splitlines():
+        if re.match(r"\|\s*file(?: path)?\s*\|", line, re.IGNORECASE):
+            in_file_table = True
+        elif in_file_table and not line.startswith("|"):
+            in_file_table = False
+        if in_file_table:
+            file_section += "\n" + line
+    return {path for path in paths if re.search(rf"(?<![\w./-]){re.escape(path)}(?![\w./-])", file_section)}
 
 
 def check_change_impact(paths: list[str], records: list[str]) -> list[str]:
@@ -113,7 +134,8 @@ def main() -> int:
     candidates = [body] if body.strip() else []
     for path in paths:
         if path.startswith("docs/change-log/") and path.endswith(".md"):
-            candidates.append(Path(path).read_text(encoding="utf-8"))
+            if Path(path).is_file():
+                candidates.append(Path(path).read_text(encoding="utf-8"))
     uncovered = check_change_impact(paths, candidates)
     if uncovered:
         print("FAIL: sensitive-surface PR needs a substantive Change Impact Log.")

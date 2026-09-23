@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from scripts import check_change_impact as gate
 
 
@@ -11,7 +13,7 @@ def record(paths):
             f"## Files modified\n{files}\n")
 
 
-def run_gate(monkeypatch, tmp_path, paths, body="", logs=()):
+def run_gate(monkeypatch, tmp_path, paths, body="", logs=(), deleted=()):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BASE_SHA", "base")
     monkeypatch.setenv("HEAD_SHA", "head")
@@ -23,7 +25,7 @@ def run_gate(monkeypatch, tmp_path, paths, body="", logs=()):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
         changed.append(path)
-    monkeypatch.setattr(gate, "changed_paths", lambda *_: changed)
+    monkeypatch.setattr(gate, "changed_paths", lambda *_: changed + list(deleted))
     return gate.main()
 
 
@@ -48,3 +50,23 @@ def test_placeholders_and_uncovered_path_fail(monkeypatch, tmp_path, capsys):
     assert run_gate(monkeypatch, tmp_path, [a, b], body=incomplete) == 1
     assert b in capsys.readouterr().out
     assert gate.check_change_impact([a], [incomplete]) == [a]
+
+
+def test_existing_per_task_impact_records_are_supported():
+    root = Path(__file__).parents[1]
+    cases = {"payment-retry-lock": "backend/utils/payment_retry.py",
+             "preauth-lock": "backend/utils/preauth_capture.py",
+             "orphaned-hold-lock": "backend/utils/orphaned_hold_reconciler.py",
+             "auto-payout-lock": "backend/utils/auto_payout.py",
+             "autotopup-lock": "backend/utils/corporate_autotopup.py",
+             "strict-redis-lock": "backend/utils/redis_client.py"}
+    for slug, path in cases.items():
+        log = (root / f"docs/change-log/2026-09-23-{slug}.md").read_text()
+        assert gate.check_change_impact([path], [log]) == []
+
+
+def test_deleted_log_is_skipped_and_paths_match_as_exact_tokens(monkeypatch, tmp_path):
+    path = "backend/routes/payments.py"
+    assert run_gate(monkeypatch, tmp_path, [path], body=record([path]),
+                    deleted=["docs/change-log/deleted.md"]) == 0
+    assert gate.check_change_impact([path], [record([path + "x"])]) == [path]

@@ -12,8 +12,14 @@ rows, and replay deduplication. Calls name the migration-376 idempotency
 parameter explicitly so PostgreSQL selects the 11-argument overload while the
 older overload remains installed.
 
-This proves database transaction behavior for those RPCs only. It does not
-exercise the application payment/webhook handler, Stripe delivery semantics,
-the accept/cancel race, production Postgres, or Redis. Run with the disposable
+`test_stripe_claim_pg.py` also drives the actual `wallet_repo.claim_stripe_event`
+helper through a narrow adapter to the disposable database's `stripe_events`
+table from migration 22. The adapter uses the table's real primary key to
+resolve concurrent duplicate claims.
+
+This proves database transaction behavior for those RPCs and the Stripe event
+claim primitive only. The Stripe case does not prove application webhook
+business-processing idempotency or delivery semantics. This suite does not
+cover the accept/cancel race, production Postgres, or Redis. Run with the disposable
 Postgres setup documented in `backend/tests/rls/conftest.py`; compilation and
 collection alone do not count as PostgreSQL execution.

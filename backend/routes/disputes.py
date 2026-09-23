@@ -74,11 +74,11 @@ async def create_dispute(
     if ride.get("status") not in ("completed", "cancelled"):
         raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
-    # Check for existing open dispute on same ride
+    # Each party may raise an independent claim for the same ride.
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "disputes",
-            {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}},
+            {"ride_id": req.ride_id, "user_id": current_user["id"], "status": {"$in": ["open", "under_review"]}},
             limit=1,
         )
     )

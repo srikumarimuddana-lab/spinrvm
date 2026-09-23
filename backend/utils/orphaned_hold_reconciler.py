@@ -53,8 +53,16 @@ import socket
 from datetime import datetime, timezone
 
 try:
-    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+    from utils.loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from utils.loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -244,6 +252,7 @@ async def orphaned_hold_reconciler_loop() -> None:
         # `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21): 0.05 headroom under
         # the 0.9 floor.
         lock_ttl = int(RECONCILE_INTERVAL_SECONDS * 0.85)
+        lock_failed = False
         try:
             got_lock = await redis_set_nx("spinr:orphaned_hold:reconcile:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
@@ -252,9 +261,12 @@ async def orphaned_hold_reconciler_loop() -> None:
                 type(lock_err).__name__,
             )
             _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "orphaned_hold_reconciler"})
+            _record_dependency_failure(_LOOP_NAME)
+            lock_failed = True
             got_lock = False
         if not got_lock:
-            _record_heartbeat(_LOOP_NAME)
+            if not lock_failed:
+                _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
             continue
         try:

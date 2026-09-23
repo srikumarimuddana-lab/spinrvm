@@ -11,6 +11,9 @@
 | Verification | Error+recovery and absent-Redis cases failed before implementation. Focused retry/replay suites run before commit. Existing DB claim and deterministic-key tests retained. |
 | Not verified | Live Redis outage, actual Stripe deduplication and deployed canary. |
 
+## Health visibility follow-up
+An exception from the strict Redis lock records `required_dependency_unavailable` in loop health and does not publish a successful heartbeat for that tick. An ordinary lock-contention result remains a healthy heartbeat; the next healthy tick clears a prior failure. Regression coverage verifies unhealthy status after failure, skipped money work, and recovery. No retry/payment amounts, Stripe keys, DB claims, or cadence changed.
+
 Files: `backend/utils/payment_retry.py`, `backend/tests/test_payment_retry_coverage.py`, this record.
 
 Before: `except Exception: got_lock = True` / local-capable `redis_set_nx`.

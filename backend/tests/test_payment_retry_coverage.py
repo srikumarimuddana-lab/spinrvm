@@ -25,6 +25,14 @@ import pytest
 
 from utils import payment_retry
 
+
+@pytest.fixture(autouse=True)
+def _isolate_loop_monitor_state(monkeypatch):
+    from utils import loop_monitor
+
+    monkeypatch.setattr(loop_monitor, "_heartbeats", {})
+    monkeypatch.setattr(loop_monitor, "_failures", {})
+
 RIDE_ID = "ride_cov_001"
 PI_ID = "pi_cov_abc"
 STRIPE_SECRET = "sk_test_secret"
@@ -632,6 +640,37 @@ class TestSweepGuestCorporateSettlements:
 
 class TestPaymentRetryLoop:
     @pytest.mark.anyio
+    async def test_lock_exception_marks_loop_unhealthy_until_contention_heartbeat(self):
+        from utils import loop_monitor
+
+        name = "payment_retry (5min)"
+        loop_monitor.record_heartbeat(name)
+        sleeps = 0
+
+        async def sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 1:
+                assert loop_monitor.get_loop_status([name])["loops"][name]["status"] == "unhealthy"
+            else:
+                raise asyncio.CancelledError()
+
+        ticks = [AsyncMock() for _ in range(4)]
+        with (
+            patch.object(payment_retry, "redis_set_nx", AsyncMock(side_effect=[ConnectionError("redis down"), False])),
+            patch.object(payment_retry, "retry_failed_payments", ticks[0]),
+            patch.object(payment_retry, "retry_stuck_payouts", ticks[1]),
+            patch.object(payment_retry, "sweep_guest_corporate_settlements", ticks[2]),
+            patch("utils.payment_operations.reconcile_due_operations", ticks[3]),
+            patch.object(payment_retry.asyncio, "sleep", sleep),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await payment_retry.payment_retry_loop()
+
+        assert all(not tick.await_count for tick in ticks)
+        assert loop_monitor.get_loop_status([name])["loops"][name]["status"] == "ok"
+
+    @pytest.mark.anyio
     async def test_lock_not_acquired_skips_work_sleeps_and_continues(self):
         sleep_calls = []
 
@@ -683,7 +722,7 @@ class TestPaymentRetryLoop:
             with pytest.raises(asyncio.CancelledError):
                 await payment_retry.payment_retry_loop()
         assert all(tick.await_count == 1 for tick in ticks)
-        assert heartbeat.call_count == 2
+        assert heartbeat.call_count == 2 - int(isinstance(first_result, Exception))
         assert metric.call_count == int(isinstance(first_result, Exception))
 
     @pytest.mark.anyio

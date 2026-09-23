@@ -31,8 +31,16 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 try:
-    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+    from utils.loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from utils.loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -1005,14 +1013,20 @@ async def payment_retry_loop():
         # ledger_projection.py's `_LOCK_TTL_SECONDS` formula (ACTION_ITEMS B21):
         # 0.05 headroom under the 0.9 floor.
         lock_ttl = int(RETRY_INTERVAL_SECONDS * 0.85)
+        lock_unavailable = False
         try:
             got_lock = await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl)
         except Exception as lock_err:
             logger.error("payment_retry: leader lock unavailable (%s), skipping tick", type(lock_err).__name__)
             _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "payment_retry"})
+            _record_dependency_failure("payment_retry (5min)")
+            lock_unavailable = True
             got_lock = False
         if not got_lock:
-            _record_heartbeat("payment_retry (5min)")
+            # Contention proves the required Redis dependency is reachable;
+            # an exception above does not, and must remain visible to health.
+            if not lock_unavailable:
+                _record_heartbeat("payment_retry (5min)")
             await asyncio.sleep(RETRY_INTERVAL_SECONDS)
             continue
         try:

@@ -280,62 +280,6 @@ async def _record_orphan_refund(
     )
 
 
-async def _hold_driver_payout_for_refund(
-    ride: dict,
-    delta_amount: Decimal,
-    *,
-    event_id: str,
-) -> None:
-    """Hold future driver pay after a rider refund, once this trip was paid out.
-
-    Only a completed automatic payout dated at or after this trip counts as
-    "already paid". Each Stripe event gets its own clawback row so a second
-    partial refund adds another hold, and a retry of the same event does not.
-    Raises on insert failure so the webhook is unclaimed and Stripe retries.
-    """
-    import uuid
-    from datetime import datetime, timezone
-
-    driver_id = ride.get("driver_id")
-    ride_id = ride.get("id")
-    if not driver_id or not ride_id or not event_id or delta_amount <= 0:
-        return
-    completed_at = str(ride.get("completed_at") or ride.get("ride_completed_at") or "")
-    if not completed_at:
-        return
-    payout_rows = await db_supabase.get_rows(
-        "payouts",
-        {"driver_id": driver_id, "payout_type": "auto", "status": "completed"},
-        limit=20,
-        order="created_at",
-        desc=True,
-    )
-    already_paid = any(str(row.get("created_at") or "") >= completed_at for row in (payout_rows or []))
-    if not already_paid:
-        return
-    earnings = Decimal(str(ride.get("driver_earnings") or "0"))
-    amount = min(delta_amount, earnings) if earnings > 0 else delta_amount
-    if amount <= 0:
-        return
-    clawback_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"spinr-refund-clawback:{ride_id}:{event_id}"))
-    try:
-        await db_supabase.insert_one(
-            "payouts",
-            {
-                "id": clawback_id,
-                "driver_id": driver_id,
-                "amount": amount,
-                "status": "completed",
-                "payout_type": "clawback",
-                "bank_name": "Refund hold",
-                "failure_reason": f"Rider refund hold for ride {ride_id} event {event_id}",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except DuplicateRecordError:
-        return
-
-
 def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> str | None:
     """Resolve the PaymentIntent id for a paid invoice across Stripe API versions.
 
@@ -1557,20 +1501,6 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     logger.warning("charge.refunded stale cumulative ignored ride=%s", ride_id)
                 elif projection.get("delta_cents", 0) > 0:
                     delta_amount = Decimal(int(projection["delta_cents"])) / Decimal("100")
-                    try:
-                        await _hold_driver_payout_for_refund(ride, delta_amount, event_id=event_id)
-                    except Exception as claw_exc:
-                        logger.error(
-                            "charge.refunded driver clawback failed ride=%s: %s",
-                            ride_id,
-                            claw_exc,
-                            exc_info=True,
-                        )
-                        await unclaim_stripe_event(event_id)
-                        raise HTTPException(
-                            status_code=500,
-                            detail="Driver refund hold failed — Stripe will retry",
-                        ) from claw_exc
                     rider_id = ride.get("rider_id")
                     if rider_id:
                         try:

@@ -1,78 +1,53 @@
-"""Refund clawback holds are per Stripe event and only after this trip was paid."""
+"""Both Stripe event paths delegate refunds and holds to atomic projection."""
 
-from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
-from backend.routes.webhooks import _hold_driver_payout_for_refund
-from backend.utils.error_handling import DuplicateRecordError
-
-
-@pytest.mark.anyio
-async def test_second_partial_refund_inserts_a_second_hold():
-    inserted = []
-
-    async def _insert(table, doc):
-        inserted.append(doc)
-        return doc
-
-    ride = {
-        "id": "ride-1",
-        "driver_id": "drv-1",
-        "completed_at": "2026-09-01T00:00:00+00:00",
-        "driver_earnings": "20.00",
-    }
-    with (
-        patch(
-            "backend.routes.webhooks.db_supabase.get_rows",
-            AsyncMock(
-                return_value=[{"created_at": "2026-09-02T00:00:00+00:00", "payout_type": "auto", "status": "completed"}]
-            ),
-        ),
-        patch("backend.routes.webhooks.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
-    ):
-        await _hold_driver_payout_for_refund(ride, Decimal("5.00"), event_id="evt_1")
-        await _hold_driver_payout_for_refund(ride, Decimal("10.00"), event_id="evt_2")
-
-    assert len(inserted) == 2
-    assert inserted[0]["id"] != inserted[1]["id"]
-    assert inserted[0]["amount"] == Decimal("5.00")
-    assert inserted[1]["amount"] == Decimal("10.00")
+from backend.routes import webhooks
 
 
 @pytest.mark.anyio
-async def test_unpaid_trip_does_not_insert_a_hold():
-    insert = AsyncMock()
+@pytest.mark.parametrize("event_type", ["charge.refunded", "refund.updated"])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_refund_projection_owns_hold_and_retries_atomically(event_type, fails):
+    db = AsyncMock()
     ride = {
         "id": "ride-1",
         "driver_id": "drv-1",
-        "completed_at": "2026-09-01T00:00:00+00:00",
         "driver_earnings": "20.00",
+        "completed_at": "2026-09-01T00:00:00+00:00",
+    }
+
+    async def rows(table, *args, **kwargs):
+        return [ride] if table == "rides" else [{"created_at": "2026-09-02T00:00:00+00:00"}]
+
+    db.get_rows.side_effect = rows
+    db.find_one.return_value = None
+    projection = AsyncMock(return_value={"outcome": "applied", "delta_cents": 500})
+    if fails:
+        projection.side_effect = RuntimeError("atomic hold insert failed")
+    unclaim = AsyncMock()
+    data = {
+        "id": "re_1",
+        "status": "succeeded",
+        "payment_intent": "pi_1",
+        "amount_refunded": 500,
+        "metadata": {"ride_id": "ride-1"},
     }
     with (
-        patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
-        patch("backend.routes.webhooks.db_supabase.insert_one", insert),
+        patch.object(webhooks, "db_supabase", db),
+        patch.object(webhooks, "unclaim_stripe_event", unclaim),
+        patch("backend.services.payment_service.reconcile_confirmed_stripe_refund", projection),
     ):
-        await _hold_driver_payout_for_refund(ride, Decimal("5.00"), event_id="evt_1")
-    insert.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_same_event_retry_does_not_double_debit():
-    insert = AsyncMock(side_effect=DuplicateRecordError("dup"))
-    ride = {
-        "id": "ride-1",
-        "driver_id": "drv-1",
-        "completed_at": "2026-09-01T00:00:00+00:00",
-        "driver_earnings": "20.00",
-    }
-    with (
-        patch(
-            "backend.routes.webhooks.db_supabase.get_rows",
-            AsyncMock(return_value=[{"created_at": "2026-09-02T00:00:00+00:00"}]),
-        ),
-        patch("backend.routes.webhooks.db_supabase.insert_one", insert),
-    ):
-        await _hold_driver_payout_for_refund(ride, Decimal("5.00"), event_id="evt_1")
-    insert.assert_awaited_once()
+        if fails:
+            with pytest.raises(HTTPException) as error:
+                await webhooks._dispatch_stripe_event("evt_1", event_type, {}, data)
+            assert error.value.status_code == 500
+            unclaim.assert_awaited_once_with("evt_1")
+        else:
+            await webhooks._dispatch_stripe_event("evt_1", event_type, {}, data)
+            unclaim.assert_not_awaited()
+    projection.assert_awaited_once_with(ride_id="ride-1", payment_intent_id="pi_1")
+    assert not any(call.args[0] == "payouts" for call in db.insert_one.await_args_list)

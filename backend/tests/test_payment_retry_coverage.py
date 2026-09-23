@@ -33,6 +33,7 @@ def _isolate_loop_monitor_state(monkeypatch):
     monkeypatch.setattr(loop_monitor, "_heartbeats", {})
     monkeypatch.setattr(loop_monitor, "_failures", {})
 
+
 RIDE_ID = "ride_cov_001"
 PI_ID = "pi_cov_abc"
 STRIPE_SECRET = "sk_test_secret"

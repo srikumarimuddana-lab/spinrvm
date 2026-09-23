@@ -30,10 +30,22 @@ async def test_old_generation_cannot_refresh_or_revoke_new_login(revoked):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("bound,current,allowed", [(None, 0, True), (None, 1, False), (3, 3, True)])
-async def test_legacy_and_bound_generation_validation(bound, current, allowed):
+@pytest.mark.parametrize(
+    "bound,current,allowed,flag",
+    [
+        (None, 0, True, None),
+        (None, 1, False, True),  # the enabled rollout rejects an unbound row
+        (None, 1, True, False),  # dark rollout accepts legacy rows without a kill watermark
+        (3, 3, True, None),
+    ],
+)
+async def test_legacy_and_bound_generation_validation(bound, current, allowed, flag):
     row = {"user_id": "user", "audience": "rider", "token_version": bound, "expires_at": "2099-01-01T00:00:00Z"}
-    with patch.object(tokens.db, "find_one", AsyncMock(side_effect=[row, {"token_version": current}])):
+    user = {"token_version": current}
+    responses = [row, user]
+    if flag is not None:
+        responses.append({"driver_single_session_enabled": flag})
+    with patch.object(tokens.db, "find_one", AsyncMock(side_effect=responses)):
         result = await tokens.lookup_refresh_token("refresh-secret")
     assert (result is row) is allowed
 

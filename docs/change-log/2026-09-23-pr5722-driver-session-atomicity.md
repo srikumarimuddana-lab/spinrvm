@@ -35,3 +35,7 @@ Validation covered the auth session, refresh compatibility, and offer-cleanup
 regressions plus the existing auth endpoint suite. Direct-pool migration tests
 and production rolling-deployment behavior were not run; no live database was
 modified. There is no visual surface in this change.
+
+The refresh-generation contract matrix explicitly covers a legacy unbound row
+at generation zero, flag-on rejection at a newer generation, flag-off
+acceptance without a watermark, and a bound row matching the current generation.

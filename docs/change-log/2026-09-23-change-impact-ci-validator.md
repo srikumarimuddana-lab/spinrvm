@@ -4,7 +4,7 @@
 CI accepts five phrases anywhere in the PR body or any added log, even when fields are empty or the record is unrelated. It checks substrings, not field structure or changed paths.
 
 ## Fix
-Add a validator and tests requiring filled root-cause, impact, UX, rollback, and verification fields and exact sensitive paths. It accepts existing heading/table layouts, unions valid records, and skips deleted logs. CI runs tests and the validator on PR, merge-group, and manual events. This structural check does not prove risk statements or evidence are true.
+Add a validator and tests requiring filled root-cause, impact, UX, rollback, and verification fields and exact sensitive paths. It accepts existing heading/table layouts, unions valid records, and skips deleted logs. CI runs tests and the validator on PR, merge-group, and manual events using the event base and checked-out SHA. This structural check does not prove risk statements or evidence are true.
 
 ## Risk & impact
 CI merge gating only; incomplete or placeholder records fail. No runtime, database, payment, or user-facing paths change. Blast radius: PRs touching the sensitive-path list.
@@ -17,7 +17,7 @@ No runtime effect; PR authors see failures for incomplete records.
 |---|---|---|
 | `scripts/check_change_impact.py` | Validate record layouts, exact paths, and deleted logs | Preserve valid existing records |
 | `scripts/test_check_change_impact.py` | CLI and six existing-record cases | Prevent false rejection/acceptance |
-| `.github/workflows/ci-guardrails.yml` | Run tests and validator with event-specific base/head SHAs | Make the check merge-blocking |
+| `.github/workflows/ci-guardrails.yml` | Run tests and validator with event base/checked-out SHA | Make the check merge-blocking |
 | This record | Document scope and evidence | Required impact record |
 
 ## Before / after

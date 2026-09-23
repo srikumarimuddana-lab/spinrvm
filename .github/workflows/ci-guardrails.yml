@@ -1635,7 +1635,7 @@ jobs:
       - name: Verify Change Impact Log present for sensitive-surface PRs
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.base_branch || 'origin/main' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python scripts/check_change_impact.py
 

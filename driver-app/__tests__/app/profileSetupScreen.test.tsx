@@ -120,9 +120,13 @@ async function fillValidFormExceptServiceArea(r: TestRenderer.ReactTestRenderer)
   const firstName = inputs.find((i) => i.props.placeholder === 'John')!;
   const lastName = inputs.find((i) => i.props.placeholder === 'Doe')!;
   const email = inputs.find((i) => i.props.placeholder === 'john.doe@example.com')!;
+  const dob = inputs.find((i) => i.props.placeholder === 'YYYY-MM-DD')!;
+  const issueDate = inputs.filter((i) => i.props.placeholder === 'YYYY-MM-DD')[1]!;
   act(() => { firstName.props.onChangeText('Jamie'); });
   act(() => { lastName.props.onChangeText('Smith'); });
   act(() => { email.props.onChangeText('jamie@example.com'); });
+  act(() => { dob.props.onChangeText('2000-01-02'); });
+  act(() => { issueDate.props.onChangeText('2018-01-02'); });
   const maleBtn = findButtonByText(r, 'Male');
   act(() => { maleBtn.props.onPress(); });
 }
@@ -307,6 +311,9 @@ describe('ProfileSetupScreen', () => {
       first_name: 'Jamie', last_name: 'Smith', email: 'jamie@example.com', gender: 'Male', service_area_id: 'saskatoon',
     }));
     expect(mockRegisterDriver).toHaveBeenCalled();
+    expect(mockRegisterDriver).toHaveBeenCalledWith(expect.objectContaining({
+      date_of_birth: '2000-01-02', license_issue_date: '2018-01-02',
+    }));
     expect(mockReplace).toHaveBeenCalledWith('/driver');
   });
 

@@ -1516,6 +1516,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 "dropoff_lat",
                                 "dropoff_lng",
                                 "rider_rating",
+                                "stops",
                             }
                         fcm_data = {
                             k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""

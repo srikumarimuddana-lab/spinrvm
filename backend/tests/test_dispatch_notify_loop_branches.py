@@ -566,7 +566,7 @@ async def test_fcm_payload_unchanged_when_minimal_flag_off():
     rider_rating still present, no offer_minimal marker."""
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 
-    ride = _make_ride()
+    ride = _make_ride(stops=[{"address": "Synthetic stop", "lat": 52.14, "lng": -106.65}])
     driver = _make_driver()
     push_mock = AsyncMock()
 
@@ -594,6 +594,8 @@ async def test_fcm_payload_unchanged_when_minimal_flag_off():
     for field in _MINIMAL_ONLY_FIELDS:
         assert field in fcm_data, f"{field} unexpectedly dropped from FCM data with the flag off"
     assert "offer_minimal" not in fcm_data
+    import json
+    assert json.loads(fcm_data["stops"]) == ride["stops"]
 
 
 async def test_fcm_payload_drops_coords_and_rating_when_minimal_flag_on():
@@ -604,7 +606,7 @@ async def test_fcm_payload_drops_coords_and_rating_when_minimal_flag_on():
     unaffected either way."""
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 
-    ride = _make_ride()
+    ride = _make_ride(stops=[{"address": "Synthetic stop", "lat": 52.14, "lng": -106.65}])
     driver = _make_driver()
     push_mock = AsyncMock()
 
@@ -640,6 +642,7 @@ async def test_fcm_payload_drops_coords_and_rating_when_minimal_flag_on():
     for field in _MINIMAL_ONLY_FIELDS:
         assert field not in fcm_data, f"{field} leaked into the minimal FCM data payload"
     assert fcm_data["offer_minimal"] == "true"
+    assert "stops" not in fcm_data
     # Human-readable address labels are NOT removed by this flag -- they're
     # already visible in the OS notification body / iOS aps.alert regardless
     # (see matching.py's _FCM_EXCLUDE comment).
@@ -651,3 +654,4 @@ async def test_fcm_payload_drops_coords_and_rating_when_minimal_flag_on():
     ws_payload, _ = mock_manager.send_personal_message.await_args.args
     assert ws_payload["pickup_lat"] == ride["pickup_lat"]
     assert ws_payload["rider_rating"] == 4.9
+    assert ws_payload["stops"] == ride["stops"]

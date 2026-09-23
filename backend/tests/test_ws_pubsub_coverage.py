@@ -16,9 +16,9 @@ This file directly instantiates ``_WSPubSub`` (never the module-level
   combinations.
 - ``start()``: no-URL no-op, ``redis`` package ImportError, connect failure,
   subscribe failure, and the full success path.
-- ``publish()``: inactive short-circuit, durable happy path (incr + buffered
-  pipeline), incr failure falling back to an unwrapped bare publish, pipeline
-  failure falling back to a bare publish, ``durable=False`` skipping the
+- ``publish()``: inactive short-circuit, durable happy path (atomic Redis Lua
+  script), script failure falling back to an unwrapped bare publish,
+  ``durable=False`` skipping the
   seq/outbox bookkeeping entirely, non-serialisable payloads, and a Redis
   error on the final bare publish.
 - ``get_outbox()``: inactive, real-client happy path, and read failure
@@ -283,58 +283,65 @@ class TestPublish:
         assert result is False
 
     @pytest.mark.anyio
-    async def test_durable_happy_path_uses_pipeline(self):
+    async def test_durable_happy_path_uses_atomic_redis_script(self):
         fake_redis = MagicMock()
-        fake_redis.incr = AsyncMock(return_value=5)
-        pipe = MagicMock()
-        pipe.execute = AsyncMock(return_value=[None, None, None, None])
-        fake_redis.pipeline = MagicMock(return_value=pipe)
+        fake_redis.eval = AsyncMock(return_value=5)
         fake_redis.publish = AsyncMock()
         inst = _active_instance(fake_redis)
 
         result = await inst.publish("rider_1", {"type": "x"}, durable=True)
 
         assert result is True
-        fake_redis.incr.assert_awaited_once_with("spinr:ws:seq:rider_1")
-        fake_redis.pipeline.assert_called_once_with(transaction=False)
-        pipe.rpush.assert_called_once()
-        pipe.ltrim.assert_called_once()
-        pipe.expire.assert_called_once()
-        pipe.publish.assert_called_once()
-        pipe.execute.assert_awaited_once()
-        fake_redis.publish.assert_not_awaited()  # bare publish skipped, pipeline already published
+        fake_redis.eval.assert_awaited_once()
+        args = fake_redis.eval.await_args.args
+        assert args[1:] == (
+            2,
+            "spinr:ws:seq:rider_1",
+            "spinr:ws:outbox:rider_1",
+            "spinr:ws:dispatch",
+            "rider_1",
+            '{"type": "x"}',
+            50,
+            300,
+        )
+        script = args[0]
+        assert script.index("INCR") < script.index("RPUSH") < script.index("PUBLISH")
+        assert "LTRIM" in script and "EXPIRE" in script
+        fake_redis.publish.assert_not_awaited()  # script already published
 
     @pytest.mark.anyio
     async def test_durable_incr_failure_falls_back_to_unwrapped_bare_publish(self):
         import json
 
         fake_redis = MagicMock()
-        fake_redis.incr = AsyncMock(side_effect=ConnectionError("down"))
+        fake_redis.eval = AsyncMock(side_effect=ConnectionError("down"))
         fake_redis.publish = AsyncMock()
         inst = _active_instance(fake_redis)
 
         result = await inst.publish("rider_1", {"type": "x"}, durable=True)
 
         assert result is True
-        fake_redis.pipeline.assert_not_called()
+        fake_redis.eval.assert_awaited_once()
         fake_redis.publish.assert_awaited_once()
         body = json.loads(fake_redis.publish.await_args.args[1])
         assert body["message"] == {"type": "x"}  # unwrapped, no seq envelope
 
     @pytest.mark.anyio
-    async def test_durable_pipeline_failure_falls_back_to_bare_publish(self):
+    async def test_durable_script_failure_falls_back_to_bare_publish(self):
+        import json
+
         fake_redis = MagicMock()
-        fake_redis.incr = AsyncMock(return_value=1)
-        pipe = MagicMock()
-        pipe.execute = AsyncMock(side_effect=ConnectionError("down"))
-        fake_redis.pipeline = MagicMock(return_value=pipe)
+        fake_redis.eval = AsyncMock(side_effect=ConnectionError("down"))
         fake_redis.publish = AsyncMock()
         inst = _active_instance(fake_redis)
 
         result = await inst.publish("rider_1", {"type": "x"}, durable=True)
 
         assert result is True
+        fake_redis.eval.assert_awaited_once()
         fake_redis.publish.assert_awaited_once()
+        body = json.loads(fake_redis.publish.await_args.args[1])
+        assert body["message"] == {"type": "x"}
 
     @pytest.mark.anyio
     async def test_non_durable_skips_seq_and_outbox_bookkeeping(self):
@@ -346,8 +353,7 @@ class TestPublish:
         result = await inst.publish("rider_1", {"type": "x"}, durable=False)
 
         assert result is True
-        fake_redis.incr.assert_not_awaited()
-        fake_redis.pipeline.assert_not_called()
+        fake_redis.eval.assert_not_called()
         fake_redis.publish.assert_awaited_once()
 
     @pytest.mark.anyio
@@ -405,6 +411,79 @@ class TestGetOutbox:
         result = await inst.get_outbox("rider_1")
 
         assert result == []
+
+
+@pytest.mark.anyio
+async def test_interleaved_publishers_keep_outbox_in_sequence_order():
+    """A reconnect must not advance its cursor past a lower seq still in flight.
+
+    INCR and the current append pipeline are separate Redis operations. Pause
+    publisher 1 after INCR so publisher 2 can append first, reproducing the
+    interleaving without timing-dependent sleeps.
+    """
+    import json
+
+    from backend.utils.ws_pubsub import _WSPubSub
+
+    class InterleavedRedis:
+        def __init__(self):
+            self.next_seq = 0
+            self.lock = asyncio.Lock()
+            self.first_seq_allocated = asyncio.Event()
+            self.second_script_started = asyncio.Event()
+            self.release_first = asyncio.Event()
+            self.outbox = []
+            self.published = []
+
+        async def eval(self, _script, _numkeys, _seq_key, _outbox_key, _channel, _client_id, payload, maxlen, ttl):
+            if self.next_seq:
+                self.second_script_started.set()
+            async with self.lock:
+                self.next_seq += 1
+                seq = self.next_seq
+                if seq == 1:
+                    self.first_seq_allocated.set()
+                    await self.release_first.wait()
+                message = {"seq": seq, "data": json.loads(payload)}
+                self.outbox.append(json.dumps(message))
+                self.outbox = self.outbox[-maxlen:]
+                self.published.append(message)
+                self.ttl = ttl
+                return seq
+
+        async def lrange(self, *_args):
+            return list(self.outbox)
+
+    fake_redis = InterleavedRedis()
+    inst = _active_instance(fake_redis)
+    first = asyncio.create_task(inst.publish("driver_1", {"type": "ride_offered", "id": "first"}))
+    await fake_redis.first_seq_allocated.wait()
+    second = asyncio.create_task(inst.publish("driver_1", {"type": "ride_offered", "id": "second"}))
+    await fake_redis.second_script_started.wait()
+    assert not second.done(), "Redis must serialize seq allocation with its outbox append"
+    fake_redis.release_first.set()
+    assert await asyncio.gather(first, second) == [True, True]
+    full_replay = await inst.get_outbox("driver_1")
+    assert [item["seq"] for item in full_replay] == [1, 2]
+    assert [item["data"]["id"] for item in full_replay] == ["first", "second"]
+    assert fake_redis.ttl == 300
+
+
+@pytest.mark.anyio
+async def test_durable_publish_passes_existing_retention_limits_to_script():
+    """The atomic write keeps the existing bounded replay ring and expiry."""
+    from backend.utils.ws_pubsub import _DURABLE_PUBLISH_SCRIPT
+
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=51)
+    inst = _active_instance(fake_redis)
+
+    assert await inst.publish("driver_1", {"type": "ride_offered"}) is True
+
+    assert "LTRIM" in _DURABLE_PUBLISH_SCRIPT
+    assert "-tonumber(ARGV[4])" in _DURABLE_PUBLISH_SCRIPT
+    assert "EXPIRE" in _DURABLE_PUBLISH_SCRIPT
+    assert fake_redis.eval.await_args.args[-2:] == (50, 300)
 
 
 # ── publish_broadcast() ──────────────────────────────────────────────────

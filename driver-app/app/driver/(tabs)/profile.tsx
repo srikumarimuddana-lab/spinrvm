@@ -276,10 +276,11 @@ function ProfileScreenInner() {
       licenseClass: editLicenseClass,
     });
     if (formError) return showToast('error', 'Missing Info', formError);
-    const eligibilityError = getEligibilityProfileError({
+    const hasAnyEligibilityDate = !!(editDateOfBirth.trim() || editLicenseIssueDate.trim());
+    const eligibilityError = hasAnyEligibilityDate ? getEligibilityProfileError({
       dateOfBirth: editDateOfBirth,
       licenseIssueDate: editLicenseIssueDate,
-    });
+    }) : null;
     if (eligibilityError) return showToast('error', 'Eligibility Details', eligibilityError);
 
     Keyboard.dismiss();
@@ -288,8 +289,10 @@ function ProfileScreenInner() {
       const res = await api.put<Driver>('/drivers/me', {
         license_number: editLicenseNumber.trim(),
         license_class: editLicenseClass.trim().toUpperCase(),
-        date_of_birth: editDateOfBirth,
-        license_issue_date: editLicenseIssueDate,
+        ...(hasAnyEligibilityDate && {
+          date_of_birth: editDateOfBirth,
+          license_issue_date: editLicenseIssueDate,
+        }),
       });
       if (res.data) useAuthStore.setState({ driver: res.data });
       refetchDriverMe();
@@ -1101,7 +1104,7 @@ function ProfileScreenInner() {
                 </View>
                 <View style={modalStyles.divider} />
                 <View style={modalStyles.field}>
-                  <Text style={modalStyles.fieldLabel}>Date of Birth *</Text>
+                  <Text style={modalStyles.fieldLabel}>Date of Birth</Text>
                   <TextInput
                     style={modalStyles.fieldInput}
                     value={editDateOfBirth}
@@ -1112,11 +1115,11 @@ function ProfileScreenInner() {
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
-                  <Text style={modalStyles.fieldHelper}>You must be at least 18 to drive.</Text>
+                  <Text style={modalStyles.fieldHelper}>Enter both eligibility dates to add or update them.</Text>
                 </View>
                 <View style={modalStyles.divider} />
                 <View style={modalStyles.field}>
-                  <Text style={modalStyles.fieldLabel}>Licence Issue Date *</Text>
+                  <Text style={modalStyles.fieldLabel}>Licence Issue Date</Text>
                   <TextInput
                     style={modalStyles.fieldInput}
                     value={editLicenseIssueDate}
@@ -1138,11 +1141,11 @@ function ProfileScreenInner() {
               <TouchableOpacity
                 style={[
                   modalStyles.saveButton,
-                  (!editLicenseNumber.trim() || !editLicenseClass.trim() || !editDateOfBirth.trim() || !editLicenseIssueDate.trim() || isSavingLicense) &&
+                  (!editLicenseNumber.trim() || !editLicenseClass.trim() || isSavingLicense) &&
                     modalStyles.saveButtonDisabled,
                 ]}
                 onPress={handleSaveLicense}
-                disabled={!editLicenseNumber.trim() || !editLicenseClass.trim() || !editDateOfBirth.trim() || !editLicenseIssueDate.trim() || isSavingLicense}
+                disabled={!editLicenseNumber.trim() || !editLicenseClass.trim() || isSavingLicense}
                 activeOpacity={0.85}
               >
                 {isSavingLicense ? (

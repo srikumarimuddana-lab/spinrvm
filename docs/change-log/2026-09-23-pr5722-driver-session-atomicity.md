@@ -5,8 +5,8 @@ authenticated driver when the rollout flag is enabled. The database function
 serializes generation bump, session replacement, and refresh-token revocation;
 the minted access and refresh credentials use the returned generation. Refresh
 rotation keeps the parent's generation, including `NULL` for legacy writers.
-While the flag is dark, an unbound legacy token remains usable only if it is
-newer than the account's logout-all watermark. Once enabled, unbound legacy
+While the flag is dark, an unbound legacy token remains usable unless it
+predates an account's logout-all watermark. Once enabled, unbound legacy
 tokens are rejected.
 
 Superseded-driver cleanup now honors the conditional offer and ride update

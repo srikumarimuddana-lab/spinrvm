@@ -928,6 +928,36 @@ async def test_legacy_null_refresh_generation_respects_dark_flag_and_logout_wate
     lookup.return_value = {"driver_single_session_enabled": True}
     assert not await refresh_tokens.refresh_token_generation_matches(row, user)
 
+    lookup.return_value = {"driver_single_session_enabled": False}
+    assert await refresh_tokens.refresh_token_generation_matches(
+        row, {"token_version": 4, "sessions_invalid_before": None}
+    )
+
+
+@pytest.mark.anyio
+async def test_legacy_generation_compatibility_does_not_accept_revoked_refresh(monkeypatch):
+    from backend.utils import refresh_tokens
+
+    revoked = {
+        "id": "revoked-row",
+        "user_id": "legacy-user",
+        "audience": "driver",
+        "token_version": None,
+        "issued_at": "2026-09-20T00:00:00+00:00",
+        "revoked_at": "2026-09-21T00:00:00+00:00",
+        "revocation_reason": "user_logout",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+    }
+    user = {"id": "legacy-user", "token_version": 4, "sessions_invalid_before": None}
+    monkeypatch.setattr(refresh_tokens.db, "find_one", AsyncMock(side_effect=[
+        revoked,
+        user,
+        {"driver_single_session_enabled": False},
+    ]))
+    monkeypatch.setattr(refresh_tokens, "_record_post_revoke_race", AsyncMock())
+
+    assert await refresh_tokens.lookup_refresh_token("presented-token") is None
+
 
 @pytest.mark.anyio
 async def test_driver_session_rpc_returns_atomic_generation_and_previous_session(monkeypatch):

@@ -357,7 +357,7 @@ async def refresh_token_generation_matches(row: dict, user: dict) -> bool:
     # unbound credential created after the user's authoritative kill watermark.
     watermark = _parse_iso_dt(user.get("sessions_invalid_before"))
     issued_at = _parse_iso_dt(row.get("issued_at"))
-    return bool(watermark and issued_at and issued_at >= watermark)
+    return not watermark or bool(issued_at and issued_at >= watermark)
 
 
 REUSE_AUDIT_ACTION = "refresh_token_reuse_detected"

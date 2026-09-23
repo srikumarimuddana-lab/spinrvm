@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput } from 'react-native';
+import { TouchableOpacity, Text, TextInput, ActivityIndicator } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -40,6 +40,11 @@ jest.mock('react-native-maps', () => {
 const mockBack = jest.fn();
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: mockBack, push: mockPush }) }));
+
+let mockIsFocused = true;
+jest.mock('expo-router/react-navigation', () => ({
+  useIsFocused: () => mockIsFocused,
+}));
 
 const COLORS = {
   primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
@@ -103,6 +108,7 @@ function findButtonByText(r: TestRenderer.ReactTestRenderer, text: string) {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers();
+  mockIsFocused = true;
   mockRideState = {
     pickup: { address: '100 Main St', lat: 50.45, lng: -104.6 },
     setPickup: mockSetPickup,
@@ -122,10 +128,19 @@ afterEach(() => {
 });
 
 describe('ConfirmPickupScreen', () => {
-  it('redirects back immediately when there is no pickup in the store', async () => {
+  it('redirects back when focused and there is no pickup, without rendering a blank screen', async () => {
     mockRideState.pickup = null;
-    await renderScreen();
+    const r = await renderScreen();
     expect(mockBack).toHaveBeenCalled();
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+  });
+
+  it('does not navigate back when an unfocused screen has no pickup', async () => {
+    mockIsFocused = false;
+    mockRideState.pickup = null;
+    const r = await renderScreen();
+    expect(mockBack).not.toHaveBeenCalled();
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
   });
 
   it('seeds the initial region/address from the stored pickup', async () => {

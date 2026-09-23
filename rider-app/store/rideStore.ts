@@ -297,6 +297,11 @@ interface RideState {
   setDropoff: (location: Location | null) => void;
   addStop: (location: Location) => void;
   clearStops: () => void;
+  /**
+   * Start a new Where to? session. Clears the trip draft only.
+   * Does not touch the live ride, the cancel latch, saved places, or GPS.
+   */
+  resetBookingDraft: () => void;
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
   fetchActiveRide: () => Promise<{ active: boolean; ride: Ride } | null>;
@@ -383,6 +388,9 @@ interface RideState {
   // asked for *after* that clear. See the guard in fetchRide for why the
   // difference matters.
   _clearEpoch: number;
+  // Latest started /rides/active check. Never reset across logout: outstanding
+  // requests from the previous session must not regain ownership of the store.
+  _activeRideRequestId: number;
   wsConnected: boolean;
   setWsConnected: (v: boolean) => void;
 
@@ -411,6 +419,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   chatMessages: [],
   _clearedRideId: null,
   _clearEpoch: 0,
+  _activeRideRequestId: 0,
   wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
@@ -477,6 +486,23 @@ export const useRideStore = create<RideState>((set, get) => ({
     appliedPromo: null,
     routePolyline: [],
   }),
+
+  // A new Where to? from home, with no live ride, is a new trip. clearRide
+  // deliberately keeps this draft (wiping it there bounced ride-options home).
+  // The reset happens here, at the moment the rider asks to search again.
+  resetBookingDraft: () => set({
+    pickup: null,
+    dropoff: null,
+    stops: [],
+    estimates: [],
+    selectedVehicle: null,
+    routePolyline: [],
+    availablePromos: [],
+    appliedPromo: null,
+    scheduledTime: null,
+    riderNotes: '',
+    isLoading: false,
+  }),
   removeStop: (index) => set((state) => ({
     stops: state.stops.filter((_, i) => i !== index),
     estimates: [],
@@ -497,16 +523,39 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   fetchActiveRide: async () => {
+    const { currentRide: rideAtStart, currentDriver: driverAtStart, _clearEpoch: clearEpochAtStart } = get();
+    const requestId = get()._activeRideRequestId + 1;
+    set({ _activeRideRequestId: requestId });
+    // Home, foreground recovery, and booking recovery can overlap. A response
+    // only owns the snapshot it started with: a newer check, booking, poll/WS
+    // update, clear, or logout invalidates it (including inactive/404 results).
+    const isStale = () => {
+      const state = get();
+      return state._activeRideRequestId !== requestId ||
+        state._clearEpoch !== clearEpochAtStart || state.currentRide !== rideAtStart ||
+        state.currentDriver !== driverAtStart;
+    };
+    // A just-booked ride can briefly be invisible to /rides/active. The
+    // previous ride's cancel latch is still set, so that miss must not
+    // clearRide() the new ride (which would latch the new id and bounce home).
+    const keepNewerLocalRide = () => {
+      const { currentRide, _clearedRideId } = get();
+      return !!(currentRide && !TERMINAL_STATUSES.has(currentRide.status) &&
+        _clearedRideId && currentRide.id !== _clearedRideId);
+    };
     try {
       const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
+      if (isStale()) return null;
       if (response.data?.active && response.data.ride) {
         const ride = response.data.ride;
         // The rider just cancelled this ride locally; the server may not have
         // committed the cancel yet, so /rides/active can still report it as
         // active for a moment (read-after-write lag). Treat it as inactive so
         // the home useFocusEffect doesn't re-push into the searching screen,
-        // which restarted the cancel toast (the flicker). _clearedRideId is
-        // reset to null when the rider books a new ride.
+        // which restarted the cancel toast (the flicker). The latch stays
+        // until fetchActiveRide adopts a different active ride. createRide
+        // must not clear it, or a late cancel for the previous ride wipes
+        // the ride that was just booked.
         if (get()._clearedRideId === ride.id) {
           return null;
         }
@@ -516,11 +565,15 @@ export const useRideStore = create<RideState>((set, get) => ({
         _persistRide(rideWithoutDriver, driver);
         return { active: true, ride: rideWithoutDriver };
       }
-      // No active ride on server — clear any stale local state
+      // No active ride on server — clear any stale local state, unless
+      // that local ride is newer than the cancel latch.
+      if (keepNewerLocalRide()) return null;
       if (get().currentRide) get().clearRide();
       return null;
     } catch (err: unknown) {
+      if (isStale()) return null;
       if (isErrorLike(err) && (err as { response?: { status?: number } }).response?.status === 404) {
+        if (keepNewerLocalRide()) return null;
         if (get().currentRide) get().clearRide();
       }
       return null;
@@ -743,8 +796,16 @@ export const useRideStore = create<RideState>((set, get) => ({
       );
     }
     if (get().currentRide) {
-      const serverCheck = await get().fetchActiveRide();
-      if (serverCheck?.active) {
+      let serverCheck = await get().fetchActiveRide();
+      const remaining = get().currentRide;
+      // A cancel/completion may overtake the first check. Reconcile once with a
+      // fresh snapshot; do not assume a terminal local ride is settled server-side.
+      if (!serverCheck?.active && remaining && TERMINAL_STATUSES.has(remaining.status)) {
+        serverCheck = await get().fetchActiveRide();
+      }
+      // Null also means an obsolete/failed check, not permission to double-book.
+      // A fresh inactive response clears the local ride; otherwise keep blocking.
+      if (serverCheck?.active || get().currentRide) {
         throw new Error('A ride is already active');
       }
     }
@@ -834,7 +895,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         return response.data as RideRequiresAction;
       }
       const ride = response.data as Ride;
-      set({ currentRide: ride, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null, _clearedRideId: null });
+      set({ currentRide: ride, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null });
       _persistRide(ride, null);
       return ride;
     } catch (error: unknown) {
@@ -1447,6 +1508,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 // logs in on the same device.
 registerLogoutCallback(() => {
   useRideStore.setState({
+    _activeRideRequestId: useRideStore.getState()._activeRideRequestId + 1,
     currentRide: null,
     currentDriver: null,
     driverEtaSeconds: null,

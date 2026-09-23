@@ -61,6 +61,14 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush, navigate: jest.fn(), back: mockBack }),
   useLocalSearchParams: () => mockParams,
 }));
+jest.mock('expo-router/react-navigation', () => {
+  const ReactActual = require('react');
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(() => cb(), [cb]);
+    },
+  };
+});
 const mockGetForegroundPermissionsAsync = jest.fn((): Promise<any> => Promise.resolve({ status: 'denied' }));
 const mockRequestForegroundPermissionsAsync = jest.fn((): Promise<any> => Promise.resolve({ status: 'denied' }));
 const mockGetCurrentPositionAsync = jest.fn((): Promise<any> => Promise.reject(new Error('no gps')));
@@ -556,13 +564,49 @@ describe('Favourites and Saved Places rows', () => {
   });
 });
 
+describe('fresh search after a cancelled trip', () => {
+  it('shows Current Location and an empty destination after resetBookingDraft', async () => {
+    useRideStore.setState({
+      pickup: WAKELING,
+      dropoff: GORDON,
+      stops: [{ address: 'Mid', lat: 50.41, lng: -104.65 }],
+      userLocation: { latitude: 51.0, longitude: -105.0 } as any,
+    });
+    useRideStore.getState().resetBookingDraft();
+    const renderer = await renderScreen();
+    expect(pickupInput(renderer).props.value).toBe('Current Location');
+    expect(dropoffInput(renderer).props.value).toBe('');
+    expect(useRideStore.getState().pickup).toMatchObject({
+      address: 'Current Location', lat: 51.0, lng: -105.0,
+    });
+    expect(useRideStore.getState().dropoff).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
 describe('clearing the pickup field', () => {
-  it('the pickup X button blanks both the text and the store point', async () => {
+  it('the pickup X button blanks both the text and the store point when GPS is unavailable', async () => {
     const renderer = await renderScreen();
     const clearBtn = renderer.root.findAllByProps({ accessibilityLabel: 'Clear pickup location' })[0];
     act(() => { clearBtn.props.onPress(); });
     expect(pickupInput(renderer).props.value).toBe('');
     expect(useRideStore.getState().pickup).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('the pickup X button restores Current Location when GPS is known and stays on this screen', async () => {
+    useRideStore.setState({
+      userLocation: { latitude: 51.0, longitude: -105.0 } as any,
+      dropoff: GORDON,
+    });
+    const renderer = await renderScreen();
+    const clearBtn = renderer.root.findAllByProps({ accessibilityLabel: 'Clear pickup location' })[0];
+    act(() => { clearBtn.props.onPress(); });
+    expect(pickupInput(renderer).props.value).toBe('Current Location');
+    expect(useRideStore.getState().pickup).toMatchObject({
+      address: 'Current Location', lat: 51.0, lng: -105.0,
+    });
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
 

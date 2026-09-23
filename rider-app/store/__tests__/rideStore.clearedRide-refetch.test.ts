@@ -6,8 +6,9 @@
  * bounce the rider back onto the screen they just left.
  *
  * That check used to be `_clearedRideId === rideId` alone, which is a
- * permanent, one-way latch — `_clearedRideId` is only reset by createRide (or
- * by fetchActiveRide landing a different ride). So every LATER response for
+ * permanent, one-way latch — `_clearedRideId` is only reset by fetchActiveRide
+ * landing a different ride. createRide leaves the previous ride's latch in
+ * place. So every LATER response for
  * that ride was discarded too, including a deliberate re-fetch from a screen
  * that had just mounted and explicitly asked for it. A rider re-entering
  * /ride-completed for a paid ride therefore sat on a receipt whose ride could

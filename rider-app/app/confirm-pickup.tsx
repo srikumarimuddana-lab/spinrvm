@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,6 +12,7 @@ import {
 import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useIsFocused } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Circle, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { useRideStore } from '../store/rideStore';
@@ -36,6 +37,7 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 
 export default function ConfirmPickupScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const { sf } = useResponsive();
@@ -73,6 +75,14 @@ export default function ConfirmPickupScreen() {
   const [cardHeight, setCardHeight] = useState(0);
 
   const isTooFar = distanceM > PICKUP_RADIUS_M;
+
+  // A background copy of this screen stays mounted under the destination
+  // sheet. Going back during render, or while unfocused, blanks the screen
+  // the rider is actually looking at.
+  const goBack = router.back;
+  useEffect(() => {
+    if (isFocused && !pickup) goBack();
+  }, [isFocused, pickup, goBack]);
 
   // Coordinates the displayed address was geocoded FOR. Starts at the original
   // pin, whose address came in with it from the store. The reverse geocode is
@@ -161,8 +171,11 @@ export default function ConfirmPickupScreen() {
   };
 
   if (!pickup) {
-    router.back();
-    return null;
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
   }
 
   return (

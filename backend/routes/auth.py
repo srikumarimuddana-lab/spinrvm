@@ -639,21 +639,19 @@ async def _issue_company_email_session(
         if status == "pending_deletion":
             raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
         user = dict(existing_user)
-        driver_session_enabled = False
-        token_version = int(user.get("token_version") or 0)
-        if user.get("is_driver") or user.get("role") == "driver":
-            try:
-                driver_session_enabled, token_version, _ = await _begin_driver_session(user, session_id)
-                if driver_session_enabled:
-                    user["token_version"] = token_version
-            except Exception as e:
-                logger.error("company email auth: atomic driver-session setup failed", exc_info=True)
-                raise SpinrException(
-                    message="Could not update session, please try again",
-                    error_code=ErrorCode.DATABASE_ERROR,
-                    status_code=503,
-                    message_key=ErrorKeys.SYSTEM_DATABASE,
-                ) from e
+        previous_session_id = user.get("current_session_id")
+        try:
+            driver_session_enabled, token_version, _ = await _begin_driver_session_if_driver(user, session_id)
+            if driver_session_enabled:
+                user["token_version"] = token_version
+        except Exception as e:
+            logger.error("company email auth: atomic driver-session setup failed", exc_info=True)
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         try:
             # Completing this OTP IS proof the person controls the inbox, so
             # stamp email_verified alongside the session. Without it the flag
@@ -671,6 +669,7 @@ async def _issue_company_email_session(
             await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
             user.update(_verify_patch)
             user["current_session_id"] = session_id
+            await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -1135,22 +1134,21 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             previous_session_id = existing_user.get("current_session_id")
             driver_session_enabled = False
             token_version = int(existing_user.get("token_version") or 0)
-            if existing_user.get("is_driver") or existing_user.get("role") == "driver":
-                try:
-                    driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session(
-                        existing_user, session_id
-                    )
-                    if driver_session_enabled:
-                        previous_session_id = rpc_previous_session
-                        existing_user["token_version"] = token_version
-                except Exception as e:
-                    logger.error("verify_otp: atomic driver-session setup failed", exc_info=True)
-                    raise SpinrException(
-                        message="Could not update session, please try again",
-                        error_code=ErrorCode.DATABASE_ERROR,
-                        status_code=503,
-                        message_key=ErrorKeys.SYSTEM_DATABASE,
-                    ) from e
+            try:
+                driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session_if_driver(
+                    existing_user, session_id
+                )
+                if driver_session_enabled:
+                    previous_session_id = rpc_previous_session
+                    existing_user["token_version"] = token_version
+            except Exception as e:
+                logger.error("verify_otp: atomic driver-session setup failed", exc_info=True)
+                raise SpinrException(
+                    message="Could not update session, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from e
             try:
                 _session_update: dict = {"current_session_id": session_id}
                 if existing_user.get("is_guest"):
@@ -1464,23 +1462,24 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
     session_id = str(uuid.uuid4())
     driver_session_enabled = False
     token_version = int(user.get("token_version") or 0)
-    if user.get("is_driver") or user.get("role") == "driver":
-        try:
-            driver_session_enabled, token_version, _ = await _begin_driver_session(user, session_id)
-            if driver_session_enabled:
-                user["token_version"] = token_version
-        except Exception as e:
-            logger.error("reactivate: atomic driver-session setup failed", exc_info=True)
-            raise SpinrException(
-                message="Could not update session, please try again",
-                error_code=ErrorCode.DATABASE_ERROR,
-                status_code=503,
-                message_key=ErrorKeys.SYSTEM_DATABASE,
-            ) from e
+    previous_session_id = user.get("current_session_id")
+    try:
+        driver_session_enabled, token_version, _ = await _begin_driver_session_if_driver(user, session_id)
+        if driver_session_enabled:
+            user["token_version"] = token_version
+    except Exception as e:
+        logger.error("reactivate: atomic driver-session setup failed", exc_info=True)
+        raise SpinrException(
+            message="Could not update session, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
     try:
         if not driver_session_enabled:
             await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
         user["current_session_id"] = session_id
+        await _cleanup_superseded_session(user_id, previous_session_id, session_id)
     except Exception as e:
         # Same defect verify_otp and firebase_auth_login guard against: without
         # a persisted current_session_id, should_tombstone() can never match the
@@ -1683,22 +1682,21 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         if _fb_status == "deleted" or user.get("deleted_at"):
             raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
         previous_session_id = user.get("current_session_id")
-        if user.get("is_driver") or user.get("role") == "driver":
-            try:
-                driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session(
-                    user, session_id
-                )
-                if driver_session_enabled:
-                    previous_session_id = rpc_previous_session
-                    user["token_version"] = token_version
-            except Exception as e:
-                logger.error("firebase_auth: atomic driver-session setup failed", exc_info=True)
-                raise SpinrException(
-                    message="Could not update session, please try again",
-                    error_code=ErrorCode.DATABASE_ERROR,
-                    status_code=503,
-                    message_key=ErrorKeys.SYSTEM_DATABASE,
-                ) from e
+        try:
+            driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session_if_driver(
+                user, session_id
+            )
+            if driver_session_enabled:
+                previous_session_id = rpc_previous_session
+                user["token_version"] = token_version
+        except Exception as e:
+            logger.error("firebase_auth: atomic driver-session setup failed", exc_info=True)
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         try:
             if not driver_session_enabled:
                 await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
@@ -2243,6 +2241,46 @@ async def _begin_driver_session(user: dict, session_id: str) -> tuple[bool, int,
     if not result["enabled"]:
         return False, int(user.get("token_version") or 0), user.get("current_session_id")
     return True, int(result.get("token_version") or 0), result.get("previous_session_id")
+
+
+async def _begin_driver_session_if_driver(
+    user: dict, session_id: str
+) -> tuple[bool, int, Optional[str]]:
+    """Use stored role flags first, then confirm a linked active driver row.
+
+    Auth lookups return raw ``users`` rows; unlike ``get_current_user``, they
+    do not enrich a stale ``is_driver`` value from ``drivers``. That linked row
+    is authoritative when both stored role fields are false or missing.
+    """
+    if user.get("is_driver") or user.get("role") == "driver":
+        return await _begin_driver_session(user, session_id)
+    driver = await db_supabase.get_driver_by_user_id_cached(str(user["id"]))
+    if driver:
+        return await _begin_driver_session(user, session_id)
+    return False, int(user.get("token_version") or 0), user.get("current_session_id")
+
+
+async def _cleanup_superseded_session(user_id: str, previous_session_id: Optional[str], session_id: str) -> None:
+    """Tombstone and disconnect the old session, then clean driver presence."""
+    if not previous_session_id or str(previous_session_id) == session_id:
+        return
+    try:
+        await revoke_session(str(previous_session_id))
+    except Exception:
+        logger.error("auth: failed to tombstone superseded session", exc_info=True)
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id,
+            client_types=["driver", "rider"],
+            reason="session_superseded",
+        )
+    except Exception:
+        logger.error("auth: failed to kick superseded session sockets", exc_info=True)
+    await _offline_driver_for_logout_all(user_id)
 
 
 async def _offline_driver_for_logout_all(user_id: str) -> None:

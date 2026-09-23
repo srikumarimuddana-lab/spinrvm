@@ -386,17 +386,24 @@ class TestReactivateAccount:
             "phone": "+13065551111",
             "role": "driver",
             "is_driver": True,
+            "current_session_id": "old-session",
             "status": "pending_deletion",
             "token_version": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         update_mock = AsyncMock(return_value=True)
         session_rpc = AsyncMock(return_value=[{"enabled": False}])
+        tombstone = AsyncMock()
+        kick = AsyncMock()
+        offline = AsyncMock()
         with (
             patch("backend.routes.auth.verify_reactivation_token", return_value="u-react-1"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(user))),
             patch("backend.routes.auth.db_supabase.update_one", update_mock),
             patch("backend.routes.auth.db_supabase.rpc", session_rpc),
+            patch("backend.routes.auth.revoke_session", tombstone),
+            patch("backend.socket_manager.manager.kick_user", kick),
+            patch("backend.routes.auth._offline_driver_for_logout_all", offline),
             patch("backend.routes.auth.redis_set", AsyncMock()),
             patch(
                 "backend.routes.auth.issue_refresh_token",
@@ -415,6 +422,9 @@ class TestReactivateAccount:
         calls = [c.args for c in update_mock.await_args_list]
         assert any(c[0] == "users" and c[1] == {"id": "u-react-1"} and c[2].get("status") == "active" for c in calls)
         session_rpc.assert_awaited_once()
+        tombstone.assert_awaited_once_with("old-session")
+        kick.assert_awaited_once_with("u-react-1", client_types=["driver", "rider"], reason="session_superseded")
+        offline.assert_awaited_once_with("u-react-1")
 
     @pytest.mark.asyncio
     async def test_reactivation_checks_for_new_device(self):
@@ -1033,14 +1043,21 @@ async def test_company_email_login_for_driver_uses_generation_rpc():
         "role": "driver",
         "is_driver": True,
         "profile_complete": True,
+        "current_session_id": "company-old-session",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "token_version": 5,
     }
     rpc = AsyncMock(return_value=[{"enabled": False}])
+    tombstone = AsyncMock()
+    kick = AsyncMock()
+    offline = AsyncMock()
     with (
         patch.object(auth, "_find_user_by_email", AsyncMock(return_value=user)),
         patch.object(auth.db_supabase, "rpc", rpc),
         patch.object(auth.db_supabase, "update_one", AsyncMock(return_value=True)),
+        patch.object(auth, "revoke_session", tombstone),
+        patch("backend.socket_manager.manager.kick_user", kick),
+        patch.object(auth, "_offline_driver_for_logout_all", offline),
         patch.object(auth, "redis_set", AsyncMock()),
         patch.object(auth, "_activate_pending_company_invites", AsyncMock()),
         patch.object(auth, "_alert_if_new_device", AsyncMock()),
@@ -1057,3 +1074,8 @@ async def test_company_email_login_for_driver_uses_generation_rpc():
     assert rpc.await_args.args[0] == "begin_driver_session"
     assert rpc.await_args.args[1]["p_user_id"] == "driver-email-user"
     assert rpc.await_args.args[1]["p_session_id"]
+    tombstone.assert_awaited_once_with("company-old-session")
+    kick.assert_awaited_once_with(
+        "driver-email-user", client_types=["driver", "rider"], reason="session_superseded"
+    )
+    offline.assert_awaited_once_with("driver-email-user")

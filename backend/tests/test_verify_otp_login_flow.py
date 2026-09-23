@@ -183,6 +183,37 @@ async def test_existing_driver_login_always_uses_generation_rpc(client_app):
 
 
 @pytest.mark.asyncio
+async def test_existing_driver_row_overrides_stale_user_role_flags():
+    user = {
+        "id": "driver-stale-flags",
+        "phone": PHONE,
+        "role": "rider",
+        "is_rider": True,
+        "is_driver": False,
+        "token_version": 2,
+        "profile_complete": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    driver_lookup = AsyncMock(return_value={"id": "driver-row", "user_id": user["id"]})
+    rpc = AsyncMock(return_value=[{"enabled": False}])
+    patches = _base_patches(otp_record=_valid_otp_record(), user_lookup_result=dict(user))
+    patches += [
+        patch("backend.routes.auth.db_supabase.get_driver_by_user_id_cached", driver_lookup),
+        patch("backend.routes.auth.db_supabase.rpc", rpc),
+        patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+        patch(
+            "backend.routes.auth.issue_refresh_token",
+            AsyncMock(return_value=("raw-refresh", "row-1", datetime.now(timezone.utc) + timedelta(days=30))),
+        ),
+    ]
+
+    await _call_verify_otp(patches, client_app="rider")
+
+    driver_lookup.assert_awaited_once_with(user["id"])
+    rpc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_existing_user_login_checks_for_new_device():
     """ACTION_ITEMS.md N15/R8 — the existing-user branch must run the
     new-device check before minting the login's own refresh token (see

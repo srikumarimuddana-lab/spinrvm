@@ -101,23 +101,17 @@ def resolve_worker_loop_allowlist(raw: str | None = None) -> Tuple[str, ...]:
         raise RuntimeError("SPINR_WORKER_LOOP_ALLOWLIST contains duplicate loop names")
     unknown = set(requested) - _WORKER_WAVE1
     if unknown:
-        raise RuntimeError(
-            f"SPINR_WORKER_LOOP_ALLOWLIST contains unknown worker loops: {sorted(unknown)}"
-        )
+        raise RuntimeError(f"SPINR_WORKER_LOOP_ALLOWLIST contains unknown worker loops: {sorted(unknown)}")
     selected = set(requested)
     return tuple(name for name in WORKER_WAVE1_LOOP_NAMES if name in selected)
 
 
-def should_spawn_on_api(
-    loop_name: str, process_role: str, worker_loop_allowlist: Iterable[str] | None = None
-) -> bool:
+def should_spawn_on_api(loop_name: str, process_role: str, worker_loop_allowlist: Iterable[str] | None = None) -> bool:
     """Whether the API lifespan should start this loop for the given role."""
     role = (process_role or "all").strip().lower() or "all"
     if role == "all":
         return True
-    worker_names = set(
-        WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist
-    )
+    worker_names = set(WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist)
     if role == "api":
         return loop_name not in worker_names
     # Dedicated worker is a separate process (backend/worker.py). An API
@@ -133,11 +127,9 @@ def active_api_loop_names(
     role = (process_role or "all").strip().lower() or "all"
     if role == "worker":
         return []
-    worker_names = set(
-        WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist
-    )
+    worker_names = set(WORKER_WAVE1_LOOP_NAMES if worker_loop_allowlist is None else worker_loop_allowlist)
     names: List[str] = []
-    for name, placement in LOOP_CATALOG:
+    for name, _placement in LOOP_CATALOG:
         if name == LOOP_WATCHDOG_NAME:
             continue
         if role == "all" or name not in worker_names:

@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from loguru import logger
 
 try:
-    from core.config import settings
     from core.background_loop_registry import (
         LOOP_PLACEMENT,
         LOOP_WATCHDOG_NAME,
@@ -14,9 +13,9 @@ try:
         resolve_worker_loop_allowlist,
         should_spawn_on_api,
     )
+    from core.config import settings
     from db_supabase import run_sync
 except ImportError:  # pragma: no cover - import style varies by entrypoint
-    from ..core.config import settings  # type: ignore
     from ..core.background_loop_registry import (  # type: ignore
         LOOP_PLACEMENT,
         LOOP_WATCHDOG_NAME,
@@ -25,6 +24,7 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
         resolve_worker_loop_allowlist,
         should_spawn_on_api,
     )
+    from ..core.config import settings  # type: ignore
     from ..db_supabase import run_sync  # type: ignore
 
 from supabase_client import supabase
@@ -792,9 +792,7 @@ async def lifespan(app: FastAPI):
     # Derive expectations from the selected role and only the loops present in
     # lifespan, so deferred registry entries (for example H3) stay dormant.
     _WATCHDOG_LOOP_NAMES = [
-        name
-        for name in active_api_loop_names(process_role, worker_loop_allowlist)
-        if name in _active_loop_names
+        name for name in active_api_loop_names(process_role, worker_loop_allowlist) if name in _active_loop_names
     ]
 
     async def _loop_watchdog():

@@ -351,6 +351,68 @@ async def retry_stuck_payouts() -> None:
             )
 
 
+async def _resolve_failed_retry_capture(
+    ride: dict,
+    ride_id: str,
+    payment_intent_id: str,
+    capture_cents: int,
+    attempt: int,
+    stripe_secret: str,
+    capture_err: Exception,
+) -> bool:
+    """Decide what a raised retry-loop capture actually did.
+
+    Returns True only when Stripe shows the capture succeeded for exactly
+    ``capture_cents``, so the caller should finalize the settlement. Otherwise
+    the ride is left in a state a later tick or ops can act on, and False is
+    returned.
+    """
+    import stripe
+
+    logger.error(
+        "Payment retry: capture raised for ride %s; checking PaymentIntent state",
+        ride_id,
+        exc_info=capture_err,
+        extra={"domain": "payments", "ride_id": ride_id, "payment_intent_id": payment_intent_id},
+    )
+    try:
+        intent = await asyncio.to_thread(stripe.PaymentIntent.retrieve, payment_intent_id, api_key=stripe_secret)
+    except Exception:
+        logger.critical(
+            "Payment retry: capture outcome unknown for ride %s (PaymentIntent retrieve failed); "
+            "left in 'processing' for reconciliation / manual review",
+            ride_id,
+            exc_info=True,
+            extra={"domain": "payments", "ride_id": ride_id, "payment_intent_id": payment_intent_id},
+        )
+        return False
+
+    status = getattr(intent, "status", None)
+    if status == "requires_capture":
+        # No money moved: hand the ride back to the retry loop. The next tick
+        # re-captures under the same idempotency key.
+        failed = await db.update_one(
+            "rides",
+            {"id": ride_id, "payment_status": "processing", "payment_retry_count": attempt},
+            {"$set": {"payment_status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        if failed is not None and attempt >= MAX_RETRIES and await _claim_exhausted_alert(ride_id):
+            await _alert_admins_payment_exhausted(ride)
+        return False
+    if status == "succeeded" and int(getattr(intent, "amount_received", 0) or 0) == capture_cents:
+        return True
+    logger.critical(
+        "Payment retry: capture raised for ride %s and PaymentIntent is %r (received %s of %s cents); "
+        "left in 'processing' for manual review",
+        ride_id,
+        status,
+        getattr(intent, "amount_received", None),
+        capture_cents,
+        extra={"domain": "payments", "ride_id": ride_id, "payment_intent_id": payment_intent_id},
+    )
+    return False
+
+
 async def retry_failed_payments():
     """Find and retry failed/stuck payments."""
     try:
@@ -508,9 +570,7 @@ async def retry_failed_payments():
                         "payment_status": "retrying",
                         "payment_retry_count": retry_count,
                     },
-                    {
-                        "$set": _recovery_update
-                    },
+                    {"$set": _recovery_update},
                 )
                 if released is None:
                     # Another finalizer may have won the paid flip after our
@@ -730,13 +790,23 @@ async def retry_failed_payments():
                     continue
                 # Same key shape as stripe_charge.capture_ride so a partially
                 # completed settlement capture for the same amount dedupes.
-                await asyncio.to_thread(
-                    stripe.PaymentIntent.capture,
-                    payment_intent_id,
-                    amount_to_capture=capture_cents,
-                    api_key=stripe_secret,
-                    idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
-                )
+                try:
+                    await asyncio.to_thread(
+                        stripe.PaymentIntent.capture,
+                        payment_intent_id,
+                        amount_to_capture=capture_cents,
+                        api_key=stripe_secret,
+                        idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
+                    )
+                except Exception as capture_err:
+                    # The ride is already 'processing' at `attempt`, so the outer
+                    # except's CAS (retrying @ retry_count) would match nothing
+                    # and strand it: the stale-processing guard above then skips
+                    # it every tick until the hold lapses. Resolve from Stripe.
+                    if not await _resolve_failed_retry_capture(
+                        ride, ride_id, payment_intent_id, capture_cents, attempt, stripe_secret, capture_err
+                    ):
+                        continue
                 # ACTION_ITEMS B19: route through the same shared finalizer
                 # settle_card's two success paths use, instead of the old
                 # bare capture -> record_payment_event -> separate update_ride

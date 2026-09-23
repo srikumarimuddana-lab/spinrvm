@@ -1487,7 +1487,8 @@ class TestAutoPayoutLoopRedisGate:
             patch.object(m, "finalize_stale_running_batches", finalize),
             patch.object(m, "redis_set_nx", lock),
             patch.object(m, "run_weekly_auto_payout", run_weekly),
-            patch.object(m, "_record_heartbeat"),
+            patch.object(m, "_record_heartbeat") as heartbeat,
+            patch.object(m, "_record_dependency_failure") as failure,
             patch("asyncio.sleep", fake_sleep),
             caplog.at_level(logging.ERROR),
         ):
@@ -1499,6 +1500,8 @@ class TestAutoPayoutLoopRedisGate:
         sweep.assert_awaited_once_with(_SETTINGS_OK["stripe_secret_key"])
         assert finalize.await_count == 2
         run_weekly.assert_awaited_once()
+        heartbeat.assert_called_once_with("auto_payout (1h, Sundays)")
+        failure.assert_called_once_with("auto_payout (1h, Sundays)")
         assert "redis password must stay private" not in caplog.text
         assert "ConnectionError" in caplog.text
         after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][lock_key]
@@ -1525,7 +1528,8 @@ class TestAutoPayoutLoopRedisGate:
             patch.object(m, "finalize_stale_running_batches", AsyncMock()),
             patch.object(m, "redis_set_nx", lock),
             patch.object(m, "run_weekly_auto_payout", batch),
-            patch.object(m, "_record_heartbeat"),
+            patch.object(m, "_record_heartbeat") as heartbeat,
+            patch.object(m, "_record_dependency_failure") as failure,
             patch("asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError())),
         ):
             with pytest.raises(asyncio.CancelledError):
@@ -1536,3 +1540,5 @@ class TestAutoPayoutLoopRedisGate:
         assert lock.await_args.args[2] == int(3600 * 0.85)
         sweep.assert_not_awaited()
         batch.assert_not_awaited()
+        heartbeat.assert_called_once_with("auto_payout (1h, Sundays)")
+        failure.assert_not_called()

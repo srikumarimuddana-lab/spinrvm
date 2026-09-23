@@ -78,8 +78,16 @@ except ImportError:  # pragma: no cover - dual-import pattern
     from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
-    from .loop_monitor import record_heartbeat as _record_heartbeat
+    from .loop_monitor import (
+        record_dependency_failure as _record_dependency_failure,
+    )
+    from .loop_monitor import (
+        record_heartbeat as _record_heartbeat,
+    )
 except ImportError:  # pragma: no cover
+
+    def _record_dependency_failure(name: str) -> None:  # type: ignore[misc]
+        pass
 
     def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
         pass
@@ -1223,6 +1231,7 @@ async def auto_payout_loop():
     interval = 3600  # 1 hour
 
     while True:
+        lock_failed = False
         try:
             try:
                 from ..settings_loader import get_app_settings
@@ -1252,6 +1261,8 @@ async def auto_payout_loop():
                         type(lock_err).__name__,
                     )
                     _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
+                    _record_dependency_failure("auto_payout (1h, Sundays)")
+                    lock_failed = True
                     got_lock = False
                 if got_lock:
                     try:
@@ -1268,5 +1279,6 @@ async def auto_payout_loop():
             logger.exception("[AUTO-PAYOUT] loop iteration failed")
             _metric_inc("spinr_bgloop_errors_total", {"loop": "auto_payout"})
 
-        _record_heartbeat("auto_payout (1h, Sundays)")
+        if not lock_failed:
+            _record_heartbeat("auto_payout (1h, Sundays)")
         await asyncio.sleep(interval)

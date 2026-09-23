@@ -11,22 +11,22 @@
 
 ## 1. Issue / gap identified
 
-The auto-payout loop ran its hourly stale-reserved sweep before acquiring Redis. That sweep can retry Stripe transfers, so Redis outages or contention could let multiple replicas transfer without distributed ownership. The Sunday batch also treated lock exceptions as successful acquisition.
+The auto-payout loop already skips transfer-producing work unless its strict Redis lock is acquired, but it emitted a healthy heartbeat after a lock exception. Persistent Redis outages were therefore invisible to `/health` and loop watchdogs. The hourly stale-running-batch finalizer remains outside the lock because it only updates batch status.
 
 ## 2. Root cause
 
-The lock covered only the Sunday batch, not the hourly stale-reserved transfer sweep; its exception handler also explicitly set `got_lock = True`.
+The lock exception was converted to `got_lock = False`, the same branch as ordinary contention, then the common loop tail recorded a heartbeat. This erased any signal that the Redis dependency had failed.
 
 ## 3. Fix / remediation
 
-The hourly loop now acquires the strict Redis lock before either the stale-reserved transfer sweep or Sunday batch. A lock error logs only the exception class, increments `spinr_loop_lock_unavailable_total{loop="auto_payout"}`, and skips both transfer-producing paths for that iteration. The lease stays at 85% of the 3600-second loop interval (3060 seconds), expiring before the next wake. Stale-running-batch finalization remains outside the lock because it only updates batch status and does not produce transfers.
+On lock error, the loop logs only the exception class, increments `spinr_loop_lock_unavailable_total{loop="auto_payout"}`, marks the dependency failure in loop health, and skips its common heartbeat so the failure persists. Ordinary contention still heartbeats; a later successful lock acquisition clears the failure. The strict 3060-second lease, existing transfer gates, stale-running-batch finalization, and schedule remain unchanged.
 
 ## 4. Risk & impact on existing functionality
 
-- Blast radius: isolated to transfer-producing paths in `auto_payout_loop`: `sweep_stale_reserved` and Sunday `run_weekly_auto_payout`.
+- Blast radius: `auto_payout_loop`'s health status, plus the existing transfer-producing paths `sweep_stale_reserved` and Sunday `run_weekly_auto_payout`. `/health` and worker health consume the shared `loop_monitor` contract; other loop consumers retain existing behavior unless they report a dependency failure.
 - Stale-running-batch finalization, `auto_payout_batches.week_key` claims, payout reservation rows, attempt-scoped Stripe idempotency keys, and finalization rules remain unchanged.
-- Before: the hourly stale sweep ran before any lock, and the Sunday batch proceeded on lock errors. After: neither path runs without acquisition. After a healthy acquisition, the stale sweep still runs hourly and the weekly batch still runs in its existing Sunday window.
-- During Redis outage/contention, stranded-reservation retries may wait for the next healthy hourly iteration; scheduled weekly payouts may be delayed while the Sunday window is unhealthy. No payout amount or eligibility rules changed.
+- Before this health fix: lock exceptions and ordinary contention both skipped transfer work and emitted a healthy heartbeat. After: contention remains healthy, Redis errors immediately degrade runtime loop health, and later heartbeat clears the degraded status. After a healthy acquisition, the stale sweep still runs hourly and the weekly batch still runs in its existing Sunday window.
+- During a Redis outage, stranded-reservation retries may wait for the next healthy hourly iteration; scheduled weekly payouts may be delayed while the Sunday window is unhealthy. No payout amount or eligibility rules changed.
 - No ride state or wallet-delta logic changed.
 
 ## 5. User-experience effect
@@ -37,40 +37,37 @@ Drivers may receive a stale reserved-payout retry or scheduled weekly payout lat
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/utils/auto_payout.py` | Move strict Redis acquisition ahead of the hourly sweep and Sunday batch; fail closed and emit metric | Prevent all transfer-producing loop work without Redis ownership |
-| `backend/tests/test_auto_payout.py` | Cover error→recovery, weekday and Sunday contention; assert neither sweep nor batch runs without lock, metric/redaction, and TTL | Prove every transfer path is gated and schedule resumes after acquisition |
+| `backend/utils/auto_payout.py` | Report strict-lock exceptions to loop health and skip the iteration heartbeat; preserve existing acquired-lock transfer gates | Surface Redis outage while keeping financial decisions unchanged |
+| `backend/utils/loop_monitor.py` | Add a per-loop dependency-failure state that clears on heartbeat and marks health unhealthy | Make dependency outage visible immediately, including before first heartbeat |
+| `backend/tests/test_auto_payout.py` | Assert lock error marks failure and skips heartbeat, contention remains healthy on weekdays and Sundays, and recovery heartbeats | Pin outage/contention/recovery without changing payout schedule |
+| `backend/tests/test_loop_monitor_dependency_failure.py` | Assert dependency failure is unhealthy and heartbeat restores health | Pin runtime health contract |
 | `docs/change-log/2026-09-23-auto-payout-lock.md` | Record impact and verification | Required runtime change record |
 
 ## 7. Before / after
 
 ```python
 # Before
-await sweep_stale_reserved(stripe_secret)  # ran before any lock
-if _is_batch_window(now_local):
-    got_lock = await redis_set_nx(LOCK_KEY, pod_id, int(interval * 0.85))
+except Exception as lock_err:
+    got_lock = False  # indistinguishable from ordinary contention
 ```
 
 ```python
 # After
-try:
-    got_lock = await redis_set_nx(LOCK_KEY, pod_id, int(interval * 0.85))  # every hourly tick
 except Exception as lock_err:
-    logger.error("... skipping payout work (%s)", type(lock_err).__name__)
-    _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
-    got_lock = False
-if got_lock:
-    await sweep_stale_reserved(stripe_secret)
-    if _is_batch_window(now_local):
-        await run_weekly_auto_payout()
+    _record_dependency_failure("auto_payout (1h, Sundays)")
+    lock_failed = True
+# ... existing payout work remains gated by got_lock
+if not lock_failed:
+    _record_heartbeat("auto_payout (1h, Sundays)")
 ```
 
 ## 8. Rollback plan
 
-Revert the isolated loop-gate change and redeploy if payout timing becomes unacceptable. The lock does not change payout records; existing database claims and Stripe idempotency remain intact.
+Revert the isolated health-reporting change and redeploy if its health status or alert behavior is incorrect. This change does not alter payout records; existing database claims and Stripe idempotency remain intact.
 
 ## 9. Verification performed
 
-- [x] Automated: `/tmp/pr5725-venv/bin/python -m pytest backend/tests/test_auto_payout.py -q --no-cov` (72 passed).
+- [x] Automated: `/tmp/pr5725-venv/bin/python -m pytest backend/tests/test_auto_payout.py -k 'sunday_batch_skips_lock_error or contended_hourly_lock' -o addopts='' -q` (3 passed); loop-monitor failure/recovery test (1 passed).
 - [ ] Manual repro in staging: not run; no production/staging changes were made.
 - [x] Blast-radius grep: `auto_payout_loop`, weekly batch invocation, and existing payout claim/idempotency tests.
 - [x] Money dry-run scenario: simulated Sunday lock outage followed by acquisition; stale sweep and weekly batch run only on the acquired iteration. Contention is covered on a weekday (hourly sweep) and Sunday (sweep plus batch). The tests assert the unchanged 3060-second TTL; existing mocked payout tests cover payout claims and Stripe idempotency contracts.

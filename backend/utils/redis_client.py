@@ -154,8 +154,14 @@ async def _get_redis():
         return _redis
     try:
         import redis.asyncio as aioredis  # type: ignore
+        from redis.asyncio.retry import Retry
+        from redis.backoff import NoBackoff
 
-        _redis = aioredis.from_url(url, encoding="utf-8", decode_responses=True)
+        _redis = aioredis.from_url(
+            url, encoding="utf-8", decode_responses=True,
+            socket_connect_timeout=2, socket_timeout=2,
+            retry=Retry(NoBackoff(), 0),
+        )
         _redis_url = url
         # F5: url[:30] used to be logged directly — a redis:// URL carries its
         # password before the host, and 30 chars of a real Upstash URL is
@@ -165,7 +171,7 @@ async def _get_redis():
         logger.info("Redis connected: %s://%s:%s", parsed.scheme, parsed.hostname or "?", parsed.port or "?")
         return _redis
     except Exception as e:
-        logger.warning(f"Redis connection failed ({e}); using in-process fallback")
+        logger.error("Redis client initialization failed (%s); distributed locks are unavailable", type(e).__name__)
         return None
 
 

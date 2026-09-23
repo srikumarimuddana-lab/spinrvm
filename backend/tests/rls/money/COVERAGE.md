@@ -17,9 +17,15 @@ helper through a narrow adapter to the disposable database's `stripe_events`
 table from migration 22. The adapter uses the table's real primary key to
 resolve concurrent duplicate claims.
 
+`test_ride_accept_cancel_pg.py` races the actual `driver_repo.claim_ride_atomic`
+and `_base.update_one` guarded writes against the shipped rides table. Its
+narrow adapter translates only those repository query chains to conditional
+PostgreSQL updates; this verifies the row-lock outcome and final state, not
+PostgREST or the full HTTP cancellation flow.
+
 This proves database transaction behavior for those RPCs and the Stripe event
 claim primitive only. The Stripe case does not prove application webhook
-business-processing idempotency or delivery semantics. This suite does not
-cover the accept/cancel race, production Postgres, or Redis. Run with the disposable
-Postgres setup documented in `backend/tests/rls/conftest.py`; compilation and
-collection alone do not count as PostgreSQL execution.
+business-processing idempotency or delivery semantics. The race cases do not
+prove production Postgres, Supabase/PostgREST behavior, or Redis. Run with the
+disposable Postgres setup documented in `backend/tests/rls/conftest.py`;
+compilation and collection alone do not count as PostgreSQL execution.

@@ -1,4 +1,4 @@
--- 448_revoke_client_exec_admin_rpcs.sql
+-- 450_revoke_client_exec_admin_rpcs.sql
 --
 -- Purpose:
 --   Close anon/authenticated EXECUTE on 15 admin_* SECURITY DEFINER RPCs and
@@ -109,7 +109,7 @@ BEGIN
     ]
     LOOP
         IF to_regprocedure(s) IS NULL THEN
-            RAISE EXCEPTION 'migration 448: expected function % not found (schema drift)', s;
+            RAISE EXCEPTION 'migration 450: expected function % not found (schema drift)', s;
         END IF;
     END LOOP;
 END $$;
@@ -187,12 +187,12 @@ BEGIN
         OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
         OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE'));
     IF leaked IS NOT NULL THEN
-        RAISE EXCEPTION 'migration 448 post-condition failed for: %', leaked;
+        RAISE EXCEPTION 'migration 450 post-condition failed for: %', leaked;
     END IF;
 
     IF has_function_privilege('anon', 'public.is_party_to_lost_and_found_case(text)', 'EXECUTE')
        OR NOT has_function_privilege('authenticated', 'public.is_party_to_lost_and_found_case(text)', 'EXECUTE') THEN
-        RAISE EXCEPTION 'migration 448 post-condition failed for is_party_to_lost_and_found_case(text)';
+        RAISE EXCEPTION 'migration 450 post-condition failed for is_party_to_lost_and_found_case(text)';
     END IF;
 END $$;
 

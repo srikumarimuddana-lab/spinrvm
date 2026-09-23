@@ -1,5 +1,68 @@
 # Change Impact & Risk Log
 
+## Follow-up verification — September 23
+
+- Full rider Jest: **163 suites / 2,248 tests passed** (`--runInBand --forceExit`).
+- Focused store + confirm-pickup tests: **30 passed**. The new store cases run
+  against the original PR store produced **10 failures / 7 passes**; the fixed
+  store passes all 17 cases. This verifies that the regressions detect the bugs.
+- Production Metro export: `CI=1 expo export --platform all` **passed**, producing
+  Android and iOS Hermes bundles and the web bundle. The unsupported external
+  React Navigation import is gone; the Expo compatibility check stays enabled.
+- GPT-6 Luna independent navigation and lifecycle reviews: no remaining findings
+  after driver-position protection, duplicate-booking protection, and the terminal
+  recheck were included.
+- Local Playwright E2E: **not run**. Chromium installation failed with an invalid
+  download archive, and no existing browser binary was available. Existing web
+  E2E specs are smoke checks with mocked APIs, not native device proof.
+- Still required before release: Android/iOS device test of cancel → Where to? →
+  pickup X → Economy/XL rebook, GPS disabled, delayed network, and background/resume.
+  No signed native build, physical-device run, or live booking was performed here.
+- Existing test teardown/open-handle and dependency peer warnings remain; the test
+  command uses the repository CI's force-exit convention. No dependency was changed.
+
+## PR review follow-up — overlapping active-ride requests
+
+- Issue/root cause: `/rides/active` checked the cancellation latch only after
+  awaiting the response. A newer response could adopt ride B and clear that latch,
+  allowing an older inactive/404 response to erase B or an older active response
+  to replace B with A. Reproduced on `2015b3f79` with controlled response ordering.
+- Change: each active check captures a monotonic request ID, the current ride
+  and driver objects, and clear epoch. Responses overtaken by another check, a ride update,
+  booking, clear, or logout return without mutating or navigating. Logout advances
+  the request ID. Existing cancelled-ride suppression remains in place. Booking
+  rechecks local ride presence after the awaited check, so an obsolete/null result
+  cannot authorize a second booking while a ride is still current. A terminal
+  update during that check triggers one fresh server check before permitting rebooking;
+  terminal records are not shielded by a previous ride's cancellation latch.
+- Alternative: a grace-period timer around new bookings. Rejected: arbitrary
+  timing cannot establish which request or ride owns a response.
+- Before: response checks only the current cancel latch. After: response must
+  still own its request ID and starting ride/clear snapshot before the latch check.
+- Blast radius: `fetchActiveRide` callers are home focus, app startup, foreground
+  recovery, `createRide`, ride-options recovery, and payment-confirm recovery.
+  Stale calls return the existing nullable result; they never return an obsolete
+  active ride to navigation callers. Fresh calls retain their previous contract.
+  Driver-app is unchanged. No server ride transition, money calculation, database,
+  permission, native dependency, or visible copy change.
+- Tradeoff: if a newer check fails, an older response is still discarded. Current
+  state is retained and the next fresh check can reconcile it. Poll/WS updates also
+  invalidate an in-flight check to avoid rolling back newer local ride data.
+- Files: `rideStore.ts`, its `rideStore.cancel-flicker.test.ts`, and this log.
+- Regression coverage: old inactive/404/previous-ride responses after a new check,
+  response after a new booking, clear, logout, WS status/position update, fresh
+  inactive cleanup, and blocking duplicate booking after an overtaken check.
+  Cancelled-during-check rebooking requires a fresh authoritative inactive result.
+  Focus/pickup tests cover the separate Router import follow-up.
+- Verification: controlled production-function harness failed before the guard
+  and passed seven response-order cases after it. The actual new Jest tests against
+  the original PR store produced 10 failures; all 17 store cases pass with the fix.
+  Full rider Jest: 163 suites / 2,248 tests passed (`--runInBand --forceExit`).
+- Rollback: revert this follow-up commit and redeploy the preceding rider bundle;
+  that restores the known race. No database rollback or live data repair required.
+- Not verified: physical-device native execution, actual delayed network delivery,
+  or live bookings. These checks do not claim to reproduce a particular device crash.
+
 ## PR review follow-up — Expo Router compatibility
 
 - Issue/root cause: the new `useIsFocused` import used external React Navigation,

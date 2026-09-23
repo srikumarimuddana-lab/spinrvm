@@ -22,6 +22,7 @@ Run (single process is fine up to ~200 bots; use --processes beyond):
 
   pip install -r requirements.txt
   export LOADTEST_BASE_URL=https://staging-api.spinr.ca
+  export LOADTEST_ALLOWED_ORIGINS=https://staging-api.spinr.ca
   locust -f locustfile.py --headless -u 60 -r 2 -t 10m \
       --host "$LOADTEST_BASE_URL" --csv results/run1
 
@@ -72,6 +73,12 @@ except ImportError:  # harness still runs rider-only without it
     websocket = None
 
 from bot_common import API, BASE_OTP, TOKEN_CACHE_PATH, jitter_point, next_phone
+from target_guard import (
+    guard_http_client,
+    validate_api_target,
+    validate_cached_target,
+    websocket_connection_options,
+)
 
 _jitter_point = jitter_point  # kept as a module-local alias; call sites unchanged below
 _next_phone = next_phone
@@ -101,6 +108,16 @@ def _load_token_cache() -> dict[str, list[dict]] | None:
     with open(TOKEN_CACHE_PATH, "r", encoding="utf-8") as f:
         _token_cache = json.load(f)
     return _token_cache
+
+
+def _configure_user(user) -> None:
+    """Validate target/cache and constrain HTTP before a bot can log in."""
+    target = validate_api_target(user.host)
+    user.host = target
+    guard_http_client(user.client)
+    cache = _load_token_cache()
+    if cache is not None:
+        validate_cached_target(cache.get("base_url"), target)
 
 
 def _next_cached_credential(kind: str) -> dict | None:
@@ -185,6 +202,7 @@ class RiderBot(HttpUser):
     wait_time = between(5, 20)
 
     def on_start(self):
+        _configure_user(self)
         token, refresh_token, user = _login(self.client, "rider")
         self.client.headers["Authorization"] = f"Bearer {token}"
         self.refresh_token = refresh_token
@@ -293,6 +311,7 @@ class DriverBot(HttpUser):
     wait_time = between(1, 2)
 
     def on_start(self):
+        _configure_user(self)
         token, refresh_token, user = _login(self.client, "driver")
         self.token = token
         self.refresh_token = refresh_token
@@ -342,7 +361,11 @@ class DriverBot(HttpUser):
         ws_url = self.host.replace("https://", "wss://").replace("http://", "ws://")
         while True:
             try:
-                self.ws = websocket.create_connection(f"{ws_url}/ws/driver/{self.user_id}", timeout=10)
+                self.ws = websocket.create_connection(
+                    f"{ws_url}/ws/driver/{self.user_id}",
+                    timeout=10,
+                    **websocket_connection_options(),
+                )
                 self.ws.send(json.dumps({"type": "auth", "token": self.token}))
                 while True:
                     raw = self.ws.recv()

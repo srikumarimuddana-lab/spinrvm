@@ -92,3 +92,14 @@ The auto-heal path is controlled by the existing `stripe_auto_heal_processing` a
 - [x] Rollback plan is concrete and testable.
 - [x] Blast radius is stated, not assumed.
 - [x] User-visible behavior and mid-session impact are documented.
+
+## Post-review fix (2026-09-23): retry-loop capture that raises
+
+| Field | Detail |
+|---|---|
+| **Issue/gap identified** | The retry loop flips a ride `retrying` → `processing` (count + 1) before capturing a stranded hold. If the capture raised (network, rate limit, 5xx), the generic `except` compare-and-set only matched `retrying` at the old count, so the ride stayed in `processing`. The stale-processing guard then skipped it every tick: the hold lapsed and the fare was lost, or, if Stripe had captured, the rider was charged and the ride was never marked paid. |
+| **Fix/remediation** | On a capture exception, re-read the PaymentIntent. If it is still `requires_capture`, the compare-and-set moves it `processing@attempt` → `failed`, and the next tick retries under the same idempotency key. If it `succeeded` for exactly the capture amount, finalize via `_finalize_card_settlement`. Anything else, or a failed re-read, leaves it in `processing` and logs critical. |
+| **Risk & impact** | This only touches the `requires_capture` branch of `retry_failed_payments`. No new money movement: a re-capture reuses the same idempotency key. |
+| **Verification performed** | Two new tests in `test_payment_retry.py` (both fail on the previous code). Guarded payment suites: `test_payment_retry` 24, `_coverage` 47, `test_stripe_reconcile` 49, `test_webhooks_main` 72, `test_e4_d10_payment_3ds_quests` 16. Also: the payment-test network guard now allows loopback, because Windows' asyncio self-pipe needs it. |
+| **What was NOT verified** | No Stripe test-mode run. |
+| **Still open (not fixed here)** | Review P2s: the healer's `PaymentIntent.retrieve` gets no `api_key` on non-leader replicas; the ledger lookup keyed on `rides.payment_intent_id` misses fresh-charge settlements; stuck-`processing` rides without a ledger row now need manual review. |

@@ -1057,3 +1057,42 @@ class TestCompleteRideFirstRideMetaActivation:
         response = await _complete()
         assert response["status"] == "completed"
         assert fired == []
+
+
+# ============================================================
+# Insurance period close on completion (2026-09-22 audit, HIGH #2)
+# ============================================================
+
+
+class TestCompletionInsurancePeriodClose:
+    """complete_ride used to record Period 1 unconditionally after releasing
+    the driver. A driver forced offline mid-trip (admin suspend, document
+    expiry) comes back from set_driver_available clamped is_available=False
+    and must close their Period 3 to Period 0, not Period 1."""
+
+    async def _run(self, monkeypatch: pytest.MonkeyPatch, released_row):
+        from backend.utils import insurance_periods
+
+        _install_success_mocks(monkeypatch)
+        monkeypatch.setattr(ride_complete.db_supabase, "set_driver_available", AsyncMock(return_value=released_row))
+        record = AsyncMock()
+        # Capture both the legacy direct call site and the shared helper's call.
+        monkeypatch.setattr(ride_complete._deps, "record_period_transition", record)
+        monkeypatch.setattr(insurance_periods, "record_period_transition", record)
+        response = await _complete()
+        assert response["status"] == "completed"
+        return record
+
+    async def test_offline_driver_closes_period_3_to_period_0(self, monkeypatch: pytest.MonkeyPatch):
+        record = await self._run(monkeypatch, {"id": _DRIVER_ID, "is_online": False, "is_available": False})
+        record.assert_awaited_once_with(_DRIVER_ID, 0)
+
+    async def test_online_driver_closes_period_3_to_period_1(self, monkeypatch: pytest.MonkeyPatch):
+        record = await self._run(monkeypatch, {"id": _DRIVER_ID, "is_online": True, "is_available": True})
+        record.assert_awaited_once_with(_DRIVER_ID, 1)
+
+    async def test_increments_total_rides_in_the_same_release_write(self, monkeypatch: pytest.MonkeyPatch):
+        await self._run(monkeypatch, {"id": _DRIVER_ID, "is_online": True, "is_available": True})
+        ride_complete.db_supabase.set_driver_available.assert_awaited_once_with(
+            _DRIVER_ID, available=True, total_rides_inc=1
+        )

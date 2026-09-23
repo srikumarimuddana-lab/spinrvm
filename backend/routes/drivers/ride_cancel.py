@@ -257,17 +257,22 @@ async def cancel_ride(
             logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
 
     # Make driver available again
-    await db_supabase.set_driver_available(driver["id"], True)
+    _cancel_released = await db_supabase.set_driver_available(driver["id"], True)
     # M-5: SGI insurance period audit — driver-side cancel after the
-    # driver was assigned/accepted/arrived returns them to period 1.
+    # driver was assigned/accepted/arrived closes their open Period 2.
     # If the ride was still in searching the driver was never in period
-    # 2; skip to avoid a phantom 1→1 transition.
+    # 2; skip to avoid a phantom 1→1 transition. The close derives 0-vs-1
+    # from the released row (is_available clamped to is_online): a driver
+    # forced offline mid-assignment (admin suspend, document expiry) must
+    # close to Period 0, not get an unconditional Period 1.
     if ride.get("status") in (
         RideStatus.DRIVER_ASSIGNED,
         RideStatus.DRIVER_ACCEPTED,
         RideStatus.DRIVER_ARRIVED,
     ):
-        await _deps.record_period_transition(driver["id"], 1)
+        await _deps.close_period_after_release(
+            driver["id"], _cancel_released, reason="driver_cancelled", ride_id=ride_id
+        )
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -723,8 +728,10 @@ async def mark_rider_noshow(
     # no-show cancel landed (raceable against the subscription-expiry
     # loop or an admin ban) would otherwise get a false Period 1
     # (TNC contingent) row written over what should be Period 0.
-    if isinstance(_noshow_released, dict) and _noshow_released.get("is_available"):
-        await _deps.record_period_transition(driver["id"], 1)
+    # 2026-09-22 audit: that offline driver must still have their open
+    # Period 2 closed — to Period 0 — or it stays open forever (the
+    # reconciler only scans online drivers). The shared close does both.
+    await _deps.close_period_after_release(driver["id"], _noshow_released, reason="rider_noshow", ride_id=ride_id)
 
     rider_id = ride.get("rider_id")
     if rider_id:

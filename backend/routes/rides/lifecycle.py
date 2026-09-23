@@ -215,9 +215,12 @@ async def rider_complete_ride(
     driver_id = ride.get("driver_id")
     driver_user_id = None
     if driver_id:
-        await _deps.db_supabase.set_driver_available(driver_id, available=True, total_rides_inc=1)
+        _released = await _deps.db_supabase.set_driver_available(driver_id, available=True, total_rides_inc=1)
         try:
-            await _deps.record_period_transition(driver_id, 1)
+            # Close the open Period 3 from the released row: Period 1 for an
+            # online driver, Period 0 for one forced offline mid-trip (admin
+            # suspend, document expiry) — never an unconditional Period 1.
+            await _deps.close_period_after_release(driver_id, _released, reason="rider_completed", ride_id=ride_id)
         except Exception:
             logger.opt(exception=True).error(
                 f"rider_complete_ride: period transition failed for driver {driver_id}",

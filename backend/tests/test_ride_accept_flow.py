@@ -440,6 +440,12 @@ class TestAdminCancelRide:
                 "backend.routes.admin.rides.record_period_transition",
                 record_period_mock,
             ),
+            # admin cancel now closes via close_period_after_release, which
+            # records through the insurance_periods module's own binding.
+            patch(
+                "backend.utils.insurance_periods.record_period_transition",
+                record_period_mock,
+            ),
             patch(
                 "backend.routes.admin.rides.db_supabase.get_driver_by_id",
                 get_driver_mock,

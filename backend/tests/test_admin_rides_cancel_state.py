@@ -230,7 +230,10 @@ class TestAdminCompleteRideGuards:
             resp = client.post(f"/api/admin/rides/{ride['id']}/complete")
         assert resp.status_code == 200
 
-    def test_no_period_1_when_release_clamped_offline(self, client, as_super_admin):
+    def test_closes_to_period_0_when_release_clamped_offline(self, client, as_super_admin):
+        """2026-09-22 insurance-period audit: not opening Period 1 is not
+        enough — a driver forced offline mid-trip still holds an open Period 3
+        (suspension deliberately keeps it), so it must be closed to Period 0."""
         ride = _ride("in_progress", driver_id="drv-1")
         done = {**ride, "status": "completed"}
         record_period_mock = AsyncMock()
@@ -240,6 +243,8 @@ class TestAdminCompleteRideGuards:
             patch("db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": False})),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("routes.admin.rides.record_period_transition", record_period_mock),
+            # The shared close helper records through its own module binding.
+            patch("utils.insurance_periods.record_period_transition", record_period_mock),
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
@@ -247,7 +252,7 @@ class TestAdminCompleteRideGuards:
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/complete")
         assert resp.status_code == 200
-        record_period_mock.assert_not_awaited()
+        record_period_mock.assert_awaited_once_with("drv-1", 0)
 
 
 class TestAdminCancelRideInsurancePeriod:
@@ -264,6 +269,8 @@ class TestAdminCancelRideInsurancePeriod:
             patch("db_supabase.set_driver_available", set_avail_mock),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("routes.admin.rides.record_period_transition", record_period_mock),
+            # The shared close helper records through its own module binding.
+            patch("utils.insurance_periods.record_period_transition", record_period_mock),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
@@ -274,11 +281,13 @@ class TestAdminCancelRideInsurancePeriod:
         set_avail_mock.assert_awaited_once_with("drv-1", True)
         record_period_mock.assert_awaited_once_with("drv-1", 1)
 
-    def test_no_period_1_when_release_clamped_offline(self, client, as_super_admin):
+    def test_closes_to_period_0_when_release_clamped_offline(self, client, as_super_admin):
         """set_driver_available clamps is_available to False for a driver who
-        went offline (or was suspended) while assigned. Their go-offline
-        already logged Period 0, so opening Period 1 here would falsely reopen
-        a commercial-insurance window for a driver on personal auto only."""
+        went offline (or was suspended) while assigned. Opening Period 1 here
+        would falsely reopen a commercial-insurance window for a driver on
+        personal auto only. 2026-09-22 audit: a driver forced offline by
+        suspend/ban/document expiry never logged Period 0 — their Period 2 is
+        deliberately kept open — so it must be closed to Period 0 here."""
         ride = _ride("driver_assigned", driver_id="drv-1")
         cancelled = {**ride, "status": "cancelled"}
         record_period_mock = AsyncMock()
@@ -288,6 +297,8 @@ class TestAdminCancelRideInsurancePeriod:
             patch("db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": False})),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("routes.admin.rides.record_period_transition", record_period_mock),
+            # The shared close helper records through its own module binding.
+            patch("utils.insurance_periods.record_period_transition", record_period_mock),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
@@ -295,7 +306,7 @@ class TestAdminCancelRideInsurancePeriod:
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 200
-        record_period_mock.assert_not_awaited()
+        record_period_mock.assert_awaited_once_with("drv-1", 0)
 
     def test_driver_freed_is_the_one_the_write_saw_not_the_stale_read(self, client, as_super_admin):
         """cancel_filter pins the status but not the driver, so a concurrent
@@ -315,6 +326,8 @@ class TestAdminCancelRideInsurancePeriod:
             patch("db_supabase.set_driver_available", set_avail_mock),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("routes.admin.rides.record_period_transition", record_period_mock),
+            # The shared close helper records through its own module binding.
+            patch("utils.insurance_periods.record_period_transition", record_period_mock),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),

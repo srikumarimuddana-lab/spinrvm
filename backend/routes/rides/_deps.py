@@ -144,6 +144,7 @@ try:
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.earnings_snapshot import build_earnings_snapshot
     from ...utils.insurance_periods import (
+        close_period_after_release,
         record_period_transition,
         release_batch_offer_driver_and_close_period,
         release_driver_and_close_period,
@@ -161,6 +162,7 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
     from utils.insurance_periods import (  # type: ignore[assignment]
+        close_period_after_release,
         record_period_transition,
         release_batch_offer_driver_and_close_period,
         release_driver_and_close_period,

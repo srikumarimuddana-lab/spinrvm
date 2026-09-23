@@ -44,6 +44,37 @@ def _as_utc(value: Any) -> datetime | None:
     return None
 
 
+async def _scoped_dispatch_evidence_fresh(driver: dict[str, Any], server_time: datetime) -> tuple[bool, str | None]:
+    captured_at = _as_utc(driver.get("location_captured_at"))
+    if (
+        captured_at is None
+        or (server_time - captured_at).total_seconds() < -5
+        or (server_time - captured_at).total_seconds() > 60
+    ):
+        return False, "LOCATION_STALE"
+    session_id = driver.get("controller_session_id")
+    epoch = driver.get("online_epoch")
+    if not isinstance(session_id, str) or type(epoch) is not int or epoch < 0:
+        return False, "PRESENCE_UNAVAILABLE"
+    try:
+        try:
+            from ..utils.driver_presence import get_scoped_driver_presence
+        except ImportError:  # pragma: no cover
+            from utils.driver_presence import get_scoped_driver_presence  # type: ignore
+        evidence = await get_scoped_driver_presence(str(driver["id"]), session_id, epoch)
+    except Exception:
+        return False, "PRESENCE_UNAVAILABLE"
+    if not evidence:
+        return False, "PRESENCE_UNAVAILABLE"
+    contact_deadline = _as_utc(evidence.get("contact_valid_until"))
+    location_deadline = _as_utc(evidence.get("location_valid_until"))
+    if contact_deadline is None or contact_deadline <= server_time:
+        return False, "PRESENCE_UNAVAILABLE"
+    if location_deadline is None or location_deadline <= server_time:
+        return False, "LOCATION_STALE"
+    return True, None
+
+
 async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> str | None:
     status = driver.get("status")
     if status in ("banned", "suspended"):
@@ -142,6 +173,7 @@ async def get_driver_availability(
     is_online = bool(driver.get("is_online"))
     accepting = bool(driver.get("accepting_requests"))
     reason = blocked_reason
+    verification_reason = "DRIVER_UNVERIFIED" if driver.get("is_verified") is not True else None
     controller_mismatch = bool(
         raw.get("protocol_enabled")
         and driver.get("controller_session_id")
@@ -151,6 +183,8 @@ async def get_driver_availability(
         availability_state, reason = "paused", "ACTIVE_TRIP"
     elif blocked_reason:
         availability_state = "blocked"
+    elif is_online and verification_reason:
+        availability_state, reason = "blocked", verification_reason
     elif raw.get("offer_reconciliation_required"):
         availability_state, reason = "reconnecting", "RECOVERY_REQUIRED"
     elif controller_mismatch:
@@ -165,6 +199,14 @@ async def get_driver_availability(
             availability_state, reason = "paused", "READY_TIMEOUT"
         elif raw.get("protocol_enabled") and (last_contact is None or (server_time - last_contact).total_seconds() > 90):
             availability_state, reason = "reconnecting", "PRESENCE_UNAVAILABLE"
+        elif raw.get("protocol_enabled"):
+            evidence_ready, evidence_reason = await _scoped_dispatch_evidence_fresh(driver, server_time)
+            if evidence_ready:
+                availability_state, reason = "ready", None
+            elif evidence_reason == "PRESENCE_UNAVAILABLE":
+                availability_state, reason = "reconnecting", evidence_reason
+            else:
+                availability_state, reason = "paused", evidence_reason
         else:
             availability_state, reason = "ready", None
     elif is_online:
@@ -204,7 +246,7 @@ async def get_driver_availability(
         "is_available": bool(driver.get("is_available")),
         "availability_state": availability_state,
         "reason_code": reason,
-        "eligibility_reason": blocked_reason,
+        "eligibility_reason": blocked_reason or (verification_reason if is_online else None),
         "controller_session_id": driver.get("controller_session_id"),
         "server_time": raw["server_time"],
         "snapshot_issued_at": raw["server_time"],

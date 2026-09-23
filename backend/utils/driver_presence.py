@@ -337,7 +337,7 @@ async def clear_presence(driver_id: str) -> None:
     await on_driver_offline(driver_id)
 
 
-async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
+async def _legacy_present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
     """Return ``(present_ids, reachable)`` for ``candidate_ids``.
 
     ``reachable`` lets a caller distinguish "the presence store says nobody
@@ -448,6 +448,31 @@ async def scoped_present_driver_ids_checked(candidate_ids: List[str]) -> tuple[s
     """Return only authoritative v2-scoped presence; never merge legacy keys."""
     evidence, reachable = await scoped_driver_presence_evidence(candidate_ids)
     return set(evidence), reachable
+
+
+async def availability_aware_present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
+    """Use only the globally enabled presence protocol for this request."""
+    if not candidate_ids:
+        return set(), True
+    try:
+        try:
+            from ..repositories._base import get_rows
+        except ImportError:  # pragma: no cover
+            from repositories._base import get_rows  # type: ignore
+        rows = await get_rows(
+            "settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled"
+        )
+    except Exception as exc:
+        logger.error("driver availability presence mode lookup failed: %s", exc, exc_info=True)
+        return set(), False
+    if rows and rows[0].get("driver_availability_v2_enabled") is True:
+        return await scoped_present_driver_ids_checked(candidate_ids)
+    return await _legacy_present_driver_ids_checked(candidate_ids)
+
+
+async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
+    """Central presence reader, selecting scoped evidence under the global v2 gate."""
+    return await availability_aware_present_driver_ids_checked(candidate_ids)
 
 
 async def present_driver_ids(candidate_ids: List[str]) -> set:

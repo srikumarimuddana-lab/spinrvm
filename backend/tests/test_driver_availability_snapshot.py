@@ -117,6 +117,7 @@ async def test_successful_go_returns_snapshot_for_the_presented_session():
     before = _raw()
     after = _raw(
         driver=_driver(
+            is_verified=True,
             is_online=True,
             is_available=True,
             accepting_requests=True,
@@ -137,6 +138,7 @@ async def test_successful_go_returns_snapshot_for_the_presented_session():
             "transition_driver_availability",
             AsyncMock(return_value={"code": "OK", "availability_reason": "go_online"}),
         ),
+        patch.object(service, "_scoped_dispatch_evidence_fresh", AsyncMock(return_value=(True, None))),
     ):
         result = await service.change_driver_availability(
             "user-1",
@@ -146,6 +148,75 @@ async def test_successful_go_returns_snapshot_for_the_presented_session():
     assert result["code"] == "OK"
     assert result["availability_state"] == "ready"
     assert result["reason_code"] is None
+
+
+@pytest.mark.anyio
+async def test_snapshot_requires_scoped_contact_gps_and_fresh_durable_marker():
+    driver = _driver(
+        is_verified=True,
+        is_online=True,
+        is_available=True,
+        accepting_requests=True,
+        controller_session_id="session-1",
+        online_epoch=3,
+        last_contact_at=NOW.isoformat(),
+        ready_until=(NOW + timedelta(minutes=60)).isoformat(),
+        location_captured_at=NOW.isoformat(),
+    )
+    raw = _raw(driver=driver)
+    evidence = {
+        "contact_valid_until": NOW + timedelta(seconds=20),
+        "location_valid_until": NOW + timedelta(seconds=20),
+    }
+    with (
+        patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)),
+        patch("backend.utils.driver_presence.get_scoped_driver_presence", AsyncMock(return_value=evidence)) as read,
+    ):
+        snapshot = await service.get_driver_availability("user-1", "session-1")
+    assert snapshot["availability_state"] == "ready"
+    read.assert_awaited_once_with("drv-1", "session-1", 3)
+
+
+@pytest.mark.anyio
+async def test_snapshot_does_not_ready_with_fresh_redis_and_stale_stored_coordinates():
+    driver = _driver(
+        is_verified=True,
+        is_online=True,
+        is_available=True,
+        accepting_requests=True,
+        controller_session_id="session-1",
+        last_contact_at=NOW.isoformat(),
+        ready_until=(NOW + timedelta(minutes=60)).isoformat(),
+        location_captured_at=(NOW - timedelta(seconds=61)).isoformat(),
+    )
+    raw = _raw(driver=driver)
+    with (
+        patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)),
+        patch("backend.utils.driver_presence.get_scoped_driver_presence", AsyncMock()),
+    ):
+        snapshot = await service.get_driver_availability("user-1", "session-1")
+    assert snapshot["availability_state"] == "paused"
+    assert snapshot["reason_code"] == "LOCATION_STALE"
+
+
+@pytest.mark.anyio
+async def test_snapshot_blocks_online_unverified_driver_with_specific_reason():
+    driver = _driver(
+        is_verified=False,
+        is_online=True,
+        is_available=True,
+        accepting_requests=True,
+        controller_session_id="session-1",
+        last_contact_at=NOW.isoformat(),
+        ready_until=(NOW + timedelta(minutes=60)).isoformat(),
+    )
+    with patch.object(
+        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw(driver=driver))
+    ):
+        snapshot = await service.get_driver_availability("user-1", "session-1")
+    assert snapshot["availability_state"] == "blocked"
+    assert snapshot["reason_code"] == "DRIVER_UNVERIFIED"
+    assert snapshot["eligibility_reason"] == "DRIVER_UNVERIFIED"
 
 
 @pytest.mark.anyio

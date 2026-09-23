@@ -810,10 +810,25 @@ async def register_driver(
         "license_class",
         "date_of_birth",
         "license_issue_date",
-        "license_issue_date",
-        "date_of_birth",
     }
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
+
+    for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
+        if field in payload:
+            try:
+                datetime.strptime(payload[field], "%Y-%m-%d")
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
+    if "vehicle_year" in payload:
+        try:
+            year = payload["vehicle_year"]
+            if isinstance(year, bool) or str(year).strip() != str(int(year)):
+                raise ValueError("invalid vehicle year")
+            if int(year) < 1900 or int(year) > datetime.now(timezone.utc).year + 1:
+                raise ValueError("invalid vehicle year")
+            payload["vehicle_year"] = int(year)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Vehicle year must be a valid year.") from exc
 
     if existing:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()

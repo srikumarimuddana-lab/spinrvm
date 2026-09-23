@@ -434,6 +434,28 @@ class TestCreateDriver:
 
 
 class TestRegisterDriver:
+    @pytest.mark.parametrize("field,value", [
+        ("date_of_birth", "not-a-date"),
+        ("license_issue_date", "2020-02-30"),
+        ("vehicle_year", "20xx"),
+    ])
+    def test_rejects_malformed_eligibility_registration_values(self, field, value):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock()) as insert,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.register_driver(body={field: value}, current_user={"id": USER_ID, "phone": ""})
+                )
+
+        assert exc.value.status_code == 422
+        insert.assert_not_awaited()
+
     def test_new_driver_sets_regulatory_defaults(self):
         from backend.routes import drivers as drv
 

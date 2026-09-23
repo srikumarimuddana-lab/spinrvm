@@ -1751,6 +1751,31 @@ jobs:
               }).catch(() => {});
             }
 
+  # These helper suites are intentionally independent of app credentials,
+  # external services, and the backend test environment. Keep their runtime
+  # dependencies explicit so the guard logic runs even when backend setup fails.
+  offline-helper-tests:
+    name: Offline guard helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned test dependencies
+        run: python -m pip install pytest==9.1.1 PyYAML==6.0.3
+
+      - name: Test offline safety helpers
+        run: >-
+          python -m pytest -q
+          scripts/test_validate_dast.py
+          scripts/test_payment_failure_alert.py
+          loadtest/test_target_guard.py
+
   # ─── Guard rail summary comment on PR ─────────────────────────────────────
   guardrail-summary:
     name: Post guard rail summary
@@ -1766,6 +1791,7 @@ jobs:
       - breaking-change-gate
       - mobile-test-placement-gate
       - change-impact-log-gate
+      - offline-helper-tests
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
@@ -1783,6 +1809,7 @@ jobs:
               'Breaking Changes':     '${{ needs.breaking-change-gate.result }}',
               'Test Placement':       '${{ needs.mobile-test-placement-gate.result }}',
               'Change Impact Log':    '${{ needs.change-impact-log-gate.result }}',
+              'Offline Guard Helpers': '${{ needs.offline-helper-tests.result }}',
             };
 
             const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';

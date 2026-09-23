@@ -93,6 +93,17 @@ NEVER_APPLY: dict[str, str] = {
         "either way -- left alone pending confirmation rather than blindly re-applied. "
         "See ACTION_ITEMS.md G2, 'Still open' item 1."
     ),
+    "444_ride_payment_operations.sql": (
+        "Declares ride_payment_operations.ride_id uuid REFERENCES rides(id), but "
+        "rides.id is TEXT, so CREATE TABLE fails (42804) on a fresh database. "
+        "Superseded by 447_fix_payment_ops_and_live_marker_text_ids.sql."
+    ),
+    "445_monotonic_live_driver_marker.sql": (
+        "Declares update_live_driver_marker(p_driver_id uuid, ...) against TEXT "
+        "drivers.id: every call fails (text = uuid), and re-running it after 447 "
+        "would add a second overload (PGRST203). Superseded by "
+        "447_fix_payment_ops_and_live_marker_text_ids.sql."
+    ),
 }
 
 # Matches a dollar-quote tag opener: `$$` or `$tag$` (tag must start with a

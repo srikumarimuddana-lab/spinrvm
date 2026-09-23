@@ -4,6 +4,7 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import json
 import math
 
 from . import _deps
@@ -32,10 +33,11 @@ router = APIRouter()
 
 def _stops_cas_filters(ride: dict) -> dict:
     """Match the exact route version we read before changing stop state."""
+    old_stops = ride.get("stops")
     return {
         "id": ride["id"],
         "status": {"$eq": ride.get("status")},
-        "stops": {"$eq": ride.get("stops") or []},
+        "stops": {"$eq": json.dumps(old_stops, separators=(",", ":"))} if old_stops is not None else None,
     }
 
 
@@ -61,6 +63,10 @@ class AddStopMidTripRequest(BaseModel):
     lat: float
     lng: float
     position: Optional[int] = None  # Insert at this index; None = append
+
+
+class CompleteStopRequest(BaseModel):
+    expected_stops: list[dict]
 
 
 @router.post("/{ride_id}/stops")
@@ -192,6 +198,7 @@ async def remove_stop_mid_trip(
 async def complete_stop(
     ride_id: str,
     stop_index: int,
+    body: CompleteStopRequest,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
@@ -206,8 +213,16 @@ async def complete_stop(
     if ride.get("status") != RideStatus.IN_PROGRESS:
         raise HTTPException(status_code=409, detail="Stops can only be completed during an active trip")
     stops = list(ride.get("stops") or [])
+    if body.expected_stops != stops:
+        raise HTTPException(status_code=409, detail="Stops changed. Refresh the ride and try again.")
     if stop_index < 0 or stop_index >= len(stops):
         raise HTTPException(status_code=400, detail="Invalid stop index")
+    first_incomplete = next(
+        (index for index, item in enumerate(stops) if not isinstance(item, dict) or item.get("completed") is not True),
+        None,
+    )
+    if stop_index != first_incomplete:
+        raise HTTPException(status_code=409, detail="Complete stops in route order.")
     stop = stops[stop_index]
     if not isinstance(stop, dict) or not _valid_stop(stop):
         raise HTTPException(status_code=400, detail="Stop has no valid destination")
@@ -229,6 +244,10 @@ async def complete_stop(
     )
     if not updated:
         raise HTTPException(status_code=409, detail="Stops changed. Refresh the ride and try again.")
+    event = {"type": "stops_updated", "ride_id": ride_id, "stops": stops}
+    await _deps.manager.send_personal_message(event, f"rider_{ride['rider_id']}")
+    if driver.get("user_id"):
+        await _deps.manager.send_personal_message(event, f"driver_{driver['user_id']}")
     return {"success": True, "stops": stops}
 
 

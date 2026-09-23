@@ -28,6 +28,7 @@ from ._deps import (  # noqa: F401
     fare_share,
     flush_driver_breadcrumbs,
     get_current_user,
+    json,
     logger,
     parse_iso_utc,
     pg_error_code,
@@ -45,6 +46,16 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+
+def _completion_cas_filters(ride: dict, driver_id: str) -> dict:
+    stops = ride.get("stops")
+    return {
+        "id": ride["id"],
+        "driver_id": driver_id,
+        "status": RideStatus.IN_PROGRESS,
+        "stops": {"$eq": json.dumps(stops, separators=(",", ":"))} if stops is not None else None,
+    }
 
 
 try:
@@ -115,6 +126,7 @@ class RideCompletionRequest(BaseModel):
     final_sequence_number: int | None = Field(default=None, ge=0)
     pending_outbox_count: int | None = Field(default=None, ge=0)
     off_route_confirmation: str | None = None
+    stop_progress_enabled: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         if self.off_route_confirmation is not None and self.off_route_confirmation not in _OFF_ROUTE_CONFIRMATIONS:
@@ -379,13 +391,14 @@ async def complete_ride(
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
-    # The rider's ordered stops are part of the fare route. Do not settle the
-    # ride while any stop remains, including malformed legacy rows that cannot
-    # be safely routed or acknowledged by the driver.
-    if any(stop.get("completed") is not True for stop in (ride.get("stops") or []) if isinstance(stop, dict)):
-        raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
-    if any(not isinstance(stop, dict) for stop in (ride.get("stops") or [])):
-        raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
+    # New driver clients opt in to persisted stop progression. Keep old mobile
+    # clients compatible during rolling releases; the dashboard independently
+    # blocks completion while stops remain, and this API gate protects opted-in
+    # clients from stale or reordered completion.
+    if completion_request and completion_request.stop_progress_enabled:
+        stops = ride.get("stops") or []
+        if any(not isinstance(stop, dict) or stop.get("completed") is not True for stop in stops):
+            raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
 
     # Persist the driver-captured endpoint before the status transition and
     # before legacy aggregation reads the breadcrumb trail. This ensures a
@@ -656,7 +669,7 @@ async def complete_ride(
     # complete/cancel that won the race after the read above matches zero rows
     # instead of writing a second completion (same CAS pattern as ride
     # acceptance filtering on status='searching').
-    _complete_filters = {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}
+    _complete_filters = _completion_cas_filters(ride, driver["id"])
     try:
         _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:

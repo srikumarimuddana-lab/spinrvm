@@ -39,6 +39,9 @@ interface Ride {
   is_scheduled?: boolean;
   scheduled_time?: string;
   driver_arrived_at?: string;
+  noshow_eligible_at?: string | null;
+  noshow_server_now?: string | null;
+  stops?: { id?: string; address?: string; lat?: number; lng?: number; completed?: boolean }[];
   id: string;
   pickup_address: string;
   dropoff_address: string;
@@ -80,6 +83,7 @@ interface ActiveRidePanelProps {
   onArriveAtPickup: () => void;
   onStartRide: () => void;
   onCompleteRide: () => void;
+  onCompleteStop?: (stopIndex: number, expectedStops: Ride['stops']) => void;
   onCancelRide: (reason?: string) => void;
   onReportNoShow?: () => void;
   routeEtaMinutes?: number | null;
@@ -133,6 +137,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   onArriveAtPickup,
   onStartRide,
   onCompleteRide,
+  onCompleteStop,
   onCancelRide,
   onReportNoShow,
   routeEtaMinutes,
@@ -287,10 +292,25 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // checks both columns are non-null before using either).
   const pickupLat = hasSnappedPickup(ride) ? (ride!.pickup_nav_lat as number) : ride?.pickup_lat;
   const pickupLng = hasSnappedPickup(ride) ? (ride!.pickup_nav_lng as number) : ride?.pickup_lng;
+  const orderedStops = Array.isArray(ride?.stops) ? ride.stops : [];
+  const nextStopIndex = orderedStops.findIndex((stop) => stop.completed !== true);
+  const nextStop = nextStopIndex >= 0 ? orderedStops[nextStopIndex] : null;
+  const nextStopHasDestination = !!nextStop && isPlausibleCoord(nextStop.lat, nextStop.lng);
   const navLeg = rideState === 'trip_in_progress' ? 'dropoff' : rideState === 'navigating_to_pickup' ? 'pickup' : null;
-  const navDestLat = navLeg === 'dropoff' ? ride?.dropoff_lat : pickupLat;
-  const navDestLng = navLeg === 'dropoff' ? ride?.dropoff_lng : pickupLng;
+  const navDestLat = navLeg === 'dropoff'
+    ? nextStop ? (nextStopHasDestination ? nextStop.lat : undefined) : ride?.dropoff_lat
+    : pickupLat;
+  const navDestLng = navLeg === 'dropoff'
+    ? nextStop ? (nextStopHasDestination ? nextStop.lng : undefined) : ride?.dropoff_lng
+    : pickupLng;
+  const navRouteKey = navLeg === 'dropoff' && nextStopHasDestination
+    ? `${nextStop!.id ?? nextStopIndex}:${nextStop!.lat}:${nextStop!.lng}`
+    : undefined;
   const rideId = ride?.id;
+  const noShowServerOffsetMs = useMemo(() => {
+    const serverNow = Date.parse(ride?.noshow_server_now ?? '');
+    return Number.isFinite(serverNow) ? serverNow - Date.now() : 0;
+  }, [ride?.id, ride?.noshow_server_now]);
   // Cleared on unmount so a ride cancelled during the claim's storage round-trip
   // can't still pull the driver into Maps: resetRideState() drops this panel out
   // of the tree, and burning that ride's claim costs nothing because the ride is
@@ -323,7 +343,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     // contradict the copy on the toggle itself ("when you accept a ride and
     // when the trip starts"). It takes effect from the next transition.
     if (!autoNavigate) {
-      claimAutoNavLeg(rideId, navLeg);
+      claimAutoNavLeg(rideId, navLeg, navRouteKey);
       return;
     }
 
@@ -343,7 +363,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     // an incoming-call banner, which falls in the second bucket too — spending
     // the claim there would silently kill the feature for that ride.
     if (AppState.currentState !== 'active') {
-      if (isCarSessionActive()) claimAutoNavLeg(rideId, navLeg);
+      if (isCarSessionActive()) claimAutoNavLeg(rideId, navLeg, navRouteKey);
       return;
     }
 
@@ -351,12 +371,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     // spent the claim by the time a cleanup could run, so cancelling on a mere
     // dependency change would burn a still-live leg and it would never navigate
     // at all. The claim IS the dedupe.
-    claimAutoNavLeg(rideId, navLeg).then((claimed) => {
+    claimAutoNavLeg(rideId, navLeg, navRouteKey).then((claimed) => {
       if (claimed && navMountedRef.current) {
         launchNavigation(navApp, navDestLat as number, navDestLng as number);
       }
     });
-  }, [navPrefsLoaded, autoNavigate, navLeg, rideId, navDestLat, navDestLng, navApp, appActiveTick]);
+  }, [navPrefsLoaded, autoNavigate, navLeg, navRouteKey, rideId, navDestLat, navDestLng, navApp, appActiveTick]);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.
@@ -831,13 +851,34 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.actionPrimary, styles.actionNeutral]}
-              onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
+              onPress={() => openMapsNavigation(
+                nextStopHasDestination ? nextStop!.lat as number : ride.dropoff_lat,
+                nextStopHasDestination ? nextStop!.lng as number : ride.dropoff_lng,
+                nextStopHasDestination ? (nextStop!.address || 'Stop') : 'Dropoff',
+              )}
               accessibilityRole="button"
-              accessibilityLabel={t('activeRide.navigateToDropoff')}
+              accessibilityLabel={nextStopHasDestination ? `Navigate to stop ${nextStopIndex + 1}` : t('activeRide.navigateToDropoff')}
+              disabled={!!nextStop && !nextStopHasDestination}
             >
               <Ionicons name="navigate" size={20} color={colors.surface} />
-              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>{t('activeRide.navigateToDropoff')}</Text>
+              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>
+                {nextStopHasDestination ? `Navigate to stop ${nextStopIndex + 1}` : t('activeRide.navigateToDropoff')}
+              </Text>
             </TouchableOpacity>
+            {nextStopHasDestination ? (
+            <TouchableOpacity
+              style={[styles.actionPrimary, { backgroundColor: colors.success }]}
+              onPress={() => onCompleteStop?.(nextStopIndex, orderedStops)}
+              disabled={isLoading || !onCompleteStop}
+              accessibilityRole="button"
+              accessibilityLabel={`Mark stop ${nextStopIndex + 1} complete`}
+            >
+              <Ionicons name="checkmark-circle" size={20} color="#fff" />
+              <Text allowFontScaling={false} style={styles.actionPrimaryText}>Arrived at stop {nextStopIndex + 1}</Text>
+            </TouchableOpacity>
+            ) : nextStop ? (
+              <Text style={styles.actionSecondaryText}>This stop’s destination is unavailable. Refresh the ride to continue.</Text>
+            ) : (
             <TouchableOpacity
               style={[styles.actionPrimary, { backgroundColor: colors.success }]}
               onPress={() => showConfirm(
@@ -859,14 +900,16 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 </>
               )}
             </TouchableOpacity>
+            )}
           </View>
         ) : null}
 
         {rideState === 'arrived_at_pickup' && onReportNoShow ? (() => {
-          const serverRemaining = (ride as any)?.noshow_seconds_remaining;
-          const serverEligible = (ride as any)?.noshow_eligible;
-          const noShowReady = typeof serverEligible === 'boolean' ? serverEligible : waitSeconds >= 300;
-          const noShowLeft = typeof serverRemaining === 'number' ? serverRemaining : Math.max(0, 300 - waitSeconds);
+          const deadline = Date.parse(ride?.noshow_eligible_at ?? '');
+          const noShowLeft = Number.isFinite(deadline)
+            ? Math.max(0, Math.ceil((deadline - (Date.now() + noShowServerOffsetMs)) / 1000))
+            : Math.max(0, 300 - waitSeconds);
+          const noShowReady = noShowLeft === 0;
           return (
           <TouchableOpacity
             style={[styles.actionPrimary, { backgroundColor: colors.text, marginBottom: 8 }, (isLoading || !noShowReady) && { opacity: 0.4 }]}

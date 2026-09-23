@@ -1,7 +1,9 @@
 # PR #5722 driver session atomicity
 
-Driver OTP and Firebase sign-ins now call `begin_driver_session` for an
-authenticated driver when the rollout flag is enabled. The database function
+Driver OTP, Firebase, company-email, and reactivation sign-ins now call
+`begin_driver_session` for an authenticated driver when the rollout flag is
+enabled. OTP uses the stored driver identity; client-supplied `client_app` is
+attribution only and cannot disable generation revocation. The database function
 serializes generation bump, session replacement, and refresh-token revocation;
 the minted access and refresh credentials use the returned generation. Refresh
 rotation keeps the parent's generation, including `NULL` for legacy writers.

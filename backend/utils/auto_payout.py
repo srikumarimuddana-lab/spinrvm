@@ -1214,8 +1214,8 @@ def _is_batch_window(now_local: datetime) -> bool:
 
 
 async def auto_payout_loop():
-    """Hourly loop: heartbeat + stale-reserved sweep every tick; the weekly
-    batch fires on Sundays (America/Regina) from 06:00 local, leader-locked."""
+    """Hourly loop: Redis ownership gates stale-transfer retries and the
+    Sunday (America/Regina) weekly batch from 06:00 local."""
     import os
     import socket
 
@@ -1235,31 +1235,35 @@ async def auto_payout_loop():
 
             if enabled and stripe_secret:
                 try:
-                    await sweep_stale_reserved(stripe_secret)
-                except Exception:
-                    logger.exception("[AUTO-PAYOUT] stale-reserved sweep failed")
-                try:
                     await finalize_stale_running_batches()
                 except Exception:
                     logger.exception("[AUTO-PAYOUT] stale-batch finalize failed")
 
                 now_local = datetime.now(_TZ)
-                if _is_batch_window(now_local):
-                    lock_ttl = int(interval * 0.85)
+                # The shortest loop cadence is one hour, so a 0.85× TTL
+                # expires before the next wake. Claims and Stripe idempotency
+                # still protect work that outlasts the lease.
+                lock_ttl = int(interval * 0.85)
+                try:
+                    got_lock = await redis_set_nx(LOCK_KEY, pod_id, lock_ttl)
+                except Exception as lock_err:
+                    logger.error(
+                        "[AUTO-PAYOUT] leader lock unavailable (%s), skipping payout work",
+                        type(lock_err).__name__,
+                    )
+                    _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
+                    got_lock = False
+                if got_lock:
                     try:
-                        got_lock = await redis_set_nx(LOCK_KEY, pod_id, lock_ttl)
-                    except Exception as lock_err:
-                        logger.error(
-                            "[AUTO-PAYOUT] leader lock unavailable (%s), skipping Sunday batch",
-                            type(lock_err).__name__,
-                        )
-                        _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
-                        got_lock = False
-                    if got_lock:
+                        await sweep_stale_reserved(stripe_secret)
+                    except Exception:
+                        logger.exception("[AUTO-PAYOUT] stale-reserved sweep failed")
+
+                    if _is_batch_window(now_local):
                         result = await run_weekly_auto_payout()
                         logger.info("[AUTO-PAYOUT] loop result: %s", result)
-                    else:
-                        logger.debug("[AUTO-PAYOUT] another replica holds the lock, sleeping")
+                else:
+                    logger.debug("[AUTO-PAYOUT] another replica holds the lock, skipping payout work")
         except Exception:
             logger.exception("[AUTO-PAYOUT] loop iteration failed")
             _metric_inc("spinr_bgloop_errors_total", {"loop": "auto_payout"})

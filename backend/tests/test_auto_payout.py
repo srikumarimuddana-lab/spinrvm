@@ -1478,12 +1478,14 @@ class TestAutoPayoutLoopRedisGate:
         lock_key = (("loop", "auto_payout"),)
         before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(lock_key, 0)
         run_weekly = AsyncMock(return_value={"status": "completed"})
+        sweep = AsyncMock()
+        finalize = AsyncMock()
         lock = AsyncMock(side_effect=[ConnectionError("redis password must stay private"), True])
         with (
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=_SETTINGS_OK)),
             patch.object(m, "datetime", _SundayClock),
-            patch.object(m, "sweep_stale_reserved", AsyncMock()),
-            patch.object(m, "finalize_stale_running_batches", AsyncMock()),
+            patch.object(m, "sweep_stale_reserved", sweep),
+            patch.object(m, "finalize_stale_running_batches", finalize),
             patch.object(m, "redis_set_nx", lock),
             patch.object(m, "run_weekly_auto_payout", run_weekly),
             patch.object(m, "_record_heartbeat"),
@@ -1494,8 +1496,44 @@ class TestAutoPayoutLoopRedisGate:
                 await m.auto_payout_loop()
 
         assert lock.await_count == 2
+        assert all(call.args[2] == int(3600 * 0.85) for call in lock.await_args_list)
+        sweep.assert_awaited_once_with(_SETTINGS_OK["stripe_secret_key"])
+        assert finalize.await_count == 2
         run_weekly.assert_awaited_once()
         assert "redis password must stay private" not in caplog.text
         assert "ConnectionError" in caplog.text
         after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][lock_key]
         assert after == before + 1
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("batch_window", [False, True])
+    async def test_contended_hourly_lock_skips_stale_transfers_and_sunday_batch(self, batch_window):
+        from backend.utils import auto_payout as m
+
+        class _SundayClock:
+            @staticmethod
+            def now(tz):
+                day = 20 if batch_window else 21  # Sunday batch window or Monday hourly sweep
+                return datetime(2026, 9, day, 7, 0, tzinfo=tz)
+
+        sweep = AsyncMock()
+        batch = AsyncMock()
+        lock = AsyncMock(return_value=False)
+        with (
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=_SETTINGS_OK)),
+            patch.object(m, "datetime", _SundayClock),
+            patch.object(m, "sweep_stale_reserved", sweep),
+            patch.object(m, "finalize_stale_running_batches", AsyncMock()),
+            patch.object(m, "redis_set_nx", lock),
+            patch.object(m, "run_weekly_auto_payout", batch),
+            patch.object(m, "_record_heartbeat"),
+            patch("asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError())),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await m.auto_payout_loop()
+
+        lock.assert_awaited_once()
+        assert lock.await_args.args[0] == m.LOCK_KEY
+        assert lock.await_args.args[2] == int(3600 * 0.85)
+        sweep.assert_not_awaited()
+        batch.assert_not_awaited()

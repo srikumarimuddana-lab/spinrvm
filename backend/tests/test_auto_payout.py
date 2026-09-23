@@ -16,6 +16,8 @@ Covers the review-fleet findings for PR #3925:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -1451,3 +1453,49 @@ class TestErrorSummaryText:
         text = _error_summary_text(errors)
         assert text.endswith("(+7 more)")
         assert "; ".join(errors[:_MAX_ERROR_SUMMARY_ENTRIES]) in text
+
+
+class TestAutoPayoutLoopRedisGate:
+    @pytest.mark.anyio
+    async def test_sunday_batch_skips_lock_error_then_resumes_with_lock(self, caplog):
+        from backend.utils import metrics
+
+        from backend.utils import auto_payout as m
+
+        class _SundayClock:
+            @staticmethod
+            def now(tz):
+                return datetime(2026, 9, 20, 7, 0, tzinfo=tz)
+
+        sleep_calls = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls == 2:
+                raise asyncio.CancelledError()
+
+        lock_key = (("loop", "auto_payout"),)
+        before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(lock_key, 0)
+        run_weekly = AsyncMock(return_value={"status": "completed"})
+        lock = AsyncMock(side_effect=[ConnectionError("redis password must stay private"), True])
+        with (
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=_SETTINGS_OK)),
+            patch.object(m, "datetime", _SundayClock),
+            patch.object(m, "sweep_stale_reserved", AsyncMock()),
+            patch.object(m, "finalize_stale_running_batches", AsyncMock()),
+            patch.object(m, "redis_set_nx", lock),
+            patch.object(m, "run_weekly_auto_payout", run_weekly),
+            patch.object(m, "_record_heartbeat"),
+            patch("asyncio.sleep", fake_sleep),
+            caplog.at_level(logging.ERROR),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await m.auto_payout_loop()
+
+        assert lock.await_count == 2
+        run_weekly.assert_awaited_once()
+        assert "redis password must stay private" not in caplog.text
+        assert "ConnectionError" in caplog.text
+        after = metrics.snapshot()["counters"]["spinr_loop_lock_unavailable_total"][lock_key]
+        assert after == before + 1

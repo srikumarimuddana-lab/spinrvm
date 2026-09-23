@@ -7,8 +7,8 @@ from 06:00 local, the hourly loop scans eligible drivers and creates one
 recording the payout in ``payouts`` with ``payout_type='auto'``.
 
 Replay-safety contract (mandatory per CLAUDE.md background-task rules):
-  - Redis leader lock (fail-open, loud) prevents redundant concurrent runs;
-    the ``auto_payout_batches.week_key`` unique index is the hard guard.
+  - Strict Redis leader lock is required before weekly batch execution;
+    the ``auto_payout_batches.week_key`` unique index remains a hard guard.
   - Deterministic payout id ``auto-{driver_id}-{week_key}`` + migration
     250's partial unique index ``idx_payouts_one_inflight_per_driver``
     (one in-flight payout row per driver, any type) make the reserve step
@@ -68,14 +68,14 @@ try:
     from ..utils.error_handling import DuplicateRecordError
     from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
     from ..utils.money import dollars_to_cents
-    from ..utils.redis_client import redis_set_nx
+    from ..utils.redis_client import redis_set_nx_strict as redis_set_nx
 except ImportError:  # pragma: no cover - dual-import pattern
     import db_supabase  # type: ignore
     from utils.dual_run_monitor import record_legacy_payout  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
     from utils.money import dollars_to_cents  # type: ignore
-    from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.redis_client import redis_set_nx_strict as redis_set_nx  # type: ignore
 
 try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
@@ -1249,8 +1249,12 @@ async def auto_payout_loop():
                     try:
                         got_lock = await redis_set_nx(LOCK_KEY, pod_id, lock_ttl)
                     except Exception as lock_err:
-                        logger.error("[AUTO-PAYOUT] leader lock unavailable (%s), proceeding", lock_err)
-                        got_lock = True
+                        logger.error(
+                            "[AUTO-PAYOUT] leader lock unavailable (%s), skipping Sunday batch",
+                            type(lock_err).__name__,
+                        )
+                        _metric_inc("spinr_loop_lock_unavailable_total", {"loop": "auto_payout"})
+                        got_lock = False
                     if got_lock:
                         result = await run_weekly_auto_payout()
                         logger.info("[AUTO-PAYOUT] loop result: %s", result)

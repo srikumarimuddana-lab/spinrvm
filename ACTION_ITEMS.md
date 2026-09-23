@@ -28973,7 +28973,22 @@ as evidence that the thing it configures exists.
 
 ### C129. `financial_event_entries` and `reconciliation_discrepancies` share the unreachable `users.role = 'admin'` RLS pattern C107/C123 fixed elsewhere — missed by all three sweeps; `subscription_payments`' "Append-only ledger" claim has zero DB-level enforcement
 
-- [ ] **Status:** OPEN — found 2026-09-21 while writing this session's C49
+- [x] **Status:** closed 2026-09-23 on `fix/financial-ledger-rls-unreachable-c129`. Migration 456
+  extends the C107/C123 `USING (false)` pattern to `financial_event_entries_select` and
+  `reconciliation_discrepancies`' `recon_admin_only`, and adds `subscription_payments_no_mutate`
+  (blocks UPDATE + DELETE — broader than `financial_event_entries_no_update`'s UPDATE-only scope,
+  safe here since `subscription_payments` has no FK/cascade relationship to any parent row).
+  Found via a proactive edge-case/error-handling sweep. **Verified against a real local Postgres
+  16 instance, not just mocked** — all 32 tests in `test_financial_ledger_extension_rls.py` pass
+  (3 flipped, 2 new), plus the full `tests/rls` suite (425 passed; 6 pre-existing failures in
+  `tests/rls/money/*.py` confirmed unrelated via `git stash` — same failures reproduce with this
+  diff fully reverted, root cause is an environment DB-auth issue unconnected to this change).
+  `spinr-migration-reviewer` reviewed: SHIP IT AS-IS — independently re-verified the migration
+  numbering, idempotency, the DELETE-safety claim (re-grepped for FK/cascade/write call sites
+  rather than trusting the PR description), and that the rollback plan actually executes as
+  written. See `docs/change-log/2026-09-23-financial-ledger-rls-unreachable-c129.md` for the
+  full trace.
+  Old status: OPEN — found 2026-09-21 while writing this session's C49
   round (`docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`),
   confirmed by `spinr-security-auditor` against the actual migration SQL.
 - **Issue/gap (finding 1):** `financial_event_entries_select`

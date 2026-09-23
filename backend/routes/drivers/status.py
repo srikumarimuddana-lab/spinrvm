@@ -497,7 +497,7 @@ async def update_driver_status(
                 except (TypeError, ValueError):
                     invalid_eligibility.append("vehicle year")
                     vehicle_age = None
-                if vehicle_age is not None and int(vehicle_year) > now.year:
+                if vehicle_age is not None and int(vehicle_year) > now.year + 1:
                     invalid_eligibility.append("vehicle year")
                     vehicle_age = None
                 if vehicle_age is not None and vehicle_age >= 10:

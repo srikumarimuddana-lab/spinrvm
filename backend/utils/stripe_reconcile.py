@@ -18,6 +18,14 @@ Discrepancy types detected:
   STRIPE_EVENT_STUCK_UNPROCESSED — stripe_events row still processed_at=NULL
                              past the grace window (ACTION_ITEMS.md C10);
                              see _reconcile_stuck_stripe_events
+  STRIPE_ORPHAN_HOLD       — uncaptured (requires_capture) PI with no ride row
+                             referencing it, e.g. booking crashed between the
+                             hold and the ride INSERT; 8-day lookback, see
+                             _reconcile_orphan_holds
+  CANCELLED_CAPTURED_UNREFUNDED — cancelled ride whose hold was captured and
+                             never refunded; read-only scheduled dry run of
+                             scripts/reconcile_cancelled_captured_refunds.py,
+                             see _detect_cancelled_captured
 
 Design:
   - Redis SET NX EX leader lock so only one replica runs per 23h window.
@@ -86,12 +94,14 @@ try:
     from .. import db_supabase  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils import metrics  # type: ignore
+    from ..utils.money import dollars_to_cents, to_decimal  # type: ignore
     from ..utils.redis_client import redis_set_nx  # type: ignore
     from ..utils.stripe_config import stripe_get  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils import metrics  # type: ignore
+    from utils.money import dollars_to_cents, to_decimal  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
     from utils.stripe_config import stripe_get  # type: ignore
 
@@ -112,6 +122,56 @@ _AUTO_HEAL_SETTING = "stripe_auto_heal_processing"
 # than ~5 minutes but processed_at = NULL indicate events that crashed
 # mid-processing". Matches that original design intent.
 _STUCK_STRIPE_EVENT_AFTER = timedelta(minutes=5)
+# STRIPE_ORPHAN_HOLD lookback. Deliberately NOT the 1-day window the paid-ride
+# checks use: those reconcile a daily delta, but an uncaptured hold is a
+# standing state that stays on the rider's card until someone releases it or
+# Stripe auto-cancels it. Booking holds never request extended authorization
+# (utils/stripe_charge.authorize_ride), so Stripe expires them after 7 days;
+# 8 days covers a hold's whole lifetime plus slack. That makes every daily run
+# see the complete live population, so a missed tick cannot leave a hold
+# unseen. Anything older has already been released by Stripe, and there is no
+# rider money left to recover.
+_ORPHAN_HOLD_LOOKBACK = timedelta(days=8)
+# Holds younger than this are skipped. Between authorize and the ride INSERT,
+# and during the SCA two-step (on-device confirm, then a re-book with
+# preauthorized_payment_intent_id), a hold legitimately has no ride row yet.
+_ORPHAN_HOLD_GRACE = timedelta(hours=1)
+# Cancelled+captured detector: skip rows touched this recently. The live cancel
+# path may still be mid-refund, and refund_amount lands after Stripe responds.
+_CANCELLED_CAPTURED_GRACE = timedelta(hours=1)
+# Only rides cancelled within this window are scanned. Without a bound, the
+# candidate set only ever grows: every legitimate fee-bearing partial-capture
+# cancel (cancellation.py / drivers/ride_cancel.py set auth_status='captured'
+# and release the remainder, so refund_amount stays unset) matches forever and
+# gets re-read on Stripe daily as `not_needed`. 14 days gives each new
+# occurrence of the bug class 14 daily chances (a transient `unknown` retries
+# the next day). The PRE-EXISTING backlog is sized and cleared by the
+# human-run script, which is what it exists for, not by this loop.
+_CANCELLED_CAPTURED_LOOKBACK = timedelta(days=14)
+_CANCELLED_CAPTURED_PAGE = 500
+_CANCELLED_CAPTURED_MAX_PAGES = 10
+_CANCELLED_CAPTURED_CONCURRENCY = 5
+# Dry-run outcomes that mean money is unaccounted for. Mirrors the script's
+# non-zero exit set (reconcile_cancelled_captured_refunds._main) plus
+# would_refund. pending_refund_on_stripe / not_needed are not alert-worthy.
+_CC_ALERT_OUTCOMES = ("would_refund", "already_refunded_on_stripe", "captured_nothing", "unknown")
+_CC_METRIC = "spinr_payment_cancelled_captured_unrefunded_total"
+_ORPHAN_HOLD_METRIC = "spinr_payment_stripe_orphan_hold_total"
+# A detection check that could not complete (Stripe/DB error, or a scan that
+# hit its row ceiling). Without this, a check failing every day would look
+# identical to a clean one to an alert rule.
+_CHECK_FAILED_METRIC = "spinr_payment_reconcile_check_failed_total"
+_CHECK_NAMES = ("orphan_hold", "cancelled_captured")
+
+# Pre-register every series at 0 in EVERY process at import. The counters are
+# in-process and render with a worker_pid label, so without this a series
+# first appears already holding N, and PromQL increase() never counts that
+# first sample. A real finding would then never fire its alert.
+for _o in _CC_ALERT_OUTCOMES:
+    metrics.inc(_CC_METRIC, {"outcome": _o}, by=0)
+metrics.inc(_ORPHAN_HOLD_METRIC, by=0)
+for _c in _CHECK_NAMES:
+    metrics.inc(_CHECK_FAILED_METRIC, {"check": _c}, by=0)
 
 
 def _pod_id() -> str:
@@ -177,7 +237,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
     try:
         stripe_pis: Dict[str, Any] = await asyncio.to_thread(_list_stripe_pis)
     except Exception:
-        logger.error("stripe_reconcile: Stripe API list failed", exc_info=True)
+        logger.error("stripe_reconcile: Stripe API list failed", exc_info=True, extra={"domain": "payments"})
         return
 
     # ── 2. Fetch DB rides completed yesterday with a PI id ─────────────
@@ -211,7 +271,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
             and _in_window(r["ride_completed_at"], window_start, window_end)
         ]
     except Exception:
-        logger.error("stripe_reconcile: DB rides query failed", exc_info=True)
+        logger.error("stripe_reconcile: DB rides query failed", exc_info=True, extra={"domain": "payments"})
         return
 
     # Build lookup: pi_id → ride
@@ -231,6 +291,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
                 _attr["ride_id"],
                 _attr["total_fare_cents"],
                 _attr["attributed_cents"],
+                extra={"domain": "payments", "ride_id": _attr["ride_id"]},
             )
             metrics.inc("spinr_payment_fare_attribution_mismatch_total")
 
@@ -247,6 +308,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
                 "stripe_reconcile: DB_PAID_STRIPE_MISSING ride=%s pi=%s",
                 ride["id"],
                 pi_id,
+                extra={"domain": "payments", "ride_id": ride["id"]},
             )
             continue
 
@@ -265,6 +327,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
                 ride["id"],
                 pi_id,
                 pi["status"],
+                extra={"domain": "payments", "ride_id": ride["id"]},
             )
 
         # Amount check (C2) — the authoritative charge is grand_total + tip (the
@@ -305,6 +368,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
                     pi_id,
                     expected_cents,
                     actual_cents,
+                    extra={"domain": "payments", "ride_id": ride["id"]},
                 )
 
     # ── 3b. Check for Stripe succeeded PIs with no DB ride ───────────────
@@ -329,6 +393,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
                 "stripe_reconcile: STRIPE_ORPHAN pi=%s amount_cents=%d — no ride in DB",
                 pi_id,
                 _orphan_cents,
+                extra={"domain": "payments"},
             )
 
     # ── 3c. Payout settlement backstop ──────────────────────────────────
@@ -365,6 +430,31 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
     stuck_stripe_events = await _reconcile_stuck_stripe_events(settings)
     discrepancies.extend(stuck_stripe_events)
 
+    # ── 3g. Uncaptured holds with no ride row (STRIPE_ORPHAN_HOLD) ───────
+    # 3b only sees SUCCEEDED PIs from yesterday. A booking hold placed before
+    # the ride INSERT (routes/rides/booking.py) that never got a ride row is
+    # requires_capture, has nothing in `rides` to find it, and so is invisible
+    # to utils/orphaned_hold_reconciler too. Detection only — never releases.
+    #
+    # 3g/3h are CURRENT-STATE checks that feed P1 alert counters. They are
+    # skipped on a target_date backfill so re-running N past days neither
+    # stamps today's findings onto old audit rows nor re-fires the alert N
+    # times.
+    orphan_holds: Any = "skipped_backfill"
+    cc_counts: Any = "skipped_backfill"
+    if target_date is None:
+        orphan_holds = await _reconcile_orphan_holds(_stripe)
+        if orphan_holds is not None:
+            discrepancies.extend(orphan_holds)
+
+        # ── 3h. Cancelled rides with a captured, unrefunded hold ────────
+        # Read-only scheduled counterpart of
+        # scripts/reconcile_cancelled_captured_refunds.py's DRY RUN. Never
+        # refunds: the --apply path stays human-triggered. See
+        # _detect_cancelled_captured.
+        cc_counts, cc_flagged = await _detect_cancelled_captured()
+        discrepancies.extend(cc_flagged)
+
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
         "date": yesterday.isoformat(),
@@ -376,6 +466,10 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
         "rides_healed": heal_stats["healed"],
         "healed_ride_ids": heal_stats["healed_ride_ids"][:50],
         "stripe_events_stuck_unprocessed": len(stuck_stripe_events),
+        # None = the check itself failed (logged), NOT "zero orphans".
+        "stripe_orphan_holds": orphan_holds if not isinstance(orphan_holds, list) else len(orphan_holds),
+        # None = the scan failed (logged); otherwise per-outcome ride counts.
+        "cancelled_captured_unrefunded": cc_counts,
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -401,6 +495,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
             len(discrepancies),
             len(stuck_stripe_events),
             other_count,
+            extra={"domain": "payments"},
         )
     else:
         logger.info(
@@ -614,6 +709,284 @@ async def _reconcile_stuck_stripe_events(
             extra={"domain": "payments", "event_id": row.get("event_id")},
         )
     return discrepancies
+
+
+async def _reconcile_orphan_holds(stripe_mod: Any) -> Optional[List[Dict[str, Any]]]:
+    """Detect uncaptured booking holds (``requires_capture``) with no ride row.
+
+    ``routes/rides/booking.py`` authorizes the card BEFORE ``_insert_ride_with_code``.
+    Two cases leave a real hold with nothing in ``rides`` pointing at it: (1) a
+    crash or failed/timed-out INSERT after the authorize, and (2) an SCA
+    two-step the rider confirmed on-device but never re-booked. Neither
+    ``orphaned_hold_reconciler`` (it scans ``rides``) nor 3b (``succeeded``
+    PIs only) can see either one.
+
+    Its own type, not ``STRIPE_ORPHAN``, because the remediation is different:
+    an orphaned CAPTURE is money taken with no ride (investigate, maybe refund).
+    An orphaned HOLD has moved no money yet, and the fix is to cancel the
+    authorization so the rider's funds free up before Stripe's 7-day expiry.
+    Sharing one type would give an operator the wrong runbook for half the rows.
+
+    Scans ``_ORPHAN_HOLD_LOOKBACK`` rather than yesterday. See that constant.
+
+    Returns ``None`` when the Stripe list or the ride lookup fails, so the
+    caller never reports "0 orphans" for a check that did not actually run.
+    Detection only: it never cancels a hold.
+    """
+    now = datetime.now(timezone.utc)
+    created_gte = int((now - _ORPHAN_HOLD_LOOKBACK).timestamp())
+    created_lte = int((now - _ORPHAN_HOLD_GRACE).timestamp())
+
+    def _list_holds() -> Dict[str, Any]:
+        # Off the event loop (C86): one blocking Stripe call per page.
+        out: Dict[str, Any] = {}
+        for pi in stripe_mod.PaymentIntent.list(
+            created={"gte": created_gte, "lte": created_lte},
+            limit=100,
+        ).auto_paging_iter():
+            if stripe_get(pi, "status") != "requires_capture":
+                continue
+            # Same non-ride scopes 3b excludes (none use manual capture today,
+            # but a future one must not be flagged as a ride hold).
+            if stripe_get(stripe_get(pi, "metadata"), "scope") in (
+                "driver_subscription",
+                "corporate_topup",
+                "wallet_topup",
+            ):
+                continue
+            out[stripe_get(pi, "id")] = pi
+        return out
+
+    try:
+        holds: Dict[str, Any] = await asyncio.to_thread(_list_holds)
+    except Exception:
+        logger.error("stripe_reconcile: orphan-hold Stripe list failed", exc_info=True, extra={"domain": "payments"})
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "orphan_hold"})
+        return None
+
+    pi_ids = [p for p in holds if p]
+    try:
+        # Batched $in: the hold count grows with booking volume (URL-length cap).
+        rows = (
+            await db_supabase.get_rows_batched_in("rides", "payment_intent_id", pi_ids, columns="id,payment_intent_id")
+            or []
+        )
+    except Exception:
+        # Unknown is not "unlinked": flagging every hold on a DB blip would
+        # send an operator to cancel holds on live rides.
+        logger.error("stripe_reconcile: orphan-hold ride lookup failed", exc_info=True, extra={"domain": "payments"})
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "orphan_hold"})
+        return None
+    linked = {r.get("payment_intent_id") for r in rows if r.get("payment_intent_id")}
+
+    discrepancies: List[Dict[str, Any]] = []
+    for pi_id in pi_ids:
+        if pi_id in linked:
+            continue
+        pi = holds[pi_id]
+        held_cents = stripe_get(pi, "amount_capturable", 0) or 0
+        meta_ride_id = stripe_get(stripe_get(pi, "metadata"), "ride_id")
+        discrepancies.append(
+            {
+                "type": "STRIPE_ORPHAN_HOLD",
+                "payment_intent_id": pi_id,
+                "amount_capturable": held_cents,
+                "metadata_ride_id": meta_ride_id,
+                "created": stripe_get(pi, "created"),
+            }
+        )
+        logger.error(
+            "stripe_reconcile: STRIPE_ORPHAN_HOLD pi=%s held_cents=%d metadata_ride_id=%s — "
+            "uncaptured hold with no ride row; cancel the authorization to release the rider's funds",
+            pi_id,
+            held_cents,
+            meta_ride_id,
+            extra={"domain": "payments"},
+        )
+    metrics.inc(_ORPHAN_HOLD_METRIC, by=len(discrepancies))
+    return discrepancies
+
+
+def _cc_fee_owed_cents(ride: Dict[str, Any]) -> int:
+    """Mirror of scripts/reconcile_cancelled_captured_refunds._fee_still_owed_from_capture, in cents.
+
+    Duplicated rather than imported: importing that script into the server
+    process would run its import-time ``logging.basicConfig`` / ``sys.path``
+    mutation and load a second copy of ``db_supabase``. The
+    ``test_cc_fee_rule_matches_script`` parity test fails if the two drift.
+    """
+    fee = to_decimal(ride.get("cancellation_fee_admin") or 0) + to_decimal(ride.get("cancellation_fee_driver") or 0)
+    fee_pi = ride.get("cancel_fee_payment_intent_id")
+    if bool(fee_pi) and fee_pi != ride.get("payment_intent_id") and (ride.get("payment_status") or "") == "paid":
+        return 0
+    return dollars_to_cents(fee)
+
+
+async def _read_capture_state(*, ride_id: str, payment_intent_id: str) -> Optional[Dict[str, Any]]:
+    """Lazy wrapper over utils.stripe_charge.read_capture_state (read-only, never raises)."""
+    try:
+        from ..utils.stripe_charge import read_capture_state  # type: ignore
+    except ImportError:
+        from utils.stripe_charge import read_capture_state  # type: ignore
+    return await read_capture_state(ride_id=ride_id, payment_intent_id=payment_intent_id)
+
+
+def _classify_cc(ride: Dict[str, Any], state: Optional[Dict[str, Any]]) -> str:
+    """The DRY-RUN branch of the script's ``reconcile_one``: same outcome keys, no writes."""
+    if state is None:
+        return "unknown"
+    if state.get("pending_refund_cents", 0) > 0:
+        return "pending_refund_on_stripe"
+    if state["refunded_cents"] > 0:
+        return "already_refunded_on_stripe"
+    if state["captured_cents"] <= 0:
+        return "captured_nothing"
+    if state["captured_cents"] - _cc_fee_owed_cents(ride) <= 0:
+        return "not_needed"
+    return "would_refund"
+
+
+async def _detect_cancelled_captured() -> tuple[Optional[Dict[str, int]], List[Dict[str, Any]]]:
+    """Scheduled, READ-ONLY run of the cancelled+captured refund backfill's dry run.
+
+    Same candidate shape as ``scripts/reconcile_cancelled_captured_refunds.find_candidates``
+    (``status='cancelled'``, ``auth_status='captured'``, a PI, no ``refund_amount``)
+    and the same outcome classification as its ``reconcile_one(apply_changes=False)``.
+    Stripe is only read, through ``read_capture_state``. This path never calls
+    ``refund_excess_capture`` and never writes a row. Issuing the refund stays
+    with the human-run ``--apply``.
+
+    Kept out of ``orphaned_hold_reconciler``: that loop's ``OPEN_AUTH_STATES``
+    deliberately excludes ``captured`` (it releases holds and must never touch
+    captured money), and it MUTATES. This check is detect-only.
+
+    Scope: rides cancelled in the last ``_CANCELLED_CAPTURED_LOOKBACK`` (see
+    that constant for why the scan must be bounded). Pages through the window,
+    because rides the script has already refunded keep matching the query (it
+    never changes status/auth_status) and are only dropped afterwards on
+    ``refund_amount``. Returns ``(outcome_counts | None, alert_discrepancies)``.
+    ``None`` means the DB scan failed.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - _CANCELLED_CAPTURED_GRACE
+    filters = {
+        "status": "cancelled",
+        "auth_status": "captured",
+        "cancelled_at": {"$gte": (now - _CANCELLED_CAPTURED_LOOKBACK).isoformat()},
+    }
+    cols = (
+        "id,status,auth_status,payment_intent_id,refund_amount,cancellation_fee_admin,"
+        "cancellation_fee_driver,cancel_fee_payment_intent_id,payment_status,updated_at"
+    )
+    candidates: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    truncated = False
+    try:
+        for page in range(_CANCELLED_CAPTURED_MAX_PAGES):
+            rows = (
+                await db_supabase.get_rows(
+                    "rides",
+                    filters,
+                    columns=cols,
+                    order="id",
+                    limit=_CANCELLED_CAPTURED_PAGE,
+                    offset=page * _CANCELLED_CAPTURED_PAGE,
+                )
+                or []
+            )
+            for r in rows:
+                # Defensive: re-assert the state, never trust the query filter alone.
+                if r.get("status") != "cancelled" or r.get("auth_status") != "captured":
+                    continue
+                if not r.get("payment_intent_id"):
+                    continue
+                try:
+                    if dollars_to_cents(to_decimal(r.get("refund_amount") or 0)) > 0:
+                        continue
+                except Exception:
+                    # Malformed refund_amount: keep it as a candidate so Stripe
+                    # decides, rather than silently dropping a possibly-owed ride.
+                    logger.error(
+                        "stripe_reconcile: cancelled-captured ride=%s has malformed refund_amount=%r",
+                        r.get("id"),
+                        r.get("refund_amount"),
+                        extra={"domain": "payments", "ride_id": r.get("id")},
+                    )
+                ts = r.get("updated_at")
+                if ts and not _is_older_than(ts, cutoff):
+                    continue  # live cancel path may still be mid-refund
+                candidates.append(r)
+            if len(rows) < _CANCELLED_CAPTURED_PAGE:
+                break
+        else:
+            # Every page was full. Probe one row past the ceiling so exactly
+            # N*PAGE rows is not misreported as truncated.
+            probe = await db_supabase.get_rows(
+                "rides",
+                filters,
+                columns="id",
+                order="id",
+                limit=1,
+                offset=_CANCELLED_CAPTURED_MAX_PAGES * _CANCELLED_CAPTURED_PAGE,
+            )
+            truncated = bool(probe)
+    except Exception:
+        logger.error("stripe_reconcile: cancelled-captured scan failed", exc_info=True, extra={"domain": "payments"})
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "cancelled_captured"})
+        return None, []
+    if truncated:
+        counts["scan_truncated"] = 1
+        logger.error(
+            "stripe_reconcile: cancelled-captured scan hit its %d-row ceiling; later rows were NOT checked",
+            _CANCELLED_CAPTURED_PAGE * _CANCELLED_CAPTURED_MAX_PAGES,
+            extra={"domain": "payments"},
+        )
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "cancelled_captured"})
+
+    sem = asyncio.Semaphore(_CANCELLED_CAPTURED_CONCURRENCY)
+
+    async def _one(ride: Dict[str, Any]) -> str:
+        # One bad row (malformed fee, odd Stripe payload) must neither stop the
+        # others nor lose the day's whole audit summary. Report it as unknown.
+        try:
+            async with sem:
+                state = await _read_capture_state(ride_id=ride["id"], payment_intent_id=ride["payment_intent_id"])
+            return _classify_cc(ride, state)
+        except Exception:
+            logger.error(
+                "stripe_reconcile: cancelled-captured classify raised ride=%s",
+                ride.get("id"),
+                exc_info=True,
+                extra={"domain": "payments", "ride_id": ride.get("id")},
+            )
+            return "unknown"
+
+    outcomes = await asyncio.gather(*(_one(r) for r in candidates))
+
+    flagged: List[Dict[str, Any]] = []
+    for ride, outcome in zip(candidates, outcomes, strict=True):
+        counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome not in _CC_ALERT_OUTCOMES:
+            continue
+        flagged.append(
+            {
+                "type": "CANCELLED_CAPTURED_UNREFUNDED",
+                "ride_id": ride["id"],
+                "payment_intent_id": ride["payment_intent_id"],
+                "outcome": outcome,
+            }
+        )
+        logger.error(
+            "stripe_reconcile: CANCELLED_CAPTURED_UNREFUNDED ride=%s pi=%s outcome=%s — run "
+            "scripts/reconcile_cancelled_captured_refunds.py --ride-id <id> (dry run first)",
+            ride["id"],
+            ride["payment_intent_id"],
+            outcome,
+            extra={"domain": "payments", "ride_id": ride["id"]},
+        )
+    for outcome in _CC_ALERT_OUTCOMES:
+        metrics.inc(_CC_METRIC, {"outcome": outcome}, by=counts.get(outcome, 0))
+    return counts, flagged
 
 
 def _truthy(v: Any) -> bool:

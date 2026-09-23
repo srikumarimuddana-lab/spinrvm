@@ -175,3 +175,137 @@ groups:
                     type: gt
                     params: [0]
               refId: C
+
+      # Rules 4-6 added 2026-09-23 (docs/change-log/2026-09-23-orphaned-hold-and-detection-loop.md).
+      # The counters are incremented ONLY by the replica that wins
+      # utils/stripe_reconcile.py's daily (02:00 UTC) leader lock, but every
+      # worker pre-registers every series at 0 on import, so increase() sees
+      # the first real increment (a series born already holding N would be
+      # invisible to increase()). NoData therefore means the scrape pipeline
+      # is broken, not "clean" -- it is surfaced as NoData, same as rule 2.
+      # Reconciler liveness itself is loop_watchdog's job ("stripe_reconcile
+      # (24h)" heartbeat). These rules fire on the FIRST non-zero daily tick
+      # instead of waiting for a second one. A daily detect-only scan's single
+      # positive is not a noisy sample: 1h grace windows already exclude
+      # in-flight races, and waiting a tick would hold back a "rider is owed
+      # money" alert for 24h. The 26h window keeps the alert firing until the
+      # next tick has reported.
+      - uid: spinr-payment-cancelled-captured-unrefunded
+        title: "Cancelled ride with captured, unrefunded hold (daily reconcile)"
+        condition: C
+        for: 0m
+        labels:
+          severity: P1
+          domain: payments
+        annotations:
+          summary: "Daily reconcile found cancelled rides whose captured hold was never refunded (or whose state could not be verified)"
+          description: >-
+            spinr_payment_cancelled_captured_unrefunded_total{outcome=...}
+            incremented by utils/stripe_reconcile._detect_cancelled_captured
+            (read-only; never refunds). Ride ids are in the
+            CANCELLED_CAPTURED_UNREFUNDED Sentry events (domain:payments) and the
+            stripe_reconciliation audit_logs row. Remediate by hand with
+            backend/scripts/reconcile_cancelled_captured_refunds.py (dry run
+            first, then --apply --ride-id <id>).
+          runbook_url: "docs/change-log/2026-09-23-orphaned-hold-and-detection-loop.md"
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 93600
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                sum(increase(spinr_payment_cancelled_captured_unrefunded_total[26h]))
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+
+      - uid: spinr-payment-stripe-orphan-hold
+        title: "Uncaptured Stripe hold with no ride row (daily reconcile)"
+        condition: C
+        for: 0m
+        labels:
+          severity: P1
+          domain: payments
+        annotations:
+          summary: "Daily reconcile found requires_capture PaymentIntents that no ride references -- rider funds held with no ride"
+          description: >-
+            spinr_payment_stripe_orphan_hold_total incremented by
+            utils/stripe_reconcile._reconcile_orphan_holds (8-day lookback,
+            detection only). PI ids are in the STRIPE_ORPHAN_HOLD Sentry events
+            (domain:payments) and the stripe_reconciliation audit_logs row.
+            Confirm no ride references the PI, then cancel the authorization
+            in Stripe to release the hold (Stripe auto-expires it after 7 days
+            otherwise).
+          runbook_url: "docs/change-log/2026-09-23-orphaned-hold-and-detection-loop.md"
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 93600
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                sum(increase(spinr_payment_stripe_orphan_hold_total[26h]))
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+
+      - uid: spinr-payment-reconcile-check-failed
+        title: "Daily payment reconcile check could not complete"
+        condition: C
+        for: 0m
+        labels:
+          severity: P2
+          domain: payments
+        annotations:
+          summary: "An orphan-hold or cancelled-captured reconcile check failed (Stripe/DB error) or hit its row ceiling -- rules 4-5 are blind until it passes"
+          description: >-
+            spinr_payment_reconcile_check_failed_total{check=orphan_hold|cancelled_captured}.
+            Without this, a check failing every day is indistinguishable from
+            a clean one. See the domain:payments Sentry error logged in the
+            same tick for the cause.
+          runbook_url: "docs/change-log/2026-09-23-orphaned-hold-and-detection-loop.md"
+        noDataState: NoData
+        execErrState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 93600
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                sum(increase(spinr_payment_reconcile_check_failed_total[26h]))
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C

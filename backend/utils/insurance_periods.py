@@ -259,6 +259,12 @@ RELEASE_REASONS = frozenset(
         "offer_declined",  # the driver tapped Decline
         "offer_timeout",  # the offer expired unanswered
         "rider_cancelled",  # the rider cancelled after assignment
+        "driver_cancelled",  # the driver cancelled after assignment (routes/drivers/ride_cancel.py)
+        "rider_noshow",  # the driver marked the rider a no-show (routes/drivers/ride_cancel.py)
+        "ride_completed",  # driver ended the trip; closes the open Period 3 (routes/drivers/ride_complete.py)
+        "rider_completed",  # rider ended the trip (routes/rides/lifecycle.py)
+        "admin_cancelled",  # admin cancel (routes/admin/rides.py)
+        "admin_completed",  # admin force-complete (routes/admin/rides.py)
     }
 )
 
@@ -331,6 +337,32 @@ async def release_driver_and_close_period(
         raise ValueError(f"reason must be one of {sorted(RELEASE_REASONS)}, got {reason!r}")
 
     released = await db_supabase.set_driver_available(driver_id, True)
+    return await close_period_after_release(driver_id, released, reason=reason, ride_id=ride_id)
+
+
+async def close_period_after_release(
+    driver_id: str,
+    released: object,
+    *,
+    reason: str,
+    ride_id: Optional[str] = None,
+) -> Optional[int]:
+    """Close the driver's open Period 2/3 given the row an already-performed
+    ``set_driver_available(driver_id, True, ...)`` returned.
+
+    The second half of :func:`release_driver_and_close_period`, split out for
+    callers that must issue the release write themselves — ``complete_ride``
+    also increments ``total_rides`` in that same write, and ``cancel_ride``
+    releases the driver unconditionally but only closes a period when the
+    ride was past assignment. Same contract as the parent helper: the
+    returned row is the authoritative read of 0-vs-1, and an unreadable row
+    writes nothing. Before this existed both of those callers recorded
+    Period 1 unconditionally — the exact defect the parent's docstring
+    describes (2026-09-22 insurance-period audit, HIGH #2).
+    """
+    if reason not in RELEASE_REASONS:
+        raise ValueError(f"reason must be one of {sorted(RELEASE_REASONS)}, got {reason!r}")
+
     if not isinstance(released, dict):
         # No row came back: either no Supabase client (_write_skipped) or the
         # update matched nothing (stale/deleted driver). "Offline" and "unknown"
@@ -362,6 +394,122 @@ async def release_driver_and_close_period(
         {"reason": reason, "period": str(period)},
     )
     return period
+
+
+# Why a driver was forced offline by the system/an admin. Label only, like
+# RELEASE_REASONS — it reaches the log line and the metric, nothing else.
+FORCED_OFFLINE_REASONS = frozenset(
+    {
+        "document_expired",  # utils/document_expiry.py auto-suspension
+        "admin_suspend",  # routes/admin/drivers.py admin_driver_action
+        "admin_ban",
+        "admin_reject",
+        "admin_status_override",  # routes/admin/drivers.py admin_override_driver_status
+    }
+)
+
+_OBLIGATED_RIDE_STATUSES = sorted(s.value for s in (_EN_ROUTE_STATUSES | {RideStatus.IN_PROGRESS}))
+
+
+async def close_period_for_forced_offline(driver_id: str, *, reason: str) -> Optional[int]:
+    """Re-classify a driver who was just forced ``is_online=False`` by the
+    system or an admin (suspend / ban / reject / document expiry).
+
+    Must be called AFTER the ``drivers`` write that set ``is_online=False``
+    succeeded. The driver's own Go Offline is refused while a ride or live
+    offer is theirs (``routes/drivers/status.py``); these paths have no such
+    refusal, and before this helper they wrote no period row at all — an
+    open Period 1 stayed open for an offline driver (claiming TNC contingent
+    cover over personal-auto time) and the reconciler could never heal it,
+    because its idle-driver scan only looks at ``is_online = True``.
+
+    Why the period is derived from ride state, not blanket Period 0
+    ---------------------------------------------------------------
+    Suspending a driver changes their account, not the physical situation.
+    A passenger already in the car is still in the car: the ride stays
+    ``in_progress`` (nothing here cancels it), and CLAUDE.md says to derive
+    the period from ride state, not the driver UI. Writing Period 0 there
+    would close the open Period 3 and assert personal-auto-only cover while
+    a passenger is aboard — the most harmful misclassification possible,
+    and a downgrade the reconciler's ``_in_progress_candidates`` scan would
+    immediately fight. So:
+
+    * ride ``in_progress``                       → Period 3 (left open, no write)
+    * ride assigned/accepted/arrived, or a
+      pending ``ride_offers`` row                → Period 2 (left open, no write)
+    * none of the above                          → Period 0 (closes a stale 1)
+
+    Every later end of that ride/offer releases through a path that reads the
+    now-offline row and closes the 2/3 to Period 0: driver ``complete_ride`` /
+    ``cancel_ride`` / ``mark_rider_noshow``, rider-side ``complete_ride``,
+    admin cancel / force-complete (all via :func:`close_period_after_release`),
+    and rider cancel / offer decline / offer expiry (via
+    :func:`release_driver_and_close_period` or the batch-offer release RPC).
+
+    Any pending offer counts as live — the same conservative rule the
+    reconciler's ``_pending_offer_candidates`` uses; a stale one is closed by
+    the claim reaper, never downgraded here.
+
+    Returns the derived period (0 written; 2/3 left open), or ``None`` when
+    the ride/offer lookup failed — nothing is written then, because guessing
+    0 could close a real Period 3. Never raises except for a programmer-error
+    ``reason``.
+    """
+    if reason not in FORCED_OFFLINE_REASONS:
+        raise ValueError(f"reason must be one of {sorted(FORCED_OFFLINE_REASONS)}, got {reason!r}")
+
+    try:
+        rides = await db_supabase.get_rows(
+            "rides",
+            {"driver_id": driver_id, "status": {"$in": _OBLIGATED_RIDE_STATUSES}},
+            columns="id,status",
+            limit=1,
+        )
+        ride = rides[0] if rides else None
+        offer = None
+        if ride is None:
+            offers = await db_supabase.get_rows(
+                "ride_offers",
+                {"driver_id": driver_id, "status": "pending"},
+                columns="ride_id",
+                limit=1,
+            )
+            offer = offers[0] if offers else None
+    except Exception:
+        logger.error(
+            "insurance_periods: forced-offline ride/offer lookup FAILED, period left unchanged driver_id=%s reason=%s",
+            driver_id,
+            reason,
+            exc_info=True,
+        )
+        _metric_inc("spinr_insurance_period_forced_offline_skipped_total", {"reason": reason})
+        return None
+
+    period = derive_insurance_period(
+        ride_status=ride.get("status") if ride else None,
+        is_online=False,
+        has_live_offer=offer is not None,
+    )
+    if period != 0:
+        # The open Period 2/3 row, opened at claim / trip start, is already
+        # the right one — so write nothing. Re-asserting it here would only
+        # add a stale-read race: if the ride completed between the lookup
+        # above and the write, a re-asserted Period 3 would re-open primary
+        # cover on a finished trip after complete_ride had closed it.
+        logger.warning(
+            "insurance_periods: driver forced offline while holding an obligation; "
+            "leaving open Period %s for the ride-end path to close driver_id=%s ride_id=%s reason=%s",
+            period,
+            driver_id,
+            (ride or {}).get("id") or (offer or {}).get("ride_id"),
+            reason,
+        )
+        _metric_inc("spinr_insurance_period_forced_offline_total", {"reason": reason, "period": str(period)})
+        return period
+
+    await record_period_transition(driver_id, 0)
+    _metric_inc("spinr_insurance_period_forced_offline_total", {"reason": reason, "period": "0"})
+    return 0
 
 
 async def release_batch_offer_driver_and_close_period(driver_id: str, *, ride_id: str) -> Optional[int]:

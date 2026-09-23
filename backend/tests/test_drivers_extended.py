@@ -197,6 +197,46 @@ class TestGetMyDriver:
 
 
 class TestUpdateMyDriver:
+    @pytest.mark.parametrize("field", ["date_of_birth", "license_issue_date"])
+    def test_eligibility_dates_persist_through_self_service_profile(self, field):
+        from backend.routes import drivers as drv
+
+        driver = _driver(status="pending")
+        saved = {}
+
+        async def _fake_update(_table, _filters, updates):
+            saved.update(updates)
+            return driver
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", _fake_update),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            request = drv.UpdateDriverProfileRequest(**{field: "2000-01-02"})
+            asyncio.run(drv.update_my_driver(body=request, current_user={"id": USER_ID}))
+
+        assert saved[field] == "2000-01-02"
+
+    @pytest.mark.parametrize("field", ["date_of_birth", "license_issue_date"])
+    def test_malformed_eligibility_date_is_rejected(self, field):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()) as update,
+        ):
+            request = drv.UpdateDriverProfileRequest(**{field: "not-a-date"})
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.update_my_driver(body=request, current_user={"id": USER_ID}))
+
+        assert exc.value.status_code == 422
+        update.assert_not_awaited()
+
     def test_updates_safe_fields(self):
         from backend.routes import drivers as drv
 

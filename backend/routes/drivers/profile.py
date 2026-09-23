@@ -118,6 +118,8 @@ class UpdateDriverProfileRequest(BaseModel):
     # licence class like "5" or "5A" carries no personal-identity value on
     # its own.
     license_class: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    license_issue_date: Optional[str] = None
     license_expiry_date: Optional[str] = None
     insurance_expiry_date: Optional[str] = None
     vehicle_inspection_expiry_date: Optional[str] = None
@@ -160,6 +162,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         "vehicle_vin",
         "license_number",
         "license_class",
+        "date_of_birth",
+        "license_issue_date",
         "license_expiry_date",
         "insurance_expiry_date",
         "vehicle_inspection_expiry_date",
@@ -171,6 +175,13 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     allowed_fields = safe_fields | vehicle_fields
 
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
+
+    for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
+        if field in updates:
+            try:
+                datetime.strptime(updates[field], "%Y-%m-%d")
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
 
     # Validate the SIN before anything else touches it. A typo is not caught
     # until CRA rejects the T4A months later, by which time the driver may be
@@ -797,6 +808,8 @@ async def register_driver(
         "work_eligibility_expiry_date",
         "documents",
         "license_class",
+        "date_of_birth",
+        "license_issue_date",
         "license_issue_date",
         "date_of_birth",
     }

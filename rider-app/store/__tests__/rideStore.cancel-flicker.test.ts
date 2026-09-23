@@ -136,4 +136,40 @@ describe('cancel-during-search flicker — store invariants', () => {
     // Guard is reset so a future cancel of ride-NEW notifies normally.
     expect(useRideStore.getState()._clearedRideId).toBeNull();
   });
+
+  it('createRide preserves _clearedRideId from the prior cancel', async () => {
+    useRideStore.setState({
+      _clearedRideId: 'ride-1',
+      currentRide: null,
+      pickup: { address: '100 Queen St', lat: 43.65, lng: -79.38 },
+      dropoff: { address: '200 King St', lat: 43.66, lng: -79.39 },
+      selectedVehicle: { id: 'vt-1', name: 'Economy', description: '', icon: 'car', capacity: 4 },
+    });
+    mockApi.post.mockResolvedValueOnce({
+      status: 201,
+      data: makeRide('searching', 'ride-2'),
+    } as any);
+
+    await useRideStore.getState().createRide('card');
+
+    expect(useRideStore.getState().currentRide?.id).toBe('ride-2');
+    expect(useRideStore.getState()._clearedRideId).toBe('ride-1');
+  });
+
+  it('fetchActiveRide inactive does not clear a newer local ride', async () => {
+    useRideStore.setState({
+      currentRide: makeRide('searching', 'ride-NEW') as any,
+      _clearedRideId: 'ride-OLD',
+    });
+    mockApi.get.mockResolvedValueOnce({
+      status: 200,
+      data: { active: false },
+    } as any);
+
+    const result = await useRideStore.getState().fetchActiveRide();
+
+    expect(result).toBeNull();
+    expect(useRideStore.getState().currentRide?.id).toBe('ride-NEW');
+    expect(useRideStore.getState()._clearedRideId).toBe('ride-OLD');
+  });
 });

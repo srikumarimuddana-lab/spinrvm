@@ -18,6 +18,7 @@ import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
+import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import * as rideLive from '../services/rideLiveNotification';
@@ -180,9 +181,12 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
     case 'ride_completed':
       if (ride_id) router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
       break;
-    case 'ride_cancelled':
+    case 'ride_cancelled': {
+      const rideState = useRideStore.getState();
+      if (!shouldLeaveScreenForRideCancelled(ride_id, rideState.currentRide?.id, rideState._clearedRideId)) break;
       router.replace('/(tabs)' as any);
       break;
+    }
     case 'chat_message':
       if (ride_id) router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
       break;

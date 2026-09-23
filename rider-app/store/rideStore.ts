@@ -519,6 +519,13 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   fetchActiveRide: async () => {
+    // A just-booked ride can briefly be invisible to /rides/active. The
+    // previous ride's cancel latch is still set, so that miss must not
+    // clearRide() the new ride (which would latch the new id and bounce home).
+    const keepNewerLocalRide = () => {
+      const { currentRide, _clearedRideId } = get();
+      return !!(currentRide && _clearedRideId && currentRide.id !== _clearedRideId);
+    };
     try {
       const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
       if (response.data?.active && response.data.ride) {
@@ -527,8 +534,10 @@ export const useRideStore = create<RideState>((set, get) => ({
         // committed the cancel yet, so /rides/active can still report it as
         // active for a moment (read-after-write lag). Treat it as inactive so
         // the home useFocusEffect doesn't re-push into the searching screen,
-        // which restarted the cancel toast (the flicker). _clearedRideId is
-        // reset to null when the rider books a new ride.
+        // which restarted the cancel toast (the flicker). The latch stays
+        // until fetchActiveRide adopts a different active ride. createRide
+        // must not clear it, or a late cancel for the previous ride wipes
+        // the ride that was just booked.
         if (get()._clearedRideId === ride.id) {
           return null;
         }
@@ -538,11 +547,14 @@ export const useRideStore = create<RideState>((set, get) => ({
         _persistRide(rideWithoutDriver, driver);
         return { active: true, ride: rideWithoutDriver };
       }
-      // No active ride on server — clear any stale local state
+      // No active ride on server — clear any stale local state, unless
+      // that local ride is newer than the cancel latch.
+      if (keepNewerLocalRide()) return null;
       if (get().currentRide) get().clearRide();
       return null;
     } catch (err: unknown) {
       if (isErrorLike(err) && (err as { response?: { status?: number } }).response?.status === 404) {
+        if (keepNewerLocalRide()) return null;
         if (get().currentRide) get().clearRide();
       }
       return null;
@@ -856,7 +868,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         return response.data as RideRequiresAction;
       }
       const ride = response.data as Ride;
-      set({ currentRide: ride, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null, _clearedRideId: null });
+      set({ currentRide: ride, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null });
       _persistRide(ride, null);
       return ride;
     } catch (error: unknown) {

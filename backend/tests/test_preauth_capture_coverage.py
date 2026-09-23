@@ -180,9 +180,7 @@ async def test_loop_recovers_after_lock_error_and_cancellation_propagates(caplog
     from backend.utils import metrics
 
     lock_unavailable_key = (("loop", "preauth_capture"),)
-    before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(
-        lock_unavailable_key, 0
-    )
+    before = metrics.snapshot()["counters"].get("spinr_loop_lock_unavailable_total", {}).get(lock_unavailable_key, 0)
 
     async def fake_sleep(secs):
         nonlocal sleeps

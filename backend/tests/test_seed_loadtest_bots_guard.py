@@ -2,7 +2,6 @@ import pytest
 
 from backend.scripts import seed_loadtest_bots as seed
 
-
 STAGING_REF = "abcdefghijklmnopqrst"
 STAGING_URL = f"https://{STAGING_REF}.supabase.co"
 
@@ -85,7 +84,10 @@ def test_staging_target_guard_returns_only_after_exact_match():
         env(EXPECTED_SUPABASE_PROJECT_REF="zyxwvutsrqponmlkjihg"),
         env(SUPABASE_URL="not-a-url"),
         env(ENV="production"),
-        env(SUPABASE_URL="https://soavhtdhefowwvforzwb.supabase.co", EXPECTED_SUPABASE_PROJECT_REF="soavhtdhefowwvforzwb"),
+        env(
+            SUPABASE_URL="https://soavhtdhefowwvforzwb.supabase.co",
+            EXPECTED_SUPABASE_PROJECT_REF="soavhtdhefowwvforzwb",
+        ),
     ],
 )
 def test_main_rejects_target_before_database_client_or_writes(monkeypatch, bad_env):
@@ -104,9 +106,10 @@ def test_main_rejects_target_before_database_client_or_writes(monkeypatch, bad_e
     monkeypatch.setattr(sys, "argv", ["seed_loadtest_bots.py"])
     monkeypatch.setattr(seed, "load_dotenv", lambda: None)
 
-    with patch.object(seed, "_initialize_db_supabase") as initialize_client, patch.object(
-        seed, "_ensure_vehicle_type_and_area", new=AsyncMock()
-    ) as seed_area:
+    with (
+        patch.object(seed, "_initialize_db_supabase") as initialize_client,
+        patch.object(seed, "_ensure_vehicle_type_and_area", new=AsyncMock()) as seed_area,
+    ):
         with pytest.raises(SystemExit):
             import asyncio
 

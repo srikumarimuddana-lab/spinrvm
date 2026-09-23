@@ -85,7 +85,10 @@ class TestEmailDriverStatement:
                     current_user=_user(),
                 )
         assert exc.value.status_code == 422
-        assert exc.value.detail == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        assert (
+            exc.value.detail
+            == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        )
         assert not bg.tasks
 
     async def test_arbitrary_period_validation_error_is_redacted_and_does_not_email(self):
@@ -110,7 +113,10 @@ class TestEmailDriverStatement:
                     current_user=_user(),
                 )
         assert exc.value.status_code == 422
-        assert exc.value.detail == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        assert (
+            exc.value.detail
+            == "Choose a Monday for weekly statements or the first day of the month for monthly statements."
+        )
         assert "private validator detail" not in exc.value.detail
         assert not bg.tasks
 

@@ -34,11 +34,11 @@ from loguru import logger
 try:
     from ..core.config import settings
     from ..db import db
-    from ..utils.error_handling import db_error_text, pg_error_code
+    from ..utils.error_handling import DatabaseError, db_error_text, pg_error_code
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
-    from utils.error_handling import db_error_text, pg_error_code
+    from utils.error_handling import DatabaseError, db_error_text, pg_error_code
 
 # audiences for which token_version lives on the `users` table; admin
 # audiences live on `admin_staff`. Anything else is rejected at the
@@ -82,6 +82,7 @@ _NON_THEFT_REVOCATION_REASONS = frozenset(
         "admin_logout_all",
         "admin_action",
         "account_deletion",
+        "session_superseded",
     }
 )
 
@@ -152,6 +153,7 @@ async def issue_refresh_token(
     user_agent: Optional[str] = None,
     ip: Optional[str] = None,
     replaces: Optional[str] = None,
+    token_version: Optional[int] = None,
 ) -> tuple[str, str, datetime]:
     """Mint a new refresh token row for ``user_id``.
 
@@ -177,6 +179,10 @@ async def issue_refresh_token(
         "user_agent": (user_agent or "")[:512] or None,
         "ip": (ip or "")[:64] or None,
     }
+    # The login/parent credential owns this value. Re-reading the user here
+    # would upgrade an old refresh racing a driver login into its new generation.
+    if token_version is not None:
+        row["token_version"] = int(token_version)
 
     result = await db.insert_one("refresh_tokens", row)
     row_id = (result or {}).get("id") or row.get("id") or ""
@@ -249,6 +255,18 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     if not row:
         return None
 
+    if row.get("audience") in _USERS_TABLE_AUDIENCES:
+        try:
+            user = await db.find_one("users", {"id": row.get("user_id")})
+        except Exception as exc:
+            logger.opt(exception=True).error("refresh generation lookup failed")
+            raise DatabaseError(message="Could not verify session; please try again") from exc
+        # NULL is an unbound legacy credential, never proof of a newer login.
+        # Check BEFORE replay detection: an old rotated token cannot invalidate
+        # the replacement phone merely by being presented again.
+        if not user or int(row.get("token_version") or 0) != int(user.get("token_version") or 0):
+            return None
+
     # Replay attack guard: a revoked refresh token presented by a real
     # client is a strong signal of theft. Legitimate clients always step
     # forward to the latest token they were issued and never return to
@@ -266,8 +284,7 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         # cascades. Either way the client gets a generic 401 (no oracle).
         if _is_benign_rotation_replay(row):
             logger.warning(
-                "refresh: benign {} replay — returning 401 without cascade "
-                "(row_id={} user_id={} audience={})",
+                "refresh: benign {} replay — returning 401 without cascade (row_id={} user_id={} audience={})",
                 "rotation within grace window" if row.get("replaced_by") else "explicit revocation",
                 row.get("id"),
                 row.get("user_id"),

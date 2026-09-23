@@ -15,7 +15,7 @@ def availability_db(pg_cur):
     pg_cur.execute("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()")
     for migration_name in ("42_drivers_last_status_changed_at.sql", "97_driver_intent_timestamps.sql"):
         _apply_migration_sql(pg_cur, (migrations / migration_name).read_text(encoding="utf-8"))
-    migration = migrations / "455_driver_availability_epoch.sql"
+    migration = migrations / "456_driver_availability_epoch.sql"
     _apply_migration_sql(pg_cur, migration.read_text(encoding="utf-8"))
     pg_cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")

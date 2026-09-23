@@ -95,8 +95,10 @@ BEGIN
         IF COALESCE((SELECT driver_refund_holds_enabled FROM settings WHERE id='app_settings'), false)
            AND v_ride.driver_id IS NOT NULL AND v_ride.ride_completed_at IS NOT NULL
            AND EXISTS (SELECT 1 FROM payouts WHERE driver_id=v_ride.driver_id
-                       AND payout_type='auto' AND status='completed'
-                       AND created_at >= v_ride.ride_completed_at) THEN
+                       AND payout_type IN ('auto', 'instant', 'standard')
+                       AND status='completed' AND amount > 0
+                       AND created_at >= v_ride.ride_completed_at
+                       AND created_at <= now()) THEN
             -- Bounded to this driver, under the already-held ride lock. Attribute
             -- known legacy rows before summing; never guess about unknown rows.
             UPDATE payouts p SET refund_ride_id=r.id FROM rides r

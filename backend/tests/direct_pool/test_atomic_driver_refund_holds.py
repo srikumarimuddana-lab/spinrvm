@@ -100,6 +100,38 @@ def test_old_absorbed_refund_is_not_reclassified_after_payout(refund_cur):
     assert held(refund_cur) == 5
 
 
+@pytest.mark.parametrize("payout_type", ["standard", "instant"])
+def test_completed_cash_payout_types_qualify_for_refund_hold(refund_cur, payout_type):
+    refund_cur.execute("DELETE FROM payouts WHERE id='auto'")
+    refund_cur.execute(
+        "INSERT INTO payouts(id,driver_id,amount,status,payout_type,created_at) "
+        "VALUES('cash-out','driver',20,'completed',%s,now()-interval '1 hour')",
+        (payout_type,),
+    )
+    project(refund_cur, 500)
+    assert held(refund_cur) == 5
+
+
+def test_completed_refund_hold_does_not_itself_qualify_as_cash_paid(refund_cur):
+    refund_cur.execute("DELETE FROM payouts WHERE id='auto'")
+    refund_cur.execute(
+        "INSERT INTO payouts(id,driver_id,amount,status,payout_type,created_at) "
+        "VALUES('old-hold','driver',5,'completed','clawback',now()-interval '1 hour')"
+    )
+    project(refund_cur, 500)
+    assert held(refund_cur) == 0
+
+
+def test_future_dated_payout_does_not_qualify_for_refund_hold(refund_cur):
+    refund_cur.execute("DELETE FROM payouts WHERE id='auto'")
+    refund_cur.execute(
+        "INSERT INTO payouts(id,driver_id,amount,status,payout_type,created_at) "
+        "VALUES('future','driver',20,'completed','instant',now()+interval '1 hour')"
+    )
+    project(refund_cur, 500)
+    assert held(refund_cur) == 0
+
+
 def test_default_off_does_not_deduct_driver_pay(refund_cur):
     refund_cur.execute("UPDATE settings SET driver_refund_holds_enabled=false")
     project(refund_cur, 500)

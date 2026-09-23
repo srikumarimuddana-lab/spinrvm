@@ -70,6 +70,7 @@ jest.mock('@shared/theme/ThemeContext', () => ({
 
 let mockCompanyInfo: Record<string, string> = {};
 let mockAiEnabled = false;
+let mockAiConfigPromise: Promise<{ data: { enabled: boolean; mode: string } }> | null = null;
 const mockApiPost = jest.fn((..._args: any[]) => Promise.resolve({ data: {} as any }));
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
@@ -77,6 +78,7 @@ jest.mock('@shared/api/client', () => ({
     get: (url?: string) => {
       if (url === '/company-info') return Promise.resolve({ data: mockCompanyInfo });
       if (url === '/ai/config') {
+        if (mockAiConfigPromise) return mockAiConfigPromise;
         return Promise.resolve({
           data: { enabled: mockAiEnabled, mode: mockAiEnabled ? 'enabled' : 'hidden' },
         });
@@ -124,6 +126,7 @@ const renderContactTab = () => renderTab('contact');
 describe('SupportScreen Contact tab — phone comes from admin settings', () => {
   beforeEach(() => {
     mockCompanyInfo = {};
+    mockAiConfigPromise = null;
     jest.clearAllMocks();
   });
 
@@ -162,7 +165,9 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     // placeholder the operator never entered and cannot correct.
     expect(queryByText('support@spinr.ca')).toBeNull();
     expect(queryByLabelText(/^Email support/)).toBeNull();
-    expect(queryAllByText('mail-outline')).toHaveLength(0);
+    // The Contact tab itself has a mail icon; only company-detail icons must
+    // be absent when no email is configured.
+    expect(queryAllByText('mail-outline')).toHaveLength(1);
     // ...and the former hardcoded identity/address/website placeholders.
     expect(queryByText('SPINR MOBILITY INC.')).toBeNull();
     expect(queryByText('Saskatoon, SK, Canada')).toBeNull();
@@ -268,11 +273,13 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
   beforeEach(() => {
     mockCompanyInfo = {};
     mockAiEnabled = true;
+    mockAiConfigPromise = null;
     jest.clearAllMocks();
   });
 
   afterEach(() => {
     mockAiEnabled = false;
+    mockAiConfigPromise = null;
   });
 
   /** Type a message and send it, letting the rejected POST settle. */
@@ -298,6 +305,47 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
       utils.getByText("I'm having trouble connecting right now. Please try again."),
     ).toBeTruthy();
     expect(utils.queryByText(/support@spinr\.ca/)).toBeNull();
+  });
+
+  it('keeps an initially requested chat tab while AI config is loading', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
+    expect(utils.getByLabelText('Loading support options')).toBeTruthy();
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: true, mode: 'enabled' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
+  });
+
+  it('falls back from an initially requested chat tab when AI is hidden', async () => {
+    mockAiEnabled = false;
+    const utils = await renderTab('chat');
+
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+    expect(utils.getByText('No FAQs available yet')).toBeTruthy();
+  });
+
+  it('keeps the rider on Contact if they select it before hidden AI config loads', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    fireEvent.press(utils.getByText('Contact'));
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: false, mode: 'hidden' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByText('Submit Report')).toBeTruthy();
   });
 
   it('names the configured email when one is set', async () => {

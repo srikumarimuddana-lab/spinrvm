@@ -370,7 +370,13 @@ describe('OtpScreen (driver-app)', () => {
   });
 
   it('fails open to /driver when the consent check itself fails', async () => {
-    mockApiGet.mockRejectedValue(new Error('down'));
+    // Only /consent/status should fail here — /drivers/me must still
+    // resolve normally, otherwise the driver-status check (which fails
+    // CLOSED to /account-deactivated on its own error, by design) wins
+    // instead of the consent check (which fails OPEN) being exercised.
+    mockApiGet.mockImplementation((url: string) =>
+      url === '/consent/status' ? Promise.reject(new Error('down')) : Promise.resolve({ data: {} }),
+    );
     const r = await renderScreen();
     await enterCode(r, '1234');
     const verifyBtn = findVerifyBtn(r);

@@ -838,6 +838,28 @@ def _validate_production_config():
             f"(got scheme from: {redis_url.split('://', 1)[0]}://…)."
         )
 
+    # Utility Redis consumers (locks, OTP state, and other shared state) read
+    # os.environ directly in utils.redis_client; Settings.REDIS_URL is not
+    # their runtime source of truth. Validate the exact value those consumers
+    # will use, and never include it in diagnostics because it may contain a
+    # password.
+    utility_redis_url = (_os.environ.get("REDIS_URL") or "").strip()
+    if not utility_redis_url:
+        errors.append("REDIS_URL is not set. Production utility Redis requires a shared Redis backend.")
+    else:
+        try:
+            parsed_utility_redis_url = urlparse(utility_redis_url)
+            utility_port = parsed_utility_redis_url.port
+            valid_utility_redis_url = (
+                parsed_utility_redis_url.scheme in {"redis", "rediss"}
+                and bool(parsed_utility_redis_url.hostname)
+                and (utility_port is None or 1 <= utility_port <= 65535)
+            )
+        except ValueError:
+            valid_utility_redis_url = False
+        if not valid_utility_redis_url:
+            errors.append("REDIS_URL must be a well-formed redis:// or rediss:// URL with a host.")
+
     # 5. Firebase service account — required for Firebase Auth verify
     #    and for FCM push delivery. Missing means get_current_user can't
     #    verify Firebase-issued tokens and send_push_notification no-ops.

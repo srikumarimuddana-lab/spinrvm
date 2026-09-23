@@ -17,6 +17,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _runtime_redis_url(monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://test-redis:6379/0")
+
+
 def _valid_settings(**over) -> MagicMock:
     s = MagicMock()
     s.ENV = "production"
@@ -36,7 +41,8 @@ def _valid_settings(**over) -> MagicMock:
     return s
 
 
-def test_non_production_env_returns_immediately_without_checks():
+def test_non_production_env_returns_immediately_without_checks(monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
     s = _valid_settings(ENV="development", JWT_SECRET="short")  # would fail every check
     with patch("core.middleware.settings", s):
         from core.middleware import _validate_production_config
@@ -44,11 +50,49 @@ def test_non_production_env_returns_immediately_without_checks():
         _validate_production_config()  # must not raise
 
 
-def test_all_valid_production_config_passes():
+def test_all_valid_production_config_passes(monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://user:secret@prod-redis:6379/0")
     with patch("core.middleware.settings", _valid_settings()):
         from core.middleware import _validate_production_config
 
         _validate_production_config()  # must not raise
+
+
+@pytest.mark.parametrize(
+    "runtime_url",
+    [
+        None,
+        "memory://cache",
+        "redis://",
+        "rediss://:6379/0",
+        "redis://host:99999/0",
+        "redis://user:secret@host:not-a-port/0",
+    ],
+)
+def test_invalid_runtime_utility_redis_url_fails_without_echoing_credentials(monkeypatch, runtime_url):
+    # Settings.REDIS_URL alone does not configure utils.redis_client, which
+    # reads os.environ directly. Prove the actual runtime input is checked.
+    if runtime_url is None:
+        monkeypatch.delenv("REDIS_URL", raising=False)
+    else:
+        monkeypatch.setenv("REDIS_URL", runtime_url)
+    s = _valid_settings(REDIS_URL="redis://settings-only:6379/0")
+    with patch("core.middleware.settings", s):
+        from core.middleware import _validate_production_config
+
+        with pytest.raises(RuntimeError, match="Refusing to start") as exc:
+            _validate_production_config()
+    assert "REDIS_URL" in str(exc.value)
+    assert "secret" not in str(exc.value)
+
+
+@pytest.mark.parametrize("runtime_url", ["redis://user:secret@redis.internal:6379/0", "rediss://user:secret@redis.internal:6380/0"])
+def test_valid_runtime_utility_redis_schemes_pass(monkeypatch, runtime_url):
+    monkeypatch.setenv("REDIS_URL", runtime_url)
+    with patch("core.middleware.settings", _valid_settings()):
+        from core.middleware import _validate_production_config
+
+        _validate_production_config()
 
 
 @pytest.mark.parametrize(
@@ -90,7 +134,8 @@ def test_multiple_problems_all_reported_in_one_error():
     assert "RATE_LIMIT_REDIS_URL" in message
 
 
-def test_missing_firebase_creds_warns_but_does_not_raise():
+def test_missing_firebase_creds_warns_but_does_not_raise(monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
     with patch("core.middleware.settings", _valid_settings(FIREBASE_SERVICE_ACCOUNT_JSON="")):
         from core.middleware import _validate_production_config
 

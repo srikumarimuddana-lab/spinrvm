@@ -4,7 +4,12 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from scripts.validate_dast import validate_report, validate_target, write_scope_context
+from scripts.validate_dast import (
+    validate_egress_attestation,
+    validate_report,
+    validate_target,
+    write_scope_context,
+)
 
 
 STAGING = "https://spinr-backend-staging.fly.dev"
@@ -17,10 +22,25 @@ def test_target_requires_https_and_exact_allowlisted_origin():
                             ("https://user:pass@stage.test", "https://stage.test"),
                             ("https://stage:notaport", "https://stage:notaport"),
                             ("https://stage..fly.dev", "https://stage..fly.dev"),
+                            ("https://stage.test\n.evil", "https://stage.test.evil"),
+                            ("https://stage.test\t.evil", "https://stage.test.evil"),
                             ("https://api-spinr.spinr.ca", "https://api-spinr.spinr.ca"),
                             (STAGING, "https://other-staging.fly.dev")]:
         with pytest.raises(ValueError):
             validate_target(target, allowed)
+
+
+def test_exact_staging_api_subdomain_can_be_allowlisted():
+    target = "https://staging-api.spinr.ca"
+    assert validate_target(target, target) == target
+
+
+def test_egress_attestation_must_exactly_match_validated_canonical_origin():
+    assert validate_egress_attestation(STAGING, STAGING, STAGING) == STAGING
+    for attestation in ["", "https://other-staging.fly.dev", STAGING + ":443",
+                        "HTTPS://spinr-backend-staging.fly.dev"]:
+        with pytest.raises(ValueError):
+            validate_egress_attestation(STAGING, STAGING, attestation)
 
 
 def test_report_must_be_nonempty_valid_json_and_include_exact_target(tmp_path):

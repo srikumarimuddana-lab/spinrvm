@@ -17,6 +17,8 @@ PRODUCTION_HOSTS = {
 
 
 def _origin(value: str) -> tuple[str, str, int]:
+    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ValueError("target URL contains whitespace or control characters")
     try:
         parsed = urlsplit(value)
         port = parsed.port if parsed.port is not None else 443
@@ -39,9 +41,17 @@ def validate_target(target: str, allowed_origin: str) -> str:
     if target_parts != _origin(allowed_origin):
         raise ValueError("STAGING_URL does not match the exact staging-origin allowlist")
     host, port = target_parts[1:]
-    if host in PRODUCTION_HOSTS or any(host.endswith("." + p) for p in PRODUCTION_HOSTS):
+    if host in PRODUCTION_HOSTS:
         raise ValueError("production origins are not valid DAST targets")
     return f"https://{host}" + (f":{port}" if port != 443 else "")
+
+
+def validate_egress_attestation(target: str, allowed_origin: str, attestation: str) -> str:
+    """Require an operator-provided egress origin matching the canonical target."""
+    canonical = validate_target(target, allowed_origin)
+    if not attestation or attestation != canonical:
+        raise ValueError("DAST_EGRESS_ORIGIN_ATTESTATION must exactly match the canonical staging origin")
+    return canonical
 
 
 def validate_report(path: str | Path, target: str) -> None:
@@ -94,7 +104,10 @@ def write_scope_context(target: str, path: str | Path) -> None:
 def main() -> int:
     try:
         target = os.environ.get("STAGING_URL", "")
-        origin = validate_target(target, os.environ.get("STAGING_ALLOWED_ORIGIN", ""))
+        allowed_origin = os.environ.get("STAGING_ALLOWED_ORIGIN", "")
+        origin = validate_egress_attestation(
+            target, allowed_origin, os.environ.get("DAST_EGRESS_ORIGIN_ATTESTATION", "")
+        )
         if len(sys.argv) > 1 and sys.argv[1] == "--write-scope-context":
             if len(sys.argv) != 3:
                 raise ValueError("scope context output path is required")

@@ -2193,6 +2193,29 @@ class TestPayoutsSummary:
         assert summary["total_paid_out"] == 0.0  # must NOT read as already sent
         assert summary["pending_balance"] == 0.0  # still deducted from what's owed
 
+    def test_refund_hold_is_deducted_but_not_reported_as_cash_paid(self, test_client, super_admin_override):
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "30.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "payouts":
+                return [
+                    {"id": "hold", "amount": "5.00", "status": "completed", "payout_type": "clawback"},
+                    {"id": "cash", "amount": "20.00", "status": "completed", "payout_type": "standard"},
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        assert summary["total_paid_out"] == 20.0
+        assert summary["refund_holds_total"] == 5.0
+        assert summary["pending_balance"] == 5.0
+        assert summary["last_payout"]["id"] == "cash"
+
 
 # ---------------------------------------------------------------------------
 # admin_refresh_driver_stripe_payouts -- per-driver full Stripe financial sync

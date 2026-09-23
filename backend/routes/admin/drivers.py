@@ -3253,7 +3253,15 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     pending_in_flight = _sum_by_status("pending", "processing", "held_over_cap")
     # Everything actually sent — completed, transfer_completed, reserved, and
     # any future status — minus what is still only queued.
-    total_paid_out = gross_money_out - pending_in_flight
+    refund_holds_total = sum(
+        (
+            _dec(p.get("amount"))
+            for p in payouts
+            if p.get("payout_type") == "clawback" and _is_money_out(p)
+        ),
+        Decimal("0"),
+    )
+    total_paid_out = gross_money_out - pending_in_flight - refund_holds_total
     on_hold = _sum_by_status("failed")
 
     # The slice of total_paid_out that came from synced Stripe transfer
@@ -3274,7 +3282,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # driver-facing balance in routes/drivers/earnings.py.
     pending_balance = max(lifetime_earnings - balance_money_out, Decimal("0"))
 
-    last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
+    last_completed = next(
+        (p for p in payouts if p.get("status") == "completed" and p.get("payout_type") != "clawback"), None
+    )
     last_failed = next((p for p in payouts if p.get("status") == "failed"), None)
 
     # ---- Payment method ----
@@ -3334,6 +3344,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "lifetime_tips": float(lifetime_tips),
             "ytd_earnings": float(ytd_earnings),
             "total_paid_out": float(total_paid_out),
+            "refund_holds_total": float(refund_holds_total),
             "legacy_stripe_transfers": float(legacy_stripe_transfers),
             "pending_in_flight": float(pending_in_flight),
             "pending_balance": float(pending_balance),

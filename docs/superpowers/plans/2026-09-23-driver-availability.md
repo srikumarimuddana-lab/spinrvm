@@ -12,7 +12,7 @@
 
 **Evidence date:** 23 September 2026. Code reviewed at `4fcb9d7703b96bc65b779e73169f8b583ce421c5` in `srikumarimuddana-lab/spinrvm`. Three GPT-6 Luna workers reviewed backend, mobile, and authentication; the architect cross-checked findings, corrected stale-document interpretations, inspected live schema/settings read-only, and selected the design.
 
-**Status:** Analysis and plan only. No product code, migrations, settings, deployment, or driver records were changed. No incident-specific device trace or authenticated driver identifier was supplied.
+**Status:** Implementation in progress in draft PR #5727; new behavior remains default-off. No production migration, settings change, deployment, or driver-record update has occurred. No incident-specific device trace or authenticated driver identifier was supplied.
 
 ## Global constraints
 
@@ -277,16 +277,16 @@ Offer envelope:
 
 ## 8. Implementation map and dependency order
 
-Keep the existing modules; introduce small focused helpers for the new state contract. New paths below are intentional proposed files. Migration numbers 455–459 are available at the reviewed snapshot; recheck main immediately before creating them and reserve the next free numbers if they have since been used. Never edit or rename an applied migration.
+Keep the existing modules; introduce small focused helpers for the new state contract. New paths below are intentional proposed files. Migration 455 is occupied by cancellation-fee tax. Availability uses 456, claim fencing 457, offer decisions 458, delivery receipts 459, readiness 460, and auth follow-on migrations start at 461. Recheck main before creating each migration; never edit or rename an applied migration.
 
 | Wave | Responsibility | Primary files |
 |---|---|---|
 | 0 | Capture evidence and confirm deployed capabilities | Existing migration/status tools, loop metrics, structured logs |
-| 1 | Durable availability schema and transition contract | New migration 455, new repository/service, status route |
+| 1 | Durable availability schema and transition contract | New migration 456, new repository/service, status route |
 | 2 | Session/epoch presence and all dispatch admission paths | Presence utility, location route, matching/service/RPCs |
-| 3 | Atomic offer decision and delivery outcomes | New migrations 457–458, ride flow, expiry/reaper/offer delivery |
+| 3 | Atomic offer decision and delivery outcomes | New migrations 458–459, ride flow, expiry/reaper/offer delivery |
 | 4 | Mobile availability state, recovery, tracker fencing | New shared availability types/reducer; dashboard; native tracker; idle panel |
-| 5 | Auth hardening, long-idle policy, rollout | Existing auth helpers, reconciler, new migration 459 and readiness worker |
+| 5 | Auth hardening, long-idle policy, rollout | Existing auth helpers, reconciler, new migration 460 and readiness worker |
 
 Within each task: write the specified regression first, confirm it fails for the intended reason, implement the bounded change, rerun that targeted test, review the diff and commit. Do not represent the sample contract/test snippets as already-running code. Integration fixtures must exercise the actual route/RPC, not merely duplicate the predicate in the test.
 
@@ -301,7 +301,7 @@ Deliverable: a read-only incident note and canary baseline. No mass driver reset
 
 ### Task 1: Availability schema and atomic transition
 
-Files (3): create `backend/migrations/455_driver_availability_epoch.sql`; create `backend/repositories/driver_availability_repo.py`; create `backend/tests/direct_pool/test_driver_availability_epoch.py`.
+Files (3): create `backend/migrations/456_driver_availability_epoch.sql`; create `backend/repositories/driver_availability_repo.py`; create `backend/tests/direct_pool/test_driver_availability_epoch.py`.
 
 - [ ] Add `online_epoch`, `controller_session_id`, `accepting_requests`, `last_contact_at`, `ready_until`, `availability_reason` to drivers, plus a monotonically increasing `state_version`. Backfill conservatively and keep new admission dark.
 - [ ] Define `transition_driver_availability(driver_id, expected_epoch, authenticated_session_id, action, request_id)` returning a complete committed availability snapshot. Supported actions: `go_online`, `go_offline`, `stop_requests`, `pause_unreachable`, `pause_idle`, `pause_misses`, `displace_controller`. `go_offline` requires no remaining obligation; `stop_requests` schedules that outcome while preserving current work. Offer decision actions belong to T5.
@@ -360,7 +360,7 @@ assert await can_claim(epoch=12) is False
 Split into two commits, each at most three files:
 
 1. Modify `backend/services/dispatch_service.py`, `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_presence_failopen.py` to centralize admission and change new-offer outage policy behind the flag.
-2. Create `backend/migrations/456_driver_claim_epoch_fence.sql`, create `backend/repositories/driver_offer_repo.py` for the new RPC wrappers, and create `backend/tests/direct_pool/test_driver_claim_epoch_fence.py`. This depends on 455 and precedes the offer-decision migration; do not edit 448.
+2. Create `backend/migrations/457_driver_claim_epoch_fence.sql`, create `backend/repositories/driver_offer_repo.py` for the new RPC wrappers, and create `backend/tests/direct_pool/test_driver_claim_epoch_fence.py`. This depends on 456 and precedes the offer-decision migration; do not edit 448.
 
 - [ ] Inventory callers of driver claim functions, including scheduled, batch, sequential, retry, admin assignment and any queued-ride path. Each must either satisfy the contract or have a documented explicit admin override that cannot bypass session/obligation safety.
 - [ ] Carry observed epoch/session and bounded contact evidence into the DB claim. Check `ready_until` using database time.
@@ -376,7 +376,7 @@ assert eligible(intent=False, lease=True, ready=True) is False
 
 ### Task 5: Atomic acceptance/expiry
 
-Files per commit (3 maximum): first create `backend/migrations/457_offer_decision_atomicity.sql`, extend `backend/repositories/driver_offer_repo.py`, and create `backend/tests/direct_pool/test_offer_decision_atomicity.py`; then integrate `backend/routes/drivers/ride_flow.py`, `backend/utils/offer_expiry_reaper.py`, and create `backend/tests/test_offer_decision_routes.py`. A separate matching timeout integration commit modifies `backend/routes/rides/matching.py` and creates `backend/tests/test_matching_offer_decisions.py`.
+Files per commit (3 maximum): first create `backend/migrations/458_offer_decision_atomicity.sql`, extend `backend/repositories/driver_offer_repo.py`, and create `backend/tests/direct_pool/test_offer_decision_atomicity.py`; then integrate `backend/routes/drivers/ride_flow.py`, `backend/utils/offer_expiry_reaper.py`, and create `backend/tests/test_offer_decision_routes.py`. A separate matching timeout integration commit modifies `backend/routes/rides/matching.py` and creates `backend/tests/test_matching_offer_decisions.py`.
 
 - [ ] Define backend-only `resolve_driver_offer(offer_id, claim_id, expected_epoch, actor_session_id, action, request_id)` for `accept`, `decline`, `expire`, and `cancel_unaccepted`. Use the T1 lock order.
 - [ ] At database time, atomically decide winner, update offer/ride/availability, emit one durable outcome, and preserve insurance claim identity.
@@ -392,7 +392,7 @@ assert number_of_open_claims_for_driver() <= 1
 
 ### Task 6: Offer presentation receipts and fair missed-offer handling
 
-Commit A (3 files): create `backend/routes/drivers/offer_receipts.py`; register it in `backend/routes/drivers/__init__.py`; add `backend/tests/test_offer_receipts.py`. Commit B (3 files): create `backend/migrations/458_offer_delivery_receipts.sql`, modify `backend/routes/rides/matching.py`, and create `backend/tests/test_offer_miss_outcomes.py`. Commit C (3 files): update `backend/features.py`, `backend/routes/rides/matching.py`, and create `backend/tests/test_offer_notification_deadline.py`. Inspect the existing push provider helper called by `features.py`; if provider TTL needs a deeper helper change, put that helper and its targeted test in a separate commit. Apply receipt schema before enabling the route.
+Commit A (3 files): create `backend/routes/drivers/offer_receipts.py`; register it in `backend/routes/drivers/__init__.py`; add `backend/tests/test_offer_receipts.py`. Commit B (3 files): create `backend/migrations/459_offer_delivery_receipts.sql`, modify `backend/routes/rides/matching.py`, and create `backend/tests/test_offer_miss_outcomes.py`. Commit C (3 files): update `backend/features.py`, `backend/routes/rides/matching.py`, and create `backend/tests/test_offer_notification_deadline.py`. Inspect the existing push provider helper called by `features.py`; if provider TTL needs a deeper helper change, put that helper and its targeted test in a separate commit. Apply receipt schema before enabling the route.
 
 - [ ] Add idempotent receipt keyed by offer/session/event with `received` or `presented`, accepted only for the addressed authenticated driver.
 - [ ] Count each expired, foreground-presented, unanswered offer once as a nonresponse outcome, without claiming the person saw or deliberately ignored it. Missing receipts are delivery-unknown; they are not proof of a human miss. The readiness deadline still catches unattended devices.
@@ -500,7 +500,7 @@ expect(credentialsWereDeleted()).toBe(false);
 
 ### Task 12: Long-idle readiness and durable pause recovery
 
-Commit A (3 files): create `backend/migrations/459_driver_readiness_policy.sql`, create `backend/utils/driver_readiness_reconciler.py`, create `backend/tests/test_driver_readiness_reconciler.py`. Commit B: register worker in `backend/core/lifespan.py`, update `backend/utils/stale_intent_reconciler.py` to use T1, and update its tests. Commit C (3 files): modify `driver-app/hooks/useDriverDashboard.ts`, `driver-app/components/dashboard/DriverIdlePanel.tsx`, and create `driver-app/__tests__/components/DriverReadinessPrompt.test.tsx`.
+Commit A (3 files): create `backend/migrations/460_driver_readiness_policy.sql`, create `backend/utils/driver_readiness_reconciler.py`, create `backend/tests/test_driver_readiness_reconciler.py`. Commit B: register worker in `backend/core/lifespan.py`, update `backend/utils/stale_intent_reconciler.py` to use T1, and update its tests. Commit C (3 files): modify `driver-app/hooks/useDriverDashboard.ts`, `driver-app/components/dashboard/DriverIdlePanel.tsx`, and create `driver-app/__tests__/components/DriverReadinessPrompt.test.tsx`.
 
 - [ ] Add default-off policy settings with the section 3 defaults. The worker scans indexed due rows and attempts an idempotent T1 pause. Never infer inactivity from generic `updated_at`.
 - [ ] Check readiness and long-disconnect expiry on claims and heartbeat recovery even if the worker is delayed. Background heartbeats must not change `ready_until`.

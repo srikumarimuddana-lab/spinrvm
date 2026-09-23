@@ -51,8 +51,7 @@ class _StripeEventsQuery:
         with psycopg2.connect(self.dsn) as conn, conn.cursor() as cur:
             if self.operation == "insert":
                 cur.execute(
-                    "INSERT INTO stripe_events (event_id, event_type, payload) "
-                    "VALUES (%s, %s, %s::jsonb)",
+                    "INSERT INTO stripe_events (event_id, event_type, payload) VALUES (%s, %s, %s::jsonb)",
                     (
                         self.payload["event_id"],
                         self.payload["event_type"],

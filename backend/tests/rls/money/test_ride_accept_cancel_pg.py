@@ -72,8 +72,7 @@ class _RideUpdateQuery:
             params.append(self.filters["driver_id__or_same"])
         with psycopg2.connect(self.dsn) as conn, conn.cursor() as cur:
             cur.execute(
-                f"UPDATE rides SET {set_sql} WHERE {' AND '.join(where)} "
-                "RETURNING id, status, driver_id",
+                f"UPDATE rides SET {set_sql} WHERE {' AND '.join(where)} RETURNING id, status, driver_id",
                 params,
             )
             rows = [dict(zip(("id", "status", "driver_id"), row)) for row in cur.fetchall()]

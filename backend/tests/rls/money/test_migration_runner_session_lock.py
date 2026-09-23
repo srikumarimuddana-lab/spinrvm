@@ -1,7 +1,6 @@
 """Exercise migration-runner ownership with actual PostgreSQL sessions."""
 
 import psycopg
-
 from backend.scripts.run_migrations import _acquire_apply_lock
 
 

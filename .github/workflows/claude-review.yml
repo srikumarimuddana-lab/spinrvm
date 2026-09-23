@@ -10,6 +10,30 @@ name: Claude PR review
 #
 # Optional (recommended):
 #   SUPABASE_READONLY_TOKEN, CONTEXT7_API_KEY — mirror of .claude/mcp.example.json
+#
+# COST CONTROL (ACTION_ITEMS.md C7): this repo is pre-launch and the
+# ANTHROPIC_API_KEY has intentionally been left unset since 2026-08-01 on
+# cost grounds — see C7's decision record. Re-enabling this workflow is a
+# trial, not a permanent switch-on: whoever sets the secret should also set
+# a hard spend cap + billing alert in the Anthropic Console first (this
+# workflow cannot enforce a dollar cap itself, only bound per-run cost).
+# Two levers are set below to keep that per-run cost predictable:
+#   --model claude-sonnet-5 — the cheaper, faster model this repo already
+#     uses for its own Claude Code sessions (see this file's own commit
+#     trailers), not the more expensive default.
+#   --max-turns 30 — caps the agentic loop so one run cannot runway on a
+#     large or confusing diff. If reviews start truncating mid-audit on
+#     legitimately large PRs, raise this number in its own commit with a
+#     citation of which PR needed it — don't raise it speculatively.
+# Trigger scoping (no `synchronize`, docs/`.claude/` excluded) already
+# bounds run *volume*; these two bound per-run *cost*.
+#
+# The `--model` string above could not be verified end-to-end against a
+# live Anthropic API call from this session (network-restricted sandbox).
+# It's internally consistent with this repo's own `.claude/settings.json`
+# convention, but the FIRST live run after the secret is actually set
+# should be watched manually for a model-not-found error, not assumed
+# correct from this comment alone.
 
 on:
   pull_request:
@@ -86,6 +110,12 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Cost control (ACTION_ITEMS.md C7) -- passed straight to the
+          # Claude Code CLI. `--model` pins the cheaper model instead of
+          # this action's default; `--max-turns` bounds the agentic loop so
+          # one run cannot runaway on a large diff. See this file's header
+          # comment for the full rationale and how to change either value.
+          claude_args: "--model claude-sonnet-5 --max-turns 30"
           # Inline prompt — keeps review behaviour under source control
           prompt: |
             You are reviewing a Spinr pull request. Load CLAUDE.md and the
@@ -125,4 +155,3 @@ jobs:
             suggest code edits inline — reviewers will ask for fixes
             separately. Do NOT restate the auto-summary table or the size
             advisory.
-          # max_turns removed — not a valid input for claude-code-action@v1

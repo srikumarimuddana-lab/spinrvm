@@ -5,19 +5,27 @@ on:
     paths:
       - 'infra/burst_controller/**'
       - 'scripts/*fly_fleet_preflight.py'
+      - 'scripts/*fly_staging_recovery.py'
+      - 'scripts/fly_deploy_gate.py'
+      - 'scripts/test_deploy_gate.py'
       - 'backend/utils/bounded_executor.py'
       - 'backend/tests/test_bounded_executor.py'
       - 'backend/fly.toml'
       - '.github/workflows/*fly*.yml'
+      - '.github/workflows/deploy-backend-staging.yml'
   push:
     branches: [main]
     paths:
       - 'infra/burst_controller/**'
       - 'scripts/*fly_fleet_preflight.py'
+      - 'scripts/*fly_staging_recovery.py'
+      - 'scripts/fly_deploy_gate.py'
+      - 'scripts/test_deploy_gate.py'
       - 'backend/utils/bounded_executor.py'
       - 'backend/tests/test_bounded_executor.py'
       - 'backend/fly.toml'
       - '.github/workflows/*fly*.yml'
+      - '.github/workflows/deploy-backend-staging.yml'
 
 permissions:
   contents: read
@@ -35,6 +43,8 @@ jobs:
         run: |
           python -m unittest discover -s infra/burst_controller -p 'test_*.py'
           python -m unittest discover -s scripts -p test_fly_fleet_preflight.py
+          python -m unittest discover -s scripts -p test_fly_staging_recovery.py
+          python -m unittest discover -s scripts -p test_deploy_gate.py
           python -m unittest discover -s backend/tests -p test_bounded_executor.py
       - name: Build standalone controller
         run: docker build -t spinr-burst-controller:test infra/burst_controller

@@ -226,6 +226,117 @@ GRANT EXECUTE ON FUNCTION public.transition_driver_availability(text,bigint,text
 COMMENT ON FUNCTION public.transition_driver_availability(text,bigint,text,text,text) IS
     'Backend-only atomic availability state transition. Lock order: driver, assigned rides, active offers, insurance period.';
 
+-- Presence evidence is scoped by the already-authenticated controller and
+-- decimal online epoch. The returned Redis deadlines are generated from the
+-- database clock; a client capture timestamp only supplies a bounded GPS age.
+CREATE OR REPLACE FUNCTION public.renew_driver_presence(
+    p_driver_id text,
+    p_authenticated_session_id text,
+    p_online_epoch bigint,
+    p_location_captured_at timestamptz DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    v_driver public.drivers%ROWTYPE;
+    v_now timestamptz;
+    v_location_valid_until timestamptz;
+    v_location_error text;
+    v_gap_result jsonb;
+BEGIN
+    IF p_driver_id IS NULL OR p_authenticated_session_id IS NULL
+       OR length(btrim(p_authenticated_session_id)) = 0
+       OR p_online_epoch IS NULL OR p_online_epoch < 0 THEN
+        RAISE EXCEPTION 'driver, authenticated session, and non-negative epoch are required' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT * INTO v_driver FROM public.drivers WHERE id=p_driver_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN jsonb_build_object('status','offline','code','DRIVER_NOT_FOUND'); END IF;
+    -- Start all contact and lease calculations after serialization on the
+    -- authoritative driver row, so lock wait time cannot extend a deadline.
+    v_now := clock_timestamp();
+    IF NOT COALESCE((SELECT driver_availability_v2_enabled FROM public.settings WHERE id='app_settings'),false) THEN
+        RETURN jsonb_build_object('status','unavailable','code','AVAILABILITY_V2_DISABLED');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id=v_driver.user_id
+                   AND u.current_session_id=p_authenticated_session_id) THEN
+        RETURN jsonb_build_object('status','stale_epoch','code','UNAUTHORIZED_SESSION',
+                                  'online_epoch',v_driver.online_epoch::text);
+    END IF;
+    IF v_driver.online_epoch <> p_online_epoch THEN
+        RETURN jsonb_build_object('status','stale_epoch','code','ONLINE_EPOCH_STALE',
+                                  'online_epoch',v_driver.online_epoch::text);
+    END IF;
+    IF v_driver.controller_session_id IS DISTINCT FROM p_authenticated_session_id THEN
+        RETURN jsonb_build_object('status','stale_epoch','code','CONTROLLER_SESSION_MISMATCH',
+                                  'online_epoch',v_driver.online_epoch::text);
+    END IF;
+    IF NOT v_driver.is_online THEN
+        RETURN jsonb_build_object('status','offline','code','OFFLINE',
+                                  'online_epoch',v_driver.online_epoch::text);
+    END IF;
+
+    -- Enforce the long-gap fence on the request path too; a delayed worker is
+    -- not allowed to leave an old controller renewable after five minutes.
+    IF v_driver.last_contact_at IS NULL OR v_driver.last_contact_at < v_now - interval '5 minutes' THEN
+        v_gap_result := public.transition_driver_availability(
+            p_driver_id, p_online_epoch, p_authenticated_session_id,
+            'pause_unreachable', 'presence-gap:' || p_online_epoch::text
+        );
+        IF v_gap_result->>'code' <> 'OK' THEN
+            RETURN jsonb_build_object('status','unavailable','code','CONTACT_RECONCILIATION_FAILED',
+                                      'online_epoch',v_driver.online_epoch::text);
+        END IF;
+        -- A current authenticated contact during an active obligation must
+        -- remain upload-capable after the fence moves. It still cannot accept
+        -- new requests; idle drivers remain offline and must explicitly Go.
+        IF COALESCE((v_gap_result->>'has_trip')::boolean,false)
+           OR COALESCE((v_gap_result->>'has_pending_offer')::boolean,false) THEN
+            v_now := clock_timestamp();
+            UPDATE public.drivers SET last_contact_at=v_now WHERE id=p_driver_id;
+        END IF;
+        RETURN jsonb_build_object('status','stale_epoch','code','CONTACT_GAP',
+                                  'online_epoch',v_gap_result->>'online_epoch',
+                                  'state_version',v_gap_result->>'state_version');
+    END IF;
+
+    IF p_location_captured_at IS NOT NULL THEN
+        IF p_location_captured_at < v_now - interval '60 seconds'
+           OR p_location_captured_at > v_now + interval '5 seconds' THEN
+            v_location_error := 'INVALID_LOCATION_TIME';
+        ELSE
+            -- Captured time, not arrival time, anchors the existing 60s age cap.
+            v_location_valid_until := p_location_captured_at + interval '60 seconds';
+        END IF;
+    END IF;
+
+    -- Keep heartbeat writes bounded to one durable update per 30 seconds. This
+    -- timestamp is dedicated contact evidence; generic updated_at is untouched.
+    UPDATE public.drivers
+       SET last_contact_at = v_now
+     WHERE id=p_driver_id
+       AND (last_contact_at IS NULL OR last_contact_at <= v_now - interval '30 seconds');
+
+    RETURN jsonb_build_object(
+        'status','renewed',
+        'code',COALESCE(v_location_error,'renewed'),
+        'driver_id',p_driver_id,
+        'online_epoch',v_driver.online_epoch::text,
+        'controller_session_id',v_driver.controller_session_id,
+        'contact_received_at',v_now,
+        'contact_valid_until',v_now + interval '90 seconds',
+        'location_valid_until',v_location_valid_until
+    );
+END;
+$$;
+REVOKE ALL ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz) TO service_role;
+COMMENT ON FUNCTION public.renew_driver_presence(text,text,bigint,timestamptz) IS
+    'Backend-only contact renewal fenced by token session and online epoch; GPS deadline is capture-time based and separately nullable.';
+
 -- One MVCC statement returns driver state, active trip, live pending offer,
 -- rollout flag, and database clock. This keeps obligations and epoch aligned
 -- across replicas. Expiry uses the authoritative clock captured here.

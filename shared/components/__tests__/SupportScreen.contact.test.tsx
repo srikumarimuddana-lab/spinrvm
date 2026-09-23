@@ -162,7 +162,9 @@ describe('SupportScreen Contact tab — phone comes from admin settings', () => 
     // placeholder the operator never entered and cannot correct.
     expect(queryByText('support@spinr.ca')).toBeNull();
     expect(queryByLabelText(/^Email support/)).toBeNull();
-    expect(queryAllByText('mail-outline')).toHaveLength(0);
+    // The Contact tab itself always has this icon; no email action chip or
+    // company-card row should add another one when the email is unset.
+    expect(queryAllByText('mail-outline')).toHaveLength(1);
     // ...and the former hardcoded identity/address/website placeholders.
     expect(queryByText('SPINR MOBILITY INC.')).toBeNull();
     expect(queryByText('Saskatoon, SK, Canada')).toBeNull();

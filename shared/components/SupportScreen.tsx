@@ -133,11 +133,11 @@ export default function SupportScreen({
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
   // AI kill switch: 'enabled' shows the AI Chat tab; 'coming_soon' shows it
-  // with a placeholder; 'hidden' removes it. Defaults to hidden until
-  // /ai/config resolves so a disabled assistant never flashes into view.
-  const [aiMode, setAiMode] = useState<'enabled' | 'coming_soon' | 'hidden'>('hidden');
+  // with a placeholder; 'hidden' removes it. Keep the tab out of view while
+  // /ai/config is pending so a disabled assistant never flashes into view.
+  const [aiMode, setAiMode] = useState<'loading' | 'enabled' | 'coming_soon' | 'hidden'>('loading');
   const aiEnabled = aiMode === 'enabled';
-  const showChatTab = aiMode !== 'hidden';
+  const showChatTab = aiMode === 'enabled' || aiMode === 'coming_soon';
 
   // FAQ — fetched from API filtered by audience.
   const [faqs, setFaqs] = useState<Faq[]>([]);
@@ -229,8 +229,8 @@ export default function SupportScreen({
   // If the assistant is fully hidden, never leave the user stranded on the
   // chat tab (e.g. when opened via initialTab='chat').
   useEffect(() => {
-    if (!showChatTab && activeTab === 'chat') setActiveTab('faq');
-  }, [showChatTab, activeTab]);
+    if (aiMode === 'hidden' && activeTab === 'chat') setActiveTab('faq');
+  }, [aiMode, activeTab]);
 
   const filteredFaqs = useMemo(() => {
     if (!faqSearch.trim()) return faqs;

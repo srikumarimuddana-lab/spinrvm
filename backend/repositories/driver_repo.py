@@ -179,6 +179,10 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
         # consider them orphaned. (Claiming sets it; releasing unsets it.)
         if available:
             payload["availability_claimed_at"] = None
+            # availability_claim_id (migration 448) is cleared by the
+            # drivers_clear_availability_claim_on_release trigger. Writing it
+            # here would make every release fail (PGRST204) if this code ever
+            # runs before 448 is applied.
 
         # Enforce the invariant is_available ⇒ is_online. is_online is
         # driver-toggled, so we must NOT flip it on here; instead, when asked
@@ -263,7 +267,7 @@ async def match_and_claim_driver(
     return result
 
 
-async def claim_driver_atomic(driver_id: str) -> Optional[Dict[str, Any]]:
+async def claim_driver_atomic(driver_id: str, *, claim_identity_enabled: bool = False) -> Optional[Dict[str, Any]]:
     """Atomically set is_available = false for driver if currently available.
 
     Returns the CLAIMED ROW on success, None on failure. It used to return a
@@ -294,11 +298,14 @@ async def claim_driver_atomic(driver_id: str) -> Optional[Dict[str, Any]]:
     await invalidate_driver_cache(driver_id=driver_id)
 
     def _claim():
+        if claim_identity_enabled:
+            res = supabase.rpc("claim_driver_with_identity_v2", {"p_driver_id": driver_id}).execute()
+            data = _rows_from_res(res)
+            return data[0] if data else None
         res = (
             supabase.table("drivers")
-            # C3: stamp a dedicated claim time so the orphan-claim reaper can
-            # release this driver if the offer-insert never lands (crash/restart)
-            # without racing the sub-second claim→insert window. Cleared on release.
+            # Flag-off legacy mode retains the app stamp expected by migration
+            # 442. V2 mode uses claim_driver_with_identity_v2 for DB-clock ID.
             .update(
                 {
                     "is_available": False,

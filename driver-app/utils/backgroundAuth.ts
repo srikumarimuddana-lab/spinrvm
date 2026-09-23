@@ -51,24 +51,30 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
             throw new Error(`Background token refresh HTTP ${response.status}`);
           }
           const data = await Promise.race([response.json(), deadline]);
-          // /auth/refresh's RefreshResponse (backend/routes/auth.py) never sends
-          // expires_in -- only AuthResponse (login/verify-otp) does. It sends
-          // access_expires_at as an absolute ISO timestamp instead; read that
-          // directly rather than re-deriving a relative duration.
-          const accessExpiresAtMs = Date.parse(data.access_expires_at);
+          const accessExpiresAtMs = typeof data.access_expires_at === 'string' ? Date.parse(data.access_expires_at) : NaN;
+          const serverNowMs = Date.parse(response.headers?.get('date') ?? '');
+          let expiresIn = typeof data.expires_in === 'number' && Number.isFinite(data.expires_in) && data.expires_in > 0
+            ? data.expires_in
+            : null;
+          if (expiresIn !== null && !Number.isFinite(Date.now() + expiresIn * 1000)) expiresIn = null;
+          if (expiresIn === null && Number.isFinite(accessExpiresAtMs)) {
+            expiresIn = Math.max(0, (accessExpiresAtMs - (Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) / 1000);
+          }
+          if (expiresIn !== null && !Number.isFinite(Date.now() + expiresIn * 1000)) expiresIn = null;
           if (typeof data.token !== 'string' || !data.token || typeof data.refresh_token !== 'string' ||
-              !data.refresh_token || !Number.isFinite(accessExpiresAtMs) || accessExpiresAtMs <= Date.now()) {
+              !data.refresh_token || expiresIn === null) {
             throw new Error('Background token refresh returned invalid credentials');
           }
           // All current writers use the lock. These fences also protect against
           // an obsolete/uncoordinated task or sign-out during an app upgrade.
           if (await SecureStore.getItemAsync(SESSION_ENDED_KEY) ||
               await SecureStore.getItemAsync('refresh_token') !== candidate) return null;
+          const tokenExpiresAt = Date.now() + expiresIn * 1000;
           // Save the successor first: if a later write fails, the next callback
           // can still renew using the credential the server now recognizes.
           await SecureStore.setItemAsync('refresh_token', data.refresh_token, sessionKeychainOptions);
           await SecureStore.setItemAsync('fg_access_token', data.token, sessionKeychainOptions);
-          await SecureStore.setItemAsync('token_expires_at', String(accessExpiresAtMs), sessionKeychainOptions);
+          await SecureStore.setItemAsync('token_expires_at', String(tokenExpiresAt), sessionKeychainOptions);
           failedCandidate = null;
           retryAfter = 0;
           return await SecureStore.getItemAsync(SESSION_ENDED_KEY) ? null : data.token;

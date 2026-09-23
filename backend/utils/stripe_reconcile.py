@@ -105,7 +105,8 @@ _WINDOW_DAYS = 1  # reconcile the previous calendar day
 # settlement round-trip; past this it is treated as stranded and surfaced.
 _STUCK_PROCESSING_AFTER = timedelta(minutes=15)
 # App-setting flag (default OFF) gating the auto-heal of stuck-processing rides.
-# OFF → detection only; ON → mark-paid from Stripe truth (see _maybe_heal_*).
+# OFF → detection only; ON → mark-paid only from exact aggregate-ledger and
+# Stripe component proof (see _maybe_heal_*).
 _AUTO_HEAL_SETTING = "stripe_auto_heal_processing"
 # migrations/22_stripe_events.sql's own original comment: "received_at older
 # than ~5 minutes but processed_at = NULL indicate events that crashed
@@ -626,36 +627,35 @@ def _truthy(v: Any) -> bool:
     return False
 
 
-def _expected_capture_cents(ride: Dict[str, Any]) -> int | None:
-    """Expected captured amount in cents (grand_total + tip, capped at the
-    pre-auth hold). Mirrors the paid-vs-Stripe amount check above. Returns None
-    when no total is recorded — the caller then declines to heal rather than
-    mark paid against an unverifiable amount."""
+def _expected_capture_cents(ride: Dict[str, Any], frozen_tip: Any) -> int | None:
+    """Expected captured cents using the tip snapshot in the durable ledger.
+
+    The ride's ``tip_amount`` may still be stale if settlement crashed before
+    its final ride update, so it is never a recovery authority.
+    """
     grand = ride.get("grand_total")
     if grand is None:
         grand = ride.get("total_fare")
     if grand is None:
         return None
-    expected = _q2(grand) + _q2(ride.get("tip_amount") or 0)
-    authorized = ride.get("authorized_amount")
-    if authorized is not None and _q2(authorized) < expected:
-        expected = _q2(authorized)
+    expected = _q2(grand) + _q2(frozen_tip)
     return int((expected * 100).to_integral_value())
 
 
 async def _heal_one_processing_ride(ride_id: str, stripe_mod: Any) -> bool:
-    """Atomically finalise ONE ride stranded in 'processing' iff Stripe confirms
-    the charge already succeeded for the expected amount. Returns True on heal.
+    """Atomically finalise ONE stuck ride using existing ledger + Stripe proof.
 
     Mark-paid + (idempotent, delta-based) tip credit only — never a re-charge
     and never a duplicate ledger write. settle_card's capture-but-DB-write-
     failed branch already wrote the financial_events row, and the driver-
     earnings base is recorded at completion, so this only lands the mark-paid
-    the failed DB write missed. Safety rests on three guards:
+    the failed DB write missed. Safety rests on these guards:
 
-      * Stripe PI must be 'succeeded' with amount_received >= expected — a ride
-        whose charge failed / is requires_action / never reached Stripe is left
-        for manual review.
+      * A ride- and rider-owned aggregate ledger row must match the frozen
+        tip-inclusive obligation; split components must have a unique exact
+        manifest and each PI must be succeeded for exactly its recorded cents.
+      * Missing, partial, malformed, or inconsistent proof stays unpaid for
+        manual review; a succeeded primary PI alone never proves settlement.
       * The flip is an atomic claim filtering payment_status='processing'; a
         zero-row result means process_payment (or another replica) already
         finalised it — no double-write.
@@ -670,49 +670,147 @@ async def _heal_one_processing_ride(ride_id: str, stripe_mod: Any) -> bool:
         return False  # no PaymentIntent to verify the charge against
 
     try:
-        pi = stripe_mod.PaymentIntent.retrieve(pi_id)
+        ledger_rows = await db_supabase.get_rows(
+            "financial_events",
+            {"ride_id": ride_id, "event_type": "stripe_charge", "ref": pi_id},
+            columns="ride_id,user_id,event_type,ref,delta_cents,metadata",
+            limit=1,
+        )
+    except Exception:
+        logger.error("stripe_reconcile: heal ledger lookup failed ride=%s pi=%s", ride_id, pi_id, exc_info=True)
+        return False
+    ledger = next(
+        (
+            row
+            for row in ledger_rows or []
+            if row.get("ride_id") == ride_id
+            and row.get("user_id") == ride.get("rider_id")
+            and row.get("event_type") == "stripe_charge"
+            and row.get("ref") == pi_id
+        ),
+        None,
+    )
+    if ledger is None:
+        logger.error(
+            "stripe_reconcile: heal SKIP missing/misowned aggregate ledger proof ride=%s pi=%s; manual review required",
+            ride_id,
+            pi_id,
+        )
+        return False
+    metadata = ledger.get("metadata") or {}
+    frozen_tip = metadata.get("tip_amount") if isinstance(metadata, dict) else None
+    delta_cents = ledger.get("delta_cents")
+    if isinstance(delta_cents, bool) or not isinstance(delta_cents, int) or frozen_tip is None:
+        logger.error("stripe_reconcile: heal SKIP malformed aggregate ledger proof ride=%s pi=%s", ride_id, pi_id)
+        return False
+    try:
+        expected_cents = _expected_capture_cents(ride, frozen_tip)
+    except Exception:
+        logger.error("stripe_reconcile: heal SKIP invalid frozen obligation ride=%s pi=%s", ride_id, pi_id)
+        return False
+    if expected_cents is None or delta_cents != expected_cents:
+        logger.error(
+            "stripe_reconcile: heal SKIP ledger obligation mismatch ride=%s pi=%s ledger_cents=%s expected_cents=%s",
+            ride_id,
+            pi_id,
+            delta_cents,
+            expected_cents,
+        )
+        return False
+
+    components = metadata.get("component_payment_intents")
+    if components is None:
+        component_amounts = {pi_id: delta_cents}
+    else:
+        items = components.get("items") if isinstance(components, dict) and components.get("version") == 1 else None
+        if not isinstance(items, list) or len(items) < 2:
+            logger.error("stripe_reconcile: heal SKIP malformed split manifest ride=%s pi=%s", ride_id, pi_id)
+            return False
+        component_amounts: dict[str, int] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                component_amounts = {}
+                break
+            component_pi = item.get("payment_intent_id")
+            component_cents = item.get("amount_cents")
+            if (
+                not isinstance(component_pi, str)
+                or not component_pi
+                or isinstance(component_cents, bool)
+                or not isinstance(component_cents, int)
+                or component_cents <= 0
+                or component_pi in component_amounts
+            ):
+                component_amounts = {}
+                break
+            component_amounts[component_pi] = component_cents
+        if (
+            not component_amounts
+            or component_amounts.get(pi_id) is None
+            or sum(component_amounts.values()) != delta_cents
+        ):
+            logger.error("stripe_reconcile: heal SKIP inconsistent split manifest ride=%s pi=%s", ride_id, pi_id)
+            return False
+
+    # Verify every exact component against Stripe. A succeeded primary PI
+    # (fare-only hold) cannot stand in for an unverified overflow PI.
+    try:
+        for component_pi, component_cents in component_amounts.items():
+            pi = await asyncio.to_thread(stripe_mod.PaymentIntent.retrieve, component_pi)
+            status = stripe_get(pi, "status")
+            amount_received = stripe_get(pi, "amount_received", 0) or 0
+            if status != "succeeded" or amount_received != component_cents:
+                logger.error(
+                    "stripe_reconcile: heal SKIP component mismatch ride=%s pi=%s status=%s received=%s expected=%s",
+                    ride_id,
+                    component_pi,
+                    status,
+                    amount_received,
+                    component_cents,
+                )
+                return False
     except Exception:
         logger.error(
-            "stripe_reconcile: heal PI retrieve failed ride=%s pi=%s",
+            "stripe_reconcile: heal component PI retrieve failed ride=%s primary_pi=%s",
             ride_id,
             pi_id,
             exc_info=True,
         )
         return False
 
-    status = stripe_get(pi, "status")
-    if status != "succeeded":
-        return False  # no captured charge — never mark paid
-
-    amount_received = stripe_get(pi, "amount_received", 0) or 0
-    expected_cents = _expected_capture_cents(ride)
-    if expected_cents is not None and amount_received < expected_cents:
-        logger.error(
-            "stripe_reconcile: heal SKIP amount short ride=%s pi=%s stripe_cents=%d expected_cents=%d",
-            ride_id,
-            pi_id,
-            amount_received,
-            expected_cents,
-        )
-        return False
-
     try:
-        from ..services.payment_service import _tip_ride_update  # type: ignore
+        from ..services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
+        from ..services.payment_service import (
+            _tip_ride_update,  # type: ignore
+            send_ride_receipt,  # type: ignore
+        )
     except ImportError:
-        from services.payment_service import _tip_ride_update  # type: ignore
+        from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
+        from services.payment_service import (
+            _tip_ride_update,  # type: ignore
+            send_ride_receipt,  # type: ignore
+        )
 
-    tip = Decimal(str(ride.get("tip_amount") or 0))
+    tip = _q2(frozen_tip)
+    settled_at = datetime.now(timezone.utc).isoformat()
     claimed = await db_supabase.update_one(
         "rides",
         {"id": ride_id, "payment_status": "processing"},
         {
             "payment_status": "paid",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "paid_at": settled_at,
+            "updated_at": settled_at,
             **_tip_ride_update(ride, tip),
         },
     )
     if not claimed:
         return False  # another writer finalised it first — idempotent no-op
+    if ride.get("rider_id"):
+        try:
+            recovered_ride = {**ride, "payment_status": "paid", "paid_at": settled_at, "tip_amount": str(tip)}
+            await maybe_send_auto_receipt(recovered_ride, ride["rider_id"], tip, send=send_ride_receipt)
+        except Exception:
+            logger.error("stripe_reconcile: recovered ride receipt failed ride=%s", ride_id, exc_info=True)
     logger.warning(
         "stripe_reconcile: HEALED stuck processing ride=%s pi=%s — marked paid from Stripe truth",
         ride_id,
@@ -728,10 +826,10 @@ async def _maybe_heal_stuck_processing(
     """Auto-heal detected stuck-processing rides — gated on the
     ``stripe_auto_heal_processing`` app setting, which DEFAULTS OFF.
 
-    Shipped dark on purpose: the mark-paid path moves money (marks a ride paid
-    and credits the driver's tip), so it must be reviewed and validated in
-    staging before an operator enables it in production. With the flag off this
-    is a no-op and the rides remain detection-only.
+    Shipped dark on purpose: the mark-paid path moves money-state (marks a ride
+    paid, restores its frozen tip, and routes a receipt), so it must be reviewed
+    and validated in staging before an operator enables it in production. With
+    the flag off this is a no-op and the rides remain detection-only.
     """
     enabled = _truthy(settings.get(_AUTO_HEAL_SETTING, False))
     stats: Dict[str, Any] = {"enabled": enabled, "considered": len(stuck), "healed": 0, "healed_ride_ids": []}

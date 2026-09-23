@@ -1001,7 +1001,6 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 )
                 _payment_status = str(ride.get("payment_status") or "").lower()
                 _settlement_finalized = _payment_status in _SETTLED_PAYMENT_STATUSES
-                _settlement_pending = _payment_status in ("pending", "failed", "processing")
                 if _component_verified and _settlement_finalized:
                     # The authoritative app settlement already wrote paid and
                     # the aggregate ledger proof. A component webhook is only
@@ -1009,13 +1008,14 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     # append another aggregate charge row.
                     await mark_stripe_event_processed(event_id)
                     return {"received": True, "component_payment": True, "event_id": event_id}
-                if _settlement_pending:
-                    # A ledger map proves received funds but cannot finalize a
-                    # ride. Retry while pending/failed/processing until the
-                    # authoritative app settlement completes its paid flip.
+                if _component_verified:
+                    # The exact aggregate map proves the full obligation was
+                    # captured. Keep this component event retryable until the
+                    # authoritative finalizer or processing recovery updates
+                    # the ride; never treat a component as the whole fare.
                     if not await unclaim_stripe_event(event_id):
                         logger.critical(
-                            "Stripe event %s could not be unclaimed before ride %s settlement finished",
+                            "Stripe event %s could not be unclaimed while ride %s settlement was unfinished",
                             event_id,
                             ride_id,
                         )

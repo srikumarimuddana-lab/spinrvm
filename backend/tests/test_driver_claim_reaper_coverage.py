@@ -52,10 +52,10 @@ async def test_drivers_fetch_exception_is_logged_and_tick_returns():
         await _reap_tick()
 
 
-async def test_release_exception_does_not_abort_batch():
+async def test_recovery_rpc_exception_does_not_abort_batch():
     from backend.utils.driver_claim_reaper import _reap_tick
 
-    drivers = [_driver(minutes_ago=5)]
+    drivers = [_driver(minutes_ago=5), {**_driver(minutes_ago=5), "id": "drv_2"}]
 
     async def _get_rows(table, flt, **kw):
         if table == "drivers":
@@ -64,17 +64,18 @@ async def test_release_exception_does_not_abort_batch():
 
     with (
         patch(P + "db.get_rows", AsyncMock(side_effect=_get_rows)),
-        patch(P + "set_driver_available", AsyncMock(side_effect=RuntimeError("release failed"))),
+        patch(
+            P + "reap_stale_driver_claim",
+            AsyncMock(side_effect=[RuntimeError("recovery failed"), {"status": "released"}]),
+        ) as recovery,
     ):
         # Must not raise even though the release call blew up.
         await _reap_tick()
+    assert recovery.await_count == 2
 
 
-async def test_offer_check_error_isolated_to_one_driver():
-    """Fixed: `_has_pending_offer`/`_has_active_ride` are now individually
-    try/excepted per-driver, so an error on the FIRST driver's lookup is
-    logged and skipped, and the SECOND (otherwise reapable) driver still
-    gets processed in the same tick."""
+async def test_recovery_error_isolated_to_one_driver():
+    """A recovery RPC error for one candidate does not abort later candidates."""
     from backend.utils.driver_claim_reaper import _reap_tick
 
     def _two_drivers(driver_id, minutes_ago=5):
@@ -85,34 +86,29 @@ async def test_offer_check_error_isolated_to_one_driver():
             "is_online": True,
             "is_available": False,
             "availability_claimed_at": stamp,
+            "availability_claim_id": None,
         }
 
     drivers = [_two_drivers("drv_first"), _two_drivers("drv_second")]
 
     async def _get_rows(table, flt, **kw):
-        if table == "drivers":
-            return drivers
-        if table == "ride_offers" and flt.get("driver_id") == "drv_first":
-            raise RuntimeError("transient postgrest error")
-        return []
+        return drivers if table == "drivers" else []
 
-    release = AsyncMock(return_value={"is_available": True})
+    recovery = AsyncMock(side_effect=[RuntimeError("transient RPC error"), {"status": "released"}])
 
     with (
         patch(P + "db.get_rows", AsyncMock(side_effect=_get_rows)),
-        patch(P + "set_driver_available", release),
+        patch(P + "reap_stale_driver_claim", recovery),
     ):
-        # Must not raise -- drv_first's lookup failure is isolated.
+        # Must not raise -- drv_first's RPC failure is isolated.
         await _reap_tick()
 
-    # drv_second was still reaped despite drv_first's lookup error.
-    release.assert_awaited_once_with("drv_second", available=True)
+    # drv_second was still reaped despite drv_first's RPC error.
+    assert recovery.await_count == 2
 
 
-async def test_release_returning_non_available_dict_does_not_warn_crash(caplog):
-    """release succeeding but the returned row not reflecting is_available=True
-    (e.g. clamped to is_online=False) must not raise -- only the warning log
-    is skipped."""
+async def test_unexpected_rpc_result_does_not_crash(caplog):
+    """A malformed RPC result is logged as an anomaly and does not crash the tick."""
     from backend.utils.driver_claim_reaper import _reap_tick
 
     drivers = [_driver(minutes_ago=5)]
@@ -124,7 +120,7 @@ async def test_release_returning_non_available_dict_does_not_warn_crash(caplog):
 
     with (
         patch(P + "db.get_rows", AsyncMock(side_effect=_get_rows)),
-        patch(P + "set_driver_available", AsyncMock(return_value={"is_available": False})),
+        patch(P + "reap_stale_driver_claim", AsyncMock(return_value=None)),
     ):
         await _reap_tick()
 

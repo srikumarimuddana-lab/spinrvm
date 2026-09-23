@@ -622,7 +622,6 @@ class TestStripeWebhookPaymentIntentSucceeded:
     @pytest.mark.parametrize("payment_status", ["pending", "failed", "processing"])
     def test_valid_split_components_do_not_finalize_unsettled_ride(self, payment_status):
         import stripe
-
         from fastapi import HTTPException
 
         from backend.routes import webhooks as wh
@@ -656,33 +655,68 @@ class TestStripeWebhookPaymentIntentSucceeded:
         assert exc.value.status_code == 503
         unclaim.assert_awaited_once()
 
-    def test_processing_component_without_aggregate_row_is_retried(self):
+    def test_invalid_split_manifest_on_pending_ride_is_terminal_underpayment(self):
         import stripe
-
-        from fastapi import HTTPException
 
         from backend.routes import webhooks as wh
 
         event_obj, _ = self._make_event(
             {"ride_id": "ride_1", "user_id": "user_1"}, amount_received=50, payment_intent_id="pi_tip"
         )
-        unclaim = AsyncMock(return_value=True)
+        ride = {
+            "id": "ride_1", "grand_total": "2.11", "tip_amount": "0.50", "payment_status": "pending",
+            "payment_intent_id": "pi_fare",
+        }
+        invalid_ledger = [{"ref": "pi_fare", "delta_cents": 261, "metadata": {
+            "component_payment_intents": {"version": 1, "items": [
+                {"payment_intent_id": "pi_fare", "amount_cents": 211},
+                {"payment_intent_id": "pi_tip", "amount_cents": 49},
+            ]},
+        }}]
+        processed = AsyncMock()
+        update_ride = AsyncMock()
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.unclaim_stripe_event", unclaim),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", processed),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=invalid_ledger)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert result.get("underpaid") is True
+        processed.assert_awaited_once()
+        update_ride.assert_not_awaited()
+
+    def test_processing_component_without_aggregate_row_is_terminal_underpayment(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event(
+            {"ride_id": "ride_1", "user_id": "user_1"}, amount_received=50, payment_intent_id="pi_tip"
+        )
+        processed = AsyncMock()
+        update_ride = AsyncMock()
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", processed),
             patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value={
                 "id": "ride_1", "grand_total": "2.11", "tip_amount": "0.50", "payment_status": "processing",
                 "payment_intent_id": "pi_fare",
             })),
             patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride),
         ):
-            with pytest.raises(HTTPException) as exc:
-                asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
 
-        assert exc.value.status_code == 503
-        unclaim.assert_awaited_once()
+        assert result.get("underpaid") is True
+        processed.assert_awaited_once()
+        update_ride.assert_not_awaited()
 
     def test_booking_hold_capture_during_processing_is_deferred_until_aggregate_finalizes(self):
         """The main fare PI may succeed before the overflow PI and before the
@@ -1712,6 +1746,7 @@ class TestStripeWebhookRecurringSubscription:
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch.object(stripe.Subscription, "retrieve", return_value={"metadata": {}}),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),

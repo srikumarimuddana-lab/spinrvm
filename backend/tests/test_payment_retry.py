@@ -10,7 +10,7 @@ Verifies that:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -60,9 +60,9 @@ def _fake_intent(status: str) -> MagicMock:
 @pytest.mark.anyio
 async def test_retry_skips_when_stripe_already_succeeded():
     """
-    When Stripe reports the PI as 'succeeded', the loop must:
-      - Update the DB row to payment_status='paid'
-      - NOT call stripe.PaymentIntent.confirm()
+    A succeeded primary PI does not prove the frozen fare + tip obligation.
+    The loop leaves it unpaid for durable-ledger reconciliation and never
+    charges or appends another ledger event.
     """
     ride = _make_ride()
 
@@ -85,22 +85,112 @@ async def test_retry_skips_when_stripe_already_succeeded():
             MagicMock(return_value=_fake_intent("succeeded")),
         ),
         patch("stripe.PaymentIntent.confirm", mock_confirm),
+        patch("stripe.PaymentIntent.capture", MagicMock()) as mock_capture,
+        patch("services.payment_service.record_payment_event", AsyncMock()) as mock_record_event,
     ):
         # Import after patching to pick up mocks
         from utils import payment_retry
 
         await payment_retry.retry_failed_payments()
 
-    # update_one is awaited twice: once for the atomic 'retrying' claim,
-    # then for the final 'paid' write. Locate the 'paid' call.
+    # The claim is released back to processing, never marked paid.
     paid_calls = [c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "paid"]
-    assert len(paid_calls) == 1
-    paid_call = paid_calls[0]
-    assert paid_call[0][0] == "rides"
-    assert paid_call[0][1] == {"id": RIDE_ID}
+    assert paid_calls == []
+    recovered = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "processing"
+    ]
+    assert len(recovered) == 1
+    assert recovered[0][0][0] == "rides"
+    assert recovered[0][0][1] == {"id": RIDE_ID, "payment_status": "retrying", "payment_retry_count": 0}
 
-    # confirm must never be called
+    # No charge, capture, or ledger append is allowed during this proofless recovery.
     mock_confirm.assert_not_called()
+    mock_capture.assert_not_called()
+    mock_record_event.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_succeeded_primary_preserves_stale_processing_age_for_reconciliation():
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+    ride = _make_ride(payment_status="processing", updated_at=stale)
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("succeeded"))),
+        patch("stripe.PaymentIntent.confirm", MagicMock()) as mock_confirm,
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    release = [
+        call
+        for call in mock_db_update.await_args_list
+        if call[0][2].get("$set", {}).get("payment_status") == "processing"
+    ][0]
+    assert release[0][2]["$set"]["updated_at"] == stale
+    mock_confirm.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_succeeded_primary_release_cas_cannot_overwrite_concurrent_paid():
+    ride = _make_ride()
+    mock_db_update = AsyncMock(side_effect=[{"id": RIDE_ID}, None])
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("succeeded"))),
+        patch("stripe.PaymentIntent.confirm", MagicMock()) as mock_confirm,
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    # Simulate the live finalizer winning after the retry's Stripe read. The
+    # CAS matches only the claim this loop made, so a concurrently-paid row is
+    # left untouched when the database returns no row.
+    release_filter = mock_db_update.await_args_list[1][0][1]
+    assert release_filter == {"id": RIDE_ID, "payment_status": "retrying", "payment_retry_count": 0}
+    mock_confirm.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_processing_requires_capture_with_stale_tip_never_captures():
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+    ride = _make_ride(payment_status="processing", updated_at=stale, grand_total="25.00", tip_amount="5.00")
+    intent = _fake_intent("requires_capture")
+    intent.amount = 4000
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    capture = MagicMock()
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
+        patch("stripe.PaymentIntent.capture", capture),
+        patch("services.payment_service._finalize_card_settlement", AsyncMock()) as finalize,
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    capture.assert_not_called()
+    finalize.assert_not_awaited()
+    release = [
+        call
+        for call in mock_db_update.await_args_list
+        if call[0][2].get("$set", {}).get("payment_status") == "processing"
+    ][0]
+    assert release[0][2]["$set"]["updated_at"] == stale
 
 
 @pytest.mark.anyio
@@ -502,9 +592,75 @@ async def test_requires_capture_paid_write_failure_leaves_processing():
 
 
 @pytest.mark.anyio
+async def test_requires_capture_raise_with_hold_intact_returns_ride_to_failed():
+    """A transient Stripe error on the retry capture must not strand the ride.
+
+    The ride is flipped to 'processing' at attempt=1 before capturing, so the
+    generic except (which only matches 'retrying' at the old count) used to
+    leave it 'processing' forever, and the hold lapsed uncaptured.
+    """
+    ride = _make_ride(grand_total=20.00, tip_amount=0)
+    held = _fake_intent("requires_capture")
+    held.amount = 3000
+
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_finalize = AsyncMock()
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=held)),
+        patch("stripe.PaymentIntent.capture", MagicMock(side_effect=RuntimeError("stripe 503"))),
+        patch("services.payment_service._finalize_card_settlement", mock_finalize),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_finalize.assert_not_awaited()
+    last_filter, last_update = mock_db_update.await_args_list[-1][0][1:3]
+    assert last_filter == {"id": RIDE_ID, "payment_status": "processing", "payment_retry_count": 1}
+    assert last_update["$set"]["payment_status"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_requires_capture_raise_after_stripe_captured_finalizes_settlement():
+    """Capture applied at Stripe but the response was lost: settle, don't strand."""
+    ride = _make_ride(grand_total=20.00, tip_amount=0)
+    held = _fake_intent("requires_capture")
+    held.amount = 3000
+    captured = _fake_intent("succeeded")
+    captured.amount = 3000
+    captured.amount_received = 2000
+
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_finalize = AsyncMock(return_value=MagicMock(success=True))
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("utils.payment_retry._fire_purchase_conversion", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(side_effect=[held, captured])),
+        patch("stripe.PaymentIntent.capture", MagicMock(side_effect=RuntimeError("connection reset"))),
+        patch("services.payment_service._finalize_card_settlement", mock_finalize),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["payment_intent_id"] == PI_ID
+    statuses = [c[0][2].get("$set", {}).get("payment_status") for c in mock_db_update.await_args_list]
+    assert "failed" not in statuses
+
+
+@pytest.mark.anyio
 async def test_requires_capture_never_exceeds_authorized_amount():
-    """If the owed total somehow exceeds the hold, capture is capped at the
-    authorized amount — Stripe rejects anything higher."""
+    """An underfunded hold must not be partially captured then marked paid."""
     ride = _make_ride(grand_total=35.00, tip_amount=0)
 
     mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
@@ -523,12 +679,16 @@ async def test_requires_capture_never_exceeds_authorized_amount():
         patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
         patch("stripe.PaymentIntent.capture", mock_capture),
         patch("services.payment_service.record_payment_event", AsyncMock()),
+        patch("utils.payment_retry._claim_exhausted_alert", AsyncMock(return_value=False)),
     ):
         from utils import payment_retry
 
         await payment_retry.retry_failed_payments()
 
-    assert mock_capture.call_args.kwargs["amount_to_capture"] == 3000
+    mock_capture.assert_not_called()
+    failed = [c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "failed"]
+    assert len(failed) == 1
+    assert failed[0][0][2]["$set"]["payment_retry_count"] == payment_retry.MAX_RETRIES
 
 
 @pytest.mark.anyio

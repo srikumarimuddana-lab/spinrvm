@@ -87,11 +87,13 @@ try:
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils import metrics  # type: ignore
     from ..utils.redis_client import redis_set_nx  # type: ignore
+    from ..utils.stripe_config import stripe_get  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils import metrics  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.stripe_config import stripe_get  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +270,9 @@ async def _run_reconciliation_tick() -> None:
             if _authorized is not None and _q2(_authorized) < expected:
                 expected = _q2(_authorized)
             expected_cents = int((expected * 100).to_integral_value())
-            actual_cents = pi.get("amount_received", 0)
+            # v15: PaymentIntent is not a dict — .get() raised AttributeError
+            # and killed every tick. stripe_get works for dicts + StripeObjects.
+            actual_cents = stripe_get(pi, "amount_received", 0) or 0
             if actual_cents < expected_cents:
                 discrepancies.append(
                     {
@@ -293,21 +297,22 @@ async def _run_reconciliation_tick() -> None:
             continue
         # Spinr Pass charges (one-off subscription Checkout, corporate/wallet
         # top-ups) are not rides — skip them so they aren't flagged as orphans.
-        _scope = (pi.get("metadata") or {}).get("scope")
+        _scope = stripe_get(stripe_get(pi, "metadata"), "scope")
         if _scope in ("driver_subscription", "corporate_topup", "wallet_topup"):
             continue
         if pi_id not in db_pi_to_ride:
+            _orphan_cents = stripe_get(pi, "amount_received", 0) or 0
             discrepancies.append(
                 {
                     "type": "STRIPE_ORPHAN",
                     "payment_intent_id": pi_id,
-                    "stripe_amount": pi.get("amount_received", 0),
+                    "stripe_amount": _orphan_cents,
                 }
             )
             logger.error(
                 "stripe_reconcile: STRIPE_ORPHAN pi=%s amount_cents=%d — no ride in DB",
                 pi_id,
-                pi.get("amount_received", 0),
+                _orphan_cents,
             )
 
     # ── 3c. Payout settlement backstop ──────────────────────────────────
@@ -660,11 +665,11 @@ async def _heal_one_processing_ride(ride_id: str, stripe_mod: Any) -> bool:
         )
         return False
 
-    status = pi.get("status") if hasattr(pi, "get") else pi["status"]
+    status = stripe_get(pi, "status")
     if status != "succeeded":
         return False  # no captured charge — never mark paid
 
-    amount_received = (pi.get("amount_received", 0) if hasattr(pi, "get") else pi["amount_received"]) or 0
+    amount_received = stripe_get(pi, "amount_received", 0) or 0
     expected_cents = _expected_capture_cents(ride)
     if expected_cents is not None and amount_received < expected_cents:
         logger.error(

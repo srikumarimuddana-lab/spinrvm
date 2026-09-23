@@ -39,6 +39,26 @@ def configure_stripe() -> None:
     )
 
 
+def stripe_get(obj, key: str, default=None):
+    """``dict.get`` semantics for a plain dict OR a StripeObject.
+
+    stripe-python v15 StripeObject is not a dict subclass: ``obj.get(...)``
+    raises AttributeError ("'get' is a dict method, but a PaymentIntent is not
+    a dict") and ``dict(obj)`` raises TypeError. It still supports ``key in
+    obj`` and ``obj[key]``, which is all this uses — no copy, no network.
+    Nested objects (e.g. ``metadata``) are StripeObjects too, so chain calls:
+    ``stripe_get(stripe_get(pi, "metadata"), "scope")``.
+    """
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    try:
+        return obj[key] if key in obj else default
+    except (TypeError, KeyError):
+        return default
+
+
 def stripe_object_to_dict(obj) -> dict:
     """Convert a StripeObject to a plain dict, safely across SDK versions.
 

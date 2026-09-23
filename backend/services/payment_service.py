@@ -21,7 +21,13 @@ try:
     from ..services.fare_service import driver_earnings_with_tip
     from ..services.outbox_receipts import maybe_send_auto_receipt
     from ..socket_manager import manager
-    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
+    from ..utils.stripe_charge import (
+        cancel_authorization,
+        capture_ride,
+        charge_ride,
+        increment_authorization,
+        read_capture_state,
+    )
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
@@ -34,6 +40,7 @@ except ImportError:
         capture_ride,
         charge_ride,
         increment_authorization,
+        read_capture_state,
     )
 
 try:
@@ -441,6 +448,51 @@ async def record_refund_event(
         ref=payment_intent_id,
         metadata=meta,
         dedupe_key=dedupe_key,
+    )
+
+
+async def apply_confirmed_stripe_refund(
+    *, ride_id: str, payment_intent_id: str, cumulative_refunded_cents: int, captured_cents: int,
+    ) -> Dict[str, Any]:
+    """Atomically apply Stripe's confirmed succeeded-refund aggregate.
+
+    Stripe's pending Refund objects are excluded by the caller's
+    ``read_capture_state`` result. The database RPC serializes every refund
+    writer for this PaymentIntent while inserting only the missing cumulative
+    ledger delta and updating the ride projection in one transaction.
+    """
+    if int(cumulative_refunded_cents) <= 0:
+        raise ValueError("A positive succeeded-refund aggregate is required")
+    dedupe_key = f"stripe_refund|{payment_intent_id}|{int(cumulative_refunded_cents)}"
+    event_id = ledger_service.derive_event_id(dedupe_key)
+    rows = await db_supabase.rpc("apply_stripe_refund_cumulative", {
+        "p_ride_id": ride_id,
+        "p_payment_intent_id": payment_intent_id,
+        "p_cumulative_refunded_cents": int(cumulative_refunded_cents),
+        "p_captured_cents": int(captured_cents),
+        "p_event_id": event_id,
+    })
+    if not rows:
+        raise RuntimeError("Atomic Stripe refund accounting RPC returned no result")
+    result = rows[0]
+    if result.get("outcome") not in {"applied", "stale"}:
+        raise RuntimeError("Atomic Stripe refund accounting RPC returned an unknown outcome")
+    return result
+
+
+async def reconcile_confirmed_stripe_refund(*, ride_id: str, payment_intent_id: str) -> Dict[str, Any]:
+    """Read all Refund pages and atomically project succeeded refunds only."""
+    capture = await read_capture_state(ride_id=ride_id, payment_intent_id=payment_intent_id)
+    if not capture:
+        raise RuntimeError("Stripe refund aggregate is unavailable or paginated")
+    cumulative = int(capture.get("refunded_cents") or 0)
+    if cumulative <= 0:
+        # A pending-only Refund list is not an accounting event.
+        return {"outcome": "no_succeeded_refunds", "delta_cents": 0, "refund_amount_cents": 0}
+    return await apply_confirmed_stripe_refund(
+        ride_id=ride_id, payment_intent_id=payment_intent_id,
+        cumulative_refunded_cents=cumulative,
+        captured_cents=int(capture.get("captured_cents") or 0),
     )
 
 

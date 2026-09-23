@@ -1,3 +1,4 @@
+import { DriverLocationStatus } from '../components/DriverLocationStatus';
 import React, { useCallback, useContext, useEffect, useState, useMemo, useRef } from 'react';
 import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from './_layout';
 import { fetchDirectionsRoute } from '@shared/api/directions';
@@ -757,6 +758,7 @@ function DriverArrivingScreenContent() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.driverName}>{currentDriver?.name || 'Driver'}</Text>
                     <Text style={styles.driverTrips}>{currentDriver?.total_rides || 0} trips</Text>
+                    <DriverLocationStatus capturedAt={currentDriver?.location_captured_at} color={colors.textDim} />
                   </View>
                 </View>
 

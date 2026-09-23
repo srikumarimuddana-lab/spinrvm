@@ -83,6 +83,9 @@ def sr(monkeypatch):
     db_supabase module, per the `db.py` compat shim) ready to patch."""
     from backend.utils import scheduled_rides
 
+    # Dispatch now re-reads the claimed state before searching side effects.
+    monkeypatch.setattr(scheduled_rides.db, "get_rows", AsyncMock(return_value=[{"status": "searching"}]))
+
     return scheduled_rides
 
 
@@ -358,7 +361,7 @@ class TestDispatchScheduledRide:
         assert update_one.await_count == 2
         second_call = update_one.await_args_list[1]
         assert second_call.args[0] == "rides"
-        assert second_call.args[1] == {"id": "ride-1"}
+        assert second_call.args[1] == {"id": "ride-1", "status": "searching", "payment_intent_id": None}
         assert second_call.args[2] == {"$set": outcome.fields}
 
     @pytest.mark.anyio
@@ -411,6 +414,33 @@ class TestDispatchScheduledRide:
 
         broadcast_ride.assert_awaited_once()
         match_driver.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_ambiguous_preauth_attach_releases_untracked_hold_before_dispatch(
+        self, sr, monkeypatch, matching_modules, booking_modules, monitoring_modules
+    ):
+        claimed = _ride(payment_method="card", auth_status=None, grand_total="10.00")
+        monkeypatch.setattr(sr.db, "update_one", AsyncMock(side_effect=[claimed, RuntimeError("connection reset")]))
+        monkeypatch.setattr(sr.db, "get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus1"}))
+        monkeypatch.setattr(sr.db, "get_rows", AsyncMock(return_value=[{"status": "searching", "payment_intent_id": None}]))
+        monkeypatch.setattr(sr.manager, "broadcast_ride_status", AsyncMock())
+        monkeypatch.setattr(sr.manager, "broadcast_to_admins", AsyncMock())
+        release = AsyncMock(return_value=True)
+        for module in booking_modules:
+            if module is not None:
+                monkeypatch.setattr(module._deps, "cancel_authorization", release)
+        _patch_attr_everywhere(monkeypatch, matching_modules, "match_driver_to_ride", AsyncMock())
+        _patch_attr_everywhere(monkeypatch, matching_modules, "ride_search_timeout", AsyncMock())
+        for mod in monitoring_modules:
+            _patch_attr_everywhere(monkeypatch, [mod], "build_monitoring_ride", lambda ride, rider=None: {})
+        monkeypatch.setattr(sr, "send_push_notification", AsyncMock())
+        outcome = MagicMock()
+        outcome.fields = {"auth_status": "authorized", "payment_intent_id": "pi_untracked"}
+        _patch_attr_everywhere(monkeypatch, booking_modules, "_preauthorize_ride_card", AsyncMock(return_value=outcome))
+
+        await sr._dispatch_scheduled_ride(_ride(payment_method="card", auth_status=None, grand_total="10.00"))
+
+        release.assert_awaited_once_with(ride_id="ride-1", payment_intent_id="pi_untracked")
 
     @pytest.mark.anyio
     async def test_ws_broadcast_failure_does_not_block_matching(

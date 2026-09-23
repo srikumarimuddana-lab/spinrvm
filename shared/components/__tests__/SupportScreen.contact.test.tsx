@@ -126,6 +126,7 @@ const renderContactTab = () => renderTab('contact');
 describe('SupportScreen Contact tab — phone comes from admin settings', () => {
   beforeEach(() => {
     mockCompanyInfo = {};
+    mockAiConfigPromise = null;
     jest.clearAllMocks();
   });
 
@@ -336,6 +337,47 @@ describe('SupportScreen AI chat — failure copy quotes the configured email', (
       utils.getByText("I'm having trouble connecting right now. Please try again."),
     ).toBeTruthy();
     expect(utils.queryByText(/support@spinr\.ca/)).toBeNull();
+  });
+
+  it('keeps an initially requested chat tab while AI config is loading', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    expect(utils.queryByText('AI Assistant coming soon')).toBeNull();
+    expect(utils.getByLabelText('Loading support chat availability')).toBeTruthy();
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: true, mode: 'enabled' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByPlaceholderText('Ask a question...')).toBeTruthy();
+  });
+
+  it('falls back from an initially requested chat tab when AI is hidden', async () => {
+    mockAiEnabled = false;
+    const utils = await renderTab('chat');
+
+    expect(utils.queryByPlaceholderText('Ask a question...')).toBeNull();
+    expect(utils.getByText('No FAQs available yet')).toBeTruthy();
+  });
+
+  it('keeps the rider on Contact if they select it before hidden AI config loads', async () => {
+    let resolveAiConfig!: (value: { data: { enabled: boolean; mode: string } }) => void;
+    mockAiConfigPromise = new Promise((resolve) => {
+      resolveAiConfig = resolve;
+    });
+
+    const utils = await renderTab('chat');
+    fireEvent.press(utils.getByText('Contact'));
+    await act(async () => {
+      resolveAiConfig({ data: { enabled: false, mode: 'hidden' } });
+      await mockAiConfigPromise;
+    });
+
+    expect(utils.getByText('Submit Report')).toBeTruthy();
   });
 
   it('names the configured email when one is set', async () => {

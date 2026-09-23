@@ -358,11 +358,11 @@ async def test_route_helper_writes_period1_through_an_active_throttle(monkeypatc
 
     writes = []
 
-    async def _fake_update_one(table, filt, data):
-        writes.append((table, filt, data))
+    async def _fake_update_one(driver_id, lat, lng, **kwargs):
+        writes.append(("drivers", {"id": driver_id}, kwargs["extra_fields"]))
         return True
 
-    monkeypatch.setattr(loc.db_supabase, "update_one", _fake_update_one)
+    monkeypatch.setattr(loc.db_supabase, "update_driver_location", _fake_update_one)
 
     plain = {"lat": 50.4452, "lng": -104.6189}
     withp1 = {"lat": 50.4452, "lng": -104.6189, "period1_accum_km": 1.25}

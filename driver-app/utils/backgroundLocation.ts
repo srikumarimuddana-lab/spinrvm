@@ -13,6 +13,7 @@ import {
   TERMINAL_STATUS_CODES,
   tripLocationRecorder,
   type TripLocationBatchRequest,
+  type TripLocationBatchAck,
 } from './tripLocationRecorder';
 import { createLocationIntegrityChecker, haversineKm } from './locationIntegrity';
 import { runExclusive } from './locationTaskArbiter';
@@ -364,33 +365,70 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     historyReservation?.release();
     return;
   }
-  const postLocation = async (token: string, path: string, payload: unknown, reservation: ForegroundUploadReservation) => {
+  const postLocation = async <T = never>(
+    token: string,
+    path: string,
+    payload: unknown,
+    reservation: ForegroundUploadReservation,
+    decodeResponse?: (response: Response) => Promise<T | undefined>,
+  ): Promise<{ response: Response; decoded: T | undefined }> => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new Error('Location upload deadline exceeded'));
+      }, 10_000);
+    });
+
+    const work = (async () => {
       await initFirebaseServices();
+      if (timedOut) throw new Error('Location upload deadline exceeded');
+
       const appCheckToken = await getAppCheckToken();
+      if (timedOut) throw new Error('Location upload deadline exceeded');
+
       // Strict reads here: failed storage access must defer upload. Keep this
       // after async App Check preparation and directly before network dispatch.
       if (await SecureStore.getItemAsync(SESSION_ENDED_KEY) ||
           await SecureStore.getItemAsync(SESSION_GENERATION_KEY) !== captureSession) {
         throw new Error('Location upload cancelled after session change');
       }
+      // SecureStore can also stall. Never dispatch if the deadline expired
+      // while either ownership read was in flight.
+      if (timedOut) throw new Error('Location upload deadline exceeded');
+
       // Auth/App Check may take longer than the pacing window. Start the
       // cooldown at dispatch so the next callback cannot send a late burst.
       reservation.markDispatched();
-      return await fetch(`${API_URL}/api/v1/drivers/${path}`, {
+      const response = await fetch(`${API_URL}/api/v1/drivers/${path}`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
           ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}) },
         body: JSON.stringify(payload),
       });
-    } finally { clearTimeout(timeout); }
+      if (timedOut) throw new Error('Location upload deadline exceeded');
+
+      // History acknowledgements are part of this same deadline. If parsing
+      // stalls or the deadline aborts body consumption, the caller throws and
+      // flushPending leaves the durable batch queued for retry.
+      const decoded = decodeResponse ? await decodeResponse(response) : undefined;
+      if (timedOut) throw new Error('Location upload deadline exceeded');
+      return { response, decoded };
+    })();
+
+    try {
+      return await Promise.race([work, deadline]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   };
 
   const liveUpload = liveReservation ? (async () => {
     try {
-      const response = await postLocation(token, 'location-live', {
+      const { response } = await postLocation(token, 'location-live', {
         lat: latestLiveFix!.coords.latitude, lng: latestLiveFix!.coords.longitude,
         heading: latestLiveFix!.coords.heading, speed: latestLiveFix!.coords.speed,
         accuracy: latestLiveFix!.coords.accuracy, mocked: latestLiveFix!.mocked ?? false,
@@ -409,7 +447,11 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       await tripLocationRecorder.flushPending(async (request: TripLocationBatchRequest) => {
         // App Check is enforced on /api/* in production. Initialize it
         // idempotently because this headless task does not mount the app shell.
-        const response = await postLocation(token, 'location-batch', request, historyReservation);
+        const { response, decoded } = await postLocation<TripLocationBatchAck>(
+          token, 'location-batch', request, historyReservation,
+          async response => response.ok && !TERMINAL_STATUS_CODES.has(response.status)
+            ? await response.json() as TripLocationBatchAck : undefined,
+        );
         // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
         // this fetch previously threw on them, and because flushPending aborts
         // its whole loop on a transport throw, ONE permanently-rejected batch
@@ -420,7 +462,7 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
           return drainTerminalAck(request);
         }
         if (!response.ok) throw new Error(`location-batch ${response.status}`);
-        return response.json();
+        return decoded!;
       }, { force: true });
     } catch {
       // Degraded-but-recovered, so no Sentry (CLAUDE.md observability rules):

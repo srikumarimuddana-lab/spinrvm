@@ -1,3 +1,4 @@
+import { cancellationPaymentMessages } from '../utils/cancellationPaymentMessages';
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
@@ -27,6 +28,8 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const paymentStatusLabel = (status: string | undefined | null): string => {
   if (status === 'paid') return 'Paid';
   if (status === 'failed') return 'Failed';
+  if (status === 'refunded') return 'Refund recorded';
+  if (status === 'partially_refunded') return 'Partial refund recorded';
   if (status === 'held_for_review') return 'Under review';
   return 'Pending';
 };
@@ -255,6 +258,7 @@ export default function RideDetailsScreen() {
 
   const isCompleted = ride.status === 'completed';
   const isCancelled = ride.status === 'cancelled';
+  const cancellationMessages = cancellationPaymentMessages(ride);
   // Backend-computed, flag-gated (app_settings.legacy_ride_badge_enabled) —
   // never derive this from legacy_import_metadata directly, so the dark-ship
   // flag stays the single source of truth for this UI.
@@ -379,6 +383,13 @@ export default function RideDetailsScreen() {
           </View>
         </View>
 
+        {isCancelled && cancellationMessages.length > 0 && (
+          <View style={styles.fareBreakdownCard}>
+            <Text style={styles.fareBreakdownTitle}>Cancellation payment</Text>
+            {cancellationMessages.map(message => <Text key={message} style={styles.paymentText}>{message}</Text>)}
+          </View>
+        )}
+
         {/* Fare breakdown — same layout as ride-options. Cancelled rides never
             took a trip, so they show the flat cancellation fee instead of the
             booking-time fare estimate. */}
@@ -387,7 +398,7 @@ export default function RideDetailsScreen() {
             <View style={styles.fareBreakdownCard}>
               <Text style={styles.fareBreakdownTitle}>Cancellation fee</Text>
               <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
-                <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
+                <Text style={styles.fareBreakdownTotalLabel}>Fee</Text>
                 <Text style={styles.fareBreakdownTotalValue}>${cancellationFeeTotal.toFixed(2)}</Text>
               </View>
               <View style={styles.paymentRow}>

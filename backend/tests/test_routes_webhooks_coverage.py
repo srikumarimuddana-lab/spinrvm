@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import sys
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -99,244 +100,89 @@ def _mock_req():
 
 
 class TestStripeWebhookChargeRefunded:
-    def test_matched_ride_marks_refunded_and_records_ledger(self):
+    @pytest.mark.parametrize("captured,cumulative,delta,outcome", [
+        (1500, 1500, 1500, "applied"),  # full refund
+        (4000, 500, 500, "applied"),  # partial refund
+        (4000, 4000, 3500, "applied"),  # final partial reaches full refund
+        (5000, 2000, 1000, "applied"),  # next partial books only its delta
+        (5000, 1000, 0, "stale"),  # older capture cannot rewind accounting
+        (5000, 2000, 0, "applied"),  # duplicate is not another notification
+    ])
+    def test_confirmed_aggregate_uses_atomic_rpc_and_notifies_only_new_delta(
+        self, captured, cumulative, delta, outcome,
+    ):
         import stripe
 
         from backend.routes import webhooks as wh
+        from backend.services.ledger_service import derive_event_id
 
-        charge = {"id": "ch_1", "payment_intent": "pi_refund_1", "amount_refunded": 1500, "currency": "cad"}
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_1")
-        ride = {"id": "ride_r1", "rider_id": "rider_1"}
-        update_mock = AsyncMock()
-        record_refund_mock = AsyncMock()
-        push_mock = AsyncMock()
-
+        # The event payload is deliberately different from the current
+        # succeeded-refund sum. It must not be treated as confirmed money.
+        charge = {"id": "ch_atomic", "payment_intent": "pi_atomic", "amount_refunded": 99999}
+        event_obj = _event_obj("charge.refunded", charge, "evt_atomic")
+        ride = {"id": "ride_atomic", "rider_id": "rider_atomic"}
+        capture = {"captured_cents": captured, "refunded_cents": cumulative, "pending_refund_cents": 0}
+        rpc = AsyncMock(return_value=[{"outcome": outcome, "delta_cents": delta,
+                                       "refund_amount_cents": cumulative}])
+        update = AsyncMock()
+        legacy_ledger = AsyncMock()
+        push = AsyncMock()
+        email = AsyncMock()
         with (
             patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()) as mark,
             patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
-            patch("backend.services.payment_service.record_refund_event", record_refund_mock),
-            patch("backend.routes.webhooks.send_push_notification", push_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update),
+            patch("backend.services.payment_service.read_capture_state", AsyncMock(return_value=capture)),
+            patch("backend.services.payment_service.db_supabase.rpc", rpc),
+            patch("backend.services.payment_service.record_refund_event", legacy_ledger),
+            patch("backend.routes.webhooks.send_push_notification", push),
+            patch("backend.routes.webhooks.send_refund_email", email),
         ):
             result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
 
         assert result["received"] is True
-        update_mock.assert_awaited_once()
-        assert update_mock.await_args.args[0] == "rides"
-        assert update_mock.await_args.args[2]["payment_status"] == "refunded"
-        assert update_mock.await_args.args[2]["refund_amount"] == "15.00"
-        record_refund_mock.assert_awaited_once()
-        assert record_refund_mock.await_args.kwargs["refund_cents"] == 1500
-        push_mock.assert_awaited_once()
-
-    def test_partial_refund_marks_partially_refunded_not_refunded(self):
-        """CR follow-up (fare-payout-audit finding #2): a partial refund must
-        NOT collapse into the same terminal 'refunded' status as a full one —
-        that silently drops the fact that the platform retained
-        (amount - amount_refunded) of the fare, and permanently blocks
-        collecting/re-invoicing the un-refunded remainder via admin/rides.py's
-        terminal-payment-state guard.
-        """
-        import stripe
-
-        from backend.routes import webhooks as wh
-
-        # $5 refunded out of a real $40 charge — Stripe's own `refunded`
-        # boolean is False (only True once cumulative refunds == amount).
-        charge = {
-            "id": "ch_2",
-            "payment_intent": "pi_refund_2",
-            "amount": 4000,
-            "amount_refunded": 500,
-            "refunded": False,
-            "currency": "cad",
-        }
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_2")
-        ride = {"id": "ride_r2", "rider_id": "rider_2"}
-        update_mock = AsyncMock()
-        record_refund_mock = AsyncMock()
-        push_mock = AsyncMock()
-
-        with (
-            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
-            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
-            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
-            patch("backend.services.payment_service.record_refund_event", record_refund_mock),
-            patch("backend.routes.webhooks.send_push_notification", push_mock),
-        ):
-            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
-
-        assert result["received"] is True
-        update_mock.assert_awaited_once()
-        assert update_mock.await_args.args[2]["payment_status"] == "partially_refunded"
-        assert update_mock.await_args.args[2]["refund_amount"] == "5.00"
-        # The refund ledger row still records the true amount collected
-        # regardless of full-vs-partial classification.
-        record_refund_mock.assert_awaited_once()
-        assert record_refund_mock.await_args.kwargs["refund_cents"] == 500
-
-    def test_refund_reaching_full_amount_via_multiple_partials_marks_refunded(self):
-        """Cumulative refunds reaching the original charge amount (Stripe's
-        `refunded=True`) must still classify as full 'refunded', not
-        'partially_refunded' — this is the amount_refunded >= amount /
-        refunded-boolean case, not a < comparison.
-        """
-        import stripe
-
-        from backend.routes import webhooks as wh
-
-        charge = {
-            "id": "ch_3",
-            "payment_intent": "pi_refund_3",
-            "amount": 4000,
-            "amount_refunded": 4000,
-            "refunded": True,
-            "currency": "cad",
-        }
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_3")
-        ride = {"id": "ride_r3", "rider_id": "rider_3"}
-        update_mock = AsyncMock()
-
-        with (
-            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
-            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
-            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
-            patch("backend.services.payment_service.record_refund_event", AsyncMock()),
-            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
-        ):
-            asyncio.run(wh.stripe_webhook(request=_mock_req()))
-
-        assert update_mock.await_args.args[2]["payment_status"] == "refunded"
-
-    def test_second_sequential_partial_refund_ledgers_only_the_delta(self):
-        """Security-audit finding on the partial-refund fix: Stripe's
-        amount_refunded is CUMULATIVE, so a second charge.refunded event on
-        the same charge must ledger only the incremental delta, not the full
-        cumulative amount again — otherwise two $10 refunds ($10, then $10
-        more out of $50) would net -$30 in financial_events instead of -$20.
-        """
-        import stripe
-
-        from backend.routes import webhooks as wh
-
-        # Second event: cumulative amount_refunded is now $20; the ride
-        # already has refund_amount="10.00" recorded from a prior event.
-        charge = {
-            "id": "ch_4",
-            "payment_intent": "pi_refund_4",
-            "amount": 5000,
-            "amount_refunded": 2000,
-            "refunded": False,
-            "currency": "cad",
-        }
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_4b")
-        ride = {"id": "ride_r4", "rider_id": "rider_4", "refund_amount": "10.00"}
-        update_mock = AsyncMock()
-        record_refund_mock = AsyncMock()
-
-        with (
-            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
-            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
-            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
-            patch("backend.services.payment_service.record_refund_event", record_refund_mock),
-            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
-        ):
-            asyncio.run(wh.stripe_webhook(request=_mock_req()))
-
-        # Ledger gets only the $10 delta (2000 - 1000 cents), not the full
-        # $20 cumulative amount.
-        record_refund_mock.assert_awaited_once()
-        assert record_refund_mock.await_args.kwargs["refund_cents"] == 1000
-        # The rides row still stores the new cumulative total for display.
-        assert update_mock.await_args.args[2]["refund_amount"] == "20.00"
-        assert update_mock.await_args.args[2]["payment_status"] == "partially_refunded"
-
-    def test_stale_out_of_order_refund_event_is_skipped_not_double_counted(self):
-        """A charge.refunded event whose cumulative amount_refunded is not
-        ahead of what's already recorded on the ride (stale/out-of-order
-        delivery) must not write a ledger row or move payment_status/
-        refund_amount backward — and must still let the handler complete
-        normally (no exception) so mark_stripe_event_processed still runs.
-        """
-        import stripe
-
-        from backend.routes import webhooks as wh
-
-        charge = {
-            "id": "ch_5",
-            "payment_intent": "pi_refund_5",
-            "amount": 5000,
-            "amount_refunded": 1000,  # same as what's already recorded
-            "refunded": False,
-            "currency": "cad",
-        }
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_5")
-        ride = {"id": "ride_r5", "rider_id": "rider_5", "refund_amount": "10.00"}
-        update_mock = AsyncMock()
-        record_refund_mock = AsyncMock()
-
-        # F1 replay recovery reads financial_events to check whether the $10
-        # already recorded on the ride has a matching ledger row. This IS that
-        # case (a genuinely already-fully-booked duplicate, not a lost-ledger-
-        # row gap) — the ledger already has -1000 cents, so recovery must find
-        # nothing missing and fall through to the stale/skip path untouched.
-        async def _get_rows(table, *args, **kwargs):
-            if table == "financial_events":
-                return [{"delta_cents": -1000}]
-            return [ride]
-
-        with (
-            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
-            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
-            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
-            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()) as mark_mock,
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
-            patch("backend.services.payment_service.record_refund_event", record_refund_mock),
-            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
-        ):
-            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
-
-        assert result["received"] is True
-        update_mock.assert_not_awaited()
-        record_refund_mock.assert_not_awaited()
-        # The shared tail call must still run so Stripe doesn't retry forever.
-        mark_mock.assert_awaited_once()
+        rpc.assert_awaited_once_with("apply_stripe_refund_cumulative", {
+            "p_ride_id": "ride_atomic", "p_payment_intent_id": "pi_atomic",
+            "p_cumulative_refunded_cents": cumulative, "p_captured_cents": captured,
+            "p_event_id": derive_event_id(f"stripe_refund|pi_atomic|{cumulative}"),
+        })
+        # Only the transaction may update the ride and append refund money.
+        update.assert_not_awaited()
+        legacy_ledger.assert_not_awaited()
+        mark.assert_awaited_once()
+        if delta > 0:
+            push.assert_awaited_once()
+            assert f"${delta / 100:.2f}" in push.await_args.args[2]
+            email.assert_awaited_once()
+            assert email.await_args.args[1] == Decimal(delta) / 100
+        else:
+            push.assert_not_awaited()
+            email.assert_not_awaited()
 
     def test_refund_push_notification_failure_swallowed(self):
         import stripe
 
         from backend.routes import webhooks as wh
-
-        charge = {"id": "ch_1b", "payment_intent": "pi_refund_1b", "amount_refunded": 500}
-        event_obj = _event_obj("charge.refunded", charge, "evt_refund_1b")
-        ride = {"id": "ride_r1b", "rider_id": "rider_1b"}
-
+        charge = {"id": "ch_push", "payment_intent": "pi_push", "amount_refunded": 500}
+        event_obj = _event_obj("charge.refunded", charge, "evt_push")
         with (
             patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
-            patch("backend.services.payment_service.record_refund_event", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[
+                {"id": "ride_push", "rider_id": "rider_push"}])),
+            patch("backend.services.payment_service.reconcile_confirmed_stripe_refund", AsyncMock(
+                return_value={"outcome": "applied", "delta_cents": 500})),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock(side_effect=Exception("fcm down"))),
+            patch("backend.routes.webhooks.send_refund_email", AsyncMock()) as email,
         ):
             result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
-
         assert result["received"] is True
+        email.assert_awaited_once()  # push failure must not suppress the financial notice
 
     def test_no_payment_intent_records_orphan(self):
         import stripe

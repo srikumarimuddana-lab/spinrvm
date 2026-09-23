@@ -63,10 +63,8 @@ Safety properties
   * Never refunds on an unknown Stripe state — a failed read is reported as
     ``unknown`` and skipped, not treated as "nothing refunded yet".
   * A failure on one ride never stops the rest.
-  * Ledger + ride-row bookkeeping mirrors the live cancel path exactly (same
-    ``record_refund_event`` dedupe-key shape, same ``refund_amount`` /
-    ``payment_status`` writes), so a row this script fixes is indistinguishable
-    from one the route handled itself.
+  * Ledger + ride-row bookkeeping goes through migration 446's atomic
+    cumulative-refund RPC, shared with cancellation and Stripe webhooks.
 """
 
 from __future__ import annotations
@@ -89,9 +87,11 @@ logger = logging.getLogger("reconcile_cancelled_captured_refunds")
 OUTCOMES = (
     "would_refund",
     "refunded",
+    "accounting_repaired",
     "not_needed",
     "skipped_db_refund",
     "already_refunded_on_stripe",
+    "pending_refund_on_stripe",
     "captured_nothing",
     "unknown",
     "failed",
@@ -185,9 +185,7 @@ def to_cents(value: Any) -> int:
 
 async def reconcile_one(ride: Dict[str, Any], *, apply_changes: bool) -> str:
     """Handle one ride. Returns an outcome key from ``OUTCOMES``. Never raises."""
-    import db_supabase as db
-    from services.payment_service import record_refund_event
-    from utils.money import cents_to_dollars
+    from services.payment_service import reconcile_confirmed_stripe_refund
     from utils.stripe_charge import read_capture_state, refund_excess_capture
 
     ride_id = ride["id"]
@@ -197,8 +195,6 @@ async def reconcile_one(ride: Dict[str, Any], *, apply_changes: bool) -> str:
     # second decides whether the ride ends up "refunded" or "partially_refunded".
     fee_owed = _fee_still_owed_from_capture(ride)
     fee_cents = to_cents(fee_owed)
-    fee_retained = _recorded_fee(ride) > 0
-
     state = await read_capture_state(ride_id=ride_id, payment_intent_id=pi)
     if state is None:
         # Unknown, not zero. Refunding blind here could double-refund a rider
@@ -207,13 +203,30 @@ async def reconcile_one(ride: Dict[str, Any], *, apply_changes: bool) -> str:
         return "unknown"
 
     captured_cents = state["captured_cents"]
+    if state.get("pending_refund_cents", 0) > 0:
+        logger.warning(
+            "ride=%s has %s cents in pending/action-required Stripe refunds — no new refund created",
+            ride_id,
+            state["pending_refund_cents"],
+        )
+        return "pending_refund_on_stripe"
+
     if state["refunded_cents"] > 0:
-        # Stripe already gave money back but the ride row still says otherwise.
-        # Deliberately NOT repaired here: writing refund_amount for a refund this
-        # script did not issue, with no matching ledger event, would paper over a
-        # real bookkeeping gap. Report it for a human instead.
+        # When an operator explicitly selects --apply, the atomic cumulative
+        # projection can repair existing Stripe refunds without issuing another.
+        if apply_changes:
+            try:
+                projection = await reconcile_confirmed_stripe_refund(
+                    ride_id=ride_id, payment_intent_id=pi,
+                )
+            except Exception as exc:
+                logger.exception("ride=%s confirmed Stripe refund accounting failed: %s", ride_id, exc)
+                return "ledger_failed"
+            if projection.get("outcome") == "applied":
+                logger.info("ride=%s existing succeeded refunds reconciled atomically", ride_id)
+                return "accounting_repaired"
         logger.error(
-            "ride=%s has %s cents refunded on Stripe but refund_amount is unset — needs manual reconciliation",
+            "ride=%s has %s cents refunded on Stripe but accounting is stale — needs manual reconciliation",
             ride_id,
             state["refunded_cents"],
         )
@@ -265,77 +278,20 @@ async def reconcile_one(ride: Dict[str, Any], *, apply_changes: bool) -> str:
         )
         return "failed"
 
-    refunded_cents = to_cents(outcome.charged_amount)
-    # Same dedupe-key shape the live cancel path and routes/webhooks.py use, so
-    # this books once even if the route later handles the same money movement.
-    # Wrapped: the money has already left the platform account by this point, so
-    # a raise here must not be reported as "rider is still owed" — it is the
-    # opposite, a refunded ride with no ledger row.
     try:
-        ledger_id = await record_refund_event(
-            ride_id=ride_id,
-            user_id=ride.get("rider_id") or "",
-            refund_cents=refunded_cents,
-            payment_intent_id=outcome.payment_intent_id,
-            ride=ride,
-            dedupe_key=f"stripe_refund|{outcome.payment_intent_id}|{refunded_cents}",
+        projection = await reconcile_confirmed_stripe_refund(
+            ride_id=ride_id, payment_intent_id=outcome.payment_intent_id,
         )
     except Exception as e:
         logger.exception(
-            "ride=%s refunded %s cents on Stripe but the ledger write raised — money moved: %s",
-            ride_id,
-            refunded_cents,
-            e,
-        )
-        ledger_id = None
-
-    # Compare-and-swap on the state this script selected for: if the live cancel
-    # path (or another pass) moved the row in the meantime, leave it alone rather
-    # than overwrite its bookkeeping.
-    try:
-        claimed = await db.update_one(
-            "rides",
-            {"id": ride_id, "status": "cancelled", "auth_status": "captured"},
-            {
-                "refund_amount": str(cents_to_dollars(refunded_cents)),
-                # Keyed on the fee the rider actually ended up paying by ANY
-                # route, not just what this hold covered — a fee collected on its
-                # own PI still means they were only partially refunded overall.
-                # cancel_fee_payment_intent_id keeps recording which PI took it.
-                "payment_status": "refunded" if not fee_retained else "partially_refunded",
-            },
-        )
-    except Exception as e:
-        logger.exception(
-            "ride=%s refunded %s cents on Stripe but the ride-row write failed — money moved, "
-            "refund_amount still unset: %s",
-            ride_id,
-            refunded_cents,
-            e,
+            "ride=%s refunded on Stripe but atomic accounting failed — money moved: %s", ride_id, e,
         )
         return "ledger_failed"
 
-    if claimed is None:
-        # Zero rows matched: the row moved out of cancelled/captured between the
-        # candidate read and this write. The Stripe refund is real either way, so
-        # this is a bookkeeping gap for a human, not something to retry blindly.
-        logger.error(
-            "ride=%s refunded %s cents on Stripe but the ride row no longer matched "
-            "status=cancelled/auth_status=captured — refund_amount not written, needs reconciliation",
-            ride_id,
-            refunded_cents,
-        )
+    if projection.get("outcome") not in {"applied", "no_succeeded_refunds"}:
+        logger.error("ride=%s Stripe aggregate is stale against ledger/ride state", ride_id)
         return "ledger_failed"
-
-    if ledger_id is None:
-        logger.error(
-            "ride=%s refunded %s cents on Stripe but the ledger write failed — needs reconciliation",
-            ride_id,
-            refunded_cents,
-        )
-        return "ledger_failed"
-
-    logger.info("ride=%s refunded %s cents (fee kept=%s)", ride_id, refunded_cents, fee_cents)
+    logger.info("ride=%s refunded %s cents (fee kept=%s)", ride_id, to_cents(outcome.charged_amount), fee_cents)
     return "refunded"
 
 

@@ -283,7 +283,11 @@ async def _preauthorize_ride_card(
 
     buffer = await _resolve_auth_buffer(_round(_d(grand_total)))
     hold_amount = _round(_d(grand_total) + buffer)
-    _ride_stub = {"id": ride_id, "payment_method": "card"}
+    _ride_stub = {
+        "id": ride_id,
+        "payment_method": "card",
+        "operation_purpose": "scheduled_dispatch_preauth" if not block_on_decline else "booking_authorization",
+    }
 
     outcome = await _deps.authorize_ride(
         ride=_ride_stub,

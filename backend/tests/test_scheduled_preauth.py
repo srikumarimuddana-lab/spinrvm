@@ -40,6 +40,7 @@ def _dispatch_patches(*, preauth_fields, update_returns):
         [
             patch(S + "db.update_one", update_mock),
             patch(S + "db.get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus_sched"})),
+            patch(S + "db.get_rows", AsyncMock(return_value=[{"id": "ride_sched_1", "status": "searching"}])),
             patch(S + "manager.broadcast_ride_status", AsyncMock()),
             patch(S + "manager.broadcast_to_admins", AsyncMock()),
             patch(S + "send_push_notification", AsyncMock()),
@@ -81,6 +82,47 @@ class TestScheduledDispatchPreauth:
         assert persisted["auth_status"] == "authorized"
         assert persisted["payment_intent_id"] == "pi_hold"
 
+    async def test_cancel_winning_during_preauth_releases_hold_and_stops_dispatch(self):
+        from contextlib import ExitStack
+
+        from backend.utils.scheduled_rides import _dispatch_scheduled_ride
+
+        S = "backend.utils.scheduled_rides."
+        update = AsyncMock(side_effect=[_claimed_card_ride(), None])
+        release = AsyncMock(return_value=False)
+        record = AsyncMock(return_value={"id": "op-release"})
+        match = AsyncMock()
+        ws_mock = AsyncMock()
+        ws_patch = patch(S + "manager.broadcast_ride_status", ws_mock)
+        patches = [
+            patch(S + "db.update_one", update),
+            patch(S + "db.get_rows", AsyncMock(return_value=[{"id": "ride_sched_1", "status": "cancelled"}])),
+            patch(S + "db.get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus_sched"})),
+            ws_patch,
+            patch(S + "manager.broadcast_to_admins", AsyncMock()),
+            patch(S + "send_push_notification", AsyncMock()),
+            patch("backend.routes.rides.booking._preauthorize_ride_card", AsyncMock(
+                return_value=__import__("backend.routes.rides", fromlist=["_PreauthOutcome"])._PreauthOutcome(
+                    fields={"payment_intent_id": "pi_late", "auth_status": "authorized", "authorized_amount": "30.00"}
+                )
+            )),
+            patch("backend.routes.rides._deps.cancel_authorization", release),
+            patch("backend.utils.payment_operations.record_operation", record),
+            patch("backend.routes.rides.matching.match_driver_to_ride", match),
+            patch("backend.routes.rides.matching.ride_search_timeout", AsyncMock()),
+            patch("backend.routes.admin.monitoring.build_monitoring_ride", lambda *a, **k: {}),
+        ]
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            await _dispatch_scheduled_ride({"id": "ride_sched_1", "rider_id": "rider_sched_1"})
+
+        release.assert_awaited_once_with(ride_id="ride_sched_1", payment_intent_id="pi_late")
+        record.assert_awaited_once()
+        assert record.await_args.kwargs["operation_type"] == "authorization_release"
+        match.assert_not_awaited()
+        ws_mock.assert_not_awaited()
+
     async def test_decline_at_dispatch_does_not_persist_or_raise(self):
         from contextlib import ExitStack
 
@@ -118,6 +160,7 @@ class TestScheduledDispatchPreauth:
         update_mock = AsyncMock(return_value=_claimed_card_ride())
         patches = [
             patch(S + "db.update_one", update_mock),
+            patch(S + "db.get_rows", AsyncMock(return_value=[{"id": "ride_sched_1", "status": "searching"}])),
             patch(S + "db.get_user_by_id", AsyncMock(return_value={"stripe_customer_id": "cus_sched"})),
             patch(S + "manager.broadcast_ride_status", AsyncMock()),
             patch(S + "manager.broadcast_to_admins", AsyncMock()),

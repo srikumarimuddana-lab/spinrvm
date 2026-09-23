@@ -156,6 +156,7 @@ interface Driver {
   total_rides: number;
   lat: number;
   lng: number;
+  location_captured_at?: string | null;
   speed?: number | null;
   heading?: number | null;
 }
@@ -927,15 +928,24 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
       const ride = response.data;
       let driver = ride.driver ?? null;
-      // R-P2-29: if a WS position update arrived within the last 10 s, the DB
-      // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
-      const { _lastWsDriverPositionAt, currentDriver } = get();
-      if (driver && currentDriver && driver.id === currentDriver.id &&
-          (get()._lastDriverFix !== driverFixAtStart || Date.now() - _lastWsDriverPositionAt < 10_000)) {
+      const { _lastWsDriverPositionAt, currentDriver, _lastDriverFix } = get();
+      const terminal = ride.status === 'completed' || ride.status === 'cancelled';
+      const polledTime = driver?.location_captured_at ? Date.parse(driver.location_captured_at) : NaN;
+      const previousTime = _lastDriverFix?.rideId === rideId && _lastDriverFix.driverId === driver?.id
+        ? _lastDriverFix.timestamp : Date.parse(currentDriver?.location_captured_at ?? '');
+      const validPollTime = Number.isFinite(polledTime) && polledTime <= Date.now() + 5000;
+      if (!terminal && driver && currentDriver && driver.id === currentDriver.id &&
+          ((Number.isFinite(previousTime) && (!validPollTime || polledTime <= previousTime)) ||
+           (!validPollTime && (get()._lastDriverFix !== driverFixAtStart || Date.now() - _lastWsDriverPositionAt < 10_000)))) {
         driver = { ...driver, lat: currentDriver.lat, lng: currentDriver.lng,
-          heading: currentDriver.heading, speed: currentDriver.speed };
+          heading: currentDriver.heading, speed: currentDriver.speed,
+          location_captured_at: currentDriver.location_captured_at };
       }
-      set({ currentRide: ride, currentDriver: driver, isLoading: false });
+      const acceptedTime = Date.parse(driver?.location_captured_at ?? '');
+      set({ currentRide: ride, currentDriver: driver, isLoading: false,
+        ...(!terminal && driver && Number.isFinite(acceptedTime) && acceptedTime <= Date.now() + 5000
+          ? { _lastDriverFix: { rideId, driverId: driver.id, timestamp: acceptedTime } } : {}),
+      });
       _persistRide(ride, driver);
     } catch (error: unknown) {
       console.log('fetchRide error:', error);
@@ -1319,6 +1329,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     // rating, vehicle info) untouched.
     const updated = {
       ...driver,
+      location_captured_at: new Date(captured).toISOString(),
       lat,
       lng,
       ...(speed !== null && speed !== undefined ? { speed } : {}),

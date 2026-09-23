@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import math
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -19,12 +21,36 @@ from ._deps import (  # noqa: F401
     logger,
     ride_action_limit,
     timezone,
+    uuid,
 )
 from ._shared import (  # noqa: F401
     _reestimate_fare_for_stops,
 )
 
 router = APIRouter()
+
+
+def _stops_cas_filters(ride: dict) -> dict:
+    """Match the exact route version we read before changing stop state."""
+    return {
+        "id": ride["id"],
+        "status": {"$eq": ride.get("status")},
+        "stops": {"$eq": ride.get("stops") or []},
+    }
+
+
+def _valid_stop(stop: dict) -> bool:
+    try:
+        lat, lng = float(stop.get("lat")), float(stop.get("lng"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(lat)
+        and math.isfinite(lng)
+        and -90 <= lat <= 90
+        and -180 <= lng <= 180
+        and (lat != 0 or lng != 0)
+    )
 
 
 # ── Mid-Trip Stop Editing ─────────────────────────────────────────────
@@ -58,7 +84,9 @@ async def add_stop_mid_trip(
     ):
         raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
-    stops = ride.get("stops") or []
+    stops = list(ride.get("stops") or [])
+    if not _valid_stop({"lat": req.lat, "lng": req.lng}):
+        raise HTTPException(status_code=400, detail="Stop has no valid destination")
     new_stop = {"address": req.address, "lat": req.lat, "lng": req.lng}
 
     if req.position is not None and 0 <= req.position <= len(stops):
@@ -67,9 +95,9 @@ async def add_stop_mid_trip(
         stops.append(new_stop)
 
     fare_update = await _reestimate_fare_for_stops(ride, stops)
-    await _deps.db.update_one(
+    updated = await _deps.db.update_one(
         "rides",
-        {"id": ride_id},
+        _stops_cas_filters(ride),
         {
             "$set": {
                 **fare_update,
@@ -78,6 +106,8 @@ async def add_stop_mid_trip(
             }
         },
     )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Stops changed. Refresh the ride and try again.")
 
     # Notify driver via WebSocket
     if ride.get("driver_id"):
@@ -118,16 +148,16 @@ async def remove_stop_mid_trip(
     ):
         raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
-    stops = ride.get("stops") or []
+    stops = list(ride.get("stops") or [])
     if stop_index < 0 or stop_index >= len(stops):
         raise HTTPException(status_code=400, detail="Invalid stop index")
 
     stops.pop(stop_index)
 
     fare_update = await _reestimate_fare_for_stops(ride, stops)
-    await _deps.db.update_one(
+    updated = await _deps.db.update_one(
         "rides",
-        {"id": ride_id},
+        _stops_cas_filters(ride),
         {
             "$set": {
                 **fare_update,
@@ -136,6 +166,8 @@ async def remove_stop_mid_trip(
             }
         },
     )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Stops changed. Refresh the ride and try again.")
 
     # Notify driver
     if ride.get("driver_id"):
@@ -153,6 +185,51 @@ async def remove_stop_mid_trip(
             )
 
     return {"success": True, "stops": stops, **fare_update}
+
+
+@router.post("/{ride_id}/stops/{stop_index}/complete")
+@ride_action_limit
+async def complete_stop(
+    ride_id: str,
+    stop_index: int,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Persist explicit driver arrival at one ordered mid-trip stop."""
+    drivers = await _deps.db.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    driver = drivers[0] if drivers else None
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    ride = await _deps.db.find_one("rides", {"id": ride_id, "driver_id": driver["id"]})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("status") != RideStatus.IN_PROGRESS:
+        raise HTTPException(status_code=409, detail="Stops can only be completed during an active trip")
+    stops = list(ride.get("stops") or [])
+    if stop_index < 0 or stop_index >= len(stops):
+        raise HTTPException(status_code=400, detail="Invalid stop index")
+    stop = stops[stop_index]
+    if not isinstance(stop, dict) or not _valid_stop(stop):
+        raise HTTPException(status_code=400, detail="Stop has no valid destination")
+    if stop.get("completed") is True:
+        return {"success": True, "stops": stops}
+
+    # Assign stable identities while touching legacy rows. A concurrent rider
+    # edit changes the CAS predicate and returns 409 rather than completing a
+    # different stop that moved into this index.
+    stops = [dict(item) if isinstance(item, dict) else item for item in stops]
+    for item in stops:
+        if isinstance(item, dict):
+            item.setdefault("id", str(uuid.uuid4()))
+    stops[stop_index]["completed"] = True
+    updated = await _deps.db.update_one(
+        "rides",
+        {**_stops_cas_filters(ride), "driver_id": driver["id"]},
+        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Stops changed. Refresh the ride and try again.")
+    return {"success": True, "stops": stops}
 
 
 class RideNotesUpdateRequest(BaseModel):

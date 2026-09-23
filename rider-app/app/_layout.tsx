@@ -7,7 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SPACING } from '@shared/utils/responsive';
 import { SafetySheetHost } from '../components/SafetySheetHost';
 import * as Updates from 'expo-updates';
@@ -21,6 +21,7 @@ import { useRideStore } from '../store/rideStore';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
+import { useDelayedReconnectWarning } from '../hooks/useDelayedReconnectWarning';
 import * as rideLive from '../services/rideLiveNotification';
 import * as rideVoltra from '../services/rideVoltraLiveActivity';
 import * as SplashScreen from 'expo-splash-screen';
@@ -897,7 +898,9 @@ function RootLayout() {
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const wasOffline = isOffline;
-      const isNowOffline = !state.isConnected || !state.isInternetReachable;
+      // NetInfo can report null while reachability is still being checked; only
+      // treat an explicit false as offline to avoid a false warning at startup.
+      const isNowOffline = state.isConnected === false || state.isInternetReachable === false;
 
       setIsOffline(isNowOffline);
 
@@ -969,6 +972,46 @@ function MaybeStripeProvider({
   );
 }
 
+function RiderReconnectBanner() {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      pointerEvents="none"
+      accessible
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+      style={{
+        position: 'absolute',
+        top: insets.top + SPACING.xs,
+        left: 16,
+        right: 16,
+        zIndex: 10000,
+        elevation: 10,
+        alignItems: 'center',
+      }}
+    >
+      <View
+        style={{
+          alignSelf: 'center',
+          maxWidth: '100%',
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          borderRadius: 999,
+          borderWidth: 1,
+          borderColor: colors.warning,
+          backgroundColor: colors.warningBg,
+        }}
+      >
+        <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600', textAlign: 'center' }}>
+          Ride is active. Reconnecting to live updates…
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function RootLayoutInner({
   isOffline,
   setIsOffline,
@@ -995,6 +1038,7 @@ function RootLayoutInner({
   forceUpdate: { visible: boolean; minVersion?: string };
 }) {
   const { isDark, colors } = useTheme();
+  const showReconnectWarning = useDelayedReconnectWarning(wsState === 'reconnecting', isOffline);
   useRideStatusNotification();
   return (
     <ErrorBoundary>
@@ -1003,17 +1047,11 @@ function RootLayoutInner({
         minVersion={forceUpdate.minVersion}
         storeUrl={Platform.OS === 'ios' ? RIDER_APP_STORE_IOS : RIDER_APP_STORE_ANDROID}
       />
-      <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
       <GestureRootWrapper>
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
-          {wsState === 'reconnecting' && (
-            <View style={{ backgroundColor: colors.warning, paddingVertical: SPACING.xs, alignItems: 'center' }}>
-              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
-                Reconnecting to ride updates…
-              </Text>
-            </View>
-          )}
+          <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+          {showReconnectWarning && <RiderReconnectBanner />}
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <TrackBaseUrlContext.Provider value={trackBaseUrl}>
           <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>

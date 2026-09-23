@@ -167,3 +167,134 @@ class TestBillCorporateCancellationFee:
     async def test_audit_write_failure_never_raises(self):
         with patch.object(svc.db_supabase, "insert_one", AsyncMock(side_effect=RuntimeError("db down"))):
             assert await _bill({}) == "unbilled"
+
+
+# ── cancel_ride_rider wiring ─────────────────────────────────────────
+
+RIDER_ID = "rider_tax_cancel"
+DRIVER_ID = "driver_tax_cancel"
+RIDE_ID = "ride_tax_cancel_001"
+FEE_SETTINGS = {"cancellation_fee_admin": 0.50, "cancellation_fee_driver": 4.00}
+
+
+def _arrived_ride(**extra) -> dict:
+    row = {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "driver_id": DRIVER_ID,
+        "status": "driver_arrived",
+        "payment_method": "card",
+        "payment_method_id": "pm_test_1",
+        "service_area_id": "area_sk",
+        # The stale pre-trip quote — must never leak into what is charged.
+        "total_fare": 18.40,
+        "grand_total": 19.32,
+        "tax_amount": 0.92,
+    }
+    row.update(extra)
+    return row
+
+
+async def _run_rider_cancel(ride: dict, settings: dict, extra_patches: dict):
+    from backend.routes import rides as rides_mod
+    from backend.utils.stripe_charge import ChargeOutcome
+
+    async def _find_one(table, flt, *a, **k):
+        return SK_AREA if table == "service_areas" else ride
+
+    mocks = {
+        "charge": AsyncMock(
+            return_value=ChargeOutcome(status="succeeded", payment_intent_id="pi_fee", charged_amount=Decimal("0"))
+        ),
+        "ledger": AsyncMock(return_value="evt"),
+        "update_ride": AsyncMock(),
+        "pay_driver": AsyncMock(return_value=True),
+        "bill_corp": AsyncMock(return_value="billed"),
+    }
+    mocks.update(extra_patches)
+    p = "backend.routes.rides._deps."
+    with (
+        patch(p + "db.find_one", AsyncMock(side_effect=_find_one)),
+        patch(p + "get_app_settings", AsyncMock(return_value=settings)),
+        patch(p + "db_supabase.get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "stripe_customer_id": "cus"})),
+        patch(p + "charge_ancillary_fee", mocks["charge"]),
+        patch(p + "record_ledger_event", mocks["ledger"]),
+        patch(p + "pay_driver_cancellation_fee", mocks["pay_driver"]),
+        patch(p + "bill_corporate_cancellation_fee", mocks["bill_corp"]),
+        patch(p + "db_supabase.get_driver_by_id", AsyncMock(return_value={"id": DRIVER_ID, "user_id": "du"})),
+        patch(p + "db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+        patch(p + "db.insert_one", AsyncMock()),
+        patch(p + "db_supabase.update_ride", mocks["update_ride"]),
+        patch(p + "db_supabase.get_ride", AsyncMock(return_value={**ride, "status": "cancelled"})),
+        patch(p + "db_supabase.set_driver_available", AsyncMock()),
+        patch(p + "release_driver_and_close_period", AsyncMock()),
+        patch(p + "manager.send_personal_message", AsyncMock()),
+        patch(p + "manager.broadcast_ride_status", AsyncMock()),
+        patch(p + "manager.broadcast_to_admins", AsyncMock()),
+        patch(p + "send_push_notification", AsyncMock()),
+        patch(p + "spawn", lambda coro: coro.close()),
+    ):
+        fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+        result = await fn(request=None, ride_id=RIDE_ID, reason="", current_user={"id": RIDER_ID})
+    return result, mocks
+
+
+@pytest.mark.unit
+class TestRiderCancelWiring:
+    async def test_tax_on_charges_fee_plus_tax_and_persists_breakdown(self):
+        result, m = await _run_rider_cancel(_arrived_ride(), {**FEE_SETTINGS, **TAX_ON}, {})
+        # 4.50 fee + 0.23 GST is what is actually charged — not the stale 19.32 quote.
+        assert m["charge"].await_args.kwargs["amount"] == Decimal("4.73")
+        meta = m["ledger"].await_args.kwargs["metadata"]
+        assert m["ledger"].await_args.kwargs["delta_cents"] == 473
+        assert meta["fee_tax"] == "0.23" and meta["fee_driver"] == "4.00" and meta["fee_admin"] == "0.50"
+        # Driver payout stays the pre-tax driver share.
+        assert m["pay_driver"].await_args.kwargs["fee"] == Decimal("4.00")
+        tax_writes = [c.args[1] for c in m["update_ride"].call_args_list if "cancellation_fee_tax_amount" in c.args[1]]
+        assert tax_writes == [
+            {
+                "cancellation_fee_tax_amount": 0.23,
+                "cancellation_fee_tax_breakdown": {"GST": {"rate": 5.0, "amount": 0.23}},
+            }
+        ]
+        # Pre-tax split columns keep their meaning; quote columns untouched.
+        base = m["update_ride"].call_args_list[0].args[1]
+        assert base["cancellation_fee_admin"] == 0.5 and base["cancellation_fee_driver"] == 4.0
+        assert "grand_total" not in base and "tax_amount" not in base
+        assert result["cancellation_fee"] == Decimal("4.73")
+        assert result["cancellation_fee_tax"] == Decimal("0.23")
+
+    async def test_tax_flag_off_is_byte_identical_to_before(self):
+        result, m = await _run_rider_cancel(_arrived_ride(), FEE_SETTINGS, {})
+        assert m["charge"].await_args.kwargs["amount"] == Decimal("4.50")
+        assert m["ledger"].await_args.kwargs["metadata"]["fee_tax"] == "0.00"
+        assert not any("cancellation_fee_tax_amount" in c.args[1] for c in m["update_ride"].call_args_list)
+        assert result["cancellation_fee"] == Decimal("4.50")
+
+    async def test_tax_column_write_failure_does_not_fail_the_cancel(self):
+        async def _update(ride_id, payload):
+            if "cancellation_fee_tax_amount" in payload:
+                raise RuntimeError("column missing")
+
+        result, _ = await _run_rider_cancel(
+            _arrived_ride(), {**FEE_SETTINGS, **TAX_ON}, {"update_ride": AsyncMock(side_effect=_update)}
+        )
+        assert result["success"] is True
+
+    async def test_company_allowance_bills_company_and_still_pays_driver(self):
+        ride = _arrived_ride(payment_method="company_allowance", corporate_account_id="co_1", payment_method_id=None)
+        result, m = await _run_rider_cancel(ride, {**FEE_SETTINGS, **TAX_ON}, {})
+        m["charge"].assert_not_awaited()  # never a personal card
+        kw = m["bill_corp"].await_args.kwargs
+        assert kw["ride_id"] == RIDE_ID
+        assert kw["amount"] == Decimal("4.73")
+        assert kw["fee_driver"] == Decimal("4.00")
+        assert kw["source"] == "cancellation_fee"
+        m["pay_driver"].assert_awaited_once()
+        assert result["cancellation_fee"] == Decimal("4.73")
+
+    async def test_free_cancel_bills_nobody(self):
+        ride = _arrived_ride(status="driver_accepted", payment_method="company_allowance", driver_accepted_at=None)
+        _, m = await _run_rider_cancel(ride, {**FEE_SETTINGS, **TAX_ON}, {})
+        m["bill_corp"].assert_not_awaited()
+        m["pay_driver"].assert_not_awaited()

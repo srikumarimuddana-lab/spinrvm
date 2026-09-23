@@ -114,6 +114,12 @@ async def cancel_ride_rider(
     # writes. Failures default the fee to 0 (no fee) rather than a partial one,
     # matching the pre-existing best-effort contract described below.
     charged_admin = charged_driver = Decimal("0")
+    # GST/PST on the fee (2026-09-23, flag cancellation_fee_tax_enabled,
+    # default off). total_cancel_fee is what is actually COLLECTED, so it
+    # includes this tax; charged_admin/charged_driver keep their pre-tax
+    # meaning (driver payout, statements).
+    fee_tax = Decimal("0")
+    fee_tax_breakdown: dict = {}
     total_cancel_fee = Decimal("0")
     settings = None
     area = None
@@ -122,12 +128,17 @@ async def cancel_ride_rider(
         if ride.get("service_area_id"):
             area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
         charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
-        total_cancel_fee = _round(charged_admin + charged_driver)
+        fee_tax, fee_tax_breakdown = await _deps.compute_cancellation_fee_tax(
+            charged_admin + charged_driver, settings, area
+        )
+        total_cancel_fee = _round(charged_admin + charged_driver + fee_tax)
     except Exception as _fee_exc:
         logger.opt(exception=True).error(
             "[CANCEL] cancellation fee computation failed ride_id={}: {}", ride_id, _fee_exc
         )
         charged_admin = charged_driver = Decimal("0")
+        fee_tax = Decimal("0")
+        fee_tax_breakdown = {}
         total_cancel_fee = Decimal("0")
 
     cancel_fee_payment_status: Optional[str] = None
@@ -211,6 +222,8 @@ async def cancel_ride_rider(
                         "driver_id": driver_id or "",
                         "fee_admin": str(_round(charged_admin)),
                         "fee_driver": str(_round(charged_driver)),
+                        # Booked to tax_payable by ledger_projection.
+                        "fee_tax": str(_round(fee_tax)),
                     },
                 )
             else:
@@ -269,18 +282,22 @@ async def cancel_ride_rider(
             )
             try:
                 _projection = await _deps.reconcile_confirmed_stripe_refund(
-                    ride_id=ride_id, payment_intent_id=_refund_outcome.payment_intent_id,
+                    ride_id=ride_id,
+                    payment_intent_id=_refund_outcome.payment_intent_id,
                 )
                 if _projection.get("outcome") in {"stale", "no_succeeded_refunds"}:
                     logger.error(
                         "[CANCEL] Stripe refund is confirmed but cumulative accounting needs reconciliation "
-                        "ride_id={} outcome={}", ride_id, _projection.get("outcome"),
+                        "ride_id={} outcome={}",
+                        ride_id,
+                        _projection.get("outcome"),
                     )
             except Exception as _refund_accounting_exc:
                 logger.error(
                     "[CANCEL] Stripe refund succeeded but atomic accounting failed ride_id={} — "
                     "durable refund operation will retry: {}",
-                    ride_id, _refund_accounting_exc,
+                    ride_id,
+                    _refund_accounting_exc,
                 )
         elif _refund_outcome is not None and _refund_outcome.status == "not_needed":
             # Whatever was captured already covers (or falls short of) the fee
@@ -301,7 +318,10 @@ async def cancel_ride_rider(
                 )
         else:
             if _refund_outcome is not None and _refund_outcome.status in {
-                "pending", "failed", "canceled", "requires_action"
+                "pending",
+                "failed",
+                "canceled",
+                "requires_action",
             }:
                 _refund_lifecycle_status = _refund_outcome.status
                 _refund_provider_id = (_refund_outcome.raw or {}).get("refund_id")
@@ -380,8 +400,8 @@ async def cancel_ride_rider(
                 # to the ride wins (e.g. the in-app "Change Card" escape), else
                 # the rider's saved default. Company-allowance / corporate-paid
                 # rides are intentionally excluded — that fee belongs on the
-                # corporate wallet ledger, not a personal Stripe card, and isn't
-                # wired up here.
+                # corporate wallet ledger, not a personal Stripe card (see the
+                # company_allowance branch below).
                 rider_user = await _deps.db_supabase.get_user_by_id(current_user["id"])
                 stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
                 payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
@@ -430,6 +450,7 @@ async def cancel_ride_rider(
                                 "driver_id": driver_id or "",
                                 "fee_admin": str(_round(charged_admin)),
                                 "fee_driver": str(_round(charged_driver)),
+                                "fee_tax": str(_round(fee_tax)),
                             },
                         )
                     else:
@@ -443,6 +464,21 @@ async def cancel_ride_rider(
                             outcome.status,
                             outcome.error_message,
                         )
+            elif payment_method == "company_allowance":
+                # Previously nobody was billed here while the driver payout
+                # below still fired — an untracked Spinr-funded write-off per
+                # corporate cancellation. Bills the company master wallet
+                # (flag-gated) or records a queryable write-off row. Never
+                # raises.
+                await _deps.bill_corporate_cancellation_fee(
+                    ride=ride,
+                    ride_id=ride_id,
+                    amount=total_cancel_fee,
+                    fee_driver=charged_driver,
+                    settings=settings or {},
+                    actor_user_id=current_user["id"],
+                    source="cancellation_fee",
+                )
 
         if driver_id and charged_driver > 0:
             await _deps.pay_driver_cancellation_fee(
@@ -520,6 +556,31 @@ async def cancel_ride_rider(
     except Exception as _col_exc:
         logger.opt(exception=True).error(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await _deps.db_supabase.update_ride(ride_id, _base_update)
+
+    # Migration 455: persist the tax charged on the fee so receipts render the
+    # actual charge. Kept OUT of _base_update deliberately — if the columns are
+    # missing (flag flipped before the migration) that write, and its minimal
+    # retry, would both fail and 500 an already-persisted cancel. Only written
+    # when tax > 0 (flag on), so flag-off payloads are byte-identical.
+    if fee_tax > 0:
+        try:
+            await _deps.db_supabase.update_ride(
+                ride_id,
+                {
+                    "cancellation_fee_tax_amount": _f(fee_tax),
+                    "cancellation_fee_tax_breakdown": fee_tax_breakdown,
+                },
+            )
+        except Exception as _tax_exc:
+            logger.opt(exception=True).error(
+                "[CANCEL] cancellation-fee tax write failed ride_id={} tax={} — receipt will under-state "
+                "the charge until reconciled: {}",
+                ride_id,
+                _round(fee_tax),
+                getattr(_tax_exc, "details", {}).get("original", _tax_exc)
+                if isinstance(getattr(_tax_exc, "details", None), dict)
+                else _tax_exc,
+            )
 
     # Verify the cancel actually landed in the database. Same class of
     # silent-failure we hit with go-online and accept: the update_one wrapper
@@ -615,7 +676,7 @@ async def cancel_ride_rider(
                 .execute()
             )
         )
-        for offer_row in (getattr(cancelled_offers, "data", None) or []):
+        for offer_row in getattr(cancelled_offers, "data", None) or []:
             _offer_did = offer_row["driver_id"]
             try:
                 await _deps.release_batch_offer_driver_and_close_period(_offer_did, ride_id=ride_id)
@@ -700,11 +761,13 @@ async def cancel_ride_rider(
             ride_id,
             {
                 "reason": "rider_cancelled",
-                "cancellation_fee": str(charged_admin + charged_driver),
+                "cancellation_fee": str(total_cancel_fee),
             },
         )
     )
-    return {"success": True, "cancellation_fee": charged_admin + charged_driver}
+    # total_cancel_fee == fee + fee_tax; identical to the old admin+driver sum
+    # whenever the tax flag is off.
+    return {"success": True, "cancellation_fee": total_cancel_fee, "cancellation_fee_tax": _round(fee_tax)}
 
 
 async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None:
@@ -733,9 +796,11 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
         except ImportError:  # pragma: no cover - dual import
             from utils.payment_operations import record_operation, update_operation  # type: ignore
         operation = await record_operation(
-            operation_type="scheduled_notice_fee", ride_id=ride_id,
+            operation_type="scheduled_notice_fee",
+            ride_id=ride_id,
             idempotency_key=f"scheduled-notice-fee-{ride_id}-{amount_cents}-{payment_method}",
-            amount_cents=amount_cents, payment_method=payment_method,
+            amount_cents=amount_cents,
+            payment_method=payment_method,
             metadata={"rider_id": rider_id},
         )
         actual = Decimal("0")
@@ -814,21 +879,31 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
         # persisted. If that write fails, the existing worker can rebuild it
         # from this durable outcome metadata without charging again.
         await update_operation(
-            str(operation["id"]), status="pending",
+            str(operation["id"]),
+            status="pending",
             payment_intent_id=payment_intent_id,
             provider_object_id=payment_intent_id or provider_reference,
             collected_cents=_deps.ledger_to_cents(actual),
             next_attempt_at=datetime.now(timezone.utc).isoformat(),
-            metadata={"outcome_status": outcome_status, "collected_cents": _deps.ledger_to_cents(actual),
-                      "provider_reference": provider_reference},
+            metadata={
+                "outcome_status": outcome_status,
+                "collected_cents": _deps.ledger_to_cents(actual),
+                "provider_reference": provider_reference,
+            },
         )
-        await _deps.db_supabase.update_one("rides", {"id": ride_id}, {
-            "scheduled_notice_fee_amount": str(actual),
-            "scheduled_notice_fee_status": "paid" if outcome_status == "succeeded" else outcome_status,
-            "scheduled_notice_fee_payment_intent_id": payment_intent_id or provider_reference,
-        })
+        await _deps.db_supabase.update_one(
+            "rides",
+            {"id": ride_id},
+            {
+                "scheduled_notice_fee_amount": str(actual),
+                "scheduled_notice_fee_status": "paid" if outcome_status == "succeeded" else outcome_status,
+                "scheduled_notice_fee_payment_intent_id": payment_intent_id or provider_reference,
+            },
+        )
         await update_operation(
-            str(operation["id"]), status=outcome_status, next_attempt_at=None,
+            str(operation["id"]),
+            status=outcome_status,
+            next_attempt_at=None,
         )
     except Exception as _fee_exc:
         logger.opt(exception=True).error(

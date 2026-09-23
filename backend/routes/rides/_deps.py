@@ -218,6 +218,17 @@ except ImportError:
 
 try:
     from ...services.cancellation_service import (
+        bill_corporate_cancellation_fee,
+        compute_cancellation_fee_tax,
+    )
+except ImportError:
+    from services.cancellation_service import (  # type: ignore
+        bill_corporate_cancellation_fee,
+        compute_cancellation_fee_tax,
+    )
+
+try:
+    from ...services.cancellation_service import (
         calculate_cancellation_fee,
         calculate_scheduled_cancel_notice_fee,
         pay_driver_cancellation_fee,

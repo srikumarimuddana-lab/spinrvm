@@ -211,6 +211,15 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() in _not_yet_sent),
             Decimal("0"),
         )
+        refund_holds = sum(
+            (
+                _d(p.get("amount") or 0)
+                for p in payout_rows
+                if p.get("payout_type") == "clawback"
+                and str(p.get("status") or "").lower() not in _not_money_out
+            ),
+            Decimal("0"),
+        )
     except Exception as e:
         # A transient DB error here must NOT be masked as a $0 balance — a
         # driver seeing their earnings drop to zero looks like money vanished
@@ -289,15 +298,15 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     return {
         # total_earnings = ride income + tax + incentives + cancel fees +
         # bonuses — full gross composition, matching /earnings and driver
-        # statements (ACTION_ITEMS.md A28). The driver-app payout screen
-        # relies on the identity total_earnings == payable_balance +
-        # pending_payouts + total_paid_out; keep all four in sync together.
+        # statements (ACTION_ITEMS.md A28). Refund holds still reduce the
+        # available balance, but they are an adjustment rather than cash paid.
         "total_earnings": _money_str(total_earnings + total_bonuses),
         # payable_balance = ride earnings + tax + incentives + cancel fees +
         # bonuses - ALL money-out payouts
         "payable_balance": _money_str(total_earnings + total_bonuses - total_payouts),
         "pending_payouts": _money_str(pending_payouts),
-        "total_paid_out": _money_str(total_payouts - pending_payouts),
+        "total_paid_out": _money_str(total_payouts - pending_payouts - refund_holds),
+        "refund_holds_total": _money_str(refund_holds),
         "previous_app_paid_total": _money_str(previous_app_paid),
         "total_bonuses": _money_str(total_bonuses),
         "total_referral_bonuses": _money_str(total_referral_bonuses),
@@ -306,6 +315,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "total_tax": _money_str(total_tax),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
+        "payouts_enabled": bool(driver.get("stripe_payouts_enabled", False)),
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,

@@ -263,7 +263,7 @@ class TestRefreshAccessToken:
 
         issue_calls = []
 
-        async def _capture_issue(user_id, audience, user_agent, ip, replaces):
+        async def _capture_issue(user_id, audience, user_agent, ip, replaces, token_version):
             issue_calls.append({"replaces": replaces})
             return ("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))
 
@@ -286,3 +286,37 @@ class TestRefreshAccessToken:
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (
             "New token must reference the old row id so the old token is revoked on rotation"
         )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("versions", [(3,), (2, 3), (2, 2)])
+async def test_refresh_preserves_parent_generation_across_login_race(versions):
+    from backend.routes import auth
+    from backend.utils.error_handling import TokenExpiredException
+
+    row = {"id": "old-row", "user_id": "user", "audience": "driver", "token_version": 2}
+    users = [{"id": "user", "token_version": version, "current_session_id": "session"} for version in versions]
+    with (
+        patch.object(auth, "lookup_refresh_token", AsyncMock(return_value=row)),
+        patch.object(auth.db, "find_one", AsyncMock(side_effect=users)),
+        patch.object(
+            auth,
+            "issue_refresh_token",
+            AsyncMock(return_value=("new-refresh", "new-row", datetime.now(timezone.utc) + timedelta(days=30))),
+        ) as issue,
+        patch.object(auth, "create_jwt_token", MagicMock(return_value="access")) as mint,
+    ):
+        if versions[-1] == 3:
+            with pytest.raises(TokenExpiredException):
+                await auth.refresh_access_token(_make_request(), MagicMock(), auth.RefreshRequest(refresh_token="old"))
+            mint.assert_not_called()
+            if len(versions) == 1:
+                issue.assert_not_awaited()
+        else:
+            result = await auth.refresh_access_token(
+                _make_request(), MagicMock(), auth.RefreshRequest(refresh_token="old")
+            )
+            assert result.token == "access"
+            assert mint.call_args.kwargs["token_version"] == 2
+        if issue.await_count:
+            assert issue.call_args.kwargs["token_version"] == 2

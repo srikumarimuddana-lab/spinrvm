@@ -269,6 +269,7 @@ export interface DriverBalance {
     payable_balance: string; // MoneyString — renamed from available_balance (NOT wallet.balance)
     pending_payouts: string; // MoneyString
     total_paid_out: string; // MoneyString
+    refund_holds_total?: string; // MoneyString — balance adjustments, not cash paid
     /** MoneyString — payments made by the previous Spinr app (synced from
      *  Stripe). History only: not part of total_earnings or the balance. */
     previous_app_paid_total?: string;
@@ -433,6 +434,7 @@ interface DriverState {
 
     // Loading states
     isLoading: boolean;
+    acceptNetworkHold: boolean;
     isCancellingRide: boolean;
     error: string | null;
 
@@ -447,6 +449,7 @@ interface DriverState {
     startRide: (rideId: string) => Promise<void>;
     completeRide: (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => Promise<CompleteRideResult>;
     cancelRide: (rideId: string, reason?: string) => Promise<void>;
+    reportNoShow: (rideId: string) => Promise<void>;
 
     // Fetch
     fetchActiveRide: () => Promise<void>;
@@ -521,6 +524,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     chatMessages: [],
     riderTyping: false,
     isLoading: false,
+    acceptNetworkHold: false,
     isCancellingRide: false,
     error: null,
 
@@ -542,6 +546,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             : cached;
         set({
             incomingRide: ride,
+            acceptNetworkHold: false,
             rideState: ride ? 'ride_offered' : 'idle',
             countdownSeconds: ride ? countdown : 0,
         });
@@ -562,7 +567,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     setCountdown: (seconds) => {
         set({ countdownSeconds: seconds });
-        if (seconds <= 0 && get().rideState === 'ride_offered') {
+        if (seconds <= 0 && get().rideState === 'ride_offered' && !get().acceptNetworkHold) {
             // Auto-decline on timeout + show a clear toast so the driver
             // knows the offer expired (G10). Previously the offer just
             // silently disappeared with no feedback.
@@ -575,10 +580,15 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     },
 
     acceptRide: async (rideId: string) => {
-        set({ isLoading: true, error: null });
+        const offer = get().incomingRide;
+        const serverExpiry = Date.parse(offer?.offer_expires_at ?? '');
+        const expiresAt = Number.isFinite(serverExpiry)
+            ? serverExpiry
+            : Date.now() + get().countdownSeconds * 1000;
+        set({ isLoading: true, acceptNetworkHold: true, error: null });
         try {
             await api.post(`/drivers/rides/${rideId}/accept`);
-            set({ rideState: 'navigating_to_pickup', incomingRide: null, countdownSeconds: 0 });
+            set({ rideState: 'navigating_to_pickup', incomingRide: null, countdownSeconds: 0, acceptNetworkHold: false });
             // Fetch the full active ride data
             await get().fetchActiveRide();
             _persistDriverState('navigating_to_pickup', get().activeRide);
@@ -604,6 +614,30 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const alreadyTakenStatus =
                 status === 404 || status === 409 || (status === 400 && alreadyTakenDetail);
 
+            if (status === undefined) {
+                set({ error: 'No connection — this offer may have expired.' });
+                try {
+                    await get().fetchActiveRide();
+                } catch {
+                    // Still offline. Leave the message; the panel stays only if
+                    // the local offer is still the one we tried to accept.
+                }
+                const st = get();
+                const stillThisOffer =
+                    st.rideState === 'ride_offered' && st.incomingRide?.ride_id === rideId;
+                if (stillThisOffer && Date.now() >= expiresAt) {
+                    set({
+                        rideState: 'idle',
+                        incomingRide: null,
+                        countdownSeconds: 0,
+                        acceptNetworkHold: false,
+                        error: 'No connection — this offer may have expired.',
+                    });
+                } else if (stillThisOffer) {
+                    set({ acceptNetworkHold: false, error: 'No connection — this offer may have expired.' });
+                }
+                return;
+            }
             if (!alreadyTakenStatus) {
                 recordNonFatal(err, { store: 'driverStore', action: 'acceptRide' });
             }
@@ -631,13 +665,25 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     rideState: 'idle',
                     incomingRide: null,
                     countdownSeconds: 0,
+                    acceptNetworkHold: false,
                     error: 'This ride was already taken by another driver. You\'ll see the next offer when it comes in.',
                 });
             } else {
-                set({ error: detail || 'Failed to accept ride' });
+                set({ acceptNetworkHold: false, error: detail || 'Failed to accept ride' });
             }
         } finally {
-            set({ isLoading: false });
+            // A late response from a previous offer must not unfreeze a
+            // different offer's in-flight acceptance.
+            if (!get().incomingRide || get().incomingRide?.ride_id === rideId) {
+                set({ isLoading: false, acceptNetworkHold: false });
+                if (get().rideState === 'ride_offered') {
+                    set({ countdownSeconds: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) });
+                }
+            } else if (!get().acceptNetworkHold) {
+                // The next offer is only being displayed, not accepted yet.
+                // Release the old request's spinner without touching its timer.
+                set({ isLoading: false });
+            }
         }
     },
 
@@ -657,7 +703,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } catch {
             // Decline failure is non-critical — reset state regardless
         }
-        set({ rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
+        set({ rideState: 'idle', incomingRide: null, countdownSeconds: 0, acceptNetworkHold: false });
     },
 
     arriveAtPickup: async (rideId: string, driverLat?: number, driverLng?: number) => {
@@ -753,6 +799,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 final_sequence_number: completion.point?.sequence_number ?? null,
                 pending_outbox_count: completion.pendingCount,
                 off_route_confirmation: offRouteConfirmation ?? null,
+                stop_progress_enabled: true,
             });
             try {
                 if (res.data.location_ack) {
@@ -790,6 +837,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
             return { confirmationRequired: false };
         } catch (err: unknown) {
+            const netStatus = isAxiosError(err) ? err.response?.status : undefined;
+            if (isAxiosError(err) && netStatus === undefined) {
+                recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
+                set({ error: 'Trip completion is not confirmed. Check your connection and retry before leaving the drop-off.' });
+                return { confirmationRequired: false };
+            }
             const confirmation = completionConfirmationFromError(err);
             if (confirmation) {
                 return { confirmationRequired: true, ...confirmation };
@@ -843,6 +896,27 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
             set({ error: getApiErrorMessage(err, 'Failed to cancel ride') });
+        } finally {
+            set({ isLoading: false, isCancellingRide: false });
+        }
+    },
+
+    reportNoShow: async (rideId: string) => {
+        set({ isLoading: true, isCancellingRide: true, error: null });
+        try {
+            await api.post(`/drivers/rides/${rideId}/noshow`);
+            set({
+                rideState: 'idle',
+                activeRide: null,
+                incomingRide: null,
+                chatMessages: [],
+                earningsByPeriod: {},
+            });
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+        } catch (err: unknown) {
+            recordNonFatal(err, { store: 'driverStore', action: 'reportNoShow' });
+            set({ error: getApiErrorMessage(err, 'Could not report a no-show') });
+            throw err;
         } finally {
             set({ isLoading: false, isCancellingRide: false });
         }
@@ -933,6 +1007,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             payment_method: ride.payment_method ?? existing?.payment_method,
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
+                            service_animal: (ride as any).service_animal ?? existing?.service_animal,
+                            stops: (ride as any).stops ?? existing?.stops,
                             quiet_mode: ride.quiet_mode ?? existing?.quiet_mode,
                             is_scheduled: (ride as any).is_scheduled ?? existing?.is_scheduled,
                             scheduled_time: (ride as any).scheduled_time ?? existing?.scheduled_time,
@@ -1165,6 +1241,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     resetRideState: () => {
         set({
             rideState: 'idle',
+            acceptNetworkHold: false,
             incomingRide: null,
             activeRide: null,
             completedRide: null,

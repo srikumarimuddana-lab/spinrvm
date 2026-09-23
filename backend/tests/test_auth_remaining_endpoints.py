@@ -224,6 +224,7 @@ class TestFirebaseAuthLoginHappyPaths:
             patch("backend.routes.auth.settings.FIREBASE_DRIVER_APP_ID", "driver-app"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(existing))),
             patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+            patch("backend.routes.auth.db_supabase.rpc", AsyncMock(return_value=[{"enabled": False}])),
             patch(
                 "backend.routes.auth.issue_refresh_token",
                 AsyncMock(return_value=("raw-refresh-2", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
@@ -383,15 +384,26 @@ class TestReactivateAccount:
         user = {
             "id": "u-react-1",
             "phone": "+13065551111",
+            "role": "driver",
+            "is_driver": True,
+            "current_session_id": "old-session",
             "status": "pending_deletion",
             "token_version": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         update_mock = AsyncMock(return_value=True)
+        session_rpc = AsyncMock(return_value=[{"enabled": False}])
+        tombstone = AsyncMock()
+        kick = AsyncMock()
+        offline = AsyncMock()
         with (
             patch("backend.routes.auth.verify_reactivation_token", return_value="u-react-1"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=dict(user))),
             patch("backend.routes.auth.db_supabase.update_one", update_mock),
+            patch("backend.routes.auth.db_supabase.rpc", session_rpc),
+            patch("backend.routes.auth.revoke_session", tombstone),
+            patch("backend.socket_manager.manager.kick_user", kick),
+            patch("backend.routes.auth._offline_driver_for_logout_all", offline),
             patch("backend.routes.auth.redis_set", AsyncMock()),
             patch(
                 "backend.routes.auth.issue_refresh_token",
@@ -409,6 +421,10 @@ class TestReactivateAccount:
         # First update_one call restores status; called with users table + user id
         calls = [c.args for c in update_mock.await_args_list]
         assert any(c[0] == "users" and c[1] == {"id": "u-react-1"} and c[2].get("status") == "active" for c in calls)
+        session_rpc.assert_awaited_once()
+        tombstone.assert_awaited_once_with("old-session")
+        kick.assert_awaited_once_with("u-react-1", client_types=["driver", "rider"], reason="session_superseded")
+        offline.assert_awaited_once_with("u-react-1")
 
     @pytest.mark.asyncio
     async def test_reactivation_checks_for_new_device(self):
@@ -909,3 +925,157 @@ class TestGetMeFailureBranches:
         assert verified_result.email_verified_at == verified_ts
         assert unverified_result.email_verified is False
         assert unverified_result.email_verified_at is None
+
+
+@pytest.mark.anyio
+async def test_legacy_null_refresh_generation_respects_dark_flag_and_logout_watermark(monkeypatch):
+    from backend.utils import refresh_tokens
+
+    row = {"token_version": None, "issued_at": "2026-09-20T00:00:00+00:00"}
+    user = {"token_version": 4, "sessions_invalid_before": "2026-09-19T00:00:00+00:00"}
+    lookup = AsyncMock(return_value={"driver_single_session_enabled": False})
+    monkeypatch.setattr(refresh_tokens.db, "find_one", lookup)
+    assert await refresh_tokens.refresh_token_generation_matches(row, user)
+
+    old = {**row, "issued_at": "2026-09-18T00:00:00+00:00"}
+    assert not await refresh_tokens.refresh_token_generation_matches(old, user)
+
+    lookup.return_value = {"driver_single_session_enabled": True}
+    assert not await refresh_tokens.refresh_token_generation_matches(row, user)
+
+    lookup.return_value = {"driver_single_session_enabled": False}
+    assert await refresh_tokens.refresh_token_generation_matches(
+        row, {"token_version": 4, "sessions_invalid_before": None}
+    )
+
+
+@pytest.mark.anyio
+async def test_legacy_generation_compatibility_does_not_accept_revoked_refresh(monkeypatch):
+    from backend.utils import refresh_tokens
+
+    revoked = {
+        "id": "revoked-row",
+        "user_id": "legacy-user",
+        "audience": "driver",
+        "token_version": None,
+        "issued_at": "2026-09-20T00:00:00+00:00",
+        "revoked_at": "2026-09-21T00:00:00+00:00",
+        "revocation_reason": "user_logout",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+    }
+    user = {"id": "legacy-user", "token_version": 4, "sessions_invalid_before": None}
+    monkeypatch.setattr(refresh_tokens.db, "find_one", AsyncMock(side_effect=[
+        revoked,
+        user,
+        {"driver_single_session_enabled": False},
+    ]))
+    monkeypatch.setattr(refresh_tokens, "_record_post_revoke_race", AsyncMock())
+
+    assert await refresh_tokens.lookup_refresh_token("presented-token") is None
+
+
+@pytest.mark.anyio
+async def test_driver_session_rpc_returns_atomic_generation_and_previous_session(monkeypatch):
+    from backend.routes import auth
+
+    rpc = AsyncMock(return_value=[
+        {"enabled": True, "token_version": 8, "previous_session_id": "prior-session"}
+    ])
+    monkeypatch.setattr(auth.db_supabase, "rpc", rpc)
+    enabled, version, previous = await auth._begin_driver_session(
+        {"id": "driver-user", "is_driver": True, "token_version": 7}, "next-session"
+    )
+
+    assert (enabled, version, previous) == (True, 8, "prior-session")
+    rpc.assert_awaited_once_with(
+        "begin_driver_session",
+        {"p_user_id": "driver-user", "p_session_id": "next-session"},
+    )
+
+
+@pytest.mark.anyio
+async def test_refresh_does_not_upgrade_null_generation_parent(monkeypatch):
+    from backend.routes import auth
+
+    user = {
+        "id": "legacy-driver",
+        "phone": "+13065550000",
+        "token_version": 4,
+        "sessions_invalid_before": "2026-09-19T00:00:00+00:00",
+        "current_session_id": "session-now",
+    }
+    find_one = AsyncMock(side_effect=[
+        user,
+        {"driver_single_session_enabled": False},
+        user,
+        {"driver_single_session_enabled": False},
+    ])
+    issue = AsyncMock(return_value=("child-token", "child-row", datetime.now(timezone.utc)))
+    jwt_spy = MagicMock(return_value="access-token")
+    monkeypatch.setattr(auth.db, "find_one", find_one)
+    monkeypatch.setattr(auth, "lookup_refresh_token", AsyncMock(return_value={
+        "id": "parent-row",
+        "user_id": user["id"],
+        "audience": "driver",
+        "token_version": None,
+        "issued_at": "2026-09-20T00:00:00+00:00",
+    }))
+    monkeypatch.setattr(auth, "issue_refresh_token", issue)
+    monkeypatch.setattr(auth, "create_jwt_token", jwt_spy)
+
+    class _Body:
+        refresh_token = "parent-token"
+
+    await auth.refresh_access_token(_request(), MagicMock(), _Body())
+
+    assert issue.await_args.kwargs["token_version"] is None
+    assert jwt_spy.call_args.kwargs["token_version"] == 4
+
+
+@pytest.mark.anyio
+async def test_company_email_login_for_driver_uses_generation_rpc():
+    from backend.routes import auth
+
+    user = {
+        "id": "driver-email-user",
+        "phone": "+13065550001",
+        "email": "driver@example.ca",
+        "role": "driver",
+        "is_driver": True,
+        "profile_complete": True,
+        "current_session_id": "company-old-session",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "token_version": 5,
+    }
+    rpc = AsyncMock(return_value=[{"enabled": False}])
+    tombstone = AsyncMock()
+    kick = AsyncMock()
+    offline = AsyncMock()
+    with (
+        patch.object(auth, "_find_user_by_email", AsyncMock(return_value=user)),
+        patch.object(auth.db_supabase, "rpc", rpc),
+        patch.object(auth.db_supabase, "update_one", AsyncMock(return_value=True)),
+        patch.object(auth, "revoke_session", tombstone),
+        patch("backend.socket_manager.manager.kick_user", kick),
+        patch.object(auth, "_offline_driver_for_logout_all", offline),
+        patch.object(auth, "redis_set", AsyncMock()),
+        patch.object(auth, "_activate_pending_company_invites", AsyncMock()),
+        patch.object(auth, "_alert_if_new_device", AsyncMock()),
+        patch.object(auth, "issue_refresh_token", AsyncMock(return_value=("refresh", "row", datetime.now(timezone.utc)))),
+        patch.object(auth, "create_jwt_token", return_value="access"),
+        patch.object(auth, "set_csrf_cookie"),
+    ):
+        result = await auth._issue_company_email_session(
+            request=_request(), response=MagicMock(), email="driver@example.ca"
+        )
+
+    assert result.token == "access"
+    rpc.assert_awaited_once()
+    assert rpc.await_args.args[0] == "begin_driver_session"
+    assert rpc.await_args.args[1]["p_user_id"] == "driver-email-user"
+    assert rpc.await_args.args[1]["p_session_id"]
+    tombstone.assert_awaited_once_with("company-old-session")
+    kick.assert_awaited_once_with(
+        "driver-email-user", client_types=["driver", "rider"], reason="session_superseded"
+    )
+    offline.assert_awaited_once_with("driver-email-user")

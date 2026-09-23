@@ -125,6 +125,20 @@ describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
     expect(mockFetchRide).toHaveBeenCalledWith('ride-001');
   });
 
+  it('refetches the ride after a driver completes a stop', async () => {
+    renderHook(() => useRiderSocket());
+    await act(async () => { await Promise.resolve(); });
+    mockFetchRide.mockClear();
+
+    await act(async () => {
+      instances[0]?.onmessage?.({
+        data: JSON.stringify({ type: 'stops_updated', ride_id: 'ride-001', stops: [{ completed: true }] }),
+      });
+    });
+
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-001');
+  });
+
   it('calls fetchRide again after a reconnect following WS close', async () => {
     renderHook(() => useRiderSocket());
     await act(async () => { await Promise.resolve(); });

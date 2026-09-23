@@ -468,6 +468,8 @@
     "failure_title": "⚠️ Alerte non envoyée",
     "failure_msg": "Impossible de joindre Spinr. Le bouton restera rouge — touchez-le pour réessayer.\n\nVous pouvez appeler le 911 directement dès maintenant.",
     "retry_now": "Réessayer maintenant",
+    "false_alarm_failed_title": "Impossible de confirmer que tout va bien",
+    "false_alarm_failed_msg": "L\u2019alerte SOS reste active. R\u00e9essayez lorsque vous serez en s\u00e9curit\u00e9.",
     "dismiss": "Fermer",
     "no_active_ride_title": "Aucune course active",
     "no_active_ride_msg": "L'alerte d'urgence nécessite une course active. Appelez le 911 directement pour une aide immédiate.",

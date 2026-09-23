@@ -61,6 +61,7 @@ try:
         is_new_device,
         issue_refresh_token,
         lookup_refresh_token,
+        refresh_token_generation_matches,
         revoke_all_for_user,
         revoke_refresh_token,
     )
@@ -119,6 +120,7 @@ except ImportError:
         is_new_device,
         issue_refresh_token,
         lookup_refresh_token,
+        refresh_token_generation_matches,
         revoke_all_for_user,
         revoke_refresh_token,
     )
@@ -637,6 +639,19 @@ async def _issue_company_email_session(
         if status == "pending_deletion":
             raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
         user = dict(existing_user)
+        previous_session_id = user.get("current_session_id")
+        try:
+            driver_session_enabled, token_version, _ = await _begin_driver_session_if_driver(user, session_id)
+            if driver_session_enabled:
+                user["token_version"] = token_version
+        except Exception as e:
+            logger.error("company email auth: atomic driver-session setup failed", exc_info=True)
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         try:
             # Completing this OTP IS proof the person controls the inbox, so
             # stamp email_verified alongside the session. Without it the flag
@@ -646,12 +661,15 @@ async def _issue_company_email_session(
             # email_verified gate then 403'd exactly the employees it exists
             # for (2026-09-20 review, C5).
             _verify_patch = {
-                "current_session_id": session_id,
                 "email_verified": True,
                 "email_verified_at": datetime.now(timezone.utc).isoformat(),
             }
+            if not driver_session_enabled:
+                _verify_patch["current_session_id"] = session_id
             await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
             user.update(_verify_patch)
+            user["current_session_id"] = session_id
+            await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -710,10 +728,14 @@ async def _issue_company_email_session(
         user["id"],
         email,
         session_id=session_id,
-        token_version=int(user.get("token_version") or 0),
+        token_version=token_version if not is_new_user else int(user.get("token_version") or 0),
     )
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user["id"], audience="rider", user_agent=user_agent, ip=client_ip
+        user["id"],
+        audience="rider",
+        user_agent=user_agent,
+        ip=client_ip,
+        token_version=token_version if not is_new_user else int(user.get("token_version") or 0),
     )
     csrf = generate_csrf_token()
     set_csrf_cookie(
@@ -1109,6 +1131,24 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
             logger.info("User exists, creating token")
             session_id = str(uuid.uuid4())
+            previous_session_id = existing_user.get("current_session_id")
+            driver_session_enabled = False
+            token_version = int(existing_user.get("token_version") or 0)
+            try:
+                driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session_if_driver(
+                    existing_user, session_id
+                )
+                if driver_session_enabled:
+                    previous_session_id = rpc_previous_session
+                    existing_user["token_version"] = token_version
+            except Exception as e:
+                logger.error("verify_otp: atomic driver-session setup failed", exc_info=True)
+                raise SpinrException(
+                    message="Could not update session, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from e
             try:
                 _session_update: dict = {"current_session_id": session_id}
                 if existing_user.get("is_guest"):
@@ -1117,12 +1157,34 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                     # proved possession via OTP — the account and its guest
                     # ride history are theirs now.
                     _session_update["is_guest"] = False
-                await db_supabase.update_one(
-                    "users",
-                    {"id": existing_user["id"]},
-                    _session_update,
-                )
+                if not driver_session_enabled:
+                    await db_supabase.update_one(
+                        "users",
+                        {"id": existing_user["id"]},
+                        _session_update,
+                    )
                 existing_user["current_session_id"] = session_id
+                if previous_session_id and str(previous_session_id) != session_id:
+                    try:
+                        await revoke_session(str(previous_session_id))
+                    except Exception:
+                        logger.error("verify_otp: failed to revoke previous session", exc_info=True)
+                    try:
+                        try:
+                            from ..socket_manager import manager as ws_manager
+                        except ImportError:
+                            from socket_manager import manager as ws_manager
+                        await ws_manager.kick_user(
+                            existing_user["id"],
+                            client_types=["driver", "rider"],
+                            reason="session_superseded",
+                        )
+                    except Exception:
+                        logger.error("verify_otp: failed to kick previous device", exc_info=True)
+                    try:
+                        await _offline_driver_for_logout_all(existing_user["id"])
+                    except Exception:
+                        logger.error("verify_otp: failed to offline previous driver session", exc_info=True)
                 if existing_user.get("is_guest"):
                     existing_user["is_guest"] = False
             except Exception as e:
@@ -1162,7 +1224,6 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             user_id = existing_user["id"]
-            token_version = int(existing_user.get("token_version") or 0)
             await _alert_if_new_device(existing_user, user_agent)
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(
@@ -1172,7 +1233,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 token_version=token_version,
             )
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip
+                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
             )
             logger.info("Token created. Validating UserProfile...")
             try:
@@ -1274,7 +1335,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip
+                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=0
             )
             csrf = generate_csrf_token()
             set_csrf_cookie(
@@ -1399,9 +1460,26 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
 
     # Log the user back in (fresh session + tokens), mirroring verify-otp.
     session_id = str(uuid.uuid4())
+    driver_session_enabled = False
+    token_version = int(user.get("token_version") or 0)
+    previous_session_id = user.get("current_session_id")
     try:
-        await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
+        driver_session_enabled, token_version, _ = await _begin_driver_session_if_driver(user, session_id)
+        if driver_session_enabled:
+            user["token_version"] = token_version
+    except Exception as e:
+        logger.error("reactivate: atomic driver-session setup failed", exc_info=True)
+        raise SpinrException(
+            message="Could not update session, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+    try:
+        if not driver_session_enabled:
+            await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
         user["current_session_id"] = session_id
+        await _cleanup_superseded_session(user_id, previous_session_id, session_id)
     except Exception as e:
         # Same defect verify_otp and firebase_auth_login guard against: without
         # a persisted current_session_id, should_tombstone() can never match the
@@ -1420,12 +1498,11 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
     await redis_set(f"session:{user_id}", session_id, ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
-    token_version = int(user.get("token_version") or 0)
     await _alert_if_new_device(user, user_agent)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+        user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
     )
     try:
         user_obj = UserProfile(**user)
@@ -1532,6 +1609,8 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
 
     is_new_user = False
     session_id = str(uuid.uuid4())
+    driver_session_enabled = False
+    previous_session_id = None
     if not user:
         is_new_user = True
         _now_iso = datetime.now(timezone.utc).isoformat()
@@ -1602,8 +1681,25 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             )
         if _fb_status == "deleted" or user.get("deleted_at"):
             raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
+        previous_session_id = user.get("current_session_id")
         try:
-            await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
+            driver_session_enabled, token_version, rpc_previous_session = await _begin_driver_session_if_driver(
+                user, session_id
+            )
+            if driver_session_enabled:
+                previous_session_id = rpc_previous_session
+                user["token_version"] = token_version
+        except Exception as e:
+            logger.error("firebase_auth: atomic driver-session setup failed", exc_info=True)
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
+        try:
+            if not driver_session_enabled:
+                await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
             # Without a persisted current_session_id, single-device login
             # can't enforce ERR_SESSION_EXPIRED on the prior device, and
@@ -1621,12 +1717,26 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             ) from e
         user["current_session_id"] = session_id
 
+    if previous_session_id and str(previous_session_id) != session_id:
+        try:
+            await revoke_session(str(previous_session_id))
+            try:
+                from ..socket_manager import manager as ws_manager
+            except ImportError:
+                from socket_manager import manager as ws_manager
+            await ws_manager.kick_user(
+                user["id"], client_types=["driver", "rider"], reason="session_superseded"
+            )
+            await _offline_driver_for_logout_all(user["id"])
+        except Exception:
+            logger.error("firebase_auth: previous driver session cleanup failed", exc_info=True)
+
     user_id = user["id"]
     token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="driver", user_agent=user_agent, ip=client_ip
+        user_id, audience="driver", user_agent=user_agent, ip=client_ip, token_version=token_version
     )
 
     try:
@@ -1842,6 +1952,12 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # PIPEDA: never rotate/mint tokens for a deletion-requested or purged account.
     # (Deletion also revokes refresh tokens, so this is belt-and-suspenders.)
     _enforce_account_active(user)
+    if not await refresh_token_generation_matches(row, user):
+        raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
+    # The access token reflects the current user generation after the legacy
+    # watermark check, while a NULL-generation parent stays NULL on rotation.
+    # That prevents an old writer's credential from being upgraded by refresh.
+    token_version = int(user.get("token_version") or 0)
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_real_client_ip(request)
@@ -1855,7 +1971,22 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         user_agent=user_agent,
         ip=client_ip,
         replaces=row.get("id"),
+        token_version=row.get("token_version"),
     )
+
+    # A driver login can win while the rotation is writing its child row.
+    # Never upgrade that row or its access token into the winning generation.
+    try:
+        latest_user = await db.find_one("users", {"id": user_id})
+    except Exception as exc:
+        logger.error("refresh: could not recheck session generation", exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+        ) from exc
+    if not latest_user or not await refresh_token_generation_matches(row, latest_user):
+        raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
 
     # NOT `or row.get("user_agent")`: refresh_tokens has no session-id column
     # (migration 25), so that fallback put a client-supplied User-Agent string
@@ -1870,7 +2001,6 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # operation, and two devices refreshing concurrently would fight over
     # current_session_id and start kicking each other off.
     session_id = user.get("current_session_id") or ""
-    token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
         user_id,
@@ -2096,6 +2226,63 @@ _LOGOUT_ALL_OBLIGATED_RIDE_STATUSES = (
 )
 
 
+async def _begin_driver_session(user: dict, session_id: str) -> tuple[bool, int, Optional[str]]:
+    """Atomically establish a new driver generation when the rollout is enabled."""
+    result = await db_supabase.rpc(
+        "begin_driver_session",
+        {"p_user_id": str(user["id"]), "p_session_id": session_id},
+    )
+    if isinstance(result, list):
+        result = result[0] if result else None
+    if isinstance(result, dict) and "begin_driver_session" in result:
+        result = result["begin_driver_session"]
+    if not isinstance(result, dict) or "enabled" not in result:
+        raise RuntimeError("begin_driver_session returned no status")
+    if not result["enabled"]:
+        return False, int(user.get("token_version") or 0), user.get("current_session_id")
+    return True, int(result.get("token_version") or 0), result.get("previous_session_id")
+
+
+async def _begin_driver_session_if_driver(
+    user: dict, session_id: str
+) -> tuple[bool, int, Optional[str]]:
+    """Use stored role flags first, then confirm a linked active driver row.
+
+    Auth lookups return raw ``users`` rows; unlike ``get_current_user``, they
+    do not enrich a stale ``is_driver`` value from ``drivers``. That linked row
+    is authoritative when both stored role fields are false or missing.
+    """
+    if user.get("is_driver") or user.get("role") == "driver":
+        return await _begin_driver_session(user, session_id)
+    driver = await db_supabase.get_driver_by_user_id_cached(str(user["id"]))
+    if driver:
+        return await _begin_driver_session(user, session_id)
+    return False, int(user.get("token_version") or 0), user.get("current_session_id")
+
+
+async def _cleanup_superseded_session(user_id: str, previous_session_id: Optional[str], session_id: str) -> None:
+    """Tombstone and disconnect the old session, then clean driver presence."""
+    if not previous_session_id or str(previous_session_id) == session_id:
+        return
+    try:
+        await revoke_session(str(previous_session_id))
+    except Exception:
+        logger.error("auth: failed to tombstone superseded session", exc_info=True)
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id,
+            client_types=["driver", "rider"],
+            reason="session_superseded",
+        )
+    except Exception:
+        logger.error("auth: failed to kick superseded session sockets", exc_info=True)
+    await _offline_driver_for_logout_all(user_id)
+
+
 async def _offline_driver_for_logout_all(user_id: str) -> None:
     """Best-effort: take this user's driver row offline inside logout-all.
 
@@ -2132,6 +2319,68 @@ async def _offline_driver_for_logout_all(user_id: str) -> None:
         if obligated:
             return
         now_iso = datetime.now(timezone.utc).isoformat()
+        pending_offers = await db.get_rows(
+            "ride_offers",
+            {"driver_id": driver_id, "status": "pending"},
+            limit=5,
+        )
+        for offer in pending_offers or []:
+            offer_claimed = await db.update_one(
+                "ride_offers",
+                {"id": offer.get("id"), "status": "pending"},
+                {"status": "declined", "responded_at": now_iso},
+            )
+            # A concurrent accept/decline owns this row if the conditional
+            # update returned no row. Never clean up its ride or driver state.
+            if not offer_claimed:
+                continue
+            offer_ride_id = offer.get("ride_id")
+            if offer_ride_id:
+                ride_reverted = await db.update_one(
+                    "rides",
+                    {"id": offer_ride_id, "driver_id": driver_id, "status": RideStatus.DRIVER_ASSIGNED},
+                    {
+                        "status": RideStatus.SEARCHING,
+                        "driver_id": None,
+                        "updated_at": now_iso,
+                    },
+                )
+                if ride_reverted:
+                    rider_id = ride_reverted.get("rider_id")
+                    if not rider_id:
+                        current_ride = await db.get_ride(offer_ride_id)
+                        rider_id = (current_ride or {}).get("rider_id")
+                    if rider_id:
+                        try:
+                            from ..socket_manager import manager as ws_manager
+                        except ImportError:
+                            from socket_manager import manager as ws_manager
+                        await ws_manager.send_personal_message(
+                            {
+                                "type": "driver_timeout",
+                                "ride_id": offer_ride_id,
+                                "message": "Driver didn't respond. Finding another driver...",
+                            },
+                            f"rider_{rider_id}",
+                        )
+                    try:
+                        from .rides import match_driver_to_ride
+                    except ImportError:
+                        from rides import match_driver_to_ride  # type: ignore
+                    _spawn(match_driver_to_ride(offer_ride_id))
+
+        # An acceptance may have committed after the first busy check but
+        # before offer cleanup. Preserve the live ride and its insurance period.
+        obligated_after_declines = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver_id,
+                "status": {"$in": list(_LOGOUT_ALL_OBLIGATED_RIDE_STATUSES)},
+            },
+            limit=1,
+        )
+        if obligated_after_declines:
+            return
         await db.update_one(
             "drivers",
             {"id": driver_id},

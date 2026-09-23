@@ -220,15 +220,48 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
     # (cold start / reconnect path). The polygon is non-sensitive geodata.
     service_area_polygon = None
     sa_id = ride.get("service_area_id")
+    sa = None
+    area_loaded = False
+    noshow_eligible_at = None
+    arrived_at = parse_iso_utc(ride.get("driver_arrived_at"))
+    if ride.get("status") == RideStatus.DRIVER_ARRIVED and arrived_at is not None:
+        try:
+            from ...settings_loader import get_app_settings
+            from ...utils.scheduled_ride_config import pickup_wait_start
+        except ImportError:
+            from settings_loader import get_app_settings
+            from utils.scheduled_ride_config import pickup_wait_start
+        try:
+            # Match mark_rider_noshow: area override (including zero), then
+            # app settings, starting no earlier than a scheduled pickup.
+            settings = await get_app_settings() or {}
+            if sa_id:
+                sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+                area_loaded = True
+            wait_seconds = int(
+                sa["noshow_wait_seconds"]
+                if sa and sa.get("noshow_wait_seconds") is not None
+                else settings.get("noshow_wait_seconds", 300)
+            )
+            noshow_eligible_at = (pickup_wait_start(ride, arrived_at) + timedelta(seconds=wait_seconds)).isoformat()
+        except Exception as error:
+            original = (getattr(error, "details", None) or {}).get("original", error)
+            logger.error("get_active_ride: no-show policy unavailable: %s", original, exc_info=True)
+            raise HTTPException(status_code=503, detail="Could not load no-show eligibility. Please retry.") from error
     if sa_id:
         try:
-            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            if not area_loaded:
+                sa = await db_supabase.find_one("service_areas", {"id": sa_id})
             service_area_polygon = get_service_area_polygon(sa or {}) or None
         except Exception as e:
             logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
 
     return {
-        "ride": serialize_ride_for_driver(ride),
+        "ride": {
+            **serialize_ride_for_driver(ride),
+            "noshow_eligible_at": noshow_eligible_at,
+            "noshow_server_now": datetime.now(timezone.utc).isoformat(),
+        },
         "rider": safe_rider,
         "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
         "incentives": incentives,
@@ -434,6 +467,8 @@ async def get_ride_offer(ride_id: str, request: Request = None, current_user: di
         "rider_name": first_name_only(rider) or None,
         "rider_rating": (rider or {}).get("rating"),
         "requires_wav": bool(ride.get("requires_wav")),
+        "service_animal": bool(ride.get("service_animal")),
+        "stops": ride.get("stops") or [],
         "quiet_mode": bool(ride.get("quiet_mode")),
         "is_scheduled": bool(ride.get("is_scheduled")),
         "scheduled_time": ride.get("scheduled_time"),
@@ -445,6 +480,56 @@ async def get_ride_offer(ride_id: str, request: Request = None, current_user: di
         "quest_hint": quest_hint,
         "payment_method": ride.get("payment_method"),
     }
+
+
+@router.get("/rides/upcoming")
+@ride_read_limit
+async def get_upcoming_scheduled_rides(
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Accepted scheduled rides that have not started yet."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    rows = await db_supabase.get_rows(
+        "rides",
+        {
+            "driver_id": driver["id"],
+            "is_scheduled": True,
+            "status": {"$in": ["scheduled", "driver_accepted", "driver_arrived"]},
+        },
+        limit=50,
+    )
+    now = datetime.now(timezone.utc)
+    upcoming = []
+    for ride in rows or []:
+        raw = ride.get("scheduled_time")
+        when = None
+        if isinstance(raw, datetime):
+            when = raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+            except ValueError:
+                when = None
+        if when is None or when < now:
+            continue
+        upcoming.append(
+            {
+                "id": ride.get("id"),
+                "status": ride.get("status"),
+                "scheduled_time": raw,
+                "pickup_address": ride.get("pickup_address"),
+                "dropoff_address": ride.get("dropoff_address"),
+            }
+        )
+    upcoming.sort(key=lambda row: str(row.get("scheduled_time") or ""))
+    return {"rides": upcoming}
 
 
 @router.get("/rides/history")

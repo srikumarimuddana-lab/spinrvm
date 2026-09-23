@@ -93,7 +93,7 @@ export function getVehicleStepError(input: BecomeDriverVehicleStepInput): { titl
   );
   if (!hasInfo) return null;
   if (!isVehicleYearValid(input.vehicleYear)) {
-    return { title: 'Invalid Year', message: 'Vehicle must be 9 years old or newer.' };
+    return { title: 'Invalid Year', message: 'Vehicles must be under 10 years old.' };
   }
   if (!isVehicleInfoComplete(input.vehicleMake, input.vehicleModel, input.licensePlate, input.vehicleType)) {
     return { title: 'Incomplete Vehicle Info', message: 'Please complete all vehicle fields or use "Skip for now".' };

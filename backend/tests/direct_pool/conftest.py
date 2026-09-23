@@ -341,7 +341,7 @@ def pg_conn(pg_test_dbname):
     bootstrap = psycopg2.connect(_DSN)
     bootstrap.autocommit = True
     with bootstrap.cursor() as bcur:
-        bcur.execute(f"CREATE DATABASE {pg_test_dbname}")
+        bcur.execute(f"CREATE DATABASE {pg_test_dbname} TEMPLATE template0 ENCODING 'UTF8'")
     bootstrap.close()
 
     conn = psycopg2.connect(_dsn_with_dbname(_DSN, pg_test_dbname))

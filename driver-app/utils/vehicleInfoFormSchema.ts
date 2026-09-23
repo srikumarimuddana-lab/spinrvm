@@ -58,7 +58,10 @@ export function isVehicleModelValid(vehicleModel: string): boolean {
 export function isVehicleYearValid(vehicleYear: string): boolean {
   const trimmed = vehicleYear.trim();
   if (!trimmed) return false;
-  return Number.isFinite(parseInt(trimmed, 10));
+  const year = parseInt(trimmed, 10);
+  if (!Number.isFinite(year)) return false;
+  // Same rule as become-driver: vehicles must be under 10 years old.
+  return year >= new Date().getFullYear() - 9;
 }
 
 /** Mirrors the original `form.license_plate.trim()` check exactly. */
@@ -77,7 +80,7 @@ export const vehicleInfoFormSchema = z.object({
     message: 'Please enter your vehicle model.',
   }),
   vehicleYear: z.string().refine(isVehicleYearValid, {
-    message: 'Please enter a valid vehicle year.',
+    message: 'Vehicles must be under 10 years old.',
   }),
   licensePlate: z.string().refine(isLicensePlateValid, {
     message: 'Please enter your license plate.',

@@ -96,7 +96,7 @@ def _patches(*, current_online: bool, offers: list, flag_on: bool, ride_offers_c
             if filters.get("status") != "pending" or filters.get("driver_id") != DRIVER_ID:
                 return []
             return offers
-        if table in ("driver_documents", "service_areas", "settings", "app_settings"):
+        if table in ("driver_documents", "service_areas", "settings", "app_settings", "legal_documents"):
             return []
         raise AssertionError(f"unexpected table {table}")
 
@@ -183,18 +183,13 @@ class TestIdempotentReassertIsNeverBlocked:
         assert calls == [], "not a flip -> the guard must not even query ride_offers"
 
 
-class TestFlagOffIsUnchanged:
-    """OFF is what production runs until an operator flips it, so the old
-    behaviour — the driver CAN go offline mid-offer — must be reproduced
-    exactly, including not spending the extra `ride_offers` read."""
+class TestFlagOffStillRejectsLiveOffer:
+    """The pending-offer 409 is no longer flag-gated. A driver with a live
+    batch offer cannot go offline even when the old setting is off."""
 
     @pytest.mark.anyio
-    async def test_live_offer_still_allows_go_offline(self):
-        result, _ = await _run(current_online=True, offers=[_live_offer()], flag_on=False)
-        assert result["success"] is True
-
-    @pytest.mark.anyio
-    async def test_flag_off_makes_no_extra_ride_offers_query(self):
-        """Not just 'same result' — OFF must cost nothing extra either."""
-        _, calls = await _run(current_online=True, offers=[_live_offer()], flag_on=False)
-        assert calls == [], "flag OFF must not query ride_offers on the offline path at all"
+    async def test_live_offer_409s_even_when_flag_off(self):
+        exc, calls = await _run_expect_409(current_online=True, offers=[_live_offer()], flag_on=False)
+        assert exc.status_code == 409
+        assert "pending ride offer" in exc.detail
+        assert calls, "the guard must read ride_offers even when the old flag is off"

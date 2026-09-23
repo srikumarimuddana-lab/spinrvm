@@ -62,17 +62,23 @@ async def create_dispute(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("rider_id") != current_user["id"]:
+    is_rider = ride.get("rider_id") == current_user["id"]
+    is_assigned_driver = False
+    if not is_rider:
+        driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        driver_row = driver_rows[0] if driver_rows else None
+        is_assigned_driver = bool(driver_row and ride.get("driver_id") == driver_row.get("id"))
+    if not is_rider and not is_assigned_driver:
         raise HTTPException(status_code=403, detail="Not authorized for this ride")
 
     if ride.get("status") not in ("completed", "cancelled"):
         raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
-    # Check for existing open dispute on same ride
+    # Each party may raise an independent claim for the same ride.
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "disputes",
-            {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}},
+            {"ride_id": req.ride_id, "user_id": current_user["id"], "status": {"$in": ["open", "under_review"]}},
             limit=1,
         )
     )
@@ -85,7 +91,11 @@ async def create_dispute(
         "user_id": current_user["id"],
         "reason": req.reason,
         "description": req.description,
-        "requested_amount": req.requested_amount or ride.get("total_fare", 0),
+        "requested_amount": (
+            ride.get("driver_earnings")
+            if is_assigned_driver and req.requested_amount is None
+            else (req.requested_amount or ride.get("total_fare", 0))
+        ),
         "original_fare": ride.get("total_fare", 0),
         "status": "open",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -94,15 +104,16 @@ async def create_dispute(
 
     await db_supabase.insert_one("disputes", dispute)
 
-    rider_id = ride.get("rider_id") or current_user["id"]
-    if rider_id:
+    notify_user_id = current_user["id"] if is_assigned_driver else (ride.get("rider_id") or current_user["id"])
+    notify_app = "driver" if is_assigned_driver else "rider"
+    if notify_user_id:
         try:
             await send_push_notification(
-                rider_id,
+                notify_user_id,
                 "Dispute received",
                 "We've received your dispute and will review it within 1-2 business days.",
                 data={"type": "dispute_created", "dispute_id": str(dispute["id"])},
-                target_app="rider",
+                target_app=notify_app,
             )
         except Exception as notif_err:
             logger.debug(f"Dispute created notification failed: {notif_err}")
@@ -215,12 +226,27 @@ async def admin_resolve_dispute(
             detail=f"Refund amount ${req.refund_amount} exceeds original fare ${original_fare}",
         )
 
+    ride = await db_supabase.get_ride(dispute.get("ride_id"))
+    claimant = dispute.get("user_id")
+    target_app = "rider"
+    if not ride or not claimant:
+        raise HTTPException(status_code=409, detail="Dispute ownership requires manual review")
+    if claimant != ride.get("rider_id"):
+        drivers = await db_supabase.get_rows("drivers", {"id": ride.get("driver_id")}, limit=1)
+        if not drivers or drivers[0].get("user_id") != claimant:
+            raise HTTPException(status_code=409, detail="Dispute ownership requires manual review")
+        target_app = "driver"
+        if req.resolution != "rejected":
+            raise HTTPException(
+                status_code=409,
+                detail="Driver earnings disputes require manual earnings review; no rider refund was issued",
+            )
+
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         # HALF_UP cents conversion — int() truncation shaved sub-cent refund
         # amounts (e.g. 10.005 → 1000 cents instead of 1001).
         refund_amount_cents = dollars_to_cents(req.refund_amount)
-        ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -317,7 +343,7 @@ async def admin_resolve_dispute(
                     "dispute_id": str(dispute_id),
                     "resolution": req.resolution,
                 },
-                target_app="rider",
+                target_app=target_app,
             )
         except Exception as notif_err:
             logger.debug(f"Dispute resolved notification failed: {notif_err}")

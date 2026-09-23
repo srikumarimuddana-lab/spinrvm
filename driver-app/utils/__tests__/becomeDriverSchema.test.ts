@@ -89,7 +89,7 @@ describe('getVehicleStepError', () => {
   it('rejects an invalid year when info was started', () => {
     expect(getVehicleStepError({ ...base, vehicleMake: 'Toyota', vehicleYear: String(currentYear - 10) })).toEqual({
       title: 'Invalid Year',
-      message: 'Vehicle must be 9 years old or newer.',
+      message: 'Vehicles must be under 10 years old.',
     });
   });
 
@@ -103,7 +103,7 @@ describe('getVehicleStepError', () => {
   it('checks year validity before completeness (first-error-wins order)', () => {
     expect(
       getVehicleStepError({ ...base, vehicleMake: 'Toyota', vehicleYear: String(currentYear - 10) }),
-    ).toEqual({ title: 'Invalid Year', message: 'Vehicle must be 9 years old or newer.' });
+    ).toEqual({ title: 'Invalid Year', message: 'Vehicles must be under 10 years old.' });
   });
 });
 

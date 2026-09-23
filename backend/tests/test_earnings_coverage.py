@@ -208,6 +208,38 @@ class TestGetDriverBalanceBonusFetchFailure:
         assert exc.value.status_code == 503
 
 
+class TestGetDriverBalanceRefundHoldReporting:
+    async def test_clawback_reduces_available_balance_but_is_not_cash_paid(self):
+        from backend.routes.drivers import get_driver_balance
+
+        payout_rows = [
+            {"amount": "5.00", "status": "completed", "payout_type": "clawback"},
+            {"amount": "20.00", "status": "completed", "payout_type": "standard"},
+        ]
+
+        def get_rows(table, filters=None, **kwargs):
+            return {
+                "drivers": [_driver()],
+                "rides": [_ride(driver_earnings="30.00", tip_amount=0)],
+                "payouts": payout_rows,
+                "driver_bonuses": [],
+            }.get(table, [])
+
+        with (
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+            patch("backend.db_supabase.count_documents", AsyncMock(return_value=1)),
+            patch("backend.db_supabase.supabase") as mock_supabase,
+        ):
+            mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+                data=[]
+            )
+            result = await get_driver_balance(current_user={"id": USER_ID})
+
+        assert result["payable_balance"] == "5.00"
+        assert result["total_paid_out"] == "20.00"
+        assert result["refund_holds_total"] == "5.00"
+
+
 # ============================================================
 # get_driver_bonuses
 # ============================================================

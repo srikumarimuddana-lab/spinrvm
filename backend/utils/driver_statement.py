@@ -175,6 +175,7 @@ _PAYOUT_TYPE_LABELS = {
     # this one can appear with a non-'completed' status (see the
     # is_unsettled_correction handling above) while stripe_sync never does.
     "legacy_outstanding_correction": "Previous app payout (outstanding correction)",
+    "clawback": "Refund hold adjustment",
 }
 
 
@@ -320,7 +321,15 @@ async def _build(
         # yet transferred. It still appears in payouts_out below (so the
         # statement shows it), just excluded from the paid-out totals.
         is_held_over_cap = status == "held_over_cap"
-        if status not in ("reversed", "failed") and not is_unsettled_correction and not is_held_over_cap:
+        # Refund holds are completed ledger adjustments that reduce the
+        # driver's available balance, but they are not cash sent to a bank.
+        is_refund_hold = payout_type == "clawback"
+        if (
+            status not in ("reversed", "failed")
+            and not is_unsettled_correction
+            and not is_held_over_cap
+            and not is_refund_hold
+        ):
             payouts_total += amount
             if payout_type in ("stripe_sync", "legacy_outstanding_correction"):
                 payouts_previous_app += amount

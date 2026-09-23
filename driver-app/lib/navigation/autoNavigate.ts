@@ -9,9 +9,8 @@
  * reopen Spinr to tap "Arrived" would re-fire the hand-off and bounce them
  * straight back out to Maps — at the exact moment they need the Spinr screen.
  *
- * One key is enough for both legs because legs are strictly sequential: the ride
- * state machine has no path from `in_progress` back to `driver_accepted`, so a
- * dropoff marker can never need to coexist with a pickup one.
+ * A route key distinguishes successive intermediate stops in the dropoff leg;
+ * without it, a rider's live stop edit would keep the old Maps destination.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -32,8 +31,8 @@ export function _resetAutoNavClaimForTest(): void {
  * Claim the auto-launch for one ride leg. Returns true exactly once per leg —
  * the caller should launch navigation only on a true.
  */
-export async function claimAutoNavLeg(rideId: string, leg: NavLeg): Promise<boolean> {
-  const marker = `${rideId}:${leg}`;
+export async function claimAutoNavLeg(rideId: string, leg: NavLeg, destinationKey?: string): Promise<boolean> {
+  const marker = `${rideId}:${leg}${destinationKey ? `:${destinationKey}` : ''}`;
   if (claimedInProcess === marker) return false;
   claimedInProcess = marker;
 

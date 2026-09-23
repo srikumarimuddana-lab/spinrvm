@@ -125,6 +125,13 @@ export function useRiderSocket() {
         }
         break;
 
+      // Driver marked an intermediate stop complete. The persisted ordered
+      // route is authoritative, so refetch instead of merging a partial stop
+      // list into the local ride cache.
+      case 'stops_updated':
+        if (rideId) fetchRide(rideId);
+        break;
+
       case 'ride_completed':
         if (rideId) {
           applyRideStatusFromWS(rideId, RideStatus.COMPLETED, {

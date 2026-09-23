@@ -48,6 +48,7 @@ def _driver_row(**extra) -> dict:
         # unchanged (same "default is always-eligible" pattern as the two
         # fields above).
         "license_issue_date": (datetime.now(timezone.utc) - timedelta(days=365 * 10)).date().isoformat(),
+        "date_of_birth": (datetime.now(timezone.utc) - timedelta(days=365 * 30)).date().isoformat(),
         **extra,
     }
 
@@ -294,13 +295,18 @@ class TestGoOnlineEligibilityRecheck:
         assert result["success"] is True
         assert writes
 
-    async def test_missing_license_class_is_not_blocked(self):
-        """A driver whose license_class was never backfilled (ACTION_ITEMS.md
-        B14) must not be retroactively locked out by this fix — unknown data
-        is left unblocked, not guessed at."""
-        result, writes = await self._go_online({"license_class": None})
+    async def test_missing_license_class_is_not_blocked_when_flag_off(self):
+        """Unknown licence class stays unblocked until the eligibility flag is on."""
+        result, writes = await self._go_online({"license_class": None}, flag_enabled=False)
         assert result["success"] is True
         assert writes
+
+    async def test_missing_license_class_is_blocked_when_flag_on(self):
+        from backend.utils.error_handling import ErrorCode, SpinrException
+
+        with pytest.raises(SpinrException) as excinfo:
+            await self._go_online({"license_class": None}, flag_enabled=True)
+        assert excinfo.value.error_code == ErrorCode.DRIVER_DOCUMENTS_PENDING
 
     async def test_vehicle_ten_years_old_is_rejected(self):
         """Vehicle age >= 10 years must be rejected with a distinct error,
@@ -322,16 +328,13 @@ class TestGoOnlineEligibilityRecheck:
 
     async def test_missing_vehicle_year_is_not_blocked(self):
         """No vehicle_year on file must not be guessed at / blocked."""
-        result, writes = await self._go_online({"vehicle_year": None})
+        result, writes = await self._go_online({"vehicle_year": None}, flag_enabled=False)
         assert result["success"] is True
         assert writes
 
-    async def test_flag_disabled_does_not_block_otherwise_ineligible_driver(self):
-        """Dark-ship default: with enforce_driver_eligibility_recheck OFF
-        (the shipped default), even a driver who WOULD fail both new checks
-        must go online unchanged — this fix must not regress any
-        currently-active driver until an operator explicitly flips the flag
-        on after verifying it in staging (CLAUDE.md gate #3)."""
+    async def test_flag_off_does_not_block_otherwise_ineligible_driver(self):
+        """The eligibility flag is the rollout switch. Off leaves a Class 4
+        driver able to go online."""
         old_year = datetime.now(timezone.utc).year - 15
         result, writes = await self._go_online(
             {"license_class": "4", "sgi_approved": False, "vehicle_year": old_year},
@@ -373,14 +376,37 @@ class TestGoOnlineEligibilityRecheck:
         capturing it) must not be retroactively locked out — unknown data
         is left unblocked, not guessed at, same fail-safe direction as the
         license_class/vehicle_year sub-checks."""
-        result, writes = await self._go_online({"license_issue_date": None})
+        result, writes = await self._go_online({"license_issue_date": None}, flag_enabled=False)
         assert result["success"] is True
         assert writes
 
-    async def test_flag_disabled_does_not_block_insufficient_experience_driver(self):
-        """Dark-ship default: with enforce_driver_eligibility_recheck OFF,
-        a driver who would fail the new experience sub-check must still go
-        online unchanged (CLAUDE.md gate #3)."""
+    async def test_underage_date_of_birth_is_rejected(self):
+        from backend.utils.error_handling import ErrorCode, SpinrException
+
+        minor = (datetime.now(timezone.utc) - timedelta(days=365 * 16)).date().isoformat()
+        with pytest.raises(SpinrException) as excinfo:
+            await self._go_online({"date_of_birth": minor})
+        assert excinfo.value.error_code == ErrorCode.DRIVER_UNDERAGE
+
+    async def test_adult_date_of_birth_goes_online(self):
+        adult = (datetime.now(timezone.utc) - timedelta(days=365 * 25)).date().isoformat()
+        result, writes = await self._go_online({"date_of_birth": adult})
+        assert result["success"] is True
+        assert writes
+
+    async def test_iso_datetime_eligibility_values_remain_supported(self):
+        adult = (datetime.now(timezone.utc) - timedelta(days=365 * 25)).isoformat()
+        issue_date = (datetime.now(timezone.utc) - timedelta(days=365 * 4)).isoformat()
+        result, writes = await self._go_online({"date_of_birth": adult, "license_issue_date": issue_date})
+        assert result["success"] is True
+        assert writes
+
+    async def test_missing_date_of_birth_is_not_blocked(self):
+        result, writes = await self._go_online({"date_of_birth": None}, flag_enabled=False)
+        assert result["success"] is True
+        assert writes
+
+    async def test_experience_is_not_enforced_when_the_flag_is_off(self):
         recent_issue_date = (datetime.now(timezone.utc) - timedelta(days=365)).date().isoformat()
         result, writes = await self._go_online(
             {"license_issue_date": recent_issue_date},
@@ -388,3 +414,49 @@ class TestGoOnlineEligibilityRecheck:
         )
         assert result["success"] is True
         assert writes
+
+    @pytest.mark.parametrize("field,value", [
+        ("date_of_birth", "not-a-date"),
+        ("date_of_birth", ""),
+        ("license_issue_date", "not-a-date"),
+        ("license_issue_date", ""),
+        ("vehicle_year", "20xx"),
+        ("vehicle_year", ""),
+    ])
+    async def test_malformed_required_eligibility_values_block_go_online(self, field, value):
+        from backend.utils.error_handling import ErrorCode, SpinrException
+
+        with pytest.raises(SpinrException) as excinfo:
+            await self._go_online({field: value})
+        assert excinfo.value.error_code == ErrorCode.DRIVER_DOCUMENTS_PENDING
+        assert "Update your profile" in excinfo.value.action_hint
+
+
+@pytest.mark.anyio
+async def test_published_crc_consent_blocks_go_online_until_current():
+    from backend.routes import drivers as drv_mod
+    from backend.utils.error_handling import ErrorCode, SpinrException
+
+    driver = _driver_row()
+
+    async def _get_rows(table, filters=None, limit=None, **kwargs):
+        if table == "legal_documents":
+            return [{"content": "I consent", "version": 2}]
+        return []
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"enforce_driver_eligibility_recheck": True}),
+        ),
+        patch("backend.services.driver_crc_consent.is_consent_current", AsyncMock(return_value=False)),
+    ):
+        with pytest.raises(SpinrException) as excinfo:
+            await drv_mod.update_driver_status(
+                driver_id=DRIVER_ID,
+                is_online=True,
+                current_user={"id": DRIVER_USER_ID},
+            )
+    assert excinfo.value.error_code == ErrorCode.DRIVER_CRC_CONSENT_REQUIRED

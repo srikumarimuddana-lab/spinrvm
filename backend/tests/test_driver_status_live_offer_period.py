@@ -73,7 +73,7 @@ def _patches(*, current_online: bool, requested_online: bool, offers: list, flag
             return []  # batch dispatch: no rides.driver_id link pre-acceptance
         if table == "ride_offers":
             return offers
-        if table in ("driver_documents", "service_areas", "settings", "app_settings"):
+        if table in ("driver_documents", "service_areas", "settings", "app_settings", "legal_documents"):
             return []
         raise AssertionError(f"unexpected table {table}")
 
@@ -122,13 +122,14 @@ async def _run(*, current_online, requested_online, offers, flag_on):
 
 class TestFlagOnPreservesPeriodTwo:
     @pytest.mark.anyio
-    async def test_go_offline_during_a_live_offer_records_period_2(self):
-        """The core fix: obligation follows the ride, not the toggle."""
-        period_mock, result = await _run(
-            current_online=True, requested_online=False, offers=[_live_offer()], flag_on=True
-        )
-        assert result["success"] is True
-        period_mock.assert_awaited_once_with(DRIVER_ID, 2, ride_id=OFFER_RIDE_ID)
+    async def test_go_offline_during_a_live_offer_is_rejected(self):
+        """A pending offer blocks the offline toggle before any period write.
+        The Period 2 row opened at claim time is left in place."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await _run(current_online=True, requested_online=False, offers=[_live_offer()], flag_on=True)
+        assert exc.value.status_code == 409
 
     @pytest.mark.anyio
     async def test_go_online_during_a_live_offer_records_period_2(self):
@@ -150,9 +151,14 @@ class TestFlagOffIsUnchanged:
     behaviour — bug included — must be reproduced exactly."""
 
     @pytest.mark.anyio
-    async def test_go_offline_during_a_live_offer_still_records_period_0(self):
-        period_mock, _ = await _run(current_online=True, requested_online=False, offers=[_live_offer()], flag_on=False)
-        period_mock.assert_awaited_once_with(DRIVER_ID, 0)
+    async def test_go_offline_during_a_live_offer_is_rejected_before_period_write(self):
+        """Going offline during a pending offer 409s before any period row.
+        The insurance-period flag does not reopen that toggle."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await _run(current_online=True, requested_online=False, offers=[_live_offer()], flag_on=False)
+        assert exc.value.status_code == 409
 
     @pytest.mark.anyio
     async def test_go_online_during_a_live_offer_still_records_period_1(self):

@@ -219,6 +219,7 @@ async def test_admin_get_disputes_empty_list_skips_user_ride_queries():
 
 
 async def _resolve(req, dispute=None, ride=None, get_rows=None, extra_patches=None):
+    ride = {"id": "ride_1", "rider_id": "user_1", **(ride or {})}
     overrides = {
         "backend.routes.disputes.db_supabase.get_rows": get_rows
         or AsyncMock(return_value=[dispute] if dispute else []),
@@ -425,17 +426,57 @@ async def test_resolve_notification_wording_rejected():
     assert captured["body"] == "Your dispute has been rejected."
 
 
-async def test_resolve_dispute_no_rider_id_skips_notification():
-    """dispute.get('user_id') falsy -> the notification block is skipped
-    entirely (covers the `if rider_id:` False path)."""
+async def test_resolve_dispute_no_claimant_requires_manual_review():
+    """Missing ownership must not silently resolve a historical claim."""
     dispute = {**DISPUTE_ROW, "user_id": None}
     req = ResolveDisputeRequest(resolution="rejected")
     push = AsyncMock()
-    result = await _resolve(
-        req,
-        dispute=dispute,
-        ride=None,
-        extra_patches={"backend.routes.disputes.send_push_notification": push},
-    )
-    assert result["success"] is True
+    with pytest.raises(Exception) as error:
+        await _resolve(
+            req,
+            dispute=dispute,
+            ride=None,
+            extra_patches={"backend.routes.disputes.send_push_notification": push},
+        )
+    assert error.value.status_code == 409
     push.assert_not_awaited()
+
+
+@pytest.mark.parametrize("claimant,other", [("user_1", "driver_user"), ("driver_user", "user_1")])
+async def test_open_dispute_by_other_party_does_not_block_claimant(claimant, other):
+    """Independent rider and driver claims on one trip may coexist."""
+    ride = dict(RIDE_ROW, driver_id="driver_1", driver_earnings="20.00")
+    existing = dict(DISPUTE_ROW, user_id=other)
+
+    async def rows(table, filters, **kwargs):
+        if table == "drivers":
+            return [{"id": "driver_1", "user_id": "driver_user"}]
+        if table == "disputes":
+            return [existing] if filters.get("user_id", other) == other else []
+        raise AssertionError(table)
+
+    with _MultiPatch(_patch_disputes(**{
+        "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=ride),
+        "backend.routes.disputes.db_supabase.get_rows": AsyncMock(side_effect=rows),
+    })):
+        result = await create_dispute(
+            CreateDisputeRequest(ride_id="ride_1", reason="payment_error", description="Review charge"),
+            current_user={"id": claimant},
+        )
+    assert result["success"] is True
+    assert result["dispute"]["user_id"] == claimant
+
+
+async def test_open_dispute_by_same_claimant_still_blocks_duplicate():
+    from fastapi import HTTPException
+
+    with _MultiPatch(_patch_disputes(**{
+        "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=dict(RIDE_ROW)),
+        "backend.routes.disputes.db_supabase.get_rows": AsyncMock(return_value=[dict(DISPUTE_ROW)]),
+    })):
+        with pytest.raises(HTTPException) as error:
+            await create_dispute(
+                CreateDisputeRequest(ride_id="ride_1", reason="payment_error", description="Review charge"),
+                current_user=dict(RIDER),
+            )
+    assert error.value.status_code == 400

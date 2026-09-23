@@ -1051,12 +1051,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           pickup_lng: pLng,
           dropoff_lat: dLat,
           dropoff_lng: dLng,
-          fare: data.fare || 0,
+          fare: data.fare ?? '',
           distance_km: data.distance_km,
           duration_minutes: data.duration_minutes,
           rider_name: data.rider_name,
           rider_rating: data.rider_rating,
           requires_wav: data.requires_wav === true,
+          service_animal: data.service_animal === true,
+          stops: Array.isArray(data.stops) ? data.stops : undefined,
           quiet_mode: data.quiet_mode === true,
           is_scheduled: data.is_scheduled === true,
           scheduled_time: data.scheduled_time,
@@ -1102,6 +1104,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         showToast('info', 'Ride taken', 'Another driver accepted this ride.');
         break;
       }
+      case 'session_revoked':
+        if (data.reason === 'session_superseded') {
+          showAlert(
+            'Signed in on another phone',
+            'This phone was signed out because your account signed in somewhere else.',
+          );
+          setIsOnline(false);
+          void useAuthStore.getState().logout({ revokeServerSession: false });
+        }
+        break;
       case 'auto_offline':
         // Backend took the driver offline after N consecutive missed offers.
         offerSound.stop();
@@ -1111,6 +1123,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           'You\'re now offline',
           data.message || 'You were taken offline because you missed several ride offers in a row. Tap "Go Online" when you\'re ready.',
         );
+        break;
+      case 'stops_updated':
+        showToast('info', 'Route updated', 'The rider changed the stops on this trip.');
+        void fetchActiveRide();
         break;
       case 'ride_cancelled':
         showToast(
@@ -1866,6 +1882,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         } else if (status === 403 && errCode === 5006) {
           // Daily Spinr Pass ride allowance used up — resets at local midnight.
           showToast('info', "Daily ride limit reached", reason || "You've used today's Spinr Pass rides. They reset at midnight.");
+        } else if (status === 409) {
+          showToast(
+            'error',
+            next ? 'Cannot go online' : 'Cannot go offline',
+            reason || 'Decline the offer or finish the trip first.',
+          );
+        } else if (errCode === 5011) {
+          showAlert(
+            'Background check consent',
+            reason || 'Agree to the background-check consent before going online.',
+            [
+              { text: 'Review consent', onPress: () => router.push('/crc-consent' as any) },
+              { text: 'Cancel', style: 'cancel' },
+            ],
+          );
         } else if (status === 403 && errCode === 1006) {
           // ErrorCode.AUTH_ACCOUNT_DISABLED (backend utils/error_handling.py) —
           // raised by routes/drivers/status.py for both 'suspended' and
@@ -1908,6 +1939,32 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           stopSensorMonitoring();
           showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to go online and receive ride offers.");
         } else {
+          if (Platform.OS === 'android') {
+            const prompted = await AsyncStorage.getItem('@spinr:battery_prompted');
+            if (!prompted) {
+              await AsyncStorage.setItem('@spinr:battery_prompted', '1');
+              showAlert(
+                'Keep Spinr running',
+                'Android can pause the app and stop trip location. Allow unrestricted battery use for Spinr.',
+                [
+                  {
+                    text: 'Open settings',
+                    onPress: () => {
+                      const sendIntent = (Linking as { sendIntent?: (action: string) => Promise<void> }).sendIntent;
+                      if (sendIntent) {
+                        sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS').catch(() => {
+                          Linking.openSettings().catch(() => {});
+                        });
+                      } else {
+                        Linking.openSettings().catch(() => {});
+                      }
+                    },
+                  },
+                  { text: 'Not now', style: 'cancel' },
+                ],
+              );
+            }
+          }
           // Arm a geofence around the current position. A wake may re-arm
           // future tracking after suspension, but cannot recover missed fixes.
           // Non-fatal: if location is not ready we skip the best-effort re-arm.

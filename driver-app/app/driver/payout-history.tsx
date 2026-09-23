@@ -125,6 +125,12 @@ export default function PayoutHistoryScreen() {
             </View>
 
             <View style={styles.payoutDetails}>
+                {item.payout_type === 'clawback' && (
+                    <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Type</Text>
+                        <Text style={styles.detailValue}>Refund hold adjustment</Text>
+                    </View>
+                )}
                 <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Date</Text>
                     <Text style={styles.detailValue}>{formatDate(item.created_at)}</Text>

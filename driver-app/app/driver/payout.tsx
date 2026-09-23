@@ -101,10 +101,14 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean }>('/drivers/balance');
-            setStripeAccountStatus(
-                res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
-            );
+            const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean; payouts_enabled?: boolean }>('/drivers/balance');
+            if (res.data.stripe_account_onboarded && res.data.payouts_enabled === false) {
+                setStripeAccountStatus('restricted');
+            } else {
+                setStripeAccountStatus(
+                    res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
+                );
+            }
             setStripeIdOnFile(!!res.data.stripe_id_number_provided);
         } catch {
             setStripeAccountStatus('not_onboarded');
@@ -478,11 +482,23 @@ function PayoutScreen() {
                                 {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '$0.00'}
                             </Text>
                         </View>
+                        {parseFloat(driverBalance?.refund_holds_total || '0') > 0 && (
+                            <>
+                                <View style={styles.balanceDivider} />
+                                <View style={styles.balanceItem}>
+                                    <Text style={styles.balanceItemLabel}>Refund Holds</Text>
+                                    <Text style={styles.balanceItemValue}>
+                                        {formatCurrency(driverBalance!.refund_holds_total!)}
+                                    </Text>
+                                </View>
+                            </>
+                        )}
                         {/* Additive: only rendered for a driver with real previous-app
                             money, so a driver with none sees the original 3-item row
                             byte-identical to before. A visible line item (not a footnote)
-                            — Total Earnings above sums Paid Out + Pending + Previously Paid
-                            (+ Available), so every dollar is accounted for and verifiable
+                            — Total Earnings above reconciles to Paid Out + Pending + Refund Holds
+                            (+ Available), with Previously Paid shown separately as historical
+                            earnings, so every dollar is accounted for and verifiable
                             against the payout history list below, which carries the real
                             transfer dates. */}
                         {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
@@ -622,12 +638,23 @@ function PayoutScreen() {
                 )}
 
                 {/* Payouts-ready confirmation */}
-                {allReady && (
+                {stripeAccountStatus === 'restricted' && (
+                    <View style={styles.section}>
+                        <View style={styles.readyCard}>
+                            <Ionicons name="alert-circle" size={22} color={colors.warning ?? colors.primary} />
+                            <Text style={styles.readyText}>
+                                Stripe needs more information before payouts can be sent. Weekly payouts stay paused until this is fixed. Earnings are paid every Sunday once payouts are enabled, with a $10 minimum.
+                            </Text>
+                        </View>
+                    </View>
+                )}
+
+                {allReady && stripeAccountStatus !== 'restricted' && (
                     <View style={styles.section}>
                         <View style={styles.readyCard}>
                             <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                             <Text style={styles.readyText}>
-                                You&apos;re all set — your earnings are paid out automatically every Sunday.
+                                You&apos;re all set — earnings are paid every Sunday, with a $10 minimum.
                             </Text>
                         </View>
                     </View>

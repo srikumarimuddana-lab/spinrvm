@@ -40,6 +40,7 @@ import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { isProfileFieldsComplete, getProfileFormError } from '../../../utils/driverProfileSchema';
 import { getLicenseInfoFormError } from '../../../utils/licenseInfoFormSchema';
+import { getEligibilityProfileError } from '../../../utils/eligibilityProfileSchema';
 
 // Module-level (not component-scope) so react-hooks/purity doesn't treat
 // this Date.now() read as an impure call "during render" — the compiler's
@@ -123,8 +124,11 @@ function ProfileScreenInner() {
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [editLicenseNumber, setEditLicenseNumber] = useState('');
   const [editLicenseClass, setEditLicenseClass] = useState('');
+  const [editDateOfBirth, setEditDateOfBirth] = useState('');
+  const [editLicenseIssueDate, setEditLicenseIssueDate] = useState('');
   const [isSavingLicense, setIsSavingLicense] = useState(false);
   const missingLicenseInfo = !driverData?.license_number || !driverData?.license_class;
+  const missingEligibilityInfo = !driverData?.date_of_birth || !driverData?.license_issue_date;
 
 
   const genderOptions = [
@@ -255,6 +259,8 @@ function ProfileScreenInner() {
   const openLicenseModal = () => {
     setEditLicenseNumber(driverData?.license_number || '');
     setEditLicenseClass(driverData?.license_class || '');
+    setEditDateOfBirth(String(driverData?.date_of_birth || '').slice(0, 10));
+    setEditLicenseIssueDate(String(driverData?.license_issue_date || '').slice(0, 10));
     setShowLicenseModal(true);
   };
 
@@ -270,6 +276,12 @@ function ProfileScreenInner() {
       licenseClass: editLicenseClass,
     });
     if (formError) return showToast('error', 'Missing Info', formError);
+    const hasAnyEligibilityDate = !!(editDateOfBirth.trim() || editLicenseIssueDate.trim());
+    const eligibilityError = hasAnyEligibilityDate ? getEligibilityProfileError({
+      dateOfBirth: editDateOfBirth,
+      licenseIssueDate: editLicenseIssueDate,
+    }) : null;
+    if (eligibilityError) return showToast('error', 'Eligibility Details', eligibilityError);
 
     Keyboard.dismiss();
     setIsSavingLicense(true);
@@ -277,6 +289,10 @@ function ProfileScreenInner() {
       const res = await api.put<Driver>('/drivers/me', {
         license_number: editLicenseNumber.trim(),
         license_class: editLicenseClass.trim().toUpperCase(),
+        ...(hasAnyEligibilityDate && {
+          date_of_birth: editDateOfBirth,
+          license_issue_date: editLicenseIssueDate,
+        }),
       });
       if (res.data) useAuthStore.setState({ driver: res.data });
       refetchDriverMe();
@@ -421,14 +437,14 @@ function ProfileScreenInner() {
               <Text style={styles.photoStatusText}>Photo rejected — update needed</Text>
             </View>
           )}
-          {missingLicenseInfo && (
+          {(missingLicenseInfo || missingEligibilityInfo) && (
             <TouchableOpacity
               style={[styles.photoStatusBanner, { backgroundColor: 'rgba(245, 158, 11, 0.9)' }]}
               onPress={openLicenseModal}
               activeOpacity={0.8}
             >
               <Ionicons name="card-outline" size={14} color="#fff" />
-              <Text style={styles.photoStatusText}>Add your driver's licence info</Text>
+              <Text style={styles.photoStatusText}>Complete your eligibility profile</Text>
             </TouchableOpacity>
           )}
 
@@ -509,6 +525,14 @@ function ProfileScreenInner() {
                     </View>
                 </>
                 )}
+                <View style={styles.cardDivider} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={openLicenseModal}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
+                        <Ionicons name="card-outline" size={18} color="#6366F1" />
+                    </View>
+                    <Text style={styles.actionText}>Licence & eligibility details</Text>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </TouchableOpacity>
             </View>
             </View>
 
@@ -684,6 +708,14 @@ function ProfileScreenInner() {
             <View style={styles.section}>
             <Text style={styles.sectionTitle}>Support</Text>
             <View style={styles.card}>
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/upcoming' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
+                        <Ionicons name="calendar" size={18} color="#6366F1" />
+                    </View>
+                    <Text style={styles.actionText}>Upcoming trips</Text>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/addresses' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
                         <Ionicons name="location" size={18} color="#38BDF8" />
@@ -1015,7 +1047,7 @@ function ProfileScreenInner() {
         </View>
       </Modal>
 
-      {/* Licence Self-Serve Modal — ACTION_ITEMS.md B14. Reuses modalStyles
+      {/* Licence and eligibility self-service modal. Reuses modalStyles
           from the Edit Profile modal above (same card/field visual language). */}
       <Modal
         visible={showLicenseModal}
@@ -1025,7 +1057,7 @@ function ProfileScreenInner() {
       >
         <View style={modalStyles.container}>
           <LinearGradient colors={[colors.surface, colors.surfaceLight]} style={StyleSheet.absoluteFill} />
-          <ScreenHeader title="Driver's Licence" onBack={() => setShowLicenseModal(false)} />
+          <ScreenHeader title="Licence & Eligibility" onBack={() => setShowLicenseModal(false)} />
           <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
             <ScrollView
               contentContainerStyle={[modalStyles.content, { paddingBottom: Math.max(insets.bottom, 16) + 140 }]}
@@ -1036,8 +1068,7 @@ function ProfileScreenInner() {
               <View style={modalStyles.infoBox}>
                 <Ionicons name="information-circle" size={18} color={colors.primary} />
                 <Text style={modalStyles.infoText}>
-                  We're missing your driver's licence number and class on file.
-                  Add them below to keep your account in good standing.
+                  Add your licence details, date of birth, and the date your licence was issued.
                 </Text>
               </View>
 
@@ -1070,6 +1101,36 @@ function ProfileScreenInner() {
                   <Text style={modalStyles.fieldHelper}>
                     Found on your SGI driver's licence — usually "5" or "5A".
                   </Text>
+                </View>
+                <View style={modalStyles.divider} />
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Date of Birth</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editDateOfBirth}
+                    onChangeText={setEditDateOfBirth}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={colors.textDim}
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Text style={modalStyles.fieldHelper}>Enter both eligibility dates to add or update them.</Text>
+                </View>
+                <View style={modalStyles.divider} />
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Licence Issue Date</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editLicenseIssueDate}
+                    onChangeText={setEditLicenseIssueDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={colors.textDim}
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Text style={modalStyles.fieldHelper}>At least 3 years of licensed driving experience is required.</Text>
                 </View>
               </View>
 

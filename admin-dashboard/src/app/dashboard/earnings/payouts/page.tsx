@@ -33,6 +33,7 @@ import { getPayouts, getPayoutStats, retryPayout } from "@/lib/api";
 
 interface Payout {
     id: string;
+    payout_type?: string | null;
     driver_id?: string;
     driver_name?: string;
     amount: number;
@@ -386,6 +387,9 @@ export default function PayoutsPage() {
                                         </TableCell>
                                         <TableCell>
                                             <Badge className={sc.cls}>{sc.label}</Badge>
+                                            {p.payout_type === "clawback" && (
+                                                <p className="text-xs text-muted-foreground mt-0.5">Refund hold adjustment</p>
+                                            )}
                                             {p.failure_reason && (
                                                 <p className="text-xs text-destructive mt-0.5">{p.failure_reason}</p>
                                             )}

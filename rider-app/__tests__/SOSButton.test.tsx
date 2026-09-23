@@ -123,6 +123,33 @@ describe('SOSButton localization', () => {
     );
   });
 
+  it('keeps the SOS active and offers a retry when false-alarm confirmation fails', async () => {
+    const onFalseAlarm = jest.fn().mockRejectedValueOnce(new Error('network down'));
+    const { getByLabelText } = render(
+      <SOSButton
+        rideId="ride-1"
+        onTrigger={jest.fn().mockResolvedValue({ incident_id: 'incident-1' })}
+        onFalseAlarm={onFalseAlarm}
+      />,
+    );
+    fireEvent(getByLabelText('Emergency SOS'), 'pressIn');
+    await act(async () => { jest.advanceTimersByTime(1200); });
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalledWith(
+      '🚨 Emergency Alert Sent', expect.any(String), expect.any(Array),
+    ));
+
+    const successActions = (Alert.alert as jest.Mock).mock.calls.at(-1)?.[2];
+    await act(async () => { await successActions[1].onPress(); });
+    expect(onFalseAlarm).toHaveBeenCalledTimes(1);
+    expect(getByLabelText('Emergency alert sent')).toBeTruthy();
+    expect(Alert.alert).toHaveBeenLastCalledWith(
+      'Could not mark as safe', expect.stringContaining('SOS alert remains active'), expect.any(Array),
+    );
+    const retryActions = (Alert.alert as jest.Mock).mock.calls.at(-1)?.[2];
+    await act(async () => { await retryActions[0].onPress(); });
+    expect(onFalseAlarm).toHaveBeenCalledTimes(2);
+  });
+
   it('has no hardcoded user-facing English strings outside the DEFAULT_STRINGS fallback map', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../../shared/components/SOSButton.tsx'),

@@ -7,6 +7,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 import asyncio
 import hashlib
 import json
+import math
 
 from . import _deps
 from ._deps import (  # noqa: F401
@@ -19,6 +20,26 @@ from ._deps import (  # noqa: F401
 )
 
 router = APIRouter()
+
+
+def _ride_destination(ride: dict) -> tuple[float | None, float | None, str, str]:
+    """Resolve the first uncompleted stop, or the final dropoff if none remain."""
+    if ride.get("status") != "in_progress":
+        return ride.get("pickup_lat"), ride.get("pickup_lng"), "pickup", "pickup"
+    for index, stop in enumerate(ride.get("stops") or []):
+        if isinstance(stop, dict) and stop.get("completed") is True:
+            continue
+        if not isinstance(stop, dict):
+            return None, None, "dropoff", f"invalid-stop:{index}"
+        try:
+            lat, lng = float(stop.get("lat")), float(stop.get("lng"))
+        except (TypeError, ValueError):
+            return None, None, "dropoff", f"invalid-stop:{index}"
+        if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180 and (lat != 0 or lng != 0)):
+            return None, None, "dropoff", f"invalid-stop:{index}"
+        route_key = f"stop:{stop.get('id', index)}:{lat}:{lng}"
+        return lat, lng, "dropoff", route_key
+    return ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff", "dropoff"
 
 # Per-ride response cache for the live route. The rider app AND the driver app
 # (phone + Android Auto share one poller) each call this every ~6 s during a
@@ -73,10 +94,8 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     status = ride.get("status")
-    if status in ("driver_assigned", "driver_accepted", "driver_arrived"):
-        dest_lat, dest_lng, destination = ride.get("pickup_lat"), ride.get("pickup_lng"), "pickup"
-    elif status == "in_progress":
-        dest_lat, dest_lng, destination = ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff"
+    if status in ("driver_assigned", "driver_accepted", "driver_arrived", "in_progress"):
+        dest_lat, dest_lng, destination, route_key = _ride_destination(ride)
     else:
         # No live leg for searching / scheduled / completed / cancelled.
         return {
@@ -115,7 +134,7 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         from utils.redis_client import redis_get, redis_set  # type: ignore
         from utils.route_distance import compute_route  # type: ignore
 
-    cache_key = live_route_cache_key(ride_id, destination, float(o_lat), float(o_lng))
+    cache_key = live_route_cache_key(ride_id, route_key, float(o_lat), float(o_lng))
     try:
         cached = await redis_get(cache_key)
     except Exception as exc:
@@ -225,10 +244,8 @@ async def get_navigation_steps(
         raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     status = ride.get("status")
-    if status in ("driver_assigned", "driver_accepted", "driver_arrived"):
-        dest_lat, dest_lng, destination = ride.get("pickup_lat"), ride.get("pickup_lng"), "pickup"
-    elif status == "in_progress":
-        dest_lat, dest_lng, destination = ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff"
+    if status in ("driver_assigned", "driver_accepted", "driver_arrived", "in_progress"):
+        dest_lat, dest_lng, destination, route_key = _ride_destination(ride)
     else:
         return {"steps": [], "destination": None}
 
@@ -251,7 +268,7 @@ async def get_navigation_steps(
         from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
         from utils.route_distance import compute_navigation_steps  # type: ignore
 
-    cache_key = navigation_steps_cache_key(ride_id, destination)
+    cache_key = navigation_steps_cache_key(ride_id, route_key)
     if force_refresh:
         try:
             await redis_delete(cache_key)

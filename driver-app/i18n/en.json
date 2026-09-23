@@ -468,6 +468,8 @@
     "failure_title": "⚠️ Alert Not Sent",
     "failure_msg": "Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.",
     "retry_now": "Retry Now",
+    "false_alarm_failed_title": "Could not mark as safe",
+    "false_alarm_failed_msg": "The SOS alert remains active. Try again when you have a safe moment.",
     "dismiss": "Dismiss",
     "no_active_ride_title": "No Active Ride",
     "no_active_ride_msg": "Emergency alert requires an active ride. Call 911 directly for immediate help.",
@@ -511,7 +513,9 @@
       "dual_run_hold": "Your account is on hold while active on the previous app. Please contact support.",
       "license_class_ineligible": "Your driver's licence class requires separate SGI approval to drive for Spinr. Please contact support.",
       "vehicle_too_old": "Your vehicle no longer meets Spinr's eligibility requirements. Vehicles must be under 10 years old.",
-      "insufficient_experience": "You need at least 3 years of licensed driving experience to drive for Spinr. Please contact support."
+      "insufficient_experience": "You need at least 3 years of licensed driving experience to drive for Spinr. Please contact support.",
+      "underage": "You must be 18 or older to drive for Spinr.",
+      "crc_consent_required": "Agree to the background-check consent before going online."
     },
     "ride": {
       "not_found": "We couldn't find that ride. It may have been removed.",

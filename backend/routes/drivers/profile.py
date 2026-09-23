@@ -30,6 +30,24 @@ from ._shared import (  # noqa: F401
 router = APIRouter()
 
 
+def _validate_eligibility_date(field: str, value: str) -> None:
+    """Validate a newly supplied eligibility date independently of rollout flags."""
+    label = "Date of birth" if field == "date_of_birth" else "Licence issue date"
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.") from exc
+    if parsed.isoformat() != value:
+        raise HTTPException(status_code=422, detail=f"{label} must use YYYY-MM-DD format.")
+
+    today = datetime.now(timezone.utc).date()
+    elapsed_years = today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
+    if field == "date_of_birth" and elapsed_years < 18:
+        raise HTTPException(status_code=422, detail="You must be 18 or older to drive for Spinr.")
+    if field == "license_issue_date" and elapsed_years < 3:
+        raise HTTPException(status_code=422, detail="Your licence must be at least 3 years old to drive for Spinr.")
+
+
 @router.get("/config")
 async def get_driver_config(current_user: dict = Depends(get_current_user)):
     """Return operational settings the driver-app should honor at runtime.
@@ -118,6 +136,8 @@ class UpdateDriverProfileRequest(BaseModel):
     # licence class like "5" or "5A" carries no personal-identity value on
     # its own.
     license_class: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    license_issue_date: Optional[str] = None
     license_expiry_date: Optional[str] = None
     insurance_expiry_date: Optional[str] = None
     vehicle_inspection_expiry_date: Optional[str] = None
@@ -160,6 +180,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         "vehicle_vin",
         "license_number",
         "license_class",
+        "date_of_birth",
+        "license_issue_date",
         "license_expiry_date",
         "insurance_expiry_date",
         "vehicle_inspection_expiry_date",
@@ -171,6 +193,10 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     allowed_fields = safe_fields | vehicle_fields
 
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
+
+    for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
+        if field in updates:
+            _validate_eligibility_date(field, updates[field])
 
     # Validate the SIN before anything else touches it. A typo is not caught
     # until CRA rejects the T4A months later, by which time the driver may be
@@ -796,12 +822,34 @@ async def register_driver(
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
         "documents",
+        "license_class",
+        "date_of_birth",
+        "license_issue_date",
     }
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
+
+    for field in ("date_of_birth", "license_issue_date"):
+        if field in payload:
+            _validate_eligibility_date(field, payload[field])
+    if "vehicle_year" in payload:
+        try:
+            year = payload["vehicle_year"]
+            if isinstance(year, bool) or str(year).strip() != str(int(year)):
+                raise ValueError("invalid vehicle year")
+            if int(year) < 1900 or int(year) > datetime.now(timezone.utc).year + 1:
+                raise ValueError("invalid vehicle year")
+            payload["vehicle_year"] = int(year)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Vehicle year must be a valid year.") from exc
 
     if existing:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
         payload["submitted_at"] = datetime.now(timezone.utc).isoformat()
+        # A rejected driver who resubmits the application goes back to review.
+        # Leaving status=rejected made the resubmit a silent no-op.
+        if existing.get("status") == "rejected":
+            payload["status"] = "pending"
+            payload["is_verified"] = False
         await db_supabase.update_one("drivers", {"id": existing["id"]}, await _shared._encrypt_driver_pii(payload))
         driver = await db_supabase.get_driver_by_id(existing["id"])
         return serialize_doc(await _shared._decrypt_driver_pii(driver))

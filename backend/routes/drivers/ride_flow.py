@@ -607,6 +607,43 @@ async def decline_ride(
             ),
         )
 
+    # Accommodation is mandatory, but a service-animal trip may still be
+    # declined for an unrelated safety or vehicle issue. Do not infer motive
+    # from the rider's accessibility requirement (including a reasonless tap).
+    if reason == "service_animal":
+        if ride.get("driver_id") != driver["id"]:
+            offered = await db_supabase.get_rows(
+                "ride_offers",
+                {"ride_id": ride_id, "driver_id": driver["id"], "status": "pending"},
+                limit=1,
+            )
+            if not offered:
+                raise HTTPException(status_code=403, detail="Not authorized to decline this ride")
+        try:
+            import uuid as _sa_uuid
+
+            await _deps.db.insert_one(
+                "audit_logs",
+                {
+                    "id": str(_sa_uuid.uuid4()),
+                    "action": "ride_decline_service_animal_refusal",
+                    "entity_type": "ride",
+                    "entity_id": ride_id,
+                    "actor_id": driver["id"],
+                    "details": {"driver_id": driver["id"], "reason": "service_animal"},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as _sa_exc:
+            logger.error(
+                f"Could not log service-animal decline refusal ride_id={ride_id}: {_sa_exc}",
+                exc_info=True,
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="Service animal accommodation is required. You cannot decline this trip.",
+        )
+
     # WS-18: ownership guard — only a driver who was actually offered (or
     # assigned) this ride may decline it. Without this check any authenticated
     # driver could call decline for any ride_id and trigger acceptance-rate

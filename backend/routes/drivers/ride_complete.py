@@ -28,6 +28,7 @@ from ._deps import (  # noqa: F401
     fare_share,
     flush_driver_breadcrumbs,
     get_current_user,
+    json,
     logger,
     parse_iso_utc,
     pg_error_code,
@@ -45,6 +46,16 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+
+def _completion_cas_filters(ride: dict, driver_id: str) -> dict:
+    stops = ride.get("stops")
+    return {
+        "id": ride["id"],
+        "driver_id": driver_id,
+        "status": RideStatus.IN_PROGRESS,
+        "stops": {"$eq": json.dumps(stops, separators=(",", ":"))} if stops is not None else None,
+    }
 
 
 try:
@@ -115,6 +126,7 @@ class RideCompletionRequest(BaseModel):
     final_sequence_number: int | None = Field(default=None, ge=0)
     pending_outbox_count: int | None = Field(default=None, ge=0)
     off_route_confirmation: str | None = None
+    stop_progress_enabled: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         if self.off_route_confirmation is not None and self.off_route_confirmation not in _OFF_ROUTE_CONFIRMATIONS:
@@ -379,16 +391,28 @@ async def complete_ride(
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
-    # Persist the driver-captured endpoint before the status transition and
-    # before legacy aggregation reads the breadcrumb trail. This ensures a
-    # 40-minute trip cannot lose its final location merely because finalization
-    # starts before the normal outbox flush returns.
     # Direct unit callers receive FastAPI's ``Body`` sentinel rather than
     # ``None`` when omitting this parameter; production requests have already
     # been parsed into RideCompletionRequest by FastAPI.
     parsed_completion_request = (
         completion_request if isinstance(completion_request, RideCompletionRequest) else RideCompletionRequest()
     )
+    # New driver clients opt in to persisted stop progression. Existing stop
+    # metadata also keeps the gate active if an opted-in trip is later completed
+    # by an older client during a rolling mobile release.
+    stops = ride.get("stops") or []
+    progress_already_started = any(
+        isinstance(stop, dict) and ("completed" in stop or "id" in stop)
+        for stop in stops
+    )
+    if parsed_completion_request.stop_progress_enabled or progress_already_started:
+        if any(not isinstance(stop, dict) or stop.get("completed") is not True for stop in stops):
+            raise HTTPException(status_code=409, detail="Complete every stop before ending the trip.")
+
+    # Persist the driver-captured endpoint before the status transition and
+    # before legacy aggregation reads the breadcrumb trail. This ensures a
+    # 40-minute trip cannot lose its final location merely because finalization
+    # starts before the normal outbox flush returns.
     completion_location = await prepare_completion_location(
         ride,
         driver["id"],
@@ -648,7 +672,7 @@ async def complete_ride(
     # complete/cancel that won the race after the read above matches zero rows
     # instead of writing a second completion (same CAS pattern as ride
     # acceptance filtering on status='searching').
-    _complete_filters = {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}
+    _complete_filters = _completion_cas_filters(ride, driver["id"])
     try:
         _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:

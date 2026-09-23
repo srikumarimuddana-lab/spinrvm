@@ -31,6 +31,7 @@ import {
   isProfileSetupFormValid,
   getProfileSetupError,
 } from '../utils/profileSetupSchema';
+import { getEligibilityProfileError } from '../utils/eligibilityProfileSchema';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -45,6 +46,8 @@ export default function ProfileSetupScreen() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [gender, setGender] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [licenseIssueDate, setLicenseIssueDate] = useState('');
   const [serviceAreaId, setServiceAreaId] = useState('');
   const [serviceAreas, setServiceAreas] = useState<any[]>([]);
   const [city, setCity] = useState('');
@@ -209,7 +212,8 @@ export default function ProfileSetupScreen() {
     return () => sub.remove();
   }, [handleChangeNumber]);
 
-  const isFormValid = isProfileSetupFormValid({ firstName, lastName, email, gender, serviceAreaId });
+  const eligibilityError = getEligibilityProfileError({ dateOfBirth, licenseIssueDate });
+  const isFormValid = isProfileSetupFormValid({ firstName, lastName, email, gender, serviceAreaId }) && !eligibilityError;
 
   const handleSubmit = async () => {
     // Field-specific validation: name the exact field and problem — a blanket
@@ -217,6 +221,10 @@ export default function ProfileSetupScreen() {
     const validationError = getProfileSetupError({ firstName, lastName, email, gender, serviceAreaId });
     if (validationError) {
       showToast('warning', validationError.title, validationError.message);
+      return;
+    }
+    if (eligibilityError) {
+      showToast('warning', 'Eligibility Details Required', eligibilityError);
       return;
     }
 
@@ -238,6 +246,8 @@ export default function ProfileSetupScreen() {
         await registerDriver({
           service_area_id: serviceAreaId || undefined,
           city: city || undefined,
+          date_of_birth: dateOfBirth,
+          license_issue_date: licenseIssueDate,
         });
       } catch (regErr: any) {
         // Non-fatal: the driver record might already exist (idempotent register)
@@ -406,6 +416,36 @@ export default function ProfileSetupScreen() {
                 </View>
               </View>
             </View>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Date of Birth *</Text>
+            <TextInput
+              style={styles.input}
+              value={dateOfBirth}
+              onChangeText={setDateOfBirth}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#B0B0B0"
+              keyboardType="numbers-and-punctuation"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.serviceAreaHint}>You must be at least 18 to drive.</Text>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Driver’s Licence Issue Date *</Text>
+            <TextInput
+              style={styles.input}
+              value={licenseIssueDate}
+              onChangeText={setLicenseIssueDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#B0B0B0"
+              keyboardType="numbers-and-punctuation"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.serviceAreaHint}>Your licence must show at least 3 years of driving experience.</Text>
           </View>
 
           <View style={styles.inputGroup}>

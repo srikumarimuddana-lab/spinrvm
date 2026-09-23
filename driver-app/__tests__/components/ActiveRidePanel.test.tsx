@@ -35,7 +35,8 @@ const initialMetrics = {
 };
 const renderWithSafeArea = (ui: React.ReactElement) =>
   render(
-    <SafeAreaProvider initialMetrics={initialMetrics}>{ui}</SafeAreaProvider>,
+    ui,
+    { wrapper: ({ children }) => <SafeAreaProvider initialMetrics={initialMetrics}>{children}</SafeAreaProvider> },
   );
 
 jest.mock('@shared/config/spinr.config', () => ({
@@ -304,6 +305,53 @@ it('shows booked pickup and does not count early arrival as waiting', () => {
   jest.useRealTimers();
 });
 
+it('uses the server deadline and server clock offset for no-show eligibility', () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2026-09-23T12:00:00.000Z'));
+  const view = renderWithSafeArea(
+    <ActiveRidePanel
+      {...defaultProps}
+      rideState="arrived_at_pickup"
+      onReportNoShow={jest.fn()}
+      ride={{
+        ...mockRide,
+        driver_arrived_at: '2026-09-23T11:50:00.000Z',
+        noshow_server_now: '2026-09-23T12:05:00.000Z',
+        noshow_eligible_at: '2026-09-23T12:06:00.000Z',
+      } as any}
+    />,
+  );
+  expect(view.getByText('Report no-show in 60s')).toBeTruthy();
+  act(() => { jest.advanceTimersByTime(61_000); });
+  expect(view.getByText('Report no-show')).toBeTruthy();
+  expect(view.getByLabelText('Report no-show').props.accessibilityState?.disabled).toBe(false);
+  view.unmount();
+  jest.useRealTimers();
+});
+
+it('navigates to the first uncompleted stop and exposes an explicit completion action', () => {
+  const onCompleteStop = jest.fn();
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
+  const stops = [
+    { id: 'already-done', address: 'Old stop', lat: 52.14, lng: -106.68, completed: true },
+    { id: 'next-stop', address: 'Market', lat: 52.16, lng: -106.64, completed: false },
+  ];
+  const view = renderWithSafeArea(
+    <ActiveRidePanel
+      {...defaultProps}
+      rideState="trip_in_progress"
+      ride={{ ...mockRide, stops } as any}
+      onCompleteStop={onCompleteStop}
+    />,
+  );
+  fireEvent.press(view.getByLabelText('Navigate to stop 2'));
+  fireEvent.press(view.getByLabelText('Mark stop 2 complete'));
+  expect(onCompleteStop).toHaveBeenCalledWith(1, stops);
+  expect(openURL).toHaveBeenCalledWith(expect.stringContaining('52.16,-106.64'));
+  expect(view.queryByLabelText('activeRide.completeTrip')).toBeNull();
+  openURL.mockRestore();
+});
+
 describe('automatic navigation hand-off', () => {
   let openURL: jest.SpyInstance;
   let canOpenURL: jest.SpyInstance;
@@ -341,6 +389,25 @@ describe('automatic navigation hand-off', () => {
     renderWithSafeArea(<ActiveRidePanel {...defaultProps} rideState="trip_in_progress" />);
     await waitFor(() => expect(openURL).toHaveBeenCalled());
     expect(openURL.mock.calls[0][0]).toContain('52.15,-106.65');
+  });
+
+  it('updates automatic Maps navigation when a persisted stop is advanced', async () => {
+    const firstStops = [{ id: 's1', address: 'First', lat: 52.16, lng: -106.64 }];
+    const { rerender } = renderWithSafeArea(
+      <ActiveRidePanel {...defaultProps} rideState="trip_in_progress" ride={{ ...mockRide, stops: firstStops } as any} />,
+    );
+    await waitFor(() => expect(openURL.mock.calls[0]?.[0]).toContain('52.16,-106.64'));
+
+    const nextStops = [
+      { ...firstStops[0], completed: true },
+      { id: 's2', address: 'Second', lat: 52.18, lng: -106.62 },
+    ];
+    rerender(
+      <SafeAreaProvider initialMetrics={initialMetrics}>
+        <ActiveRidePanel {...defaultProps} rideState="trip_in_progress" ride={{ ...mockRide, stops: nextStops } as any} />
+      </SafeAreaProvider>,
+    );
+    await waitFor(() => expect(openURL.mock.calls.some(([url]) => String(url).includes('52.18,-106.62'))).toBe(true));
   });
 
   it('honours the driver\'s chosen app', async () => {

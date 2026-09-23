@@ -6,6 +6,7 @@ import {
     Platform,
     ActivityIndicator,
     TouchableOpacity,
+    Alert,
 } from 'react-native';
 import { Text } from '@shared/components/Text';
 import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
@@ -486,6 +487,36 @@ export default function RideDetailScreen() {
                             )}
                         </>
                     )}
+
+                    <TouchableOpacity
+                        style={[styles.card, { paddingVertical: 14 }]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Report an earnings issue"
+                        onPress={() => {
+                            Alert.alert(
+                                'Report an earnings issue',
+                                'This sends the trip to support with your earnings snapshot.',
+                                [
+                                    { text: 'Cancel', style: 'cancel' },
+                                    {
+                                        text: 'Send',
+                                        onPress: () => {
+                                            api.post('/disputes', {
+                                                ride_id: ride.id,
+                                                reason: 'earnings_issue',
+                                                description: `Driver earnings issue. Fare snapshot ${ride.driver_earnings ?? ride.total_fare ?? ''}`,
+                                            }).then(
+                                                () => Alert.alert('Sent', 'Support has this trip.'),
+                                                () => Alert.alert('Could not send', 'Try again from Help.'),
+                                            );
+                                        },
+                                    },
+                                ],
+                            );
+                        }}
+                    >
+                        <Text style={[styles.cardTitle, { color: colors.primary }]}>Report an earnings issue</Text>
+                    </TouchableOpacity>
 
                     {/* Cancellation / No-show fee earned */}
                     {ride.status === 'cancelled' && parseFloat(ride.cancel_fee_earned || '0') > 0 && (

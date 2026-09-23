@@ -476,6 +476,77 @@ async def trigger_emergency(
     }
 
 
+class FalseAlarmRequest(BaseModel):
+    incident_id: str
+
+
+@router.post("/{ride_id}/emergency/false-alarm")
+async def mark_emergency_false_alarm(
+    ride_id: str,
+    body: FalseAlarmRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Caller says they are OK within 60s of sending SOS.
+
+    Resolves the incident with false-alarm metadata and tells the safety
+    team. Does not send another contact SMS and does not dial 911.
+    """
+    rows = await _deps.db_supabase.get_rows(
+        "safety_incidents",
+        {
+            "id": body.incident_id,
+            "ride_id": ride_id,
+            "reported_by_user_id": current_user["id"],
+        },
+        limit=1,
+    )
+    incident = rows[0] if rows else None
+    if not incident:
+        raise HTTPException(status_code=404, detail="Emergency alert not found")
+    if incident.get("status") == "resolved" and "false alarm" in (incident.get("resolution_notes") or "").lower():
+        return {"success": True, "status": "resolved"}
+
+    reported_raw = incident.get("reported_at") or incident.get("created_at")
+    reported_at = None
+    if isinstance(reported_raw, datetime):
+        reported_at = reported_raw if reported_raw.tzinfo else reported_raw.replace(tzinfo=timezone.utc)
+    elif isinstance(reported_raw, str) and reported_raw.strip():
+        try:
+            reported_at = datetime.fromisoformat(reported_raw.replace("Z", "+00:00"))
+            if reported_at.tzinfo is None:
+                reported_at = reported_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            reported_at = None
+    if reported_at is None or (datetime.now(timezone.utc) - reported_at).total_seconds() > 60:
+        raise HTTPException(status_code=409, detail="This alert can no longer be cancelled")
+
+    updated = await _deps.db_supabase.update_one(
+        "safety_incidents",
+        {"id": body.incident_id, "status": "open"},
+        {
+            "status": "resolved",
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolved_by": current_user["id"],
+            "resolution_notes": "False alarm reported by the user.",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    if not updated:
+        raise HTTPException(status_code=409, detail="This alert can no longer be cancelled")
+    try:
+        await _deps.manager.broadcast_to_admins(
+            {
+                "type": "sos_false_alarm",
+                "incident_id": body.incident_id,
+                "ride_id": ride_id,
+            }
+        )
+    except Exception as exc:
+        logger.opt(exception=True).error(f"sos_false_alarm admin broadcast failed: {exc}")
+    logger.info(f"[SOS] false_alarm incident_id={body.incident_id} ride_id={ride_id}")
+    return {"success": True, "status": "resolved"}
+
+
 # ---------------------------------------------------------------------------
 # Ride-less emergency (ACTION_ITEMS.md B15(c))
 # ---------------------------------------------------------------------------

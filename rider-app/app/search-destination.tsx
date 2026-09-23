@@ -503,9 +503,20 @@ export default function SearchDestinationScreen() {
             {pickupText ? (
               <TouchableOpacity
                 onPress={() => {
-                  setPickupText('');
-                  setPickup(null as any);
+                  if (userLocation) {
+                    setPickup({
+                      address: 'Current Location',
+                      lat: userLocation.latitude,
+                      lng: userLocation.longitude,
+                    });
+                    setPickupText('Current Location');
+                  } else {
+                    setPickupText('');
+                    setPickup(null);
+                  }
                   setActiveField('pickup');
+                  setSearchQuery('');
+                  clearPredictions();
                   pickupRef.current?.focus();
                 }}
                 accessibilityRole="button"

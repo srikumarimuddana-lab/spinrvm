@@ -94,6 +94,31 @@ async def test_no_call_when_no_stale_loops():
 
 
 @pytest.mark.anyio
+async def test_dependency_failure_alerts_before_first_tick_and_is_throttled():
+    import backend.utils.loop_alert as mod
+
+    mod._last_alerted.clear()
+    status = _stale_status("payment_retry (5min)")
+    status["loops"]["payment_retry (5min)"].update(
+        status="unhealthy",
+        seconds_since_tick=None,
+        failure="required_dependency_unavailable",
+    )
+    cm_mock, inner = _make_http_mocks()
+    with patch.object(mod, "get_loop_status", return_value=status):
+        with patch("backend.utils.loop_alert.time") as mock_time:
+            mock_time.monotonic.return_value = 12.0
+            with patch("httpx.AsyncClient", return_value=cm_mock):
+                await mod.check_and_alert(webhook_url="https://hooks.example.com/T/B/x")
+                await mod.check_and_alert(webhook_url="https://hooks.example.com/T/B/x")
+
+    inner.post.assert_called_once()
+    text = inner.post.call_args.kwargs["json"]["text"]
+    assert "dependency unavailable" in text
+    assert "payment_retry" in text
+
+
+@pytest.mark.anyio
 async def test_posts_webhook_for_stale_loop():
     import backend.utils.loop_alert as mod
 

@@ -1634,7 +1634,11 @@ jobs:
 
       - name: Verify Change Impact Log present for sensitive-surface PRs
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.base_branch || 'origin/main' }}
+          # PR and merge-queue SHAs remain authoritative. For manual runs,
+          # pass the branch name through the environment; the validator
+          # resolves it to refs/remotes/origin/<branch> when checkout has no
+          # local branch (as is typical on GitHub-hosted runners).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.base_branch || 'main' }}
           HEAD_SHA: ${{ github.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python scripts/check_change_impact.py

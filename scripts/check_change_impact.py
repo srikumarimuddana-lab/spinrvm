@@ -116,9 +116,25 @@ def check_change_impact(paths: list[str], records: list[str]) -> list[str]:
     return sorted(touched - covered)
 
 
+def resolve_base_ref(base: str) -> str:
+    """Resolve a commit or branch name, including an origin-tracking branch."""
+    candidates = [base]
+    if not base.startswith("refs/") and not base.startswith("origin/"):
+        candidates.append(f"refs/remotes/origin/{base}")
+    for candidate in candidates:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise ValueError(f"Cannot resolve base commit or origin branch: {base}")
+
+
 def changed_paths(base: str, head: str) -> list[str]:
+    resolved_base = resolve_base_ref(base)
     merge_base = subprocess.run(
-        ["git", "merge-base", base, head], check=True, capture_output=True, text=True
+        ["git", "merge-base", resolved_base, head], check=True, capture_output=True, text=True
     ).stdout.strip()
     output = subprocess.run(
         ["git", "diff", "--name-only", merge_base, head], check=True, capture_output=True, text=True

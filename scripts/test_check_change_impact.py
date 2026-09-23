@@ -70,3 +70,32 @@ def test_deleted_log_is_skipped_and_paths_match_as_exact_tokens(monkeypatch, tmp
     assert run_gate(monkeypatch, tmp_path, [path], body=record([path]),
                     deleted=["docs/change-log/deleted.md"]) == 0
     assert gate.check_change_impact([path], [record([path + "x"])]) == [path]
+
+
+def test_changed_paths_resolves_remote_branch_without_local_branch(tmp_path, monkeypatch):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    (tmp_path / "base.txt").write_text("base\n")
+    git("add", "base.txt")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("switch", "-qc", "feature")
+    (tmp_path / "feature.txt").write_text("feature\n")
+    git("add", "feature.txt")
+    git("commit", "-qm", "feature")
+    monkeypatch.chdir(tmp_path)
+
+    local_main = subprocess.run(
+        ["git", "show-ref", "--verify", "refs/heads/main"],
+        cwd=tmp_path, capture_output=True,
+    )
+    assert local_main.returncode != 0
+    assert gate.changed_paths("main", "HEAD") == ["feature.txt"]
+    assert gate.resolve_base_ref(base) == base

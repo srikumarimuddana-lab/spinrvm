@@ -11,8 +11,8 @@ import asyncio
 import json
 import os
 import uuid
-from urllib.parse import urlparse
 from unittest.mock import MagicMock
+from urllib.parse import urlparse
 
 import pytest
 import redis.asyncio as redis_asyncio

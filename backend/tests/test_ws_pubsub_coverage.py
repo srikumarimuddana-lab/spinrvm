@@ -423,8 +423,6 @@ async def test_interleaved_publishers_keep_outbox_in_sequence_order():
     """
     import json
 
-    from backend.utils.ws_pubsub import _WSPubSub
-
     class InterleavedRedis:
         def __init__(self):
             self.next_seq = 0
@@ -748,9 +746,7 @@ class TestConsumer:
     @pytest.mark.anyio
     async def test_non_message_type_is_skipped(self):
         inst = _consumer_instance()
-        inst._pubsub.get_message = AsyncMock(
-            side_effect=[{"type": "subscribe"}, asyncio.CancelledError()]
-        )
+        inst._pubsub.get_message = AsyncMock(side_effect=[{"type": "subscribe"}, asyncio.CancelledError()])
 
         with pytest.raises(asyncio.CancelledError):
             await inst._consumer()
@@ -787,9 +783,7 @@ class TestConsumer:
         with pytest.raises(asyncio.CancelledError):
             await inst._consumer()
 
-        inst._manager.disconnect_user.assert_awaited_once_with(
-            "user-1", client_types=["rider"], reason="token_revoked"
-        )
+        inst._manager.disconnect_user.assert_awaited_once_with("user-1", client_types=["rider"], reason="token_revoked")
 
     @pytest.mark.anyio
     async def test_control_kick_user_defaults_when_fields_missing(self):
@@ -800,9 +794,7 @@ class TestConsumer:
         with pytest.raises(asyncio.CancelledError):
             await inst._consumer()
 
-        inst._manager.disconnect_user.assert_awaited_once_with(
-            "", client_types=None, reason="token_revoked"
-        )
+        inst._manager.disconnect_user.assert_awaited_once_with("", client_types=None, reason="token_revoked")
 
     @pytest.mark.anyio
     async def test_control_unknown_action_is_ignored(self):

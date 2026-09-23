@@ -328,7 +328,9 @@ def test_worker_production_uses_shared_config_guard_before_startup(monkeypatch):
         monkeypatch.setattr(worker_mod.settings, "ENV", "production")
 
         with (
-            patch.object(worker_mod, "_validate_production_config", side_effect=RuntimeError("invalid config")) as validate,
+            patch.object(
+                worker_mod, "_validate_production_config", side_effect=RuntimeError("invalid config")
+            ) as validate,
             patch.object(worker_mod, "init_firebase") as firebase,
             patch.object(worker_mod, "init_backend_sentry") as sentry,
             patch.object(worker_mod, "init_database", new=AsyncMock()) as database,

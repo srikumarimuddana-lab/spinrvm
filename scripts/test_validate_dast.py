@@ -104,13 +104,20 @@ def test_default_https_port_context_accepts_normalized_and_explicit_443(tmp_path
 
 def test_workflow_fails_closed_scopes_before_zap_and_checks_report_afterward():
     workflow = open(".github/workflows/dast-zap-baseline.yml", encoding="utf-8").read()
-    preflight = workflow.index("--write-scope-context staging.context")
+    preflight = workflow.index("name: Validate DAST target and egress attestation")
+    scan_job = workflow.index("  zap-baseline:")
+    scope = workflow.index("--write-scope-context staging.context")
     scanner = workflow.index("uses: zaproxy/action-baseline@")
     report_check = workflow.index("python3 scripts/validate_dast.py report_json.json")
-    assert preflight < scanner < report_check
+    assert preflight < scan_job < scope < scanner < report_check
+    assert "runs-on: ubuntu-latest" in workflow
+    assert "needs: preflight" in workflow
+    assert "runs-on: [self-hosted, linux, x64, dast-egress-locked]" in workflow
+    assert "DAST_EGRESS_ORIGIN_ATTESTATION" in workflow
+    assert "not proof that network enforcement has been provisioned" in workflow
     assert "cmd_options: '-a -n staging.context'" in workflow
     assert "fail_action: true" in workflow
-    assert "if: always() && steps.preflight.outputs.ready == 'true'" in workflow
+    assert "if: always() && needs.preflight.result == 'success'" in workflow
     assert "name: Retain raw ZAP reports even when scan findings fail the job" in workflow
     assert "STAGING_ALLOWED_ORIGIN" in workflow
     assert "No-op (STAGING_URL not configured)" not in workflow

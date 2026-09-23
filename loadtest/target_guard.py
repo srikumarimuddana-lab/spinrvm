@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
+from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 PRODUCTION_API_HOSTS = frozenset(
-    {
-        "api-spinr.spinr.ca",
-        "api.spinr.ca",
-        "spinr.ca",
-        "www.spinr.ca",
-        "spinr-backend-yyz.fly.dev",
-    }
+    json.loads((Path(__file__).resolve().parents[1] / "config/production_api_hosts.json").read_text())
 )
 
 

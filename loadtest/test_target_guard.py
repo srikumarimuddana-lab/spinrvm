@@ -44,6 +44,10 @@ def test_documented_staging_subdomain_can_be_explicitly_allowlisted():
         "https://api.spinr.ca",
         "https://spinr.ca",
         "https://spinr-backend-yyz.fly.dev",
+        "https://spinr-backend-production.up.railway.app",
+        "https://spinr-backend.up.railway.app",
+        "https://SpInR-BaCkEnD-PrOdUcTiOn.Up.RaIlWaY.ApP.:443",
+        "https://SPINR-BACKEND.UP.RAILWAY.APP.:443",
     ],
 )
 def test_known_production_targets_are_denied_even_if_allowlisted(target):

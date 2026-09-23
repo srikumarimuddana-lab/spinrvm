@@ -713,7 +713,11 @@ async def _issue_company_email_session(
         token_version=int(user.get("token_version") or 0),
     )
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user["id"], audience="rider", user_agent=user_agent, ip=client_ip
+        user["id"],
+        audience="rider",
+        user_agent=user_agent,
+        ip=client_ip,
+        token_version=int(user.get("token_version") or 0),
     )
     csrf = generate_csrf_token()
     set_csrf_cookie(
@@ -1194,7 +1198,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 token_version=token_version,
             )
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip
+                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
             )
             logger.info("Token created. Validating UserProfile...")
             try:
@@ -1296,7 +1300,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip
+                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=0
             )
             csrf = generate_csrf_token()
             set_csrf_cookie(
@@ -1447,7 +1451,7 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+        user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
     )
     try:
         user_obj = UserProfile(**user)
@@ -1648,7 +1652,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="driver", user_agent=user_agent, ip=client_ip
+        user_id, audience="driver", user_agent=user_agent, ip=client_ip, token_version=token_version
     )
 
     try:
@@ -1864,6 +1868,9 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # PIPEDA: never rotate/mint tokens for a deletion-requested or purged account.
     # (Deletion also revokes refresh tokens, so this is belt-and-suspenders.)
     _enforce_account_active(user)
+    token_version = int(row.get("token_version") or 0)
+    if token_version != int(user.get("token_version") or 0):
+        raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_real_client_ip(request)
@@ -1877,7 +1884,22 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         user_agent=user_agent,
         ip=client_ip,
         replaces=row.get("id"),
+        token_version=token_version,
     )
+
+    # A driver login can win while the rotation is writing its child row.
+    # Never upgrade that row or its access token into the winning generation.
+    try:
+        latest_user = await db.find_one("users", {"id": user_id})
+    except Exception as exc:
+        logger.error("refresh: could not recheck session generation", exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+        ) from exc
+    if not latest_user or token_version != int(latest_user.get("token_version") or 0):
+        raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
 
     # NOT `or row.get("user_agent")`: refresh_tokens has no session-id column
     # (migration 25), so that fallback put a client-supplied User-Agent string
@@ -1892,7 +1914,6 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # operation, and two devices refreshing concurrently would fight over
     # current_session_id and start kicking each other off.
     session_id = user.get("current_session_id") or ""
-    token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
         user_id,

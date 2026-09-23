@@ -26,6 +26,7 @@ REQUIRED_WORKFLOWS = {
         "G6 · Trivy container scan",
     },
 }
+PRODUCTION_HEALTH_URL = "https://spinr-backend-yyz.fly.dev"
 
 
 def evaluate_deploy_evidence(*, expected_sha, repository, current_main_sha, runs, jobs_by_run, required_workflows):
@@ -71,6 +72,14 @@ def evaluate_deploy_evidence(*, expected_sha, repository, current_main_sha, runs
                 raise GateDenied(f"required job did not succeed: {workflow}/{name} ({job.get('conclusion')})")
 
     return GateResult(ready=not pending, pending=tuple(pending))
+
+
+def validate_probe_config(health_url, metrics_token):
+    """Validate the production readiness and served-SHA probe settings."""
+    if health_url != PRODUCTION_HEALTH_URL:
+        raise GateDenied("FLY_HEALTH_URL must target the production Fly app")
+    if not metrics_token or not metrics_token.strip():
+        raise GateDenied("METRICS_AUTH_TOKEN is required for the served-SHA check")
 
 
 def wait_for_deploy_evidence(*, expected_sha, repository, fetch_runs, fetch_jobs, read_main_sha, required_workflows, max_attempts=50, sleep=None):
@@ -130,6 +139,17 @@ def _read_main_sha(repository):
 
 
 def main():
+    if sys.argv[1:] == ["--check-probes"]:
+        try:
+            validate_probe_config(os.environ.get("FLY_HEALTH_URL", ""), os.environ.get("METRICS_AUTH_TOKEN", ""))
+        except GateDenied as exc:
+            print(f"Fly deploy gate denied: {exc}", file=sys.stderr)
+            return 1
+        print("Fly production probe configuration passed.")
+        return 0
+    if sys.argv[1:]:
+        print("Fly deploy gate denied: unsupported command.", file=sys.stderr)
+        return 1
     expected_sha = os.environ.get("GITHUB_SHA", "")
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if not expected_sha or not repository:

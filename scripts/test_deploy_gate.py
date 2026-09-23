@@ -2,7 +2,7 @@
 
 import unittest
 
-from fly_deploy_gate import GateDenied, evaluate_deploy_evidence, wait_for_deploy_evidence
+from fly_deploy_gate import GateDenied, evaluate_deploy_evidence, validate_probe_config, wait_for_deploy_evidence
 
 
 REPO = "acme/spinrvm"
@@ -145,6 +145,17 @@ class DeployEvidenceTests(unittest.TestCase):
             )
         self.assertEqual(main_reads, [])
 
+
+    def test_probe_config_requires_exact_production_url_and_metrics_token(self):
+        for url, token in (
+            ("", "metrics-token"),
+            ("https://other.example", "metrics-token"),
+            ("https://spinr-backend-yyz.fly.dev", " "),
+        ):
+            with self.subTest(url=url, token=bool(token.strip())):
+                with self.assertRaises(GateDenied):
+                    validate_probe_config(url, token)
+        validate_probe_config("https://spinr-backend-yyz.fly.dev", "metrics-token")
 
 if __name__ == "__main__":
     unittest.main()

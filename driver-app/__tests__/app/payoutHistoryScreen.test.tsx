@@ -205,6 +205,16 @@ describe('PayoutHistoryScreen', () => {
     expect(text).toContain('1234');
   });
 
+  it('labels a completed clawback as a refund hold adjustment', async () => {
+    mockDriverState.payoutHistory = [{
+      id: 'hold-1', amount: 5, status: 'completed', created_at: '2026-09-01T00:00:00Z',
+      payout_type: 'clawback',
+    }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Refund hold adjustment');
+    expect(allText(r)).toContain('Completed');
+  });
+
   it('renders the error message for a failed payout', async () => {
     mockDriverState.payoutHistory = [PAYOUT_2];
     const r = await renderScreen();

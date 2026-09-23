@@ -41,6 +41,13 @@ describe('claimAutoNavLeg', () => {
     await expect(claimAutoNavLeg('ride-1', 'dropoff')).resolves.toBe(true);
   });
 
+  it('allows a new stop destination in the same dropoff leg', async () => {
+    await expect(claimAutoNavLeg('ride-1', 'dropoff', 'stop-1')).resolves.toBe(true);
+    await expect(claimAutoNavLeg('ride-1', 'dropoff', 'stop-1')).resolves.toBe(false);
+    await expect(claimAutoNavLeg('ride-1', 'dropoff', 'stop-2')).resolves.toBe(true);
+    expect(setItem).toHaveBeenLastCalledWith('@spinr_auto_nav_launched', 'ride-1:dropoff:stop-2');
+  });
+
   it('allows the next ride after the previous one was claimed', async () => {
     getItem.mockResolvedValue('ride-1:dropoff');
     await expect(claimAutoNavLeg('ride-2', 'pickup')).resolves.toBe(true);

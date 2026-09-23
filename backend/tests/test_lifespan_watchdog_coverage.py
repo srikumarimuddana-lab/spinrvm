@@ -194,6 +194,10 @@ class TestProcessRoleLoopOwnership:
         monkeypatch.setattr(lifespan_module, "settings", settings)
         monkeypatch.setattr(lifespan_module, "init_database", AsyncMock(return_value=None))
         monkeypatch.setenv("SPINR_PROCESS_ROLE", role)
+        if role == "all":
+            monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", "unknown-loop")
+        else:
+            monkeypatch.delenv("SPINR_WORKER_LOOP_ALLOWLIST", raising=False)
         monkeypatch.setattr(mcp_server, "start_mcp", AsyncMock())
         monkeypatch.setattr(mcp_server, "stop_mcp", AsyncMock())
 
@@ -253,6 +257,116 @@ class TestProcessRoleLoopOwnership:
         else:
             assert len(watchdog_registrations) == 1
             assert set(watchdog_registrations[0]) == set(active_api_loop_names(role)) & spawned_names
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("invalid", ["", "unknown-loop", "push_retry (30s),push_retry (30s)"])
+    async def test_api_rejects_invalid_allowlist_before_database_or_tasks(self, invalid, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi import FastAPI
+
+        from backend.core import lifespan as lifespan_module
+
+        init_database = AsyncMock()
+        monkeypatch.setattr(lifespan_module, "init_database", init_database)
+        monkeypatch.setattr(lifespan_module, "settings", MagicMock(ENV="development"))
+        monkeypatch.setenv("SPINR_PROCESS_ROLE", "api")
+        monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", invalid)
+
+        with pytest.raises(RuntimeError, match="SPINR_WORKER_LOOP_ALLOWLIST"):
+            async with lifespan_module.lifespan(FastAPI()):
+                pytest.fail("invalid worker loop selection reached lifespan body")
+        init_database.assert_not_awaited()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "selected_worker_loop",
+        [
+            "push_retry (30s)",
+            "zoho_desk_sync (10min)",
+            "driver_onboarding_reminders (15min)",
+        ],
+    )
+    async def test_api_role_keeps_unselected_wave_loops_and_watches_them(
+        self, selected_worker_loop, monkeypatch
+    ):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fastapi import FastAPI
+
+        from backend.core import lifespan as lifespan_module
+        from backend.core.background_loop_registry import (
+            LOOP_CATALOG,
+            LOOP_WATCHDOG_NAME,
+        )
+        from backend.utils import loop_alert
+        import ai.mcp_server as mcp_server
+        from utils import ws_pubsub
+
+        monkeypatch.setattr(
+            lifespan_module,
+            "settings",
+            MagicMock(
+                ENV="development",
+                DISPATCH_POOL_DSN="",
+                REDIS_URL="",
+                RATE_LIMIT_REDIS_URL="",
+                WS_REDIS_URL="",
+                ALERT_WEBHOOK_URL="",
+            ),
+        )
+        monkeypatch.setattr(lifespan_module, "init_database", AsyncMock())
+        monkeypatch.setenv("SPINR_PROCESS_ROLE", "api")
+        monkeypatch.setenv("SPINR_WORKER_LOOP_ALLOWLIST", selected_worker_loop)
+        monkeypatch.setattr(mcp_server, "start_mcp", AsyncMock())
+        monkeypatch.setattr(mcp_server, "stop_mcp", AsyncMock())
+        monkeypatch.setattr(ws_pubsub.pubsub, "start", AsyncMock(return_value=True))
+        monkeypatch.setattr(ws_pubsub.pubsub, "stop", AsyncMock())
+
+        created_names = []
+        watchdog_registrations = []
+        real_create_task = asyncio.create_task
+        loop = asyncio.get_running_loop()
+
+        async def watchdog_once(factory):
+            try:
+                await factory()
+            except asyncio.CancelledError:
+                pass
+
+        async def stop_after_watchdog_check(**kwargs):
+            watchdog_registrations.append(kwargs["registered_names"])
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(loop_alert, "check_and_alert", stop_after_watchdog_check)
+
+        def fake_create_task(coro, *, name=None):
+            created_names.append(name)
+            if name == LOOP_WATCHDOG_NAME:
+                factory = coro.cr_frame.f_locals["coro_factory"]
+                coro.close()
+                return real_create_task(watchdog_once(factory), name=name)
+            coro.close()
+            future = loop.create_future()
+            future.set_result(None)
+            return future
+
+        monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+        async with lifespan_module.lifespan(FastAPI()):
+            await asyncio.sleep(0)
+
+        spawned_names = set(_spawned_loop_names(_find_lifespan_function(_parse_lifespan_module())))
+        active = {
+            name
+            for name, placement in LOOP_CATALOG
+            if name != LOOP_WATCHDOG_NAME
+            and (placement != "worker_wave1" or name != selected_worker_loop)
+        }
+        expected = (active | {LOOP_WATCHDOG_NAME}) & spawned_names
+        assert {name for name in created_names if name in spawned_names} == expected
+        assert len(watchdog_registrations) == 1
+        assert set(watchdog_registrations[0]) == expected - {LOOP_WATCHDOG_NAME}
 
 
 class TestWatchdogFlagsAHungNewlyAddedLoop:

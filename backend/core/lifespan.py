@@ -11,6 +11,7 @@ try:
         LOOP_WATCHDOG_NAME,
         active_api_loop_names,
         resolve_process_role,
+        resolve_worker_loop_allowlist,
         should_spawn_on_api,
     )
     from db_supabase import run_sync
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
         LOOP_WATCHDOG_NAME,
         active_api_loop_names,
         resolve_process_role,
+        resolve_worker_loop_allowlist,
         should_spawn_on_api,
     )
     from ..db_supabase import run_sync  # type: ignore
@@ -178,6 +180,9 @@ async def lifespan(app: FastAPI):
     from concurrent.futures import ThreadPoolExecutor as _Executor
 
     process_role = resolve_process_role(_os.environ.get("SPINR_PROCESS_ROLE"), env=settings.ENV)
+    worker_loop_allowlist = resolve_worker_loop_allowlist(
+        _os.environ.get("SPINR_WORKER_LOOP_ALLOWLIST") if process_role != "all" else None
+    )
     logger.info(f"Background loop process role: {process_role}")
 
     executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "16"))
@@ -299,7 +304,7 @@ async def lifespan(app: FastAPI):
         _spawned_loop_names.append(name)
         if name not in LOOP_PLACEMENT:
             raise RuntimeError(f"Background loop {name!r} has no process-role classification")
-        if not should_spawn_on_api(name, process_role):
+        if not should_spawn_on_api(name, process_role, worker_loop_allowlist):
             logger.info(f"Skipped background task for process role {process_role}: {name}")
             return
         if name != LOOP_WATCHDOG_NAME:
@@ -786,7 +791,11 @@ async def lifespan(app: FastAPI):
     # ALERT_WEBHOOK_URL is unset.
     # Derive expectations from the selected role and only the loops present in
     # lifespan, so deferred registry entries (for example H3) stay dormant.
-    _WATCHDOG_LOOP_NAMES = [name for name in active_api_loop_names(process_role) if name in _active_loop_names]
+    _WATCHDOG_LOOP_NAMES = [
+        name
+        for name in active_api_loop_names(process_role, worker_loop_allowlist)
+        if name in _active_loop_names
+    ]
 
     async def _loop_watchdog():
         import asyncio as _asyncio

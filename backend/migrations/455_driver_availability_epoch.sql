@@ -24,6 +24,8 @@ ALTER TABLE public.drivers
 -- Column defaults backfill existing rows conservatively: legacy online flags
 -- remain intact, admission stays closed, and no synthetic contact time is set.
 
+-- service-role-only table: RPC owns command authorization and clients never
+-- read or write idempotency records directly, so no client RLS policy applies.
 CREATE TABLE IF NOT EXISTS public.driver_availability_requests (
     -- Request IDs are scoped to driver identity, so independent drivers may
     -- legitimately submit the same opaque client-generated key.
@@ -223,4 +225,60 @@ REVOKE ALL ON FUNCTION public.transition_driver_availability(text,bigint,text,te
 GRANT EXECUTE ON FUNCTION public.transition_driver_availability(text,bigint,text,text,text) TO service_role;
 COMMENT ON FUNCTION public.transition_driver_availability(text,bigint,text,text,text) IS
     'Backend-only atomic availability state transition. Lock order: driver, assigned rides, active offers, insurance period.';
+
+-- One MVCC statement returns driver state, active trip, live pending offer,
+-- rollout flag, and database clock. This keeps obligations and epoch aligned
+-- across replicas. Expiry uses the authoritative clock captured here.
+CREATE OR REPLACE FUNCTION public.get_driver_availability_snapshot(p_user_id text)
+RETURNS jsonb
+LANGUAGE sql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    WITH db_clock AS MATERIALIZED (
+        SELECT clock_timestamp() AS server_time
+    ), driver_row AS MATERIALIZED (
+        SELECT d.* FROM public.drivers d WHERE d.user_id = p_user_id
+        ORDER BY d.id LIMIT 1
+    ), active_trip AS MATERIALIZED (
+        SELECT r.id, r.status, r.updated_at
+        FROM public.rides r CROSS JOIN driver_row d
+        WHERE r.driver_id = d.id
+          AND r.status IN ('driver_assigned','driver_accepted','driver_arrived','in_progress')
+        ORDER BY r.updated_at DESC NULLS LAST, r.id LIMIT 1
+    ), live_offer AS MATERIALIZED (
+        SELECT ro.id, ro.ride_id, ro.offered_at, ro.expires_at,
+               r.status AS ride_status
+        FROM public.ride_offers ro
+        JOIN public.rides r ON r.id = ro.ride_id
+        CROSS JOIN driver_row d CROSS JOIN db_clock c
+        WHERE ro.driver_id = d.id AND ro.status = 'pending'
+          AND r.status IN ('searching','driver_assigned','driver_accepted','driver_arrived','in_progress')
+          AND ro.expires_at IS NOT NULL AND ro.expires_at > c.server_time
+        ORDER BY ro.offered_at DESC, ro.id LIMIT 1
+    )
+    SELECT jsonb_build_object(
+        'protocol_enabled', COALESCE((SELECT s.driver_availability_v2_enabled
+                                      FROM public.settings s WHERE s.id='app_settings'), false),
+        'server_time', c.server_time,
+        'driver_count', (SELECT count(*) FROM public.drivers d WHERE d.user_id = p_user_id),
+        'driver', (SELECT to_jsonb(d) FROM driver_row d),
+        'active_ride', (SELECT to_jsonb(a) FROM active_trip a),
+        'pending_offer', (SELECT to_jsonb(o) FROM live_offer o),
+        'offer_reconciliation_required', EXISTS (
+            SELECT 1 FROM public.ride_offers ro
+            JOIN public.rides r ON r.id = ro.ride_id
+            CROSS JOIN driver_row d CROSS JOIN db_clock expiry_clock
+            WHERE ro.driver_id=d.id AND ro.status='pending'
+              AND r.status IN ('searching','driver_assigned','driver_accepted','driver_arrived','in_progress')
+              AND (ro.expires_at IS NULL OR ro.expires_at <= expiry_clock.server_time)
+        )
+    )
+    FROM db_clock c
+$$;
+REVOKE ALL ON FUNCTION public.get_driver_availability_snapshot(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_driver_availability_snapshot(text) TO service_role;
+COMMENT ON FUNCTION public.get_driver_availability_snapshot(text) IS
+    'Single-statement availability snapshot using one MVCC view and database clock; backend service-role only.';
 COMMIT;

@@ -23,6 +23,25 @@ SUPPORTED_ACTIONS = frozenset(
 )
 
 
+async def get_driver_availability_snapshot(user_id: str) -> dict[str, Any]:
+    """Read driver, obligations, feature gate, and DB time in one SQL snapshot."""
+    if not user_id:
+        raise ValueError("user_id is required")
+    if not supabase:
+        raise RuntimeError("Supabase client unavailable for driver availability snapshot")
+
+    def _call():
+        response = supabase.rpc("get_driver_availability_snapshot", {"p_user_id": user_id}).execute()
+        return getattr(response, "data", None)
+
+    value = await run_sync(_call, retry_policy="read")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        return value
+    raise TypeError("get_driver_availability_snapshot returned non-object JSON")
+
+
 async def transition_driver_availability(
     driver_id: str,
     expected_epoch: int,

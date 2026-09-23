@@ -7,18 +7,16 @@ import pytest
 
 @pytest.fixture()
 def availability_db(pg_cur):
-    from scripts.run_migrations import _split_sql_statements
+    from conftest import _apply_migration_sql
 
     migrations = Path(__file__).resolve().parents[2] / "migrations"
     # The extracted base drivers DDL lacks updated_at; later production
     # migrations assume it exists, so provide the same base column first.
     pg_cur.execute("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()")
     for migration_name in ("42_drivers_last_status_changed_at.sql", "97_driver_intent_timestamps.sql"):
-        for statement in _split_sql_statements((migrations / migration_name).read_text(encoding="utf-8")):
-            pg_cur.execute(statement)
+        _apply_migration_sql(pg_cur, (migrations / migration_name).read_text(encoding="utf-8"))
     migration = migrations / "455_driver_availability_epoch.sql"
-    for statement in _split_sql_statements(migration.read_text(encoding="utf-8")):
-        pg_cur.execute(statement)
+    _apply_migration_sql(pg_cur, migration.read_text(encoding="utf-8"))
     pg_cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0")
@@ -36,6 +34,44 @@ def _transition(cur, epoch, action, request_id, session="sess-A", driver="avail-
         (driver, epoch, session, action, request_id),
     )
     return cur.fetchone()[0]
+
+
+def _snapshot(cur, user_id="avail-user"):
+    cur.execute("SELECT public.get_driver_availability_snapshot(%s)", (user_id,))
+    return cur.fetchone()[0]
+
+
+def test_snapshot_is_single_authoritative_view_and_service_role_only(availability_db):
+    cur = availability_db
+    cur.execute("SELECT has_function_privilege('authenticated', 'get_driver_availability_snapshot(text)', 'EXECUTE')")
+    assert cur.fetchone()[0] is False
+    cur.execute("SELECT has_function_privilege('service_role', 'get_driver_availability_snapshot(text)', 'EXECUTE')")
+    assert cur.fetchone()[0] is True
+
+    snapshot = _snapshot(cur)
+    assert snapshot["protocol_enabled"] is False
+    assert snapshot["driver"]["online_epoch"] == 0
+    assert snapshot["server_time"]
+    assert snapshot["active_ride"] is None
+    assert snapshot["pending_offer"] is None
+
+    cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
+    cur.execute(
+        "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('snapshot-ride','avail-driver','a',0,0,'b',0,0,'searching')"
+    )
+    cur.execute(
+        "INSERT INTO ride_offers (ride_id,driver_id,status,expires_at) "
+        "VALUES ('snapshot-ride','avail-driver','pending',clock_timestamp() + interval '1 minute')"
+    )
+    snapshot = _snapshot(cur)
+    assert snapshot["protocol_enabled"] is True
+    assert snapshot["pending_offer"]["ride_id"] == "snapshot-ride"
+
+    cur.execute("UPDATE ride_offers SET expires_at=clock_timestamp() - interval '1 second' WHERE ride_id='snapshot-ride'")
+    snapshot = _snapshot(cur)
+    assert snapshot["pending_offer"] is None
+    assert snapshot["offer_reconciliation_required"] is True
 
 
 def test_dark_by_default_and_rejects_client_execute(availability_db):

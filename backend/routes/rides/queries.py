@@ -431,6 +431,11 @@ async def get_ride(
                 str((area or {}).get("cancel_fee_driver_share") or settings.get("cancellation_fee_driver", "4.00"))
             )
             cancellation_fee_amount = fee_admin + fee_driver
+            # Pre-cancel disclosure must match what cancel_ride_rider will
+            # actually collect: when cancellation_fee_tax_enabled is on that
+            # is fee + GST/PST (2026-09-23). Flag off -> tax 0, unchanged.
+            _fee_tax, _ = await _deps.compute_cancellation_fee_tax(cancellation_fee_amount, settings, area)
+            cancellation_fee_amount += _fee_tax
         except Exception:
             logger.opt(exception=True).error("Failed to fetch app settings for cancellation config")
 

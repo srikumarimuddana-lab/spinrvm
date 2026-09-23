@@ -382,3 +382,43 @@ class TestNoShowWiring:
         kw = m["bill_corp"].await_args.kwargs
         assert kw["amount"] == Decimal("4.73") and kw["source"] == "noshow_fee"
         m["pay_driver"].assert_awaited_once()
+
+
+# ── get_ride pre-cancel disclosure ───────────────────────────────────
+
+
+async def _disclosed_fee(settings: dict) -> Decimal:
+    from starlette.requests import Request as SR
+
+    from backend.routes.rides import get_ride
+
+    ride = {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "driver_id": None,
+        "status": "driver_accepted",
+        "service_area_id": "area_sk",
+        "payment_method": "card",
+    }
+    req = SR({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "client": ("t", 1)})
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as db,
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+    ):
+        db.get_ride = AsyncMock(return_value=ride)
+        db.get_rows = AsyncMock(return_value=[])
+        db.find_one = AsyncMock(return_value=SK_AREA)
+        db.get_driver_by_id = AsyncMock(return_value=None)
+        result = await get_ride(request=req, ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+    return result["cancellation_fee"]
+
+
+@pytest.mark.unit
+class TestPreCancelDisclosure:
+    async def test_disclosed_fee_includes_tax_when_charged(self):
+        # What the rider is told before cancelling == what cancel_ride_rider collects.
+        assert await _disclosed_fee({**FEE_SETTINGS, **TAX_ON}) == Decimal("4.73")
+
+    async def test_disclosed_fee_unchanged_when_flag_off(self):
+        assert await _disclosed_fee(FEE_SETTINGS) == Decimal("4.50")

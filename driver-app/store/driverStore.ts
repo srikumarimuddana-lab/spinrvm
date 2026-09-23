@@ -269,6 +269,7 @@ export interface DriverBalance {
     payable_balance: string; // MoneyString — renamed from available_balance (NOT wallet.balance)
     pending_payouts: string; // MoneyString
     total_paid_out: string; // MoneyString
+    refund_holds_total?: string; // MoneyString — balance adjustments, not cash paid
     /** MoneyString — payments made by the previous Spinr app (synced from
      *  Stripe). History only: not part of total_earnings or the balance. */
     previous_app_paid_total?: string;

@@ -482,11 +482,23 @@ function PayoutScreen() {
                                 {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '$0.00'}
                             </Text>
                         </View>
+                        {parseFloat(driverBalance?.refund_holds_total || '0') > 0 && (
+                            <>
+                                <View style={styles.balanceDivider} />
+                                <View style={styles.balanceItem}>
+                                    <Text style={styles.balanceItemLabel}>Refund Holds</Text>
+                                    <Text style={styles.balanceItemValue}>
+                                        {formatCurrency(driverBalance!.refund_holds_total!)}
+                                    </Text>
+                                </View>
+                            </>
+                        )}
                         {/* Additive: only rendered for a driver with real previous-app
                             money, so a driver with none sees the original 3-item row
                             byte-identical to before. A visible line item (not a footnote)
-                            — Total Earnings above sums Paid Out + Pending + Previously Paid
-                            (+ Available), so every dollar is accounted for and verifiable
+                            — Total Earnings above reconciles to Paid Out + Pending + Refund Holds
+                            (+ Available), with Previously Paid shown separately as historical
+                            earnings, so every dollar is accounted for and verifiable
                             against the payout history list below, which carries the real
                             transfer dates. */}
                         {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (

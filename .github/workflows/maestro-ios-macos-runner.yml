@@ -188,4 +188,36 @@ jobs:
       # .maestro/README.md, no --app-id or device flag needed.
       - name: Run Maestro flows against the booted Simulator
         working-directory: ${{ matrix.app.dir }}
-        run: maestro test "../${{ matrix.app.flows }}"
+        run: |
+          mkdir -p maestro-results
+          maestro test --debug-output=maestro-results/session --format junit --output maestro-results/report.xml "../${{ matrix.app.flows }}"
+
+      - name: Require at least one executed Maestro flow
+        if: always()
+        working-directory: ${{ matrix.app.dir }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = "maestro-results/report.xml"
+          try:
+              root = ET.parse(path).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"Maestro report missing or invalid ({type(exc).__name__})")
+
+          cases = list(root.iter("testcase"))
+          executed = sum(case.find("skipped") is None for case in cases)
+          if executed == 0:
+              sys.exit(f"Maestro report contains no executed flows (cases={len(cases)})")
+          print(f"Maestro completed-flow proof: {executed} executed testcase(s)")
+          PY
+
+      - name: Upload iOS Simulator execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: maestro-ios-results-${{ matrix.app.dir }}
+          path: ${{ matrix.app.dir }}/maestro-results/
+          if-no-files-found: warn
+          retention-days: 14

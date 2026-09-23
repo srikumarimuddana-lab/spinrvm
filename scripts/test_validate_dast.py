@@ -89,5 +89,8 @@ def test_workflow_fails_closed_scopes_before_zap_and_checks_report_afterward():
     report_check = workflow.index("python3 scripts/validate_dast.py report_json.json")
     assert preflight < scanner < report_check
     assert "cmd_options: '-a -n staging.context'" in workflow
+    assert "fail_action: true" in workflow
+    assert "if: always() && steps.preflight.outputs.ready == 'true'" in workflow
+    assert "name: Retain raw ZAP reports even when scan findings fail the job" in workflow
     assert "STAGING_ALLOWED_ORIGIN" in workflow
     assert "No-op (STAGING_URL not configured)" not in workflow

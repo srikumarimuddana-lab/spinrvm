@@ -43,11 +43,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate target and generate exact-origin ZAP scope
+        id: preflight
         # Values go through env rather than expression interpolation in shell.
         env:
           STAGING_URL: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
           STAGING_ALLOWED_ORIGIN: ${{ vars.STAGING_ALLOWED_ORIGIN || secrets.STAGING_ALLOWED_ORIGIN }}
-        run: python3 scripts/validate_dast.py --write-scope-context staging.context
+        run: |
+          python3 scripts/validate_dast.py --write-scope-context staging.context
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
@@ -60,10 +63,24 @@ jobs:
           # origin before crawling (not merely a post-scan report check).
           cmd_options: '-a -n staging.context'
           allow_issue_writing: false
-          fail_action: false
+          # ZAP reports alerts as WARN by default; true makes WARN/FAIL findings
+          # fail the check instead of becoming a successful artifact-only scan.
+          fail_action: true
           artifact_name: zap-baseline-report
 
+      - name: Retain raw ZAP reports even when scan findings fail the job
+        if: always() && steps.preflight.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: zap-baseline-raw-reports
+          path: |
+            report_json.json
+            report_md.md
+            report_html.html
+          if-no-files-found: warn
+
       - name: Validate generated JSON report target
+        if: always() && steps.preflight.outputs.ready == 'true'
         env:
           STAGING_URL: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
           STAGING_ALLOWED_ORIGIN: ${{ vars.STAGING_ALLOWED_ORIGIN || secrets.STAGING_ALLOWED_ORIGIN }}

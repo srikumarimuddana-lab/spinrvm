@@ -3,15 +3,15 @@
 the Locust marketplace load test (loadtest/README.md, ACTION_ITEMS.md C50
 Phase 3 T16 — staging validation).
 
-STAGING/DEV ONLY. This talks to whatever SUPABASE_URL /
-SUPABASE_SERVICE_ROLE_KEY are set in the environment and hard-refuses to
-run when ENV=production — checked in code below, not just documented,
-mirroring the interlock in backend/scripts/seed_corporate_test_data.py
-(docs/change-log/2026-07-30-corporate-dev-seed-script.md). This script
-does NOT check settings.ENV via backend.core.config on purpose (importing
-the full Settings object requires the whole backend's env surface to be
-present) — it reads the same os.environ["ENV"] value config.py itself
-reads (Settings.ENV, config.py:203), so the guard is equivalent, not weaker.
+STAGING/DEV ONLY. Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+EXPECTED_SUPABASE_PROJECT_REF, and an allowed ENV. Before importing the DB
+module, it validates the canonical hosted Supabase URL, rejects the known
+production project unconditionally, and requires the URL project ref to match
+the independently configured expected ref exactly. This script does NOT check
+settings.ENV via backend.core.config on purpose (importing the full Settings
+object requires the whole backend's env surface to be present) — it reads the
+same os.environ["ENV"] value config.py itself reads (Settings.ENV,
+config.py:203), so the environment guard is equivalent, not weaker.
 
 What it seeds, per loadtest/README.md's documented contract:
   - N rider bot `users` rows, even phone suffixes: +1306555NNN{0,2,4,6,8}
@@ -33,6 +33,9 @@ Idempotent: re-running skips users/drivers that already exist by phone.
 Usage:
     python backend/scripts/seed_loadtest_bots.py --riders 45 --drivers 15
     python backend/scripts/seed_loadtest_bots.py --cleanup
+
+Set EXPECTED_SUPABASE_PROJECT_REF independently from SUPABASE_URL to the
+20-character, nonproduction project ref before running either operation.
 """
 
 from __future__ import annotations
@@ -41,10 +44,12 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("seed_loadtest_bots")
@@ -53,6 +58,8 @@ logger = logging.getLogger("seed_loadtest_bots")
 # harness's bots and this script's seeded rows point at different numbers.
 PHONE_PREFIX = "+1306555"
 _ALLOWED_ENVS = frozenset({"development", "dev", "test", "staging", "preview"})
+_KNOWN_PRODUCTION_SUPABASE_PROJECT_REF = "soavhtdhefowwvforzwb"
+_SUPABASE_PROJECT_REF_RE = re.compile(r"^[a-z0-9]{20}$")
 SASKATOON_LAT = 52.1332
 SASKATOON_LNG = -106.6700
 # A generous square around downtown Saskatoon — must fully contain the
@@ -82,12 +89,74 @@ def load_dotenv() -> None:
             os.environ.setdefault(name.strip(), value.strip())
 
 
-load_dotenv()
+db_supabase = None
 
-try:
-    from backend import db_supabase
-except ImportError:
-    import db_supabase  # type: ignore
+
+def _validate_target_environment(environment: dict[str, str] | None = None) -> str:
+    """Require explicit environment and exact independent Supabase project identity."""
+    values = os.environ if environment is None else environment
+    env_value = values.get("ENV", "").lower()
+    if env_value not in _ALLOWED_ENVS:
+        raise ValueError("ENV is not an allowed development/staging environment")
+
+    url = values.get("SUPABASE_URL", "")
+    if url != url.strip() or any(
+        char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url
+    ):
+        raise ValueError("SUPABASE_URL is malformed")
+    if not url or not values.get("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
+
+    expected_ref = values.get("EXPECTED_SUPABASE_PROJECT_REF", "")
+    if expected_ref != expected_ref.strip():
+        raise ValueError("EXPECTED_SUPABASE_PROJECT_REF must not contain surrounding whitespace")
+    if not _SUPABASE_PROJECT_REF_RE.fullmatch(expected_ref):
+        raise ValueError("EXPECTED_SUPABASE_PROJECT_REF must be a 20-character project ref")
+    if expected_ref == _KNOWN_PRODUCTION_SUPABASE_PROJECT_REF:
+        raise ValueError("EXPECTED_SUPABASE_PROJECT_REF cannot be the production project")
+
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise ValueError("SUPABASE_URL is malformed") from None
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.netloc != host
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or "?" in url
+        or "#" in url
+    ):
+        raise ValueError("SUPABASE_URL must be a canonical HTTPS Supabase project URL")
+
+    match = re.fullmatch(r"([a-z0-9]{20})\.supabase\.co", host)
+    if not match:
+        raise ValueError("SUPABASE_URL must identify a canonical Supabase project host")
+    actual_ref = match.group(1)
+    if actual_ref == _KNOWN_PRODUCTION_SUPABASE_PROJECT_REF:
+        raise ValueError("SUPABASE_URL points to the known production project")
+    if actual_ref != expected_ref:
+        raise ValueError("SUPABASE_URL project ref does not match EXPECTED_SUPABASE_PROJECT_REF")
+    return actual_ref
+
+
+def _initialize_db_supabase() -> None:
+    """Import the database module only after all target guards pass."""
+    global db_supabase
+    if db_supabase is not None:
+        return
+    try:
+        from backend import db_supabase as database
+    except ImportError:
+        import db_supabase as database  # type: ignore
+    db_supabase = database
 
 
 def _rider_phone(n: int) -> str:
@@ -296,6 +365,7 @@ async def _cleanup() -> None:
 
 
 async def main() -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--riders", type=int, default=45, help="number of rider bot accounts")
     parser.add_argument("--drivers", type=int, default=15, help="number of driver bot accounts")
@@ -307,24 +377,17 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    # ── Hard safety interlocks (checked in code, not just documented) ──
-    if not os.environ.get("SUPABASE_URL") or not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
-        logger.error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — refusing to run against an unknown project.")
+    # Fail closed before importing db_supabase, whose module import initializes
+    # the Supabase client. ENV remains an allowlist, but the independently
+    # supplied expected project ref also prevents staging from targeting prod.
+    try:
+        _validate_target_environment()
+    except ValueError as exc:
+        logger.error("Loadtest seed target rejected: %s", exc)
         sys.exit(1)
+    _initialize_db_supabase()
 
-    # Review fix (2026-09-03): allowlist, not a production denylist. The old
-    # check only refused ENV=production, so an UNSET ENV (the default) with a
-    # production SUPABASE_URL sailed through and would have written 60 users
-    # and 15 drivers into the live project with the service key.
     env_value = os.environ.get("ENV", "").lower()
-    if env_value not in _ALLOWED_ENVS:
-        logger.error(
-            "ENV=%r is not one of %s — refusing to seed synthetic bot accounts. Set ENV explicitly "
-            "to the staging/dev environment you are targeting; this script never runs against production.",
-            env_value,
-            sorted(_ALLOWED_ENVS),
-        )
-        sys.exit(1)
 
     if args.cleanup:
         if not args.yes:

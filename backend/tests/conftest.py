@@ -445,13 +445,17 @@ def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def block_external_network_in_payment_regressions(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+def block_external_network_in_payment_regressions(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Block and report all IP networking attempts in payment regression tests.
 
     These tests use mocked Stripe/Supabase boundaries; a missing mock must fail
     locally instead of hanging or reaching a live provider. They use in-process
     ASGI mocks, so no IPv4/IPv6 connection is expected; Unix socketpairs remain
-    available for asyncio internals.
+    available for asyncio internals. Loopback is allowed because Windows has no
+    AF_UNIX socketpair: asyncio's ProactorEventLoop builds its self-pipe from a
+    127.0.0.1 connection, and blocking it breaks every async test there.
     """
     guarded_modules = {
         "test_payment_retry.py",
@@ -468,18 +472,21 @@ def block_external_network_in_payment_regressions(request: pytest.FixtureRequest
     original_connect_ex = socket.socket.connect_ex
     original_sendto = socket.socket.sendto
 
+    def _is_loopback(address) -> bool:
+        return isinstance(address, tuple) and bool(address) and address[0] in ("127.0.0.1", "::1")
+
     def _guarded_getaddrinfo(host, *args, **kwargs):
         attempts.append(f"DNS lookup: {host!r}")
         raise socket.gaierror("network disabled in payment regression tests")
 
     def _guarded_connect(sock, address):
-        if sock.family in (socket.AF_INET, socket.AF_INET6):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not _is_loopback(address):
             attempts.append(f"socket connect: {address!r}")
             raise OSError("network disabled in payment regression tests")
         return original_connect(sock, address)
 
     def _guarded_connect_ex(sock, address):
-        if sock.family in (socket.AF_INET, socket.AF_INET6):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not _is_loopback(address):
             attempts.append(f"socket connect_ex: {address!r}")
             return 1
         return original_connect_ex(sock, address)

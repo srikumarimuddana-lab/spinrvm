@@ -57,6 +57,14 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), back: jest.fn() }),
   useLocalSearchParams: () => ({}),
 }));
+jest.mock('expo-router/react-navigation', () => {
+  const ReactActual = require('react');
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(() => cb(), [cb]);
+    },
+  };
+});
 jest.mock('expo-location', () => ({
   getForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false })),
   getCurrentPositionAsync: jest.fn(() => Promise.reject(new Error('no gps'))),

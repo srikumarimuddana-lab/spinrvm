@@ -310,6 +310,45 @@ describe('rideStore — ride lifecycle', () => {
     expect(state.pickup).toEqual(pickup);
     expect(state.dropoff).toEqual(dropoff);
   });
+
+  test('resetBookingDraft clears the trip draft and leaves the live ride and cancel latch', () => {
+    const pickup = makeLocation('100 Queen St');
+    const dropoff = makeLocation('200 King St', 43.6450, -79.3800);
+    useRideStore.setState({
+      currentRide: makeRide('searching') as any,
+      pickup,
+      dropoff,
+      stops: [makeLocation('Stop')],
+      selectedVehicle: { id: 'vt-1', name: 'Economy' } as any,
+      estimates: [{ vehicle_type: { id: 'vt-1' } } as any],
+      routePolyline: [[50, -104]],
+      availablePromos: [{ code: 'SAVE' } as any],
+      appliedPromo: { code: 'SAVE' } as any,
+      scheduledTime: new Date('2026-09-23T18:00:00Z'),
+      riderNotes: 'Gate B',
+      isLoading: true,
+      _clearedRideId: 'ride-old',
+      userLocation: { latitude: 50.4, longitude: -104.6 },
+    });
+
+    act(() => useRideStore.getState().resetBookingDraft());
+
+    const state = useRideStore.getState();
+    expect(state.pickup).toBeNull();
+    expect(state.dropoff).toBeNull();
+    expect(state.stops).toEqual([]);
+    expect(state.estimates).toEqual([]);
+    expect(state.selectedVehicle).toBeNull();
+    expect(state.routePolyline).toEqual([]);
+    expect(state.availablePromos).toEqual([]);
+    expect(state.appliedPromo).toBeNull();
+    expect(state.scheduledTime).toBeNull();
+    expect(state.riderNotes).toBe('');
+    expect(state.isLoading).toBe(false);
+    expect(state.currentRide?.status).toBe('searching');
+    expect(state._clearedRideId).toBe('ride-old');
+    expect(state.userLocation).toEqual({ latitude: 50.4, longitude: -104.6 });
+  });
 });
 
 // R-P1-23: hydrateActiveRide, double-booking prevention, cancel-after-driver_arrived

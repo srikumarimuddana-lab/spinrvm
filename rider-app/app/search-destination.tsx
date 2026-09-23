@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,6 +12,7 @@ import {
 import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
@@ -211,6 +212,25 @@ export default function SearchDestinationScreen() {
     }
     // setPickup is a zustand action (stable).
   }, [userLocation, setPickup]);
+
+  // Home calls resetBookingDraft() before pushing this screen, and this
+  // screen can stay mounted. The GPS effect above only runs when
+  // userLocation changes, so a fresh search with GPS already known would
+  // keep the previous address in the inputs. Re-read the store on focus
+  // and bind Current Location when the draft pickup is empty.
+  useFocusEffect(
+    useCallback(() => {
+      const { pickup: storedPickup, dropoff: storedDropoff, stops: storedStops, userLocation: loc } = useRideStore.getState();
+      if (!storedPickup && loc) {
+        setPickup({ address: 'Current Location', lat: loc.latitude, lng: loc.longitude });
+        setPickupText('Current Location');
+      } else {
+        setPickupText(storedPickup?.address ?? '');
+      }
+      setDropoffText(storedDropoff?.address ?? '');
+      setStopTexts(storedStops.map((s) => s.address || ''));
+    }, [setPickup]),
+  );
 
   // Sync stop texts when stops change. Deliberately keyed on stops.length
   // only, NOT the whole `stops` array: handleTextChange (below) calls

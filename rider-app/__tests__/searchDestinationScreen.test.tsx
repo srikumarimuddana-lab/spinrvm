@@ -61,6 +61,14 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush, navigate: jest.fn(), back: mockBack }),
   useLocalSearchParams: () => mockParams,
 }));
+jest.mock('expo-router/react-navigation', () => {
+  const ReactActual = require('react');
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(() => cb(), [cb]);
+    },
+  };
+});
 const mockGetForegroundPermissionsAsync = jest.fn((): Promise<any> => Promise.resolve({ status: 'denied' }));
 const mockRequestForegroundPermissionsAsync = jest.fn((): Promise<any> => Promise.resolve({ status: 'denied' }));
 const mockGetCurrentPositionAsync = jest.fn((): Promise<any> => Promise.reject(new Error('no gps')));
@@ -553,6 +561,26 @@ describe('Favourites and Saved Places rows', () => {
     const renderer = await renderScreen();
     const icons = renderer.root.findAllByType(Ionicons as any);
     expect(icons.some((n) => n.props.name === 'briefcase')).toBe(true);
+  });
+});
+
+describe('fresh search after a cancelled trip', () => {
+  it('shows Current Location and an empty destination after resetBookingDraft', async () => {
+    useRideStore.setState({
+      pickup: WAKELING,
+      dropoff: GORDON,
+      stops: [{ address: 'Mid', lat: 50.41, lng: -104.65 }],
+      userLocation: { latitude: 51.0, longitude: -105.0 } as any,
+    });
+    useRideStore.getState().resetBookingDraft();
+    const renderer = await renderScreen();
+    expect(pickupInput(renderer).props.value).toBe('Current Location');
+    expect(dropoffInput(renderer).props.value).toBe('');
+    expect(useRideStore.getState().pickup).toMatchObject({
+      address: 'Current Location', lat: 51.0, lng: -105.0,
+    });
+    expect(useRideStore.getState().dropoff).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
 

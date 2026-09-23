@@ -69,6 +69,7 @@ try:
     from ...utils.insurance_periods import (
         close_period_after_release,
         close_period_for_forced_offline,
+        has_active_ride_obligation,
         record_period_transition,
         release_driver_and_close_period,
     )
@@ -133,6 +134,7 @@ except ImportError:
     from utils.insurance_periods import (  # type: ignore[assignment]
         close_period_after_release,
         close_period_for_forced_offline,
+        has_active_ride_obligation,
         record_period_transition,
         release_driver_and_close_period,
     )

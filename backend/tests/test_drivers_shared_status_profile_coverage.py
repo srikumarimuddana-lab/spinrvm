@@ -888,6 +888,7 @@ class TestUpdateMyDriverAutoCreateAndReview:
             patch("backend.utils.vehicle_history.record_vehicle_changes", record_mock),
             patch("backend.utils.driver_status_notifications.notify_driver_status_change", notify_mock),
             patch("backend.utils.driver_status_notifications.status_message", return_value="needs review"),
+            patch("backend.routes.drivers.profile._deps.has_active_ride_obligation", AsyncMock(return_value=False)),
             patch("backend.routes.drivers.profile._deps.record_period_transition", period_mock),
         ):
             req = profile_mod.UpdateDriverProfileRequest(vehicle_make="Honda")
@@ -898,6 +899,82 @@ class TestUpdateMyDriverAutoCreateAndReview:
         period_mock.assert_awaited_once_with("d1", 0)
         notify_mock.assert_awaited_once()
         assert result["status"] == "needs_review"
+
+    async def test_mid_trip_vehicle_change_flags_review_but_defers_offline_and_period(self):
+        """2026-09-23 mid-trip guard: a driver with an obligated ride (or a
+        pending offer) who edits a vehicle/document field is still flagged
+        needs_review, but must NOT be forced offline or have Period 0
+        recorded — that would falsely claim personal-auto-only coverage
+        while they're still obligated to (or driving) a ride."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {
+            "id": "d1",
+            "user_id": "u1",
+            "status": "active",
+            "is_online": True,
+            "vehicle_make": "Toyota",
+        }
+        updated = {**driver, "status": "needs_review"}
+        record_mock = AsyncMock()
+        notify_mock = AsyncMock()
+        period_mock = AsyncMock()
+        update_one_mock = AsyncMock()
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.profile.db_supabase.update_one", update_one_mock),
+            patch("backend.routes.drivers.profile.db_supabase.get_driver_by_id", AsyncMock(return_value=updated)),
+            patch("backend.routes.drivers.profile._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers.profile._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.utils.vehicle_history.record_vehicle_changes", record_mock),
+            patch("backend.utils.driver_status_notifications.notify_driver_status_change", notify_mock),
+            patch("backend.utils.driver_status_notifications.status_message", return_value="needs review"),
+            patch("backend.routes.drivers.profile._deps.has_active_ride_obligation", AsyncMock(return_value=True)),
+            patch("backend.routes.drivers.profile._deps.record_period_transition", period_mock),
+        ):
+            req = profile_mod.UpdateDriverProfileRequest(vehicle_make="Honda")
+            result = await profile_mod.update_my_driver(body=req, current_user={"id": "u1"})
+
+        period_mock.assert_not_awaited()
+        write_payload = update_one_mock.await_args.args[2]
+        assert write_payload["status"] == "needs_review"
+        assert "is_online" not in write_payload
+        assert "is_available" not in write_payload
+        assert result["status"] == "needs_review"
+
+    async def test_obligation_lookup_failure_also_defers_offline_and_period(self):
+        """A failed obligation lookup must fail toward NOT disrupting a
+        possible active trip — same as an explicit True."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {
+            "id": "d1",
+            "user_id": "u1",
+            "status": "active",
+            "is_online": True,
+            "vehicle_make": "Toyota",
+        }
+        updated = {**driver, "status": "needs_review"}
+        period_mock = AsyncMock()
+        update_one_mock = AsyncMock()
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.profile.db_supabase.update_one", update_one_mock),
+            patch("backend.routes.drivers.profile.db_supabase.get_driver_by_id", AsyncMock(return_value=updated)),
+            patch("backend.routes.drivers.profile._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers.profile._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.notify_driver_status_change", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.status_message", return_value="needs review"),
+            patch("backend.routes.drivers.profile._deps.has_active_ride_obligation", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers.profile._deps.record_period_transition", period_mock),
+        ):
+            req = profile_mod.UpdateDriverProfileRequest(vehicle_make="Honda")
+            await profile_mod.update_my_driver(body=req, current_user={"id": "u1"})
+
+        period_mock.assert_not_awaited()
+        write_payload = update_one_mock.await_args.args[2]
+        assert "is_online" not in write_payload
 
     async def test_pending_driver_vehicle_change_skips_review_flip(self):
         """A driver who isn't yet 'active' (still pending onboarding) doesn't
@@ -1456,7 +1533,6 @@ class TestGetDemandHeatmapV2:
 
         driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
         coord = (52.132, -106.664)
-        now_iso = datetime.now(timezone.utc).isoformat()
         rides = _make_rides([coord, (coord[0] + 0.001, coord[1] + 0.001), (coord[0] + 0.002, coord[1] + 0.002)])
         for r in rides:
             r["status"] = "searching"

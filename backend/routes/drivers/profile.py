@@ -194,7 +194,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
 
-    for field, label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
+    for field, _label in (("date_of_birth", "Date of birth"), ("license_issue_date", "Licence issue date")):
         if field in updates:
             _validate_eligibility_date(field, updates[field])
 
@@ -289,11 +289,32 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     # Check if an active driver changed vehicle/document fields → needs review
     changed_vehicle = any(k in vehicle_fields for k in updates)
+    _forced_offline_for_review = False
     if changed_vehicle and driver.get("status") == "active":
         updates["status"] = "needs_review"
-        updates["is_online"] = False
-        updates["is_available"] = False
-        logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
+        # 2026-09-23 mid-trip guard (follow-up to the forced-offline insurance-
+        # period audit): flagging for review is safe immediately, but forcing
+        # the driver offline and closing their coverage period is NOT — a
+        # driver mid-trip (passenger aboard, or en route/assigned) who edits
+        # a vehicle/document field here would otherwise be yanked offline and
+        # have Period 0 ("personal auto only") recorded while still on an
+        # obligated ride. Deferred here; the ride-end release path
+        # (close_period_after_release) closes the period normally once the
+        # trip ends, same as any other forced-offline case. `None` (lookup
+        # failed) is treated the same as an obligation — deferring one tick
+        # is safer than guessing it's fine to disrupt an active trip.
+        _obligated = await _deps.has_active_ride_obligation(driver["id"])
+        if _obligated is False:
+            updates["is_online"] = False
+            updates["is_available"] = False
+            _forced_offline_for_review = True
+            logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
+        else:
+            logger.info(
+                f"[DRIVER] Driver {driver['id']} updated vehicle info while on an obligated ride "
+                f"(or obligation check failed, obligated={_obligated}) → status set to needs_review; "
+                "offline/period change deferred until the ride ends"
+            )
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     write_filter: dict = {"id": driver["id"]}
@@ -328,7 +349,10 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # M-5: SGI insurance period audit — vehicle/document edits flip an
     # active driver to needs_review and force them offline. If they were
     # actually online before this update, that's a 1→0 transition.
-    if changed_vehicle and driver.get("status") == "active" and driver.get("is_online"):
+    # `_forced_offline_for_review` is only True when the mid-trip guard above
+    # confirmed no obligated ride/offer, so this can't fire while a driver is
+    # mid-trip.
+    if changed_vehicle and driver.get("status") == "active" and driver.get("is_online") and _forced_offline_for_review:
         await _deps.record_period_transition(driver["id"], 0)
     # This transition takes the driver offline. Without a notice the only
     # signal is the Go-online toggle silently refusing them later, so tell

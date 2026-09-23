@@ -411,6 +411,48 @@ FORCED_OFFLINE_REASONS = frozenset(
 _OBLIGATED_RIDE_STATUSES = sorted(s.value for s in (_EN_ROUTE_STATUSES | {RideStatus.IN_PROGRESS}))
 
 
+async def has_active_ride_obligation(driver_id: str) -> Optional[bool]:
+    """True if the driver currently has an obligated ride (assigned/accepted/
+    arrived/in_progress) or a pending ``ride_offers`` row.
+
+    For any caller about to force a driver offline (or close their coverage
+    period) outside the driver's own voluntary Go Offline path — the same
+    question :func:`close_period_for_forced_offline` answers internally, but
+    exposed here for callers that must skip the offline flip itself, not just
+    the period write, while the obligation holds (2026-09-23 follow-up audit,
+    BLOCKER: `routes/drivers/profile.py`'s vehicle/document-edit path and
+    `utils/spinr_pass.py`'s quota enforcement forced a driver offline and
+    recorded Period 0 mid-trip with no check at all).
+
+    Returns ``None`` if the lookup itself failed — never raises. Callers
+    should treat ``None`` the same as ``True`` (defer / do not force
+    offline): guessing "safe to disrupt" is worse than deferring one tick.
+    """
+    try:
+        rides = await db_supabase.get_rows(
+            "rides",
+            {"driver_id": driver_id, "status": {"$in": _OBLIGATED_RIDE_STATUSES}},
+            columns="id",
+            limit=1,
+        )
+        if rides:
+            return True
+        offers = await db_supabase.get_rows(
+            "ride_offers",
+            {"driver_id": driver_id, "status": "pending"},
+            columns="ride_id",
+            limit=1,
+        )
+        return bool(offers)
+    except Exception:
+        logger.error(
+            "insurance_periods: has_active_ride_obligation lookup FAILED driver_id=%s",
+            driver_id,
+            exc_info=True,
+        )
+        return None
+
+
 async def close_period_for_forced_offline(driver_id: str, *, reason: str) -> Optional[int]:
     """Re-classify a driver who was just forced ``is_online=False`` by the
     system or an admin (suspend / ban / reject / document expiry).

@@ -22,6 +22,8 @@ This prompt is the **umbrella** above both — where they already produced a rep
 | `docs/audit/clean-sheet-prompt/sweep-catalog.md` | Doing the actual sweep — domain checklists, ride-share edge-case catalog, CRA/regulatory checks |
 | `docs/audit/clean-sheet-prompt/operating-model.md` | Phase 6 — weekly audits, issue/PR/CR lifecycle, incident loop, agent loops, access guardrails |
 | `docs/audit/clean-sheet-prompt/greenfield-extensions.md` | Phases 3–5 and W4/W5 lanes — required matrices, feature-completeness dimensions, invariants, simulation/chaos, compliance-as-code, agent control plane, dispute prevention, keep/modify/replace/remove, model routing, decision tie-breakers |
+| `docs/audit/clean-sheet-prompt/standards-and-scale.md` | Inventory of techniques/standards in place, gaps, standards to measure against (ASVS, MASVS, NIST CSF, SLSA, …), the tagging taxonomy, per-SaaS capacity tripwires, new techniques to research |
+| `docs/audit/clean-sheet-prompt/one-hour-run.md` | **Only one hour?** A time-boxed rapid baseline: model plan, 8 parallel lanes, timeline, kickoff prompt |
 
 **Framework alignment:** `audit-framework/ground-rules.md` (evidence + severity rules),
 `audit-framework/dimensions/01–24`, `audit-framework/modules/*`, `CLAUDE.md` (release

@@ -24,6 +24,7 @@ This prompt is the **umbrella** above both — where they already produced a rep
 | `docs/audit/clean-sheet-prompt/greenfield-extensions.md` | Phases 3–5 and W4/W5 lanes — required matrices, feature-completeness dimensions, invariants, simulation/chaos, compliance-as-code, agent control plane, dispute prevention, keep/modify/replace/remove, model routing, decision tie-breakers |
 | `docs/audit/clean-sheet-prompt/standards-and-scale.md` | Inventory of techniques/standards in place, gaps, standards to measure against (ASVS, MASVS, NIST CSF, SLSA, …), the tagging taxonomy, per-SaaS capacity tripwires, new techniques to research |
 | `docs/audit/clean-sheet-prompt/one-hour-run.md` | **Only one hour?** A time-boxed rapid baseline: model plan, 8 parallel lanes, timeline, kickoff prompt |
+| `docs/audit/clean-sheet-prompt/research-sessions.md` | After the baseline — five parallel 1-hour research sessions (dispatch, pricing/payments/CRA, trust & safety, mobile & realtime, security/data/infra), each producing a techniques radar |
 
 **Framework alignment:** `audit-framework/ground-rules.md` (evidence + severity rules),
 `audit-framework/dimensions/01–24`, `audit-framework/modules/*`, `CLAUDE.md` (release

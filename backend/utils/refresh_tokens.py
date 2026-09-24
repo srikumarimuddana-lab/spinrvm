@@ -242,6 +242,10 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     future. Returns None otherwise — callers MUST NOT distinguish
     between "not found" / "revoked" / "expired" in the response to the
     client, to avoid leaking oracle information.
+
+    A DB failure raises ``DatabaseError`` (503, code 9005) rather than
+    returning None (X7/C10): a false 401 would sign a valid session out
+    during a transient outage. Not-found/revoked/expired still return None.
     """
     if not raw:
         return None
@@ -249,9 +253,9 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     token_hash = _hash_refresh_token(raw)
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
-    except Exception as e:
-        logger.error(f"refresh_tokens lookup failed: {e}")
-        return None
+    except Exception as exc:
+        logger.opt(exception=True).error("refresh_tokens lookup failed")
+        raise DatabaseError(message="Could not verify session; please try again") from exc
     if not row:
         return None
 

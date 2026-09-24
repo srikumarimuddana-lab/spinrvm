@@ -200,16 +200,21 @@ async def test_lookup_refresh_token_empty_raw_returns_none_without_db_call():
 
 
 @pytest.mark.asyncio
-async def test_lookup_refresh_token_db_error_returns_none():
+async def test_lookup_refresh_token_db_error_raises_503():
+    """X7/C10: a DB failure is a 503 (code 9005), never a false 401."""
     with patch(
         "utils.refresh_tokens.db.find_one",
         AsyncMock(side_effect=RuntimeError("db down")),
     ):
+        from utils.error_handling import DatabaseError, ErrorCode
         from utils.refresh_tokens import lookup_refresh_token
 
-        result = await lookup_refresh_token("some-raw-token")
+        with pytest.raises(DatabaseError) as caught:
+            await lookup_refresh_token("some-raw-token")
 
-    assert result is None
+    assert caught.value.status_code == 503
+    assert caught.value.error_code == ErrorCode.DATABASE_ERROR
+    assert isinstance(caught.value.__cause__, RuntimeError)
 
 
 @pytest.mark.asyncio

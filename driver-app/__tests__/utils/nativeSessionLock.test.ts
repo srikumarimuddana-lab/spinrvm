@@ -60,6 +60,31 @@ it('defers on contention instead of taking over a suspended owner', async () => 
   } finally { jest.useRealTimers(); }
 });
 
+it('retries when PRAGMA busy_timeout itself throws database-is-locked, not just BEGIN IMMEDIATE', async () => {
+  // CRIMSON-SMOKE-7445-120: on a real device, the PRAGMA statement can throw
+  // SQLITE_BUSY too, not only BEGIN IMMEDIATE -- if the retry loop doesn't
+  // cover it, this throw escapes uncaught on the very first attempt.
+  jest.useFakeTimers();
+  let pragmaAttempts = 0;
+  let ran = false;
+  const lock = createNativeSessionLock(async () => ({
+    execAsync: async sql => {
+      if (sql === 'PRAGMA busy_timeout = 0') {
+        pragmaAttempts += 1;
+        if (pragmaAttempts < 3) throw new Error('database is locked');
+      }
+    },
+    closeAsync: async () => {},
+  }));
+  try {
+    const result = lock(async () => { ran = true; return 'acquired'; });
+    await jest.advanceTimersByTimeAsync(200);
+    expect(await result).toBe('acquired');
+    expect(ran).toBe(true);
+    expect(pragmaAttempts).toBe(3);
+  } finally { jest.useRealTimers(); }
+});
+
 it('installs native session exclusion before loading headless handlers or the UI', () => {
   const events: string[] = [];
   runInNewContext(readFileSync(join(__dirname, '../../index.js'), 'utf8'), {

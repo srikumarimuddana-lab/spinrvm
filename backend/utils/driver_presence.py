@@ -237,13 +237,23 @@ async def renew_driver_presence(
     if status != "renewed":
         external_code = {
             "UNAUTHORIZED_SESSION": "SESSION_SUPERSEDED",
-            "CONTROLLER_SESSION_MISMATCH": "SESSION_SUPERSEDED",
+            # F2-8a: a controller mismatch when the caller IS the current session
+            # means the stored controller is stale, not that the caller is. Map to
+            # ONLINE_EPOCH_STALE with the original code as reason_code.
+            "CONTROLLER_SESSION_MISMATCH": "ONLINE_EPOCH_STALE",
             "ONLINE_EPOCH_STALE": "ONLINE_EPOCH_STALE",
             "OFFLINE": "DRIVER_OFFLINE",
             "CONTACT_GAP": "CONTACT_GAP",
+            # F2-5: readiness-expired maps to itself.
+            "READINESS_EXPIRED": "READINESS_EXPIRED",
             "AVAILABILITY_V2_DISABLED": "AVAILABILITY_V2_DISABLED",
         }.get(code, code or "PRESENCE_UNAVAILABLE")
-        return {**result, "code": external_code}
+        mapped = {**result, "code": external_code}
+        # Preserve the original T1/renew code as reason_code when the external
+        # code differs, so _presence_conflict can pass it through.
+        if external_code != code and "reason_code" not in mapped:
+            mapped["reason_code"] = code
+        return mapped
 
     try:
         key = scoped_presence_key(driver_id, session_id, online_epoch)
@@ -402,7 +412,8 @@ async def scoped_driver_presence_evidence(candidate_ids: List[str]) -> tuple[dic
         logger.error("scoped presence durable controller lookup failed: %s", exc, exc_info=True)
         return {}, False
     scoped_rows = [
-        row for row in rows
+        row
+        for row in rows
         if row.get("is_online") is True
         and isinstance(row.get("controller_session_id"), str)
         and type(row.get("online_epoch")) is int
@@ -426,7 +437,9 @@ async def scoped_driver_presence_evidence(candidate_ids: List[str]) -> tuple[dic
     result = {}
     for row, raw_fields in zip(scoped_rows, values, strict=False):
         fields = {
-            (key.decode() if isinstance(key, bytes) else str(key)): (value.decode() if isinstance(value, bytes) else str(value))
+            (key.decode() if isinstance(key, bytes) else str(key)): (
+                value.decode() if isinstance(value, bytes) else str(value)
+            )
             for key, value in (raw_fields or {}).items()
         }
         try:
@@ -459,9 +472,7 @@ async def availability_aware_present_driver_ids_checked(candidate_ids: List[str]
             from ..repositories._base import get_rows
         except ImportError:  # pragma: no cover
             from repositories._base import get_rows  # type: ignore
-        rows = await get_rows(
-            "settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled"
-        )
+        rows = await get_rows("settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled")
     except Exception as exc:
         logger.error("driver availability presence mode lookup failed: %s", exc, exc_info=True)
         return set(), False

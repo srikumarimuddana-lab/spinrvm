@@ -50,8 +50,8 @@ async def test_reap_tick_expires_offers_and_redispatches_searching_ride():
     assert "$lt" in captured["offers_filter"].get("expires_at", {})
     # Each expired offer processed via the shared idempotent function.
     assert proc.await_count == 2
-    proc.assert_any_await("r1", "d1", 3)
-    proc.assert_any_await("r1", "d2", 3)
+    proc.assert_any_await("r1", "d1", 3, offer=expired[0])
+    proc.assert_any_await("r1", "d2", 3, offer=expired[1])
     # The affected searching ride is re-dispatched exactly once (deduped by ride).
     redispatch.assert_awaited_once_with("r1")
 
@@ -91,5 +91,32 @@ async def test_reap_tick_does_not_redispatch_a_non_searching_ride():
     ):
         await reaper._reap_tick()
 
-    proc.assert_awaited_once_with("r1", "d1", 3)
+    proc.assert_awaited_once_with("r1", "d1", 3, offer={"ride_id": "r1", "driver_id": "d1"})
     redispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reap_tick_selects_offer_identity_for_v2_routing():
+    """T5-8: the reaper reads id/claim_id/online_epoch so process_expired_offer
+    can route v3-created offers to resolve_driver_offer (request id
+    expire:{offer_id}, shared with the batch handler, so neither double-counts)."""
+    v2_offer = {"ride_id": "r1", "driver_id": "d1", "id": "o1", "claim_id": "c1", "online_epoch": 4}
+    seen = {}
+
+    async def _get_rows(table, filt, **kw):
+        if table == "ride_offers":
+            seen["columns"] = kw.get("columns")
+            return [v2_offer]
+        return [{"status": "completed"}]
+
+    proc = AsyncMock(return_value=True)
+    with (
+        patch.object(reaper.db, "get_rows", AsyncMock(side_effect=_get_rows)),
+        patch.object(reaper, "get_app_settings", AsyncMock(return_value={"auto_offline_miss_threshold": 3})),
+        patch.object(reaper, "process_expired_offer", proc),
+        patch.object(reaper, "match_driver_to_ride", AsyncMock()),
+    ):
+        await reaper._reap_tick()
+
+    assert seen["columns"] == "ride_id,driver_id,id,claim_id,online_epoch"
+    proc.assert_awaited_once_with("r1", "d1", 3, offer=v2_offer)

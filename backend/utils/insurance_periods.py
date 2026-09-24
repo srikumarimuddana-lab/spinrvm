@@ -340,6 +340,69 @@ async def release_driver_and_close_period(
     return await close_period_after_release(driver_id, released, reason=reason, ride_id=ride_id)
 
 
+async def _finalize_deferred_availability(driver_id: str, released: dict) -> Optional[bool]:
+    """Finalize a deferred v2 stop/pause without guessing the resulting period.
+
+    True means T1 finalized it and wrote Period 0; False means the row is not
+    a deferred v2 transition; None means it was applicable but unresolved, so
+    the caller must not substitute a legacy period write.
+    """
+    if not (
+        isinstance(released.get("controller_session_id"), str)
+        and released.get("is_online") is True
+        and released.get("accepting_requests") is False
+    ):
+        return False
+    epoch = released.get("online_epoch")
+    try:
+        try:
+            from ..repositories import driver_offer_repo
+        except ImportError:  # pragma: no cover - top-level backend import mode
+            from repositories import driver_offer_repo  # type: ignore
+        result = await driver_offer_repo.finalize_deferred_availability(
+            driver_id, request_id=f"finalize:{driver_id}:{epoch}"
+        )
+    except Exception:
+        logger.error("insurance_periods: deferred finalize failed driver_id=%s", driver_id, exc_info=True)
+        return None
+    if not (isinstance(result, dict) and result.get("finalized")):
+        logger.error(
+            "insurance_periods: deferred finalize unresolved driver_id=%s code=%s",
+            driver_id,
+            result.get("code") if isinstance(result, dict) else None,
+        )
+        return None
+    availability = result.get("availability") or {}
+    user_id = released.get("user_id")
+    if user_id and not availability.get("replayed"):
+        # Addendum X9: every successful system transition emits this signal.
+        reason_code = {
+            "stop_requests": "REQUESTS_STOPPED",
+            "pause_policy": "POLICY_BLOCKED",
+            "pause_unreachable": "PRESENCE_UNAVAILABLE",
+            "pause_idle": "READY_TIMEOUT",
+            "pause_misses": "MISSED_OFFERS",
+        }.get(availability.get("availability_reason"), "OFFLINE_INTENT")
+        try:
+            try:
+                from ..socket_manager import manager
+            except ImportError:  # pragma: no cover
+                from socket_manager import manager  # type: ignore
+            await manager.send_personal_message(
+                {
+                    "type": "availability_changed",
+                    "online_epoch": availability.get("online_epoch"),
+                    "state_version": availability.get("state_version"),
+                    "reason_code": reason_code,
+                    "server_time": availability.get("server_time"),
+                },
+                f"driver_{user_id}",
+            )
+        except Exception:
+            logger.warning("insurance_periods: finalize notify failed driver_id=%s", driver_id, exc_info=True)
+    return True
+
+
 async def close_period_after_release(
     driver_id: str,
     released: object,
@@ -377,6 +440,22 @@ async def close_period_after_release(
             "spinr_insurance_period_release_skipped_total",
             {"reason": reason},
         )
+        return None
+
+    # Availability v2 (T12-8): a driver who stopped requests (or was paused)
+    # during this obligation is online but not accepting. Now that the
+    # obligation is gone, finish that deferred stop through T1, which writes
+    # Period 0 itself. If T1 cannot confirm the transition, leave the period
+    # unresolved for reconciliation instead of guessing Period 1 from is_online.
+    deferred_result = await _finalize_deferred_availability(driver_id, released)
+    if deferred_result is True:
+        _metric_inc(
+            "spinr_insurance_period_release_total",
+            {"reason": reason, "period": "0"},
+        )
+        return 0
+    if deferred_result is None:
+        _metric_inc("spinr_insurance_period_release_skipped_total", {"reason": reason})
         return None
 
     # `is_online` is the driver's own toggle and is what the Period table keys

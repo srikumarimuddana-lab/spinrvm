@@ -78,7 +78,9 @@ async def _reap_tick() -> None:
             {"status": "pending", "expires_at": {"$lt": now_iso}},
             order="expires_at",  # oldest-overdue first, so a truncated batch reaps the most stale
             limit=_CANDIDATE_LIMIT,
-            columns="ride_id,driver_id",
+            # id/claim_id/online_epoch route v3-created offers to the atomic
+            # resolve_driver_offer path (T5); legacy rows have online_epoch NULL.
+            columns="ride_id,driver_id,id,claim_id,online_epoch",
         )
     except Exception as e:
         logger.error("[offer-reaper] failed to fetch expired offers: %s", e, exc_info=True)
@@ -102,7 +104,7 @@ async def _reap_tick() -> None:
         miss_threshold = 3
 
     results = await asyncio.gather(
-        *(process_expired_offer(o["ride_id"], o["driver_id"], miss_threshold) for o in expired),
+        *(process_expired_offer(o["ride_id"], o["driver_id"], miss_threshold, offer=o) for o in expired),
         return_exceptions=True,
     )
     won = sum(1 for r in results if r is True)

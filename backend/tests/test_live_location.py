@@ -309,6 +309,7 @@ def test_redis_outage_does_not_drop_current_active_trip_live_marker(monkeypatch)
         "settings_loader.get_app_settings",
         AsyncMock(return_value={"background_location_fanout_enabled": True}),
     )
+
     async def rows(table, filters, **kwargs):
         if table == "rides":
             return [{"id": "ride-1", "driver_id": "driver-1", "rider_id": "rider-1", "status": "in_progress"}]

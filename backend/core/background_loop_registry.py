@@ -66,6 +66,7 @@ LOOP_CATALOG: Tuple[Tuple[str, Placement], ...] = (
     ("retention_guard_monitor (6h)", "api"),
     ("orphaned_hold_reconciler (15m)", "deferred"),
     ("offer_expiry_reaper (10s)", "api"),
+    ("driver_readiness_reconciler (20s)", "api"),
     ("suspension_reactivation (10min)", "deferred"),
     ("push_retry (30s)", "worker_wave1"),
     ("zoho_desk_sync (10min)", "worker_wave1"),

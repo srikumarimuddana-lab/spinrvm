@@ -102,9 +102,13 @@ async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> 
             areas = await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
             area = areas[0] if areas else None
             requirements = [r for r in (area or {}).get("required_documents") or [] if r.get("required", True)]
-            docs = await db_supabase.get_rows(
-                "driver_documents", {"driver_id": driver["id"], "status": "approved"}, limit=200
-            ) if requirements else []
+            docs = (
+                await db_supabase.get_rows(
+                    "driver_documents", {"driver_id": driver["id"], "status": "approved"}, limit=200
+                )
+                if requirements
+                else []
+            )
         except Exception as exc:
             raise AvailabilityLookupError("eligibility lookup unavailable") from exc
 
@@ -145,6 +149,63 @@ async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> 
         expiry = _as_utc(driver.get(field))
         if expiry and expiry < server_time:
             return code
+
+    # ── Subscription / entitlement checks ────────────────────────────
+    driver_id = driver.get("id")
+    area_id = driver.get("service_area_id")
+    _sub_required = False
+    if area_id:
+        try:
+            _areas = await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
+            _area = _areas[0] if _areas else None
+            _sub_required = bool(_area and _area.get("subscription_required"))
+            if not _sub_required and _area and _area.get("parent_service_area_id"):
+                _parents = await db_supabase.get_rows("service_areas", {"id": _area["parent_service_area_id"]}, limit=1)
+                _parent = _parents[0] if _parents else None
+                _sub_required = bool(_parent and _parent.get("subscription_required"))
+        except Exception as exc:
+            raise AvailabilityLookupError("subscription area lookup unavailable") from exc
+    if not _sub_required:
+        try:
+            _settings = await db_supabase.get_rows(
+                "settings", {"id": "app_settings"}, limit=1, columns="require_driver_subscription"
+            )
+            _sub_required = bool(_settings and _settings[0].get("require_driver_subscription"))
+        except Exception:  # noqa: S110 — global flag missing is not fatal
+            pass
+
+    if _sub_required and driver_id:
+        try:
+            _subs = await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": driver_id, "status": "active"},
+                limit=1,
+                columns="id,expires_at",
+            )
+            _has_active = False
+            for _s in _subs or []:
+                _exp = _as_utc(_s.get("expires_at"))
+                if _exp is None or _exp > server_time:
+                    _has_active = True
+                    break
+            if not _has_active:
+                return "SUBSCRIPTION_REQUIRED"
+        except Exception as exc:
+            raise AvailabilityLookupError("subscription lookup unavailable") from exc
+
+    # Quota check — fail open (logged, ignored)
+    if driver_id:
+        try:
+            try:
+                from ..utils.spinr_pass import quota_status as _quota_status
+            except ImportError:
+                from utils.spinr_pass import quota_status as _quota_status  # type: ignore
+            _qs = await _quota_status(driver_id)
+            if _qs == "exhausted":
+                return "QUOTA_EXHAUSTED"
+        except Exception:  # noqa: S110 — quota check failure is non-fatal
+            pass
+
     return None
 
 
@@ -165,9 +226,7 @@ async def _read_snapshot(user_id: str) -> dict[str, Any]:
         raise AvailabilityLookupError("availability snapshot unavailable") from exc
 
 
-async def get_driver_availability(
-    user_id: str, authenticated_session_id: str | None = None
-) -> dict[str, Any]:
+async def get_driver_availability(user_id: str, authenticated_session_id: str | None = None) -> dict[str, Any]:
     """Return an eligibility-aware snapshot ordered by the database clock."""
     raw = await _read_snapshot(user_id)
     driver = raw["driver"]
@@ -182,14 +241,22 @@ async def get_driver_availability(
     active_ride = raw.get("active_ride")
     pending_offer = raw.get("pending_offer")
     is_online = bool(driver.get("is_online"))
-    accepting = bool(driver.get("accepting_requests"))
+    # A2(a): with the flag off, an online driver must not show paused/REQUESTS_PAUSED.
+    accepting = bool(driver.get("accepting_requests")) if raw.get("protocol_enabled") else is_online
     reason = blocked_reason
     verification_reason = "DRIVER_UNVERIFIED" if driver.get("is_verified") is not True else None
-    controller_mismatch = bool(
-        raw.get("protocol_enabled")
-        and driver.get("controller_session_id")
-        and (not authenticated_session_id or driver.get("controller_session_id") != authenticated_session_id)
-    )
+    # F2-8b: session/controller checks use current_session_id from the snapshot.
+    # The newest login must never be told its session ended (Addendum A3).
+    has_controller = bool(raw.get("protocol_enabled") and driver.get("controller_session_id"))
+    current_session_id = raw.get("current_session_id")
+    if has_controller and (not authenticated_session_id or not current_session_id):
+        session_state = "SESSION_RECONCILE_REQUIRED"
+    elif has_controller and authenticated_session_id != current_session_id:
+        session_state = "SESSION_SUPERSEDED"
+    elif has_controller and driver.get("controller_session_id") != authenticated_session_id and is_online:
+        session_state = "REQUESTS_PAUSED"
+    else:
+        session_state = None
     if active_ride and active_ride.get("status") in _ACTIVE_RIDE_STATUSES:
         availability_state, reason = "paused", "ACTIVE_TRIP"
     elif blocked_reason:
@@ -198,17 +265,23 @@ async def get_driver_availability(
         availability_state, reason = "blocked", verification_reason
     elif raw.get("offer_reconciliation_required"):
         availability_state, reason = "reconnecting", "RECOVERY_REQUIRED"
-    elif controller_mismatch:
-        availability_state = "reconnecting"
-        reason = "SESSION_RECONCILE_REQUIRED" if not authenticated_session_id else "SESSION_SUPERSEDED"
+    elif session_state == "SESSION_RECONCILE_REQUIRED":
+        availability_state, reason = "reconnecting", "SESSION_RECONCILE_REQUIRED"
+    elif session_state == "SESSION_SUPERSEDED":
+        availability_state, reason = "reconnecting", "SESSION_SUPERSEDED"
+    elif session_state == "REQUESTS_PAUSED":
+        availability_state, reason = "paused", "REQUESTS_PAUSED"
     elif pending_offer:
         availability_state, reason = "paused", "OFFER_PENDING"
     elif is_online and accepting and bool(driver.get("is_available")):
         ready_until = _as_utc(driver.get("ready_until"))
         last_contact = _as_utc(driver.get("last_contact_at"))
-        if raw.get("protocol_enabled") and (ready_until is None or ready_until <= server_time):
+        # F2-4: READY_TIMEOUT only when readiness is enforced.
+        if raw.get("readiness_enforced") and (ready_until is None or ready_until <= server_time):
             availability_state, reason = "paused", "READY_TIMEOUT"
-        elif raw.get("protocol_enabled") and (last_contact is None or (server_time - last_contact).total_seconds() > 90):
+        elif raw.get("protocol_enabled") and (
+            last_contact is None or (server_time - last_contact).total_seconds() > 90
+        ):
             availability_state, reason = "reconnecting", "PRESENCE_UNAVAILABLE"
         elif raw.get("protocol_enabled"):
             evidence_ready, evidence_reason = await _scoped_dispatch_evidence_fresh(driver, server_time)
@@ -247,7 +320,20 @@ async def get_driver_availability(
     def safe_offer(value: dict[str, Any] | None) -> dict[str, Any] | None:
         if not value:
             return None
-        return {key: value.get(key) for key in ("id", "ride_id", "offered_at", "expires_at", "ride_status")}
+        offer = {key: value.get(key) for key in ("id", "ride_id", "offered_at", "expires_at", "ride_status")}
+        # v2 envelope (C1, T6-7): only offers created by the v3 claim carry
+        # online_epoch; legacy offers keep the original five keys.
+        if value.get("online_epoch") is not None:
+            offer.update(
+                {
+                    "offer_protocol": "v2",
+                    "offer_id": value.get("offer_id") or value.get("id"),
+                    "claim_id": value.get("claim_id"),
+                    "online_epoch": str(value.get("online_epoch")),
+                    "server_time": value.get("offered_at"),
+                }
+            )
+        return offer
 
     return {
         "protocol_enabled": bool(raw.get("protocol_enabled")),
@@ -264,6 +350,8 @@ async def get_driver_availability(
         "snapshot_issued_at": raw["server_time"],
         "last_contact_at": driver.get("last_contact_at"),
         "ready_until": driver.get("ready_until"),
+        "readiness_enforced": bool(raw.get("readiness_enforced")),
+        "readiness_prompt_at": raw.get("readiness_prompt_at"),
         "active_ride": safe_ride(active_ride),
         "pending_offer": safe_offer(pending_offer),
         "offer_reconciliation_required": bool(raw.get("offer_reconciliation_required")),
@@ -291,7 +379,10 @@ async def change_driver_availability(
         or len(request_id) > 128
     ):
         return {"code": "AVAILABILITY_UPGRADE_REQUIRED"}
-    if not authenticated_session_id:
+    # A token session can never act as a trusted system actor.
+    if not authenticated_session_id or str(authenticated_session_id).startswith(
+        driver_availability_repo.SYSTEM_ACTOR_PREFIX
+    ):
         return {"code": "SESSION_RECONCILE_REQUIRED"}
 
     raw = await _read_snapshot(user_id)
@@ -314,6 +405,55 @@ async def change_driver_availability(
     return {**snapshot, "code": "OK", "transition": result}
 
 
+async def confirm_driver_ready(
+    user_id: str, command: dict[str, Any], authenticated_session_id: str | None
+) -> dict[str, Any]:
+    """Validate a ``confirm_ready`` command, run it, return a fresh snapshot + code.
+
+    Only ``{"action": "confirm_ready", "online_epoch": "<decimal>",
+    "request_id": "<=128"}`` is accepted; Go, Stop and Offline stay on the
+    status route that runs the eligibility gates.
+    """
+    if command.get("action") != "confirm_ready":
+        return {"code": "INVALID_AVAILABILITY_COMMAND"}
+    raw_epoch = command.get("online_epoch")
+    request_id = command.get("request_id")
+    if (
+        not isinstance(raw_epoch, str)
+        or not raw_epoch.isascii()
+        or not raw_epoch.isdecimal()
+        or len(raw_epoch) > 19
+        or int(raw_epoch) > 9_223_372_036_854_775_807
+        or not isinstance(request_id, str)
+        or not request_id.strip()
+        or len(request_id) > 128
+    ):
+        return {"code": "INVALID_AVAILABILITY_COMMAND"}
+    # A token session can never act as a trusted system actor.
+    if not authenticated_session_id or str(authenticated_session_id).startswith(
+        driver_availability_repo.SYSTEM_ACTOR_PREFIX
+    ):
+        return {"code": "SESSION_SUPERSEDED"}
+
+    raw = await _read_snapshot(user_id)
+    if not raw.get("protocol_enabled"):
+        return {"code": "AVAILABILITY_V2_DISABLED"}
+    try:
+        result = await driver_availability_repo.confirm_driver_ready(
+            str(raw["driver"]["id"]),
+            int(raw_epoch),
+            authenticated_session_id,
+            request_id.strip(),
+            reason="still_ready",
+        )
+    except Exception as exc:
+        raise AvailabilityLookupError("readiness confirmation unavailable") from exc
+    if result.get("code") != "OK":
+        return result
+    snapshot = await get_driver_availability(user_id, authenticated_session_id)
+    return {**snapshot, "code": "OK"}
+
+
 async def pause_driver_for_policy(
     user_id: str,
     *,
@@ -322,6 +462,8 @@ async def pause_driver_for_policy(
 ) -> dict[str, Any]:
     """Pause offers after a trusted caller has committed a blocking policy state.
 
+    Runs as the trusted ``system:policy`` actor, so it works whether the
+    driver's current session is NULL, current, or not the controller.
     Re-read and recheck the blocking status on the single stale-epoch retry;
     never adopt an epoch captured by a stale event or callback.
     """
@@ -333,16 +475,10 @@ async def pause_driver_for_policy(
         if driver.get("status") not in blocking_statuses:
             return {"code": "POLICY_STATE_CHANGED"}
         try:
-            users = await db_supabase.get_rows(
-                "users", {"id": user_id}, limit=1, columns="current_session_id"
-            )
-            session_id = users[0].get("current_session_id") if users else None
-            if not session_id:
-                return {"code": "SESSION_RECONCILE_REQUIRED"}
             result = await driver_availability_repo.transition_driver_availability(
                 str(driver["id"]),
                 int(driver.get("online_epoch") or 0),
-                str(session_id),
+                driver_availability_repo.system_actor("policy"),
                 "pause_policy",
                 request_id if attempt == 0 else str(uuid.uuid4()),
             )

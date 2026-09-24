@@ -699,10 +699,26 @@ async def cancel_ride_rider(
                 .execute()
             )
         )
+        try:
+            from ...services import driver_offer_service as _offer_svc
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from services import driver_offer_service as _offer_svc  # type: ignore
         for offer_row in getattr(cancelled_offers, "data", None) or []:
             _offer_did = offer_row["driver_id"]
             try:
-                await _deps.release_batch_offer_driver_and_close_period(_offer_did, ride_id=ride_id)
+                if _offer_svc.is_v2_offer(offer_row):
+                    # v3-created offer: release its exact claim atomically
+                    # (driver -> ride -> offer), request id cancel:{offer_id}.
+                    _rel = await _offer_svc.release_cancelled_offer_v2(offer_row)
+                    if _rel.get("code") != "OK":
+                        logger.error(
+                            "[CANCEL] v2 offer release returned {} driver_id={} ride_id={}",
+                            _rel.get("code"),
+                            _offer_did,
+                            ride_id,
+                        )
+                else:
+                    await _deps.release_batch_offer_driver_and_close_period(_offer_did, ride_id=ride_id)
             except Exception:
                 # A failed period close must be visible, but should not leave
                 # the driver app displaying an offer for an already-cancelled ride.

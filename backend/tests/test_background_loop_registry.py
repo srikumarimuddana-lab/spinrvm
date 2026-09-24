@@ -30,3 +30,11 @@ def test_allowlist_rejects_empty_unknown_duplicates_and_empty_items(invalid):
 def test_unset_allowlist_preserves_full_wave_and_all_role_behavior():
     assert resolve_worker_loop_allowlist() == WORKER_WAVE1_LOOP_NAMES
     assert all(should_spawn_on_api(name, "all", ()) for name in WORKER_WAVE1_LOOP_NAMES)
+
+
+def test_driver_readiness_reconciler_runs_on_api_after_offer_expiry_reaper():
+    from backend.core.background_loop_registry import LOOP_CATALOG, LOOP_PLACEMENT
+
+    names = [name for name, _placement in LOOP_CATALOG]
+    assert LOOP_PLACEMENT["driver_readiness_reconciler (20s)"] == "api"
+    assert names.index("driver_readiness_reconciler (20s)") == names.index("offer_expiry_reaper (10s)") + 1

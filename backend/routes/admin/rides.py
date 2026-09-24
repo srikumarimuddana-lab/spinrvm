@@ -20,6 +20,7 @@ try:
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn as _spawn
     from ...utils.datetime_utils import parse_iso_utc
+    from ...utils.error_handling import ServiceUnavailableException
     from ...utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -46,6 +47,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action
     from utils.background import spawn as _spawn  # type: ignore
     from utils.datetime_utils import parse_iso_utc
+    from utils.error_handling import ServiceUnavailableException
     from utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -1174,7 +1176,19 @@ async def admin_create_ride(
     now = datetime.now(timezone.utc)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
-    status = "driver_assigned" if body.driver_id else "searching"
+    # Read the gate before creating a ride or redeeming a promo. A v2 ride
+    # stays unassigned until the claim transaction validates the driver.
+    _admin_claim_settings = {}
+    if body.driver_id:
+        try:
+            _admin_claim_settings = await get_app_settings()
+            if not isinstance(_admin_claim_settings, dict):
+                raise ValueError("Invalid availability settings response")
+        except Exception:
+            logger.error("admin_create_ride: availability settings unavailable", exc_info=True)
+            raise HTTPException(status_code=503, detail={"code": "ELIGIBILITY_UNAVAILABLE"}) from None
+    _admin_v2 = bool(_admin_claim_settings.get("driver_availability_v2_enabled"))
+    status = "driver_assigned" if body.driver_id and not _admin_v2 else "searching"
 
     # Apply the promo BEFORE the ride insert so a failed validation does
     # not leave behind a half-created ride. The promo_applications row is
@@ -1208,7 +1222,7 @@ async def admin_create_ride(
     ride_doc = {
         "id": str(uuid.uuid4()),
         "rider_id": body.rider_id,
-        "driver_id": body.driver_id,
+        "driver_id": None if _admin_v2 else body.driver_id,
         "pickup_address": body.pickup_address,
         "pickup_lat": body.pickup_lat,
         "pickup_lng": body.pickup_lng,
@@ -1246,7 +1260,8 @@ async def admin_create_ride(
         "rides",
         ride_doc["id"],
         {
-            "driver_id": body.driver_id,
+            "driver_id": ride_doc["driver_id"],
+            "requested_driver_id": body.driver_id,
             "status": status,
             "vehicle_type_id": body.vehicle_type_id,
             "subtotal_fare": (str(body.subtotal_fare) if body.subtotal_fare is not None else None),
@@ -1256,6 +1271,70 @@ async def admin_create_ride(
             "fare_overridden_by_admin": bool(body.fare_overridden_by_admin),
         },
     )
+
+    if _admin_v2:
+        try:
+            try:
+                from ...repositories import driver_offer_repo as _admin_offer_repo
+            except ImportError:  # pragma: no cover - dual import path
+                from repositories import driver_offer_repo as _admin_offer_repo  # type: ignore
+            result = await _admin_offer_repo.claim_offers(
+                ride_doc["id"],
+                [{"driver_id": body.driver_id}],
+                max_offers=1,
+                offer_ttl_seconds=int(_admin_claim_settings.get("ride_offer_timeout_seconds", 15)) + 15,
+                mode="admin_direct",
+            )
+        except Exception:
+            logger.error(
+                "admin_create_ride: v2 claim failed ride=%s driver=%s", ride_doc["id"], body.driver_id, exc_info=True
+            )
+            raise ServiceUnavailableException(
+                "Driver assignment",
+                details={"code": "ELIGIBILITY_UNAVAILABLE", "ride_id": ride_doc["id"]},
+                action_hint="Check this ride before creating another request.",
+            ) from None
+        code = result.get("code") if isinstance(result, dict) else None
+        code = code if isinstance(code, str) else None
+        entries = result.get("results") if isinstance(result, dict) else None
+        valid_entries = isinstance(entries, list)
+        entries = entries if valid_entries else []
+        claimed = [
+            entry
+            for entry in entries or []
+            if isinstance(entry, dict) and entry.get("driver_id") == body.driver_id and entry.get("claimed") is True
+        ]
+        if code != "OK" or len(claimed) != 1 or len(entries) != 1:
+            # Never notify, report success, or fall back to raw legacy writes.
+            # Include the created ride ID so the admin can reconcile/cancel it.
+            reason = next(
+                (
+                    entry.get("reason_code")
+                    for entry in entries or []
+                    if isinstance(entry, dict) and entry.get("reason_code")
+                ),
+                code,
+            )
+            conflict = code in {"OK", "RIDE_STATE_CONFLICT"} and valid_entries
+            if not conflict:
+                logger.error(
+                    "admin_create_ride: invalid or unavailable claim result ride=%s code=%s", ride_doc["id"], code
+                )
+                raise ServiceUnavailableException(
+                    "Driver assignment",
+                    details={"code": "ELIGIBILITY_UNAVAILABLE", "ride_id": ride_doc["id"]},
+                    action_hint="Check this ride before creating another request.",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DRIVER_ASSIGNMENT_REJECTED",
+                    "reason_code": reason,
+                    "ride_id": ride_doc["id"],
+                },
+            )
+        status = "driver_assigned"
+        ride_doc.update(status=status, driver_id=body.driver_id)
 
     if promo_application_id:
         # N15/R33 (ACTION_ITEMS.md): an admin redeeming a promo on the rider's
@@ -1285,14 +1364,16 @@ async def admin_create_ride(
             )
 
     if body.driver_id:
-        try:
-            await db_supabase.set_driver_available(body.driver_id, False)
-            await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
-        except Exception as e:
-            logger.error(
-                f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
-                exc_info=True,
-            )
+        if not _admin_v2:
+            # Legacy claim path
+            try:
+                await db_supabase.set_driver_available(body.driver_id, False)
+                await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
+            except Exception as e:
+                logger.error(
+                    f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
+                    exc_info=True,
+                )
 
         driver = await db_supabase.get_driver_by_id(body.driver_id)
         if driver and driver.get("user_id"):

@@ -6,6 +6,7 @@ Multi-stop Rides, Safety Toolkit, Push Notifications.
 
 import asyncio
 import json
+import math
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1246,6 +1247,15 @@ def _record_push_outcome(outcome: str) -> None:
     metrics.inc("spinr_push_send_total", {"outcome": outcome})
 
 
+def _record_offer_push_skipped(reason: str) -> None:
+    """Count a dispatch-offer push deliberately not sent (e.g. already expired)."""
+    try:
+        from .utils import metrics
+    except ImportError:
+        from utils import metrics  # type: ignore
+    metrics.inc("spinr_dispatch_offer_push_skipped_total", {"reason": reason})
+
+
 async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str] | None = None) -> bool:
     """Send a push notification via Expo's push API (for Expo-managed tokens)."""
     import httpx
@@ -1315,6 +1325,39 @@ def _stringify_push_data(data: Dict[str, Any] | None) -> Dict[str, str]:
     return out
 
 
+def _v2_offer_expires_at(data: Dict[str, Any] | None) -> datetime | None:
+    """Absolute deadline of a v2 dispatch offer push, else None.
+
+    Only payloads marked ``offer_protocol == "v2"`` carry an authoritative
+    ``expires_at``; legacy payloads keep their previous (TTL-less) delivery.
+    """
+    if not data or data.get("type") != "new_ride_assignment" or data.get("offer_protocol") != "v2":
+        return None
+    raw = data.get("expires_at") or data.get("offer_expires_at")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _v2_offer_push_expired(data: Dict[str, Any] | None, now: datetime | None = None) -> bool:
+    """True when a v2 offer push has already passed its deadline."""
+    deadline = _v2_offer_expires_at(data)
+    return deadline is not None and deadline <= (now or datetime.now(timezone.utc))
+
+
+def _v2_offer_push_ttl(data: Dict[str, Any] | None, now: datetime | None = None) -> tuple[timedelta, str] | None:
+    """(Android TTL, apns-expiration header) for a v2 offer push, else None."""
+    deadline = _v2_offer_expires_at(data)
+    if deadline is None:
+        return None
+    remaining = (deadline - (now or datetime.now(timezone.utc))).total_seconds()
+    return timedelta(seconds=max(1, math.ceil(remaining))), str(int(deadline.timestamp()))
+
+
 def _build_fcm_message(
     token: str,
     title: str,
@@ -1355,14 +1398,24 @@ def _build_fcm_message(
     # Android: data-only for dispatch so Notifee (driver app) renders the
     # rich heads-up + full-screen-intent notification with Accept/Decline
     # action buttons. Otherwise let the OS show its default banner.
+    # v2 offers must never be delivered after their deadline (T6): the
+    # remaining lifetime becomes the Android TTL and the APNs expiration.
+    offer_ttl = _v2_offer_push_ttl(data) if is_dispatch else None
     android_cfg = messaging.AndroidConfig(
         priority="high",
+        ttl=offer_ttl[0] if offer_ttl else None,
         notification=None
         if is_data_only
         else messaging.AndroidNotification(
             channel_id=android_channel,
         ),
     )
+    apns_headers = {
+        "apns-priority": "5" if is_live_activity else "10",
+        "apns-push-type": "background" if is_live_activity else "alert",
+    }
+    if offer_ttl:
+        apns_headers["apns-expiration"] = offer_ttl[1]
     # iOS rich image: surface the offer-card banner URL via fcm_options.image
     # so the Notification Service Extension (driver app) downloads + attaches
     # it. mutable_content (set below) is what lets the NSE run. Harmless when
@@ -1405,10 +1458,7 @@ def _build_fcm_message(
         token=token,
         android=android_cfg,
         apns=messaging.APNSConfig(
-            headers={
-                "apns-priority": "5" if is_live_activity else "10",
-                "apns-push-type": "background" if is_live_activity else "alert",
-            },
+            headers=apns_headers,
             fcm_options=messaging.APNSFCMOptions(image=_apns_image) if _apns_image else None,
             payload=_apns_payload,
         ),
@@ -1528,12 +1578,24 @@ async def send_dispatch_offer_pushes_batch(pushes: List[Dict[str, Any]]) -> None
         from utils.push_retry import enqueue_push  # type: ignore
 
     async def _enqueue_retry(p: Dict[str, Any]) -> None:
+        # An expired v2 offer is never queued: a late offer is worse than none.
+        if _v2_offer_push_expired(p.get("data")):
+            _record_offer_push_skipped("expired")
+            return
         try:
             await enqueue_push(
                 p["user_id"], p["title"], p["body"], p.get("data"), priority="dispatch", target_app="driver"
             )
         except Exception:
             logger.opt(exception=True).error("push_retry enqueue (batch fallback) failed")
+
+    live_pushes: List[Dict[str, Any]] = []
+    for p in pushes:
+        if _v2_offer_push_expired(p.get("data")):
+            _record_offer_push_skipped("expired")
+            continue
+        live_pushes.append(p)
+    pushes = live_pushes
 
     user_ids = [p["user_id"] for p in pushes if p.get("user_id")]
     if not user_ids:

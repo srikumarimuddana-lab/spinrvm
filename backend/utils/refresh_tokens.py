@@ -23,7 +23,9 @@ escalate per OAuth2 BCP — see _handle_refresh_token_reuse.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -34,11 +36,11 @@ from loguru import logger
 try:
     from ..core.config import settings
     from ..db import db
-    from ..utils.error_handling import DatabaseError, db_error_text, pg_error_code
+    from ..utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
-    from utils.error_handling import DatabaseError, db_error_text, pg_error_code
+    from utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
 
 # audiences for which token_version lives on the `users` table; admin
 # audiences live on `admin_staff`. Anything else is rejected at the
@@ -146,6 +148,19 @@ def _generate_raw_token() -> str:
     return secrets.token_urlsafe(_REFRESH_TOKEN_BYTES)
 
 
+# Shape of a server-minted raw token (48 bytes -> 64 base64url chars). A
+# client-proposed successor (X8) must match it exactly or it is ignored.
+PROPOSED_REFRESH_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{64}$")
+
+
+def is_valid_proposed_refresh_token(value: Optional[str]) -> bool:
+    return isinstance(value, str) and bool(PROPOSED_REFRESH_TOKEN_RE.fullmatch(value))
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    return isinstance(exc, DuplicateRecordError) or pg_error_code(exc) == "23505"
+
+
 async def issue_refresh_token(
     user_id: str,
     *,
@@ -154,6 +169,7 @@ async def issue_refresh_token(
     ip: Optional[str] = None,
     replaces: Optional[str] = None,
     token_version: Optional[int] = None,
+    raw: Optional[str] = None,
 ) -> tuple[str, str, datetime]:
     """Mint a new refresh token row for ``user_id``.
 
@@ -164,8 +180,16 @@ async def issue_refresh_token(
     ``replaces`` is the id of the refresh token being rotated (if any);
     we set replaced_by on that row in a separate step so the chain is
     queryable during incident response.
+
+    ``raw`` (X8, default-off successor commitment) is a client-proposed
+    successor. It must match ``PROPOSED_REFRESH_TOKEN_RE``. On a UNIQUE
+    conflict the insert is retried once with a server-generated token, so a
+    proposal can never collide into, or probe, another row. Token material
+    is never logged.
     """
-    raw = _generate_raw_token()
+    if raw is not None and not is_valid_proposed_refresh_token(raw):
+        raise ValueError("proposed refresh token has an invalid shape")
+    raw = raw or _generate_raw_token()
     token_hash = _hash_refresh_token(raw)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -184,7 +208,15 @@ async def issue_refresh_token(
     if token_version is not None:
         row["token_version"] = int(token_version)
 
-    result = await db.insert_one("refresh_tokens", row)
+    try:
+        result = await db.insert_one("refresh_tokens", row)
+    except Exception as exc:
+        if not _is_unique_violation(exc):
+            raise
+        logger.warning("refresh: token_hash conflict on issue; retrying with a server-generated token")
+        raw = _generate_raw_token()
+        row["token_hash"] = _hash_refresh_token(raw)
+        result = await db.insert_one("refresh_tokens", row)
     row_id = (result or {}).get("id") or row.get("id") or ""
 
     if replaces:
@@ -242,6 +274,10 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     future. Returns None otherwise — callers MUST NOT distinguish
     between "not found" / "revoked" / "expired" in the response to the
     client, to avoid leaking oracle information.
+
+    A DB failure raises ``DatabaseError`` (503, code 9005) rather than
+    returning None (X7/C10): a false 401 would sign a valid session out
+    during a transient outage. Not-found/revoked/expired still return None.
     """
     if not raw:
         return None
@@ -249,9 +285,9 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     token_hash = _hash_refresh_token(raw)
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
-    except Exception as e:
-        logger.error(f"refresh_tokens lookup failed: {e}")
-        return None
+    except Exception as exc:
+        logger.opt(exception=True).error("refresh_tokens lookup failed")
+        raise DatabaseError(message="Could not verify session; please try again") from exc
     if not row:
         return None
 
@@ -328,6 +364,61 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         return None
 
     return row
+
+
+async def classify_committed_replay(parent_raw: str, proposed_raw: str) -> tuple[str, Optional[dict]]:
+    """Classify a replayed parent against its committed successor (X8).
+
+    Returns ``("recover", successor)``, ``("dead", None)`` or
+    ``("no_match", None)``:
+
+    * ``no_match``: the parent is unknown, not revoked, has no
+      ``replaced_by``, or the successor's hash is not sha256(proposed)
+      (constant-time compare). The caller continues on the normal path.
+    * ``recover``: the successor was committed to ``proposed_raw``, belongs
+      to the same user, has a rider/driver audience, is neither revoked nor
+      expired, carries the parent's ``token_version`` and matches the user's
+      current generation. The caller re-serves the same successor.
+    * ``dead``: the proposal matched but any other check failed.
+
+    Holding both the parent and the proposed successor already means holding
+    a valid credential, so ``recover`` grants nothing new. DB errors raise
+    ``DatabaseError`` (503), never a false 401.
+    """
+    if not parent_raw or not is_valid_proposed_refresh_token(proposed_raw):
+        return "no_match", None
+    try:
+        parent = await db.find_one("refresh_tokens", {"token_hash": _hash_refresh_token(parent_raw)})
+        if not parent or not parent.get("revoked_at") or not parent.get("replaced_by"):
+            return "no_match", None
+        successor = await db.find_one("refresh_tokens", {"id": parent["replaced_by"]})
+    except Exception as exc:
+        logger.opt(exception=True).error("refresh: committed replay lookup failed")
+        raise DatabaseError(message="Could not verify session; please try again") from exc
+    if not successor or not hmac.compare_digest(
+        str(successor.get("token_hash") or ""), _hash_refresh_token(proposed_raw)
+    ):
+        return "no_match", None
+
+    if (
+        str(successor.get("user_id") or "") != str(parent.get("user_id") or "")
+        or not successor.get("user_id")
+        or successor.get("audience") not in _USERS_TABLE_AUDIENCES
+        or successor.get("revoked_at")
+        or successor.get("token_version") != parent.get("token_version")
+    ):
+        return "dead", None
+    expires_at = _parse_iso_dt(successor.get("expires_at"))
+    if not expires_at or datetime.now(timezone.utc) >= expires_at:
+        return "dead", None
+    try:
+        user = await db.find_one("users", {"id": successor["user_id"]})
+    except Exception as exc:
+        logger.opt(exception=True).error("refresh: committed replay user lookup failed")
+        raise DatabaseError(message="Could not verify session; please try again") from exc
+    if not user or not await refresh_token_generation_matches(successor, user):
+        return "dead", None
+    return "recover", successor
 
 
 async def refresh_token_generation_matches(row: dict, user: dict) -> bool:

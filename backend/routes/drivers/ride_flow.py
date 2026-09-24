@@ -26,6 +26,7 @@ from ._deps import (  # noqa: F401
     db_supabase,
     diag_logger,
     get_current_user,
+    get_token_session_id,
     hmac,
     invalidate_active_rides_cache,
     logger,
@@ -45,12 +46,46 @@ from ._shared import (  # noqa: F401
     pickup_otp_locked_exc,
     record_pickup_otp_failure,
 )
+from .offer_decisions import decision_http_exception, decline_is_success, is_v2_driver, parse_decision_body
+
+try:
+    from ...services import driver_offer_service
+except ImportError:  # pragma: no cover - dual-import pattern
+    from services import driver_offer_service  # type: ignore
 
 router = APIRouter()
 
 
+async def _decision_snapshot(user_id: str, token_session_id: str | None) -> dict | None:
+    """Best-effort fresh availability snapshot for a 409 decision body."""
+    try:
+        try:
+            from ...services.driver_availability_service import get_driver_availability
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from services.driver_availability_service import get_driver_availability  # type: ignore
+        return await asyncio.wait_for(get_driver_availability(user_id, token_session_id), timeout=5)
+    except Exception:
+        logger.error("offer decision: availability snapshot failed user=%s", user_id, exc_info=True)
+        return None
+
+
+async def _raise_decision(result: dict, user_id: str, token_session_id: str | None):
+    snapshot = None
+    if result.get("code") not in ("OFFER_NOT_FOUND",):
+        snapshot = await _decision_snapshot(user_id, token_session_id)
+    raise decision_http_exception(result, snapshot)
+
+
 @router.post("/rides/{ride_id}/accept")
-async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+async def accept_ride(
+    ride_id: str,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
+):
+    # Direct calls (tests, internal) leave the Depends default in place.
+    if not isinstance(token_session_id, str):
+        token_session_id = None
     # F7: the driver profile and the ride row are independent reads — overlap
     # them instead of paying two serial round-trips inside the <2s accept
     # budget. Validation order below is unchanged.
@@ -87,6 +122,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             f"[ACCEPT] rejected: driver_id={driver['id']} is offline "
             f"ride_id={ride_id} pre_ride_status={ride.get('status') if ride else None}"
         )
+        if is_v2_driver(driver):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "DRIVER_OFFLINE", "online_epoch": str(driver.get("online_epoch", 0))},
+            )
         raise DriverOfflineException(driver["id"])
 
     # Mid-session document-expiry re-check (P1 #12): go_online fail-closes on
@@ -289,8 +329,26 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
     )
 
+    # v2 offers (created by the v3 claim) are decided atomically by
+    # resolve_driver_offer; legacy offers return None and keep the CAS below.
+    v2_result = None
+    if ride.get("driver_id") != driver["id"] and is_v2_driver(driver):
+        _decision_body = await parse_decision_body(request)
+        try:
+            v2_result = await driver_offer_service.accept_offer_v2(ride_id, driver, token_session_id, _decision_body)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.error("accept_ride: v2 accept failed ride=%s driver=%s", ride_id, driver["id"], exc_info=True)
+            raise HTTPException(status_code=503, detail={"code": "ELIGIBILITY_UNAVAILABLE"}) from None
+        if v2_result is not None:
+            if v2_result.get("code") != "OK":
+                await _raise_decision(v2_result, current_user["id"], token_session_id)
+            if v2_result.get("already_accepted") or v2_result.get("replayed"):
+                return {"success": True, "offer_id": v2_result.get("offer_id"), "already_accepted": True}
+
     # Verify this driver was assigned
-    if ride.get("driver_id") != driver["id"]:
+    if v2_result is None and ride.get("driver_id") != driver["id"]:
         # Broadcast/searching path: only allow if a pending ride_offers row
         # exists for this driver. Without this check, any driver who learns a
         # ride_id (from WS, logs, or guessing) can bypass dispatch rules —
@@ -334,18 +392,21 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         # previously-assigned driver still in flight.
         accept_filter = {"id": ride_id, "status": RideStatus.SEARCHING, "driver_id": None}
 
-    guard = await _deps.db.update_one(
-        "rides",
-        accept_filter,
-        {
-            "$set": {
-                "status": RideStatus.DRIVER_ACCEPTED,
-                "driver_id": driver["id"],
-                "driver_accepted_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
-    )
+    if v2_result is not None:
+        guard = True  # the RPC already committed the accept
+    else:
+        guard = await _deps.db.update_one(
+            "rides",
+            accept_filter,
+            {
+                "$set": {
+                    "status": RideStatus.DRIVER_ACCEPTED,
+                    "driver_id": driver["id"],
+                    "driver_accepted_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
 
     # update_one returns None when no rows matched the filter (race lost).
     # The old `hasattr(guard, "modified_count")` check was never true for
@@ -401,9 +462,28 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # driver to Period 3 (passenger aboard). record_period_transition is
     # compliance-grade — it logs at ERROR and swallows on failure so it never
     # blocks acceptance.
-    await _deps.record_period_transition(driver["id"], 2, ride_id=ride_id)
+    if v2_result is not None:
+        # The RPC committed Period 2, the winner offer and the preemptions in
+        # one transaction; the service already counted the acceptance.
+        _v2_offered_at = parse_iso_utc(v2_result.get("offered_at"))
+        if _v2_offered_at:
+            _metric_observe(
+                "spinr_dispatch_offer_to_accept_duration_ms",
+                (datetime.now(timezone.utc) - _v2_offered_at).total_seconds() * 1000.0,
+            )
+        await driver_offer_service.release_preempted_losers(v2_result.get("losers") or [], ride_id)
+    else:
+        await _deps.record_period_transition(driver["id"], 2, ride_id=ride_id)
+        await _legacy_resolve_batch_offers(ride_id, driver)
 
-    # ── Batch dispatch: resolve offers for this ride ──────────────
+    await _after_accept_notify(ride_id, ride, driver)
+    if v2_result is not None:
+        return {"success": True, "offer_id": v2_result.get("offer_id"), "already_accepted": False}
+    return {"success": True}
+
+
+async def _legacy_resolve_batch_offers(ride_id: str, driver: dict) -> None:
+    """Legacy batch dispatch: mark the winner accepted, preempt and release losers."""
     try:
         from ...repositories.driver_repo import update_acceptance_rate
     except ImportError:
@@ -483,6 +563,9 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     except Exception as e:
         logger.error(f"[ACCEPT] batch offer cleanup failed for ride {ride_id}: {e}", exc_info=True)
 
+
+async def _after_accept_notify(ride_id: str, ride: dict | None, driver: dict) -> None:
+    """Ride metrics, rider notification and live activity after an accept."""
     # Capture the pickup-leg ESTIMATE shown to the rider at the moment of
     # acceptance. This is the only piece of ride_metrics with no other home —
     # everything else is either already on the row (planned/actual trip
@@ -566,25 +649,28 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if ride:
         spawn(send_live_activity_update(ride, EVENT_START))
 
-    return {"success": True}
-
 
 @router.post("/rides/{ride_id}/decline")
 async def decline_ride(
     ride_id: str,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
 ):
+    if not isinstance(token_session_id, str):
+        token_session_id = None
     # Optional decline reason (e.g. "service_animal", flagged from the offer
     # card's long-press option). Body-only — never a query param — so a
     # driver's flag can't ride along in a proxy/access log line. Absent for
     # the default fast decline (single tap, auto-decline-on-timeout), which
     # keeps posting no body at all, so this stays fully backward compatible.
     reason = None
+    _raw_body: dict = {}
     if request is not None:
         try:
             _body = await request.json()
             if isinstance(_body, dict):
+                _raw_body = _body
                 _r = _body.get("reason")
                 reason = str(_r).strip() or None if _r else None
         except Exception:
@@ -600,6 +686,15 @@ async def decline_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("status") not in ("searching", "driver_assigned"):
+        if is_v2_driver(driver):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RIDE_STATE_CONFLICT",
+                    "reason_code": "RIDE_CANCELLED" if ride.get("status") == "cancelled" else "RIDE_NOT_SEARCHING",
+                    "ride_status": ride.get("status"),
+                },
+            )
         raise HTTPException(
             status_code=409,
             detail=(
@@ -649,6 +744,30 @@ async def decline_ride(
     # driver could call decline for any ride_id and trigger acceptance-rate
     # degradation, insurance-period churn, and audit-log pollution.
     is_assigned = ride.get("driver_id") == driver["id"]
+
+    # v2 offers are declined atomically (claim release, readiness, one
+    # insurance transition). Legacy offers return None and fall through.
+    if not is_assigned and is_v2_driver(driver):
+        # The parser accepts an absent/empty body for older clients, while
+        # rejecting malformed or non-object bodies before any decision RPC.
+        _decision_body = await parse_decision_body(request)
+        try:
+            v2_result = await driver_offer_service.decline_offer_v2(
+                ride_id, driver, token_session_id, _decision_body, reason=reason
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.error("decline_ride: v2 decline failed ride=%s driver=%s", ride_id, driver["id"], exc_info=True)
+            raise HTTPException(status_code=503, detail={"code": "ELIGIBILITY_UNAVAILABLE"}) from None
+        if v2_result is not None:
+            if not decline_is_success(v2_result):
+                await _raise_decision(v2_result, current_user["id"], token_session_id)
+            return {
+                "success": True,
+                "outcome": v2_result.get("outcome"),
+                "already_resolved": v2_result.get("code") != "OK" or bool(v2_result.get("replayed")),
+            }
 
     # ── Batch dispatch: update this driver's offer row ───────────
     try:

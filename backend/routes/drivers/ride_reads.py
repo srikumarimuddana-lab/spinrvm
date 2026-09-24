@@ -318,7 +318,7 @@ async def get_ride_offer(ride_id: str, request: Request = None, current_user: di
             _res = await db_supabase.run_sync(
                 lambda: (
                     db_supabase.supabase.table("ride_offers")
-                    .select("status, expires_at")
+                    .select("id,status,expires_at,offered_at,claim_id,online_epoch")
                     .eq("ride_id", ride_id)
                     .eq("driver_id", driver["id"])
                     .limit(1)
@@ -443,6 +443,20 @@ async def get_ride_offer(ride_id: str, request: Request = None, current_user: di
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
 
+    # v2 offer envelope (contract C1, T6-7): only rows created by the v3 claim
+    # carry online_epoch. Admin-direct and legacy offers keep the old shape.
+    envelope: Dict[str, Any] = {}
+    if offer_row and offer_row.get("online_epoch") is not None:
+        envelope = {
+            "offer_protocol": "v2",
+            "offer_id": str(offer_row["id"]) if offer_row.get("id") else None,
+            "claim_id": str(offer_row["claim_id"]) if offer_row.get("claim_id") else None,
+            "online_epoch": str(offer_row["online_epoch"]),
+            # Database time when the offer was made, as on the WS/FCM channels.
+            "server_time": offer_row.get("offered_at"),
+            "expires_at": offer_expires_at,
+        }
+
     # Deliberately excludes offer_card_url, service_area_polygon and
     # planned_route_polyline: the first isn't removed from the FCM `data`
     # payload by minimal_fcm_offer_payload_enabled (only precise coordinates
@@ -479,6 +493,7 @@ async def get_ride_offer(ride_id: str, request: Request = None, current_user: di
         "total_bonus": total_bonus if total_bonus else None,
         "quest_hint": quest_hint,
         "payment_method": ride.get("payment_method"),
+        **envelope,
     }
 
 

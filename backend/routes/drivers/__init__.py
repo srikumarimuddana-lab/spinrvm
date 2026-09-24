@@ -15,6 +15,7 @@ from . import (  # noqa: E402
     crc_consent,
     earnings,
     location,
+    offer_receipts,
     payouts,
     profile,
     referrals,
@@ -292,6 +293,8 @@ for _sub in (
     subscriptions,
     crc_consent,
     appeals,
+    # Before status: its catch-all /{driver_id} routes must stay last.
+    offer_receipts,
     status,
 ):
     api_router.include_router(_sub.router, prefix="/drivers")

@@ -182,3 +182,70 @@ class TestDelegatesTheZeroOneChoice:
         assert kwargs["is_online"] is True
         assert kwargs["has_live_offer"] is False
         assert kwargs["ride_status"] is None
+
+
+class TestDeferredAvailabilityFinalize:
+    """T12-8: a v2 driver who stopped requests during the obligation is
+    finalized offline by T1 (which writes Period 0) instead of Period 1."""
+
+    def _v2(self, **overrides):
+        return _released(
+            controller_session_id="sess-1", accepting_requests=False, online_epoch=7, is_available=False, **overrides
+        )
+
+    async def test_finalized_skips_period_1_and_notifies(self):
+        record = AsyncMock()
+        finalize = AsyncMock(
+            return_value={
+                "code": "OK",
+                "finalized": True,
+                "availability": {"code": "OK", "online_epoch": "8", "availability_reason": "stop_requests"},
+            }
+        )
+        ws = AsyncMock()
+        with (
+            patch.object(mod, "record_period_transition", record),
+            patch("backend.repositories.driver_offer_repo.finalize_deferred_availability", finalize),
+            patch("backend.socket_manager.manager.send_personal_message", ws),
+        ):
+            period = await mod.close_period_after_release(DRIVER, self._v2(), reason="ride_completed")
+        assert period == 0
+        record.assert_not_awaited()
+        finalize.assert_awaited_once_with(DRIVER, request_id=f"finalize:{DRIVER}:7")
+        payload, room = ws.await_args.args
+        assert room == "driver_u-1"
+        assert payload["type"] == "availability_changed"
+        assert payload["reason_code"] == "REQUESTS_STOPPED"
+        assert payload["online_epoch"] == "8"
+
+    @pytest.mark.parametrize(
+        "result",
+        [{"code": "OK", "finalized": False}, {"code": "AVAILABILITY_V2_DISABLED"}, RuntimeError("down")],
+    )
+    async def test_unresolved_finalize_does_not_guess_legacy_period(self, result):
+        record = AsyncMock()
+        finalize = AsyncMock(side_effect=result) if isinstance(result, Exception) else AsyncMock(return_value=result)
+        with (
+            patch.object(mod, "record_period_transition", record),
+            patch("backend.repositories.driver_offer_repo.finalize_deferred_availability", finalize),
+        ):
+            period = await mod.close_period_after_release(DRIVER, self._v2(), reason="ride_completed")
+        assert period is None
+        record.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"controller_session_id": None, "accepting_requests": False},
+            {"controller_session_id": "sess-1", "accepting_requests": True},
+            {"controller_session_id": "sess-1", "accepting_requests": None},
+        ],
+    )
+    async def test_legacy_or_accepting_rows_never_finalize(self, row):
+        finalize = AsyncMock()
+        with (
+            patch.object(mod, "record_period_transition", AsyncMock()),
+            patch("backend.repositories.driver_offer_repo.finalize_deferred_availability", finalize),
+        ):
+            await mod.close_period_after_release(DRIVER, _released(**row), reason="ride_completed")
+        finalize.assert_not_awaited()

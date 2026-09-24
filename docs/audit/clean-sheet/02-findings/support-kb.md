@@ -1,48 +1,256 @@
 # R16 — Support, Knowledge Base & Training — Findings
 
-Status: IN PROGRESS (skeleton) — 2026-09-24
+_Spinr Clean-Sheet Rebuild Audit. Written 2026-09-24. Report-and-recommend only. Labels: VERIFIED / INFERRED / ASSUMED / UNKNOWN._
 
 ## 0. Method
-(pending)
+
+Read `CLAUDE.md` (Driver classification, What Spinr Is NOT, PIPEDA), W0-SUMMARY.md, `roles.md` §3 (R16 card), `greenfield-extensions.md` §8, `sweep-catalog.md` §2.12, and the five prior findings files this lane builds on (rider-journey.md, driver-journey.md, admin-ops.md, trust-safety-fraud.md, compliance.md, strategy.md) plus rapid-baseline A6-observability.md. Applied `spinr-notification-ux-reviewer`'s rules to §7 and `spinr-ai-guardrail-reviewer`'s rules (grounding/PII sections only, per charter) to §6.
+
+Read (VERIFIED by direct read this session): `backend/routes/support.py`; `docs/driver-faqs-saskatchewan.md`; `backend/migrations/230_seed_rider_faqs.sql`, `212_seed_saskatchewan_driver_faqs.sql`, `322_consolidate_sos_faq.sql`, `327_merge_duplicate_onboarding_faqs.sql`; `backend/ai/support_assistant.py`, `public_assistant.py`, `tools_support.py`, `prompts.py` (grep); `backend/routes/rides/matching.py:1580-1680`; `backend/routes/admin/rides.py:1385-1440`; `backend/utils/driver_status_notifications.py`, `marketing_push.py`, `notification_throttle.py`; `backend/features.py:1930-1985`; `backend/utils/driver_onboarding_reminders.py`, `dispute_evidence_reminder.py`, `document_expiry.py` (grep), `corporate_low_balance.py` (grep); `backend/core/lifespan.py` (loop registrations); `backend/utils/support_sla.py`; `docs/notification-channel-coverage.md` (full); `docs/runbooks/sos-incident.md`, `security-incident.md`, `data-breach.md` (grep); `docs/comms/` (dir listing); `ACTION_ITEMS.md` C112 (both dup entries), C113, C114, G8; `shared/api/client.ts:619-660` (`getApiErrorMessage`); `backend/routes/drivers/ride_flow.py`, `ride_cancel.py` (push copy grep); `backend/utils/safety_checkin_loop.py` (grep); `docs/audit/clean-sheet/02-findings/driver-journey.md` (DRIVER-004), `compliance.md` (§0.1-0.3, COMP-001), `rapid-baseline-2026-09-24/A6-observability.md` (OBS-004).
+
+De-duplication: grepped `ACTION_ITEMS.md` for C112/C113/C112(dup)/C118/C129/G2 per the coordinator's list before filing anything as new — all confirmed pre-existing duplicates, not re-filed. One near-miss caught and reported below (§2, SKB-001): a promise inside the closed C112 entry to track a residual gap as "C114" was never fulfilled — that slot was later occupied by an unrelated item, and the residual gap has no ACTION_ITEMS entry anywhere.
 
 ## 1. Steelman
-(pending)
 
-## 2. Findings
-(pending)
+What the current design gets right, VERIFIED unless noted:
+
+1. **The AI support surface is the most PII-disciplined code in this audit.** `backend/ai/tools_support.py`'s `search_faqs`/`escalate_to_support` and `support_assistant.py`'s ticket-reply drafter both scrub PII independently at every provider-egress and every Zoho-egress point, re-scrub already-scrubbed chat history before it goes to a *different* third party (Zoho) rather than trusting the first scrub, and `support_assistant.py:132-145` explicitly closes a subtler bug class (staff-authored guidance text carrying a customer's phone number is still the customer's PII, regardless of who typed it).
+2. **`routes/support.py`'s stub design is a genuine security fix, documented as one.** The deprecated `/support/chat` endpoint used to bypass every AI control (quota, kill switch, provider factory) — it's now a stub with zero provider calls, closing the bypass "by construction" rather than by policy (`support.py:1-110`).
+3. **FAQ content matches code behaviour everywhere spot-checked.** Cross-checked driver FAQ claims (Class 5 licence + SGI authorization language, 3-year experience, 100% fare retention, 2.5x surge cap, GST/PST line items, contractor status, WAV support) and rider FAQ claims (cancellation fee "shown before you confirm" — verified against `rider-app/app/ride-status.tsx:258-274`/`driver-arriving.tsx:453-456`'s `Alert.alert` flow) against the actual code paths; all matched. See §4.
+4. **Escalation is honest about its own limits.** `escalate_to_support` never claims a ticket was created unless one actually was (`tools_support.py:454-476`); on a Zoho outage it degrades to the deep-link card, not a false confirmation. `routes/support.py`'s `/support/escalate` does the same (`{"success": False, "reply": FALLBACK_REPLY}` on `ZohoDeskError`).
+5. **Background reminder/nudge loops are replay-safe.** `driver_onboarding_reminders.py` (DB claim log), `dispute_evidence_reminder.py` (atomic `UPDATE ... WHERE evidence_reminder_sent_at IS NULL`), `document_expiry.py`, `corporate_low_balance.py` all use the claim-flag idiom CLAUDE.md's "Background task safety" section describes. No push-sending loop checked this session lacked a dedup guard — a clean sweep against the BLOCKER bar in my own charter §3.
+6. **A quiet-hours/daily-cap convention now exists** (`backend/utils/notification_throttle.py`, migration 304) — this corrects an assumption in my own task brief, which said Spinr has none. It fails open on Redis/config errors by design and is wired into `features.send_push_notification` (`features.py:1953-1980`) ahead of nothing except the two user opt-outs. See §7 for the caveat (ships dark).
+7. **Client-side error surfacing is a real, shared helper, not ad hoc.** `shared/api/client.ts`'s `getApiErrorMessage` (used consistently across every `Alert.alert` catch block sampled in both apps) maps sentinel/backend error codes to written copy and only falls back to a backend-supplied `message` when one exists — not a naked `error.message`/stack trace. This is materially better than the "raw JS error surfaced" anti-pattern my charter warns about; I found zero instances of it in the screens sampled.
+8. **The SLA-tracking code-side gap (G8) has been substantially closed**, honestly scoped: `support_sla.py` states its own P1→"Urgent" mapping as an assumption, states why it anchors on ticket-creation time rather than first-response (no such field exists in the Zoho mirror), and the remaining Zoho-console policy configuration is explicitly left open pending human access — not silently marked done.
+
+## 2. Findings (§7.1 cards, CRITICAL/HIGH first)
+
+### SKB-001 — Untracked FCM PII gap: `admin_create_ride`'s driver push sends unfiltered precise GPS + rider rating, and a promised tracking item for it was never filed
+- Hierarchy: L2 Ride Fulfillment › L3 Admin-direct dispatch › L4 driver push notification › L5 PII payload
+- Severity: HIGH   Priority score: S×B×L = 4×2×4 = 32
+- Status: VERIFIED   Existing item: **none** — this is the specific residual gap ACTION_ITEMS.md's C112 entry (line 27942) said would be "tracked as C114 below," but the C114 slot that actually exists (line 28013, `ride_reads.py` rate limiting) is unrelated. Grepped the whole file for `admin_create_ride` + coordinate/PII language — no other entry covers it.
+- Adversary: plaintiff's lawyer / privacy commissioner (an admin-assigned ride sends a driver's device precise pickup/dropoff coordinates over Google/Apple push infra with zero filtering, live in production, for every admin-direct-assignment); malicious insider with device forensic access to a driver's phone notification history
+- Evidence: `backend/routes/admin/rides.py:1392-1413` builds `dispatch_payload` with `pickup_lat`, `pickup_lng`, `dropoff_lat`, `dropoff_lng`, `rider_rating` unconditionally; `:1433` `_ADMIN_FCM_EXCLUDE = {"rider_name"}` — the *only* field excluded from the FCM `data` dict at `:1434-1439`. Compare `backend/routes/rides/matching.py:1631-1663`, the sibling auto-dispatch path, which at least has a flag (`minimal_fcm_offer_payload_enabled`, migration 424, default `FALSE`) that *can* strip these same fields when enabled — `admin_create_ride` has no equivalent flag at all, so there is no way to turn this off even if the org wanted to.
+- What happens (plain language): every ride an admin manually assigns to a driver sends that driver's phone a push notification whose backing FCM data payload contains the exact pickup and dropoff coordinates and the rider's star rating, in cleartext, transiting Google/Apple's push infrastructure — the same category of exposure C112/C113 already fixed for `rider_name`, left un-fixed for the fields the code's own comment (`matching.py:1642-1644`) calls "far more sensitive... [with] no legitimate reason to transit Google/Apple push infra in full precision."
+- Root cause: `admin_create_ride` builds its FCM push independently of `matching.py`'s batch-dispatch path (documented pattern from CLAUDE.md's "duplication-by-default" note in W0-SUMMARY.md #2 — three separate FCM-payload builders exist for the same `new_ride_assignment` event type per C113's own blast-radius grep). When PR #5382 added the `minimal_fcm_offer_payload_enabled` flag to `matching.py` the same day C112 closed, the closing note for C112 explicitly flagged this exact residual gap and said it would be tracked — but no new ACTION_ITEMS entry was ever created for it, and the "C114" label it forward-referenced was independently reused for an unrelated finding by a different session.
+- Recommendation: extend `admin_create_ride`'s FCM push to honor `minimal_fcm_offer_payload_enabled` the same way `matching.py` does (or, simpler given the admin path's smaller payload shape, exclude `pickup_lat/lng`, `dropoff_lat/lng`, `rider_rating` unconditionally — the admin panel doesn't need a background-refetch fallback the way the driver app's offer-timeout path does, since an admin-assigned ride is not time-boxed the same way). Alternative considered: leave it gated behind the same flag as `matching.py` for consistency — rejected as the *default* recommendation because this path has no documented "driver app refetches via `GET /drivers/rides/{id}/offer`" fallback verified for the admin-assignment flow; confirm that before reusing the flag, otherwise just strip unconditionally.
+- Blast radius: single call site (`admin_create_ride`); grep for `dispatch_payload` + `_ADMIN_FCM_EXCLUDE` in `backend/routes/admin/` confirms no other admin endpoint builds this payload shape.
+- Rollout: additive field-exclusion change, no migration needed (reads existing `minimal_fcm_offer_payload_enabled` setting, or ships as an unconditional exclusion — no flag required either way since it only *removes* data from an outbound payload).
+- Verification to close: file a real ACTION_ITEMS entry (not a forward-reference); a regression test asserting the FCM `data` dict for `admin_create_ride` excludes the same field set `matching.py` does under the flag (or unconditionally).
+
+### SKB-002 — `minimal_fcm_offer_payload_enabled` ships dark (default off): today, in production, every auto-dispatch offer push to a driver still carries unfiltered precise pickup/dropoff coordinates and rider rating
+- Hierarchy: L2 Ride Fulfillment › L3 Auto-dispatch › L4 driver offer push › L5 PII payload, live default
+- Severity: MEDIUM (known, tracked, deliberately staged — not a new discovery) → the live-production state is worth surfacing on its own since "the fix exists" and "the fix is live" are different facts
+- Status: VERIFIED   Existing item: `#1231 finding 15` (per code comment at `matching.py:1637`) — already tracked, not new
+- Adversary: same as SKB-001, at far larger scale (every online driver, every offer, not just admin-assigned rides)
+- Evidence: `backend/routes/rides/matching.py:1652` `_minimal_offer_payload = bool(app_settings.get("minimal_fcm_offer_payload_enabled", False))`; `schemas.py:793` `minimal_fcm_offer_payload_enabled: bool = False`; migration 424 sets the column default `FALSE`.
+- What happens (plain language): the fix for the largest slice of this exposure (the normal dispatch flow, not just admin-assigned rides) exists, is tested (`test_minimal_fcm_offer_payload_flag_settings.py`), and is off. No finding in this repo confirms whether it has been flipped on in the live `app_settings` row — same "unverified in production" gap G8 flags for `ai_escalation_creates_ticket`.
+- Root cause: deliberately staged rollout (driver-app needs the background-refetch handler to be live before the flag can be safely flipped, per the code comment) — this is a reasonable, documented design choice, not an oversight. The finding here is narrower: nothing in this repo confirms client-side readiness has actually been checked, so the flag may be sitting off by default rather than by an active decision.
+- Recommendation: confirm driver-app's background handler (`GET /drivers/rides/{ride_id}/offer` refetch path per the comment) has shipped and is live on a large-enough installed base, then flip the flag. If that's already true, this is a one-line config change with an outsized PIPEDA-exposure reduction.
+- Blast radius: read-only flag check, no code change to close — this is a config/rollout confirmation, not a code gap.
+- Rollout: flip `minimal_fcm_offer_payload_enabled` via the existing `app_settings` admin mechanism.
+- Verification to close: confirm the driver-app refetch handler's client version coverage, then flip and monitor.
+
+### SKB-003 — `docs/trauma-support.md`, referenced by the SOS incident runbook as a checklist step, does not exist anywhere in the repo
+- Hierarchy: L2 Trust & Safety › L3 Incident response training material › L4 SOS runbook checklist › L5 trauma-support step
+- Severity: MEDIUM   Priority score: S×B×L = 3×2×3 = 18
+- Status: VERIFIED   Existing item: new (grepped ACTION_ITEMS.md for "trauma" — zero hits); adjacent to, but distinct from, R11's TSF-001 ("SOS runbook describes a nonexistent *system*") — this is a nonexistent *document*, a training-material gap specifically, which is this lane's charter
+- Adversary: safety-team responder mid-incident following the runbook checklist item-by-item; auditor/regulator sampling whether Spinr's own documented safety process is actually followable
+- Evidence: `docs/runbooks/sos-incident.md:100` — `- [ ] Trauma support offered to affected rider/driver per `docs/trauma-support.md``. `find . -iname "*trauma*"` (repo-wide, excluding node_modules) returns zero results.
+- What happens (plain language): a safety-team member working the SOS runbook during a live incident hits a checklist item pointing to guidance that isn't there — they either skip the step or have to improvise trauma-support language in the moment, which is exactly the situation a written playbook exists to prevent.
+- Root cause: the runbook was written referencing a doc that was either never created or was deleted/moved without updating the reference — consistent with W0-SUMMARY.md's "docs are snapshots" pattern (#4).
+- Recommendation: either write `docs/trauma-support.md` (brief: what to say to a rider/driver post-incident, who to loop in — EAP/counselling referral if one exists, do-not-say list) or update the runbook line to point at wherever this guidance actually lives (if it exists outside the repo, e.g. an HR system) — but "the checklist item cites a doc" and "the doc exists" must match.
+- Blast radius: one runbook reference; no code.
+- Rollout: doc-only, no flag.
+- Verification to close: `docs/trauma-support.md` exists and the runbook checklist item resolves to real content, or the reference is corrected.
+
+### SKB-004 — No customer-facing incident/outage communications exist anywhere in the repo — no status page, no templated rider/driver outage copy
+- Hierarchy: L2 Support & Comms › L3 Incident comms › L4 outage/safety-incident external messaging
+- Severity: MEDIUM   Priority score: S×B×L = 3×3×3 = 27
+- Status: VERIFIED   Existing item: new
+- Adversary: rider stuck at 11pm during a backend outage with no ETA and no explanation; regulator asking what riders are told during a service disruption; competitor pointing to a public status page Spinr doesn't have
+- Evidence: `docs/comms/` contains exactly one file, `2026-08-31-staff-mfa-rollout-notice.md` — an internal staff notice, not customer-facing. `docs/runbooks/data-breach.md:160` mentions "status page" only as a *do-not-post-until-legal-reviews* gate, implying the concept but with no corresponding product/integration anywhere in the repo (no Statuspage.io config, no `/status` route, no templated outage push/email/SMS copy in `backend/utils/` or `docs/comms/`). Grepped `security-incident.md`/`sos-incident.md`/`data-breach.md` for rider/driver-facing communication templates during an incident — none found; all three runbooks are internal-response-only.
+- What happens (plain language): during an outage or safety incident, there is no pre-written, reviewed copy for what a rider or driver sees — the response would be improvised in real time by whoever is on call, with no legal/tone review baked in ahead of the moment it's needed.
+- Root cause: incident-response tooling was built for the internal/technical response (paging, rollback, evidence capture) but the external-facing half of incident response — telling the people affected something happened — was never built as a discrete deliverable.
+- Recommendation: (1) a small library of pre-approved, tone-reviewed templates for the 2-3 most likely scenarios (backend outage, payment processing delay, SOS-adjacent incident) that on-call can fill in and send via the existing push/email/SMS channels without drafting from scratch under pressure; (2) a decision on whether a public status page is in scope at all (a Now/Later/Never call, not silence). Alternative considered: build a full public status page product now — rejected as premature; the templated-copy library is the smaller, immediately actionable piece and doesn't require choosing/integrating a status-page vendor first.
+- Blast radius: none (net-new).
+- Rollout: doc-only for templates; a status page (if pursued) would be a separate infra decision requiring its own rollout plan.
+- Verification to close: templates exist, reviewed by legal/brand per `data-breach.md`'s existing "legal reviews messaging" gate, and are referenced from `security-incident.md`/`sos-incident.md`.
+
+### SKB-005 — `faqs` table (and therefore FAQ content, AI-assistant answers grounded on it, and `search_faqs`) has no locale/language dimension despite rider-app and driver-app shipping en/fr/es UI
+- Hierarchy: L2 Support & Comms › L3 Knowledge base › L4 localization
+- Severity: MEDIUM   Priority score: S×B×L = 3×3×2 = 18
+- Status: VERIFIED   Existing item: new
+- Adversary: a French- or Spanish-preferred rider/driver whose app UI is translated but whose help-centre answers and AI-assistant replies come back in English regardless
+- Evidence: grepped every FAQ migration (`208`-`367` range) and `backend/routes/admin/faqs.py` for `locale`/`language` — zero hits; the `faqs` table schema carries no such column. By contrast, `rider-app/i18n/en-CA.json`/`fr-CA.json` and `driver-app/i18n/en.json`/`fr.json`/`es.json` exist (per `ACTION_ITEMS.md:18072,18100` references) — the apps' own UI chrome is multilingual, but the FAQ corpus and every AI answer grounded on `search_faqs` is English-only.
+- What happens (plain language): a rider or driver using the app in French or Spanish hits an English-language help centre and an English-language AI assistant the moment they need support — the one part of the product most likely to be read carefully during a stressful moment (a declined card, a suspended account) is the part that isn't localized.
+- Root cause: FAQ content and the app UI shell were built on different localization tracks; nobody made or recorded a deliberate "FAQ content stays English-only for now" decision — this reads as an omission, not a scoped choice (sweep-catalog §2.12 explicitly calls for a *recorded* bilingual decision, and none exists).
+- Recommendation: either (a) record a deliberate near-term decision that FAQ/AI-assistant content is English-only for now (with a stated reason — cost, translation quality risk for AI-generated multilingual answers, whatever it actually is) so this stops looking like an oversight, or (b) add a `locale` column and translate the ~60 seeded rows, which is a bounded, one-time cost given the corpus size. Alternative considered: rely on the LLM to translate FAQ answers on the fly at serve time — rejected as a default because it reintroduces the "the model says something the ground truth didn't say" risk `search_faqs`'s "answer ONLY from them" contract exists to prevent; a translated *and* verified corpus is safer than a live-translated one.
+- Blast radius: `faqs` table schema, `search_faqs` (tools_support.py), admin FAQ CRUD UI.
+- Rollout: additive column + backfill; no behavior change until content is added.
+- Verification to close: a recorded decision either way, filed where `sweep-catalog.md` §2.12 expects it.
+
+### SKB-006 — Driver-facing acceptance-rate dispatch penalty (DRIVER-004, driver-journey.md) has no FAQ/training coverage — the disclosure gap this lane owns is still open
+- Hierarchy: L2 Driver Journey › L3 Dispatch fairness disclosure › L4 driver FAQ/training content
+- Severity: MEDIUM (same underlying issue as DRIVER-004; filed here because the *fix* — FAQ/copy — is this lane's charter, not R5's)   Priority score: S×B×L = 3×2×3 = 18
+- Status: VERIFIED   Existing item: DRIVER-004 (`docs/audit/clean-sheet/02-findings/driver-journey.md:110-121`) — not re-filed; this card supplies the KB-side half of that finding's own recommendation
+- Adversary: same as DRIVER-004 (driver claiming employee status; regulator; competitor)
+- Evidence: grepped `docs/driver-faqs-saskatchewan.md` (all 30 active entries) and every `driver-app/app/driver/*.tsx` screen for "acceptance rate" — zero hits, confirming DRIVER-004's own grep result still holds as of this session. The FAQ has 33 entries covering onboarding, documents, safety, going-online troubleshooting, and earnings/taxes, but none address what declining an offer does to future dispatch priority.
+- What happens (plain language): a driver who wants to understand why their offers seem to be coming later than a colleague's has no in-app or FAQ resource that explains the acceptance-rate ranking mechanic exists at all, let alone what triggers it.
+- Root cause: same as DRIVER-004 — the mechanic was built as a dispatch-ranking signal without a matching disclosure surface being scoped as part of that work.
+- Recommendation: add one FAQ entry (category `troubleshooting` or a new `dispatch`) along the lines DRIVER-004 already proposed: "Declining a ride you don't want to take may affect how soon you're offered your next one" — no formula, just existence and direction, matching Uber/Lyft's own public disclosure pattern. Alternative considered: surface it as an in-app stats-screen note instead of/in addition to FAQ — better long-term (higher visibility, no need to search for it) but higher cost; the FAQ entry is the fastest close and doesn't block a later stats-screen addition.
+- Blast radius: FAQ content only, one new migration row (`INSERT ... audience='driver'` following the existing seed pattern).
+- Rollout: doc/content-only, no flag.
+- Verification to close: FAQ entry exists and is retrievable by `search_faqs` for a query like "why am I getting fewer ride offers."
+
+### SKB-007 — No-show fee push notification (`ride_cancel.py:808-814`) states the charge with no dispute-affordance, for the fee type the channel-coverage audit itself calls "the most disputable charge"
+- Hierarchy: L2 Payments & Disputes › L3 Notification copy › L4 next-step clarity
+- Severity: LOW-MEDIUM (WARNING tier — dead-end copy, not PII/jargon)   Priority score: S×B×L = 2×3×3 = 18
+- Status: VERIFIED   Existing item: new (channel-coverage doc's R21 entry addresses *delivery* — push+email now fires — not *copy content*, which is this lane's angle)
+- Adversary: rider disputing a no-show fee they believe is wrong (e.g. driver arrived at the wrong address, GPS drift) with no path forward from the notification itself
+- Evidence: `backend/routes/drivers/ride_cancel.py:808-814` — `"Ride Cancelled"` / `"Your driver waited but you didn't show up. A $X.XX no-show fee has been charged."` No "if this doesn't look right, contact support" or link in the notification body/data. `docs/notification-channel-coverage.md:238` independently calls this "the most disputable charge with no written record" when documenting that it *now* reaches email too — but the copy itself, in both channels, still doesn't point anywhere.
+- What happens (plain language): a rider who disagrees with a no-show charge gets a factual statement and nothing else — they have to already know to go find Support themselves; the notification that delivers the bad news is a dead end.
+- Root cause: the notification-channel work (fixing *whether* this reaches the rider) and copy-quality work (what it *says*) are different pieces of work, and only the first was done.
+- Recommendation: append a short next-step to the body or `data` deep-link (e.g. "Think this is wrong? Tap to dispute." → the existing lost-and-found/support screen pattern already used for `_CATEGORY_LINKS` in `tools_support.py`). Alternative considered: leave it as-is since the receipt itself is browsable and support is reachable from there — rejected because CLAUDE.md's own dispute-prevention framing (`greenfield-extensions.md` §8) is explicit that ambiguity should be designed out *at the point of the charge*, not left for the rider to route themselves to eventually.
+- Blast radius: one push/email copy change; no schema.
+- Rollout: copy-only, no flag needed.
+- Verification to close: updated copy reviewed; a follow-up dispute rate for `ride_noshow`-type charges (once `greenfield-extensions.md` §8's proposed KPIs exist) shows no regression.
+
+### SKB-008 — Silent ticket-creation failures for complaints/lost-and-found/disputes have no metric (OBS-004), which is also a support-reliability gap, not only an observability one
+- Hierarchy: L2 Support & Comms › L3 Escalation reliability
+- Severity: LOW (cross-reference/reframe, not new)   Priority score: S×B×L = 2×2×3 = 12
+- Status: VERIFIED   Existing item: OBS-004 (`rapid-baseline-2026-09-24/A6-observability.md:88-100`) — not re-filed; noted here because it bears directly on whether the support/escalation surface this lane owns is trustworthy end-to-end
+- Adversary: rider/driver told (correctly, per SKB's Steelman §1.4) that a human will follow up, whose ticket silently failed to create and who has no way to know it, in a system with no metric tracking how often that happens
+- Evidence: `backend/services/zoho_desk_integration.py:80-83,237,284` — `logger.warning` on `ZohoDeskError`, no counter. As established in §1.4, the user-facing copy never over-promises when creation fails outright (a genuinely raised `ZohoDeskError` degrades cleanly) — but OBS-004's finding is about the *silent-warn* branch inside `_link_ticket`'s complaint/L&F/dispute call sites specifically, a different code path from the escalation flow's explicit exception handling.
+- What happens (plain language): support ops has no dashboard number answering "how many complaint/lost-item/dispute tickets silently failed to reach Zoho this week" — the only way to find out is grepping logs after the fact.
+- Root cause: per OBS-004 — the warning-log half of CLAUDE.md's "degraded-but-recovered → warning log + metric" pairing was built; the metric half wasn't.
+- Recommendation: adopt OBS-004's recommendation (`metrics.inc("spinr_admin_zoho_ticket_skipped_total", {"table": table})`) — it directly closes a gap in this lane's own escalation-reliability charter, not only an observability one.
+- Blast radius: per OBS-004, all 3 call sites through the shared `_link_ticket` function.
+- Rollout: additive, no flag.
+- Verification to close: per OBS-004.
 
 ## 3. Top-20 support reasons — self-serve coverage
-(pending)
+
+Ticket categories are not enumerated in an explicit code constant for rider/driver "reasons" (no `TICKET_CATEGORY` enum found in `routes/support.py`, `routes/admin/support_tickets.py`, or the Zoho mirror schema beyond Zoho's own free-text `category`/`subject`). The 20 below are INFERRED from (a) `escalate_to_support`'s `ESCALATION_CATEGORIES` (`tools_support.py:49-58`), (b) the FAQ category taxonomy (`onboarding`, `documents`, `safety`, `troubleshooting`, `payments`, `rides`, `pricing`, `wallet`, `promotions`, `accessibility`, `account`), and (c) the disputes/refunds/cancellation/lost-item/safety code paths.
+
+| # | Reason | Self-serve path (screen / FAQ / AI tool) | Resolves without human? | Gap |
+|---|---|---|---|---|
+| 1 | Fare seems wrong / higher than expected | Rider FAQ "Why was my fare higher than usual?" (`230_seed_rider_faqs.sql`) + receipt line-item breakdown | Partial — explains, doesn't refund | None; correctly routes to support for an actual dispute |
+| 2 | Cancellation fee dispute | Cancel-flow `Alert.alert` shows fee before confirming (`ride-status.tsx:258-274`); no FAQ on disputing an already-charged fee | No | Minor — same class as SKB-007 |
+| 3 | No-show fee dispute | Push/email notice (SKB-007); no in-notification dispute link | No | SKB-007 |
+| 4 | Refund status/request | FAQ "How do refunds work?"; `escalate_to_support(category="refund")` | No (by design — human decision) | None — correctly a human-only action per `support_assistant.py`'s own ground rules |
+| 5 | Lost item | FAQ; `_CATEGORY_LINKS["lost_item"] = "/lost-and-found"` deep link; dedicated `lost-and-found-chat.tsx` screens both apps | Partial (self-serve report flow exists) | None found |
+| 6 | Card declined / payment method issue | No rider FAQ entry found on "my card was declined" specifically; payment methods FAQ is setup-only | No | Coverage gap — no FAQ row for a declined-card scenario despite `payment_retry.py`/R27/R28 being an entire notification family |
+| 7 | Driver going wrong way / bad route | No FAQ; no self-serve "why this route" explainer surfaced to rider | No | Coverage gap — `greenfield-extensions.md` §8 explicitly lists "route explanations" as a dispute-prevention pattern to evaluate |
+| 8 | Surge pricing confusion | Rider FAQ "What is surge pricing" + shown pre-booking | Yes | None |
+| 9 | Wallet top-up / balance issue | FAQ "How do I top up"; wallet history in-app | Yes for how-to; no for a discrepancy | None major |
+| 10 | Promo code not applying | FAQ "How do I use a promo code" | Partial | None found beyond generic escalate |
+| 11 | Driver document rejected (driver-side) | Driver FAQ "My document was rejected" + in-app reason shown | Yes | None |
+| 12 | Account suspended/rejected/banned (driver) | Push + email with reason (`driver_status_notifications.py`); FAQ "Am I an employee..."; no explicit "how do I appeal" FAQ beyond "contact support" | No | Minor — matches DRIVER-001 (driver-journey.md) "never told why" concern only partially resolved by this copy; appeal path itself is R5's finding, not re-filed here |
+| 13 | Can't go online (driver) | Driver FAQ "Why can't I go online?" points to Documents section | Yes | None |
+| 14 | Criminal Record Check questions | Driver FAQ, 3 dedicated entries | Yes | None |
+| 15 | Payout timing / missing payout | Driver FAQ deliberately vague ("check payout settings... or contact support") — correct per support_assistant.py's "never invent a timeline" rule | No | By design, not a gap |
+| 16 | WAV / service animal request | Rider + driver FAQ, both directions covered | Yes | None |
+| 17 | Safety concern / SOS follow-up | `escalate_to_support(category="safety")` routes to 911/SOS language; FAQ "What safety features" | No (correctly — human/911) | Rider gets no confirmation SOS was received by the safety team (channel-coverage R38) — cross-referenced, not re-filed |
+| 18 | Corporate allowance exhausted mid-ride | No rider-facing FAQ found; surfaces only as a 4xx at booking time per channel-coverage R44 | No | Coverage gap — silent failure mode, no explanatory copy at the point of denial |
+| 19 | "What happened to my scheduled ride" | Driver FAQ covers driver side (no-show); no rider-facing FAQ on scheduled-ride changes/delays | No | Coverage gap |
+| 20 | General "how do I contact a human" | FAQ "How do I contact support" (both apps); AI assistant `escalate_to_support` fallback everywhere | Yes | None — this is the best-covered reason in the set |
 
 ## 4. FAQ vs code
-(pending)
+
+| Claim | Source doc:line | Code path:line | Match |
+|---|---|---|---|
+| Drivers keep 100% of fare, 0% commission | `driver-faqs-saskatchewan.md:175` | `CLAUDE.md` "What Spinr Is NOT"; no commission-deduction code found in `payment_service.py` fare settlement (consistent with strategy.md's STRAT findings) | Matches |
+| Surge capped at 2.5x, shown before booking, never added after | `driver-faqs-saskatchewan.md:193`, `230_seed_rider_faqs.sql` | `SURGE_CAP = 2.5` clamp at every fare call site per CLAUDE.md; surge shown pre-booking in `ride-options.tsx` (per compliance.md's read) | Matches |
+| Cancellation fee "shown before you confirm the cancellation" | `230_seed_rider_faqs.sql` | `rider-app/app/ride-status.tsx:258-274`, `driver-arriving.tsx:453-456` — `Alert.alert` shows the exact dollar amount before the destructive action fires | Matches |
+| Class 5 licence + SGI authorization required | `driver-faqs-saskatchewan.md:19-25` | `backend/routes/drivers/status.py:733-744` (per compliance.md COMP-001) | **Unverifiable here** — compliance.md's COMP-001 (HIGH, UNKNOWN) found a contradicting web-search snippet suggesting Class 4 may be the actual provincial requirement; if COMP-001 resolves toward Class 4, this FAQ (and the onboarding UI) would need to change too — flagging the FAQ as downstream of that open question rather than re-auditing the primary source myself |
+| GST 5% + PST 6% (where it applies) shown as separate receipt line items | `driver-faqs-saskatchewan.md:199`, `230_seed_rider_faqs.sql` | `features.py:820-845`, `receipt_pdf.py:174-190` per compliance.md §1.8; `pst_enabled=false` currently (per G9) so PST is not actually charged today | **Partially matches** — the FAQ correctly hedges "where it applies"; today PST does not apply anywhere (G9, open, verbal-only confirmation), so the FAQ's conditional phrasing is accurate but the underlying PST-applicability question itself remains unconfirmed against a primary source (compliance.md G9, not re-litigated here) |
+| Drivers are independent contractors, no mandatory shifts/uniforms/penalties | `driver-faqs-saskatchewan.md:63` | Grepped driver-app + `driver_status_notifications.py` + `driver_dormancy_service.py` for control-of-work language — none found; `driver_dormancy_service.py` docstring: "never suspends, never changes go-online eligibility" (per compliance.md §1.9) | Matches |
+| WAV requests supported "where a WAV driver is online in the service area" | `driver-faqs-saskatchewan.md:49`, `230_seed_rider_faqs.sql` | `dispatch_service.py:231-244`, `matching.py:503-504,877-878`, `wav_available` computed pre-booking (per compliance.md §1.4) | Matches |
+| Service animals "cannot be refused" | `driver-faqs-saskatchewan.md:129`, `230_seed_rider_faqs.sql` | `ride_flow.py:708-739`, `ride_cancel.py:100-121` — refusal is a hard 400 + audit log, not just policy text (per compliance.md §1.3) | Matches (code is *stricter* than the FAQ implies — FAQ undersells how hard this is enforced) |
+| CRC + Vulnerable Sector Check required, "renewed annually" | `driver-faqs-saskatchewan.md:93-97` | Not independently re-verified this session (out of scope for time budget) | **Not verified** — flagged in §12 |
+| Declining a ride offer affects future dispatch priority | Not stated anywhere in FAQ | `dispatch_service.py:76-90` (`rank_by_eta_with_acceptance`), per DRIVER-004 | **Contradicts by omission** — see SKB-006 |
+| No-show fee is disputable / here's how | Not stated in the notification that charges it | `ride_cancel.py:808-814` | See SKB-007 |
 
 ## 5. Contractor-language review (driver training)
-(pending)
+
+Grepped `docs/driver-faqs-saskatchewan.md`, all `driver-app/app/driver/*.tsx` screens, `driver_status_notifications.py`, and `driver_dormancy_service.py` for control-of-work language (`mandatory shift`, `must maintain`, `required to work`, `minimum hours`, `uniform`, `performance review`, `dress code`, `acceptance rate`). Zero hits for control-of-work phrasing (two "uniform" hits were code comments about a polyline rendering, not driver copy — false positives, excluded). `driver-faqs-saskatchewan.md:63` states the contractor position explicitly and correctly ("You choose when and whether to drive — there are no mandatory shifts, uniforms, or penalties for being offline"). This matches compliance.md §1.9's independent finding. No new contractor-language finding — the one live gap in this area (the undisclosed acceptance-rate consequence) is a *disclosure* gap, not a *language* gap, and is filed as SKB-006 rather than under this heading.
 
 ## 6. AI assistant support answers
-(pending)
+
+- **Grounding is real, not free-form.** `search_faqs` (`tools_support.py:325-380`) retrieves from the `faqs` table and the tool description instructs the model to "answer ONLY from them and say so if nothing matches" (`:482-486`). `_NO_MATCH` (`:121-124`) gives the model an explicit "say so plainly" fallback rather than letting it improvise. This matches `spinr-ai-guardrail-reviewer`'s §1/§6 concerns (no fabricated policy, no parallel fare computation) — no violation found in `tools_support.py` itself; it does not touch fare/money at all.
+- **`support_assistant.py` (Zoho ticket-reply drafter) has the strongest explicit anti-fabrication language in the repo**: "NEVER invent fares, amounts, refund decisions, promo codes, ETAs, account details, policy specifics, or timelines" (`:70-73`), "Money is always Canadian dollars; never state an amount unless it appears in the ticket" (`:77-78`), correct 2.5x surge framing (`:79-80`), correct 911/SOS framing matching CLAUDE.md's "What Spinr Is NOT" (`:81-83`).
+- **Does the AI ever state policy the code doesn't enforce?** Checked `prompts.py` for the three highest-risk claims (911/SOS framing, contractor status, dispute-window language) — no hardcoded dispute-window number found (relevant given compliance.md's finding that the 60-day dispute window is unenforced in `routes/disputes.py`; the AI prompt doesn't compound that by *stating* a window it can't back up, which is the right posture). No fabricated payout timeline found (the deprecated direct-Gemini prompt used to do exactly this per `support.py:52-57`'s own note — the fix already landed).
+- **Public (anonymous) website assistant correctly narrows its tool surface** — `WEB` audience gets `search_faqs` + `get_company_info` only, no `escalate_to_support` (no account to attach a ticket to) — per `tools_support.py:39-47`. This is the right boundary and matches `spinr-ai-guardrail-reviewer` §3's ownership-scoping concern.
+- **Gap: `ESCALATION_CATEGORIES`** (`tools_support.py:49-58`) has no explicit "dispute" category (`refund`, `account`, `lost_item`, `complaint`, `payment_issue`, `safety`, `cancel_ride`, `other`) — a fare/charge dispute likely routes through `payment_issue` or `complaint`, which is workable but means Zoho-side triage can't filter on "dispute" as its own bucket. INFO-level, not a blocker.
+- **Rate limiting confirmed present** on the rider/driver path (`ai_chat_limit` decorator on `/support/chat` at `support.py:72` and on the central `POST /api/v1/ai/chat`, per `routes/ai.py:163`) and on the public path (`ai_public_chat_limit`, `routes/ai.py:30`).
 
 ## 7. Notification copy review
-(pending)
+
+Sampled `driver_status_notifications.py` (full read), `matching.py`'s offer push, `ride_flow.py`/`ride_cancel.py` push call sites (grep), `safety_checkin_loop.py`, `marketing_push.py`, and `notification_throttle.py`.
+
+- **Clarity/actionability: generally strong.** "Driver Arrived! 📍 / Your driver has arrived at the pickup location." — clear, matches the "driver arrived" ≠ "`driver_arrived`" bar the charter sets. "Pickup code locked 🔒 / Your driver entered the wrong pickup code too many times. Check you are with the right driver — you can cancel if something feels wrong." (`ride_flow.py:1153-1158`) is a good example of actionable safety-adjacent copy with a next step. "Safety check-in / Just checking in — are you okay? Tap to confirm." (`safety_checkin_loop.py:138-141`) — tone correctly calm and direct for a safety-tier message, not alarmist, consistent with CLAUDE.md's "never alarming language that implies 911 replacement."
+- **Tone matches severity across the tiers sampled** — account-blocking statuses ("Account Suspended ⚠️", "Account Deactivated") read as serious without being alarmist; routine lifecycle events ("You're Approved! 🎉") are upbeat without undermining the more serious copy elsewhere. No promo-tone-on-a-safety-message mismatch found in the sample.
+- **Gap found: SKB-007** (no-show fee notification is a dead end — see §2).
+- **Gap found: SKB-001/SKB-002** (PII in `data` payload, not `title`/`body` — the visible text is clean in both cases; the leak is in the machine-readable payload riding alongside it).
+- **Quiet hours exist but ship dark** — corrects this lane's own task brief. `notification_throttling_enabled` defaults `False` (migration 304); today, marketing/reminder pushes have no live time-of-day or frequency cap in production unless an admin has already turned it on (unverified, same as SKB-002's flag-state gap). Recording this as the INFO the brief asked for, but the underlying mechanism is real, not absent.
+- **Marketing pushes are CASL/PIPEDA-correct**: `marketing_push.py` gates every send on `marketing_consent.is_eligible("push", ...)` — express opt-in, not an opt-out default — before calling the shared sender.
 
 ## 8. Manuals, onboarding, incident comms
-(pending)
+
+- **66 runbooks exist in `docs/runbooks/`**, covering technical/operational incident response in depth (SOS, security incident, data breach, Stripe reconciliation, migration playbooks, etc.) — this is a mature technical-response library. R7 (admin-ops.md) already assessed executability of two of these (`payment-dispute-evidence.md`, `saskatoon-launch.md`, both found stale) — not re-audited here.
+- **No dedicated "start here" onboarding doc for a new support agent or ops hire was found.** No `docs/support/`, `docs/onboarding/`, or admin-manual index exists; the closest equivalents are the runbooks themselves (technical, not agent-facing) and the FAQ content (customer-facing, not staff-facing). A new support hire has no single document explaining the tools (Zoho, admin dashboard support-tickets module, AI reply-drafter), the escalation categories, or where policy facts live.
+- **Incident comms**: see SKB-004 — no customer-facing templates exist.
+- **`docs/trauma-support.md`**: see SKB-003 — referenced, does not exist.
 
 ## 9. Zoho & SLA
-(pending)
+
+- **No macros/canned-response templates found in-repo** (`grep -rl macro` across `zoho_desk_service.py`, `zoho_desk_integration.py`, `admin-dashboard/.../support-tickets/` returns nothing). The AI reply-drafter (`support_assistant.py`) generates a fresh draft per ticket from the FAQ/policy corpus rather than a static macro library — a defensible design (single source of truth, no drifting macro text) but means there is no fallback canned-response set for when `ai_assistant_enabled` is off (`SupportAssistantError("ai_disabled", ...)` — agents would write fully manually in that state, which is a reasonable but unstated operational dependency).
+- **SLA tracking**: G8 (ACTION_ITEMS.md:17683) is honestly scoped — code-side half closed (`support_sla.py`, `support_sla_breach_sweep (5min)` loop registered in `lifespan.py:768-770`, `spinr_support_ticket_sla_breach_total{priority}` metric), Zoho-console policy configuration and the live `ai_escalation_creates_ticket` production value both remain open, explicitly flagged as needing human access this session doesn't have. Not re-filed; cross-referenced.
+- **P1 < 2h KPI measurability**: now partially measurable (breach detection exists), but the module's own docstring states the anchor is ticket-creation time, not first-response time, because no first-response timestamp exists anywhere in the Zoho mirror or live payload — so the metric answers "is this ticket older than 2h and still Urgent," not literally "did we respond within 2h." This is a stated, not hidden, limitation (`support_sla.py:17-23`).
+- **OBS-004** (silent ticket-creation failures, no metric) — cross-referenced as SKB-008.
 
 ## 10. Rebuild Delta
-(pending)
+
+## Epic: Support & Knowledge Base
+- Verdict per inherited pattern: MODIFY (the AI-grounded FAQ + escalation architecture is genuinely strong — KEEP that core design; MODIFY the surrounding gaps: PII-in-payload parity, localization, incident comms, training-doc integrity)
+- Keep (already best-in-class): the "one FAQ corpus, retrieved not hardcoded, answered only from what's retrieved" architecture (`search_faqs` + `faqs` table + admin CRUD, no code-deploy needed to update an answer); the independent PII-scrub-at-every-egress-point discipline in `ai/tools_support.py`/`support_assistant.py`; the honest, unfabricated escalation contract (never claims a ticket exists unless it does).
+- Uber/Lyft do: maintain a large, professionally localized, multi-market help centre with in-app deflection metrics (contacts-per-100-trips) and a public status page (source: general industry knowledge, not independently fetched this session — ASSUMED). Spinr today: a single-language, code-adjacent FAQ corpus with strong grounding discipline but no localization, no deflection-rate KPI, and no public incident communications.
+- Clean-sheet Spinr would: keep the grounded-retrieval architecture (it is the right pattern, not table-stakes-behind), but treat "policy facts" (fees, timelines, surge cap, tax rates, dispute windows) as **config, not prose duplicated across FAQ text, AI prompts, receipts, and notification copy** — a single source of truth that FAQ answers, AI system prompts, and notification templates all read from, with a CI check that a changed fee/rate/cap propagates everywhere it's asserted rather than drifting (this is the specific card requested by the brief). Why (the edge it creates): eliminates the entire class of bug this repo has already hit twice (C112/C113's FCM-parity drift, the deprecated `/support/chat`'s fabricated payout timeline) — a fact stated once, read everywhere, cannot silently diverge.
+- How (architecture/pattern): a `policy_facts` table (or `app_settings`-style config namespace) holding versioned values — surge cap, cancellation-fee schedule, tax rates by area, dispute window days, T4A threshold — with FAQ answer templates, the AI system prompt, and notification copy all interpolating from it rather than hardcoding English sentences that happen to agree today. Who (role/owner): backend platform + whoever owns `app_settings` today. When: Next (not Now — this is a real refactor, not a flag flip; not Rewrite-only — it's incremental on the live product, see below).
+- Incremental path from today (no big-bang): step 1 → add the `policy_facts` table with today's already-correct values (no behavior change, pure capture); step 2 → migrate the highest-drift-risk facts first (surge cap, cancellation/no-show fee amounts — the ones the code and multiple FAQ rows both currently hardcode) to read from it; step 3 → add a CI check (e.g. a test that greps FAQ/prompt/notification-copy sources for numeric literals that match a `policy_facts` row's *old* value after a config change, flagging likely-stale prose) — each step shippable and independently valuable.
+- Cost/effort: M (table + one CI check is S; migrating every hardcoded fact across FAQ/prompts/notifications is the M-to-L tail, doable incrementally). Risk: low (additive, no live-data mutation). Reversibility: high (config table, not a schema rewrite). Build, not buy — this is Spinr-specific policy content, not a vendor problem.
+- Advantage type: operational (fewer support escalations caused by the app itself contradicting its own help text) and trust (a regulator/plaintiff's-lawyer reading the FAQ against actual behaviour — per this audit's own adversary list — finds fewer contradictions over time, not more, as the product grows).
+- "Why not?": the honest answer, visible in this session's own findings, is that surgical/incremental changes (CLAUDE.md's own stated bias) keep adding *another* place a fact is asserted (a new FAQ row, a new push notification, a new admin macro) without anyone stepping back to ask whether it should read from one place — each individual addition was reasonable; the aggregate is the drift risk. A simpler fix than a new table might be a documented **convention** (grep this list before hardcoding a number) plus the CI check alone, without a schema change — worth considering as the true "S" version before committing to the table.
 
 ## 11. Top 5
-(pending)
+
+1. **SKB-001** — `admin_create_ride`'s FCM push has zero filtering for precise GPS + rider rating, and the promised tracking item for this exact gap was never actually filed in ACTION_ITEMS.md — fix the payload and file the entry for real.
+2. **SKB-002** — the fix for the larger, non-admin version of the same PII-in-push-payload issue exists (`minimal_fcm_offer_payload_enabled`) but is unverified as ever having been turned on in production — confirm driver-app client readiness and flip it.
+3. **SKB-004** — no customer-facing incident/outage communications exist at all; build a small reviewed-copy template library before the next outage, not during it.
+4. **SKB-003** — `docs/trauma-support.md` is referenced by a live safety runbook checklist and does not exist; write it or fix the reference.
+5. **SKB-005 / SKB-006** (tie) — the FAQ/AI-assistant corpus has no localization despite a trilingual app UI, and the one disclosure gap this lane owns from DRIVER-004 (acceptance-rate consequence) is still unaddressed — both are single-FAQ-row-scale fixes with outsized fairness/trust payoff relative to cost.
 
 ## 12. NOT verified
-(pending)
+
+- **CRC/Vulnerable Sector Check "renewed annually" claim** (`driver-faqs-saskatchewan.md:93-97`) — not independently re-checked against `routes/drivers/status.py`'s actual expiry-window logic this session (out of time budget); flagged, not confirmed either way.
+- **Whether `minimal_fcm_offer_payload_enabled` or `ai_escalation_creates_ticket` are actually `True` in the live `app_settings` row** — no DB access this session, same limitation G8 already states for the latter; SKB-002 is written assuming the documented default (`False`) holds, which may not reflect current production state.
+- **Zoho Desk's own native SLA/macro configuration** — entirely outside this repo (no Zoho admin console access), per G8's own stated limitation; §9's "no macros found" claim is repo-scope only and does not rule out Zoho-side macros configured directly in their console.
+- **Whether `docs/trauma-support.md` content exists somewhere outside this repo** (e.g. an HR/People-ops system) — could not check; SKB-003 assumes it doesn't exist anywhere, which may be too strong if such a system exists and simply isn't linked from the runbook correctly.
+- **Full 20-item top-support-reasons ranking is INFERRED, not measured** — no ticket-volume-by-category data was available to this session (no Zoho/DB access); §3's ordering is a reasonable-coverage inference from code/FAQ structure, not an actual frequency ranking. A real ranking would change which gaps are highest-priority.
+- **Driver-app FAQ screen rendering/category-color correctness** (`driver-app/app/driver/faq.tsx`) was not visually inspected — content-source correctness (§3/§4) was checked, not the rendered screen itself.
 
 ## 13. Human-only questions
-(pending)
+
+- Has `minimal_fcm_offer_payload_enabled` been turned on in production, and if not, why — is driver-app client coverage the blocker, or was it just never revisited after shipping dark? (SKB-002)
+- Is there a Zoho Desk native SLA policy or macro library configured in the Zoho console itself, outside this repo? (§9, G8)
+- Does trauma-support guidance exist anywhere (HR system, external policy doc) that `docs/trauma-support.md` should actually point to, or does it need to be written from scratch? (SKB-003)
+- Is a public status page in scope for Spinr at all, and on what timeline — a Now/Later/Never product decision this session cannot make? (SKB-004)
+- Is FAQ/AI-assistant content staying English-only a deliberate near-term choice (and if so, why — cost? AI-translation-quality risk?), or was it simply never scoped as part of the i18n work that translated the app UI? (SKB-005)
+- Does support ops have an actual top-N ticket-category breakdown (Zoho reporting) that could replace §3's inferred ranking with a measured one?
 
 ## 14. Escalations
-(pending)
+
+- **SKB-001** should go to whoever owns the FCM-payload-parity pattern (per W0-SUMMARY.md's "duplication-by-default" recurrence family) — this is the third sibling-copy PII gap in the same `new_ride_assignment` payload family (after `matching.py` and the `admin_debug_ride_offer` diagnostic endpoint), a genuine recurrence CLAUDE.md gate #10's adversarial-review step exists to catch, and it should get a real ACTION_ITEMS entry with its own number this time, not a forward-reference that silently didn't land.
+- **SKB-004** (no incident comms) should go to whoever owns brand/legal review of customer communications (per `data-breach.md`'s own "legal reviews messaging" gate) — this lane can identify the gap but not write reviewed copy on legal's behalf.
+- **COMP-001** (Class 4 vs Class 5 licence requirement, compliance.md) has a direct downstream effect on `driver-faqs-saskatchewan.md`'s eligibility copy (§4 above) — flagging that this lane's FAQ-accuracy finding is gated on compliance.md's open regulatory question, not independently resolvable here.

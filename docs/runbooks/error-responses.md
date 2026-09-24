@@ -70,6 +70,7 @@ applies this gate:
 | Detail shape | Behaviour |
 |---|---|
 | Matches regex `^ERR_[A-Z0-9_]+$` | Pass through unchanged. Sentinel — vetted by route author. |
+| Dict whose keys are ALL in `{code, reason_code, online_epoch, state_version, retry_after_ms}` (`code` required; codes upper-snake, epoch/version decimal strings, `retry_after_ms` a non-negative int) | Pass through as a copy. Used by the driver availability protocol. Any other key (e.g. `message`) sanitises the whole dict. |
 | Anything else | Replace with `"Internal server error"`. Set `error.sanitised: true`. Log the original detail server-side paired with the request_id. |
 
 The rule is deliberately strict: a contributor cannot accidentally

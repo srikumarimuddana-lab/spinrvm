@@ -22,11 +22,21 @@ except ImportError:  # pragma: no cover — top-level vs package import
 
 # B-P2-1: short ALL-CAPS sentinels (e.g. ERR_AUTH_UNAVAILABLE,
 # ERR_OTP_LOCKED) are vetted by the route author and let mobile clients
-# branch UI without parsing English. Anything else on a 5xx response is
-# treated as a possible exception leak and replaced with a generic
-# message — full detail still hits the server log paired with the
-# request_id. See docs/runbooks/error-responses.md.
+# branch UI without parsing English. Anything else on a 5xx response
+# (except the structured allow-list below) is treated as a possible
+# exception leak and replaced with a generic message — full detail still
+# hits the server log paired with the request_id. See
+# docs/runbooks/error-responses.md.
 _SENTINEL_DETAIL_RE = re.compile(r"^ERR_[A-Z0-9_]+$")
+
+# Structured 5xx details (driver availability protocol, e.g.
+# {"code": "PRESENCE_UNAVAILABLE"}) pass only when EVERY key is in this
+# allow-list and every value has the vetted shape. A dict carrying any other
+# key — notably the payment/AI {"code", "message"} details, whose message can
+# hold provider text — is still sanitised as a whole.
+_STRUCTURED_5XX_KEYS = frozenset({"code", "reason_code", "online_epoch", "state_version", "retry_after_ms"})
+_STRUCTURED_5XX_CODE_RE = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
+_STRUCTURED_5XX_DECIMAL_RE = re.compile(r"[0-9]{1,20}")
 
 
 def _resolve_request_id(request: Request) -> str:
@@ -46,20 +56,46 @@ def _resolve_request_id(request: Request) -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _allowed_structured_5xx_detail(detail: object) -> Optional[Dict[str, Any]]:
+    """Return a copy of an allow-listed structured 5xx detail, else None.
+
+    Requires a ``code``; ``code``/``reason_code`` must be upper-snake codes,
+    ``online_epoch``/``state_version`` decimal strings, and ``retry_after_ms``
+    a non-negative int. Any other key or value shape rejects the whole dict.
+    """
+    if not isinstance(detail, dict) or "code" not in detail or not set(detail) <= _STRUCTURED_5XX_KEYS:
+        return None
+    for key in ("code", "reason_code"):
+        value = detail.get(key)
+        if key in detail and not (isinstance(value, str) and _STRUCTURED_5XX_CODE_RE.fullmatch(value)):
+            return None
+    for key in ("online_epoch", "state_version"):
+        value = detail.get(key)
+        if key in detail and not (isinstance(value, str) and _STRUCTURED_5XX_DECIMAL_RE.fullmatch(value)):
+            return None
+    retry_after_ms = detail.get("retry_after_ms")
+    if "retry_after_ms" in detail and not (type(retry_after_ms) is int and retry_after_ms >= 0):
+        return None
+    return dict(detail)
+
+
 def _should_sanitize_5xx_detail(detail: object) -> bool:
     """True if a 5xx HTTPException detail looks like an exception leak
     rather than a vetted sentinel.
 
-    Pass-through criteria: short ALL-CAPS ``ERR_*`` sentinel.
-    Sanitize criteria: anything else — non-string detail, free text,
+    Pass-through criteria: short ALL-CAPS ``ERR_*`` sentinel, or a structured
+    dict made only of the allow-listed keys (``_allowed_structured_5xx_detail``).
+    Sanitize criteria: anything else — other non-string detail, free text,
     interpolated exception strings, etc.
 
-    The single rule (sentinel-or-sanitize) is deliberately strict so
-    a future contributor can't accidentally leak by writing a
-    plausible-sounding sentence. Routes that need to convey 5xx info
-    should either (a) raise a ``SpinrException`` (structured fields,
-    explicit message) or (b) introduce a new ``ERR_*`` sentinel.
+    The rule is deliberately strict so a future contributor can't
+    accidentally leak by writing a plausible-sounding sentence. Routes that
+    need to convey 5xx info should either (a) raise a ``SpinrException``
+    (structured fields, explicit message) or (b) introduce a new ``ERR_*``
+    sentinel.
     """
+    if _allowed_structured_5xx_detail(detail) is not None:
+        return False
     if not isinstance(detail, str):
         return True
     return not bool(_SENTINEL_DETAIL_RE.match(detail))
@@ -805,6 +841,10 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             pass
         detail = "Something went wrong on our end. Please try again in a moment."
         sanitized = True
+    elif exc.status_code >= 500 and isinstance(detail, dict):
+        # Allow-listed structured detail: emit a fresh copy of only the
+        # vetted keys, never the route's own object.
+        detail = _allowed_structured_5xx_detail(detail)
 
     error_obj: Dict[str, Any] = {
         "code": exc.status_code,

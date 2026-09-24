@@ -1815,15 +1815,25 @@ async def _offer_timeout_handler(
             f"didn't respond within {timeout_seconds}s — re-searching"
         )
 
-        # Track consecutive misses and decide whether to auto-offline.
-        miss_count = await increment_miss_streak(driver_id)
         try:
             settings = await _deps.get_app_settings()
             miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
         except Exception:
+            settings = {}
             miss_threshold = 3
 
-        auto_offline = miss_count >= miss_threshold
+        # T5-9: under v2 the durable miss streak lives on the driver row and
+        # only resolve_driver_offer may pause (via T1, epoch-fenced). An
+        # admin-direct offer has no offer row, so it never counts as a miss
+        # here: no Redis streak, no raw is_online=false write — just release.
+        availability_v2 = bool((settings or {}).get("driver_availability_v2_enabled"))
+        if availability_v2:
+            miss_count = 0
+            auto_offline = False
+        else:
+            # Track consecutive misses and decide whether to auto-offline.
+            miss_count = await increment_miss_streak(driver_id)
+            auto_offline = miss_count >= miss_threshold
 
         if auto_offline:
             # Driver has missed N consecutive offers — take them offline.

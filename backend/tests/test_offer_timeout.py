@@ -841,3 +841,47 @@ def test_build_offer_rows_persists_expires_at():
         assert r["ride_id"] == "ride_1"
         assert r["offered_at"] == "2026-01-01T00:00:00+00:00"
         assert r["expires_at"] == "2026-01-01T00:00:30+00:00"
+
+
+@pytest.mark.asyncio
+async def test_admin_direct_timeout_under_v2_never_counts_a_miss_or_writes_offline():
+    """T5-9: with driver_availability_v2_enabled the admin-direct timeout
+    releases the driver through release_driver_and_close_period only — no
+    Redis miss streak and no raw is_online=false write, even when the legacy
+    streak would have crossed the threshold."""
+    from backend.routes.rides import matching as m
+
+    ride = {"id": "ride_v2", "rider_id": "rider", "driver_id": "driver_v2", "status": "driver_assigned"}
+    update_calls = []
+
+    async def _capture_update(table, filt, patch_doc):
+        update_calls.append(table)
+        return {"id": filt.get("id")}
+
+    miss = AsyncMock(return_value=99)
+    with (
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"driver_availability_v2_enabled": True, "auto_offline_miss_threshold": 1}),
+        ),
+        patch("backend.routes.rides._deps.release_driver_and_close_period", AsyncMock()) as release,
+        patch("backend.routes.rides._deps.record_period_transition", AsyncMock()) as period,
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value={"user_id": "u"})),
+        patch("backend.utils.driver_presence.increment_miss_streak", miss),
+        patch("utils.driver_presence.increment_miss_streak", miss),
+    ):
+        mock_db.find_one = AsyncMock(return_value=ride)
+        mock_db.update_one = AsyncMock(side_effect=_capture_update)
+        mock_manager.send_personal_message = AsyncMock()
+        await m._offer_timeout_handler("ride_v2", "driver_v2", rider_id="rider", timeout_seconds=0)
+
+    miss.assert_not_awaited()
+    assert update_calls == ["rides"], "no raw drivers write under v2"
+    release.assert_awaited_once_with("driver_v2", reason="offer_timeout", ride_id="ride_v2")
+    period.assert_not_awaited()
+    driver_msgs = [c.args[0]["type"] for c in mock_manager.send_personal_message.await_args_list]
+    assert "auto_offline" not in driver_msgs

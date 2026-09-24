@@ -147,3 +147,27 @@ async def test_repo_rejects_bad_arguments(overrides):
     }
     with pytest.raises(ValueError):
         await driver_offer_repo.record_offer_receipt(OFFER_ID, CLAIM_ID, **kwargs)
+
+
+def _flatten(routes, prefix=""):
+    """(path, methods) in match order; handles lazily included routers."""
+    out = []
+    for route in routes:
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            ctx = getattr(route, "include_context", None)
+            sub_prefix = getattr(ctx, "prefix", "") or ""
+            out.extend(_flatten(original.routes, prefix + sub_prefix))
+        else:
+            out.append((prefix + getattr(route, "path", ""), sorted(getattr(route, "methods", None) or [])))
+    return out
+
+
+def test_receipt_route_is_mounted_before_status_catch_all():
+    from backend.routes.drivers import api_router
+
+    paths = _flatten(api_router.routes)
+    receipt = ("/drivers/offers/{offer_id}/receipts", ["POST"])
+    assert receipt in paths
+    catch_all = [i for i, (p, _m) in enumerate(paths) if p.startswith("/drivers/{driver_id}")]
+    assert catch_all and paths.index(receipt) < min(catch_all)

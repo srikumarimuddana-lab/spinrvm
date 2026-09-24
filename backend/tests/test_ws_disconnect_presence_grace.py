@@ -56,14 +56,14 @@ class TestHeartbeatRevocationPresence:
         try:
             with (
                 patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
-                patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+                patch.object(ws_mod, "clear_ws_presence", AsyncMock()) as clear_mock,
                 patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
             ):
                 await ws_mod.heartbeat_task(ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1)
         finally:
             ws_mod.manager.active_connections.pop(key, None)
 
-        clear_mock.assert_awaited_once_with("drv-1")
+        clear_mock.assert_awaited_once_with("drv-1", {})
         ws.close.assert_awaited_once()
 
     @pytest.mark.anyio
@@ -81,7 +81,7 @@ class TestHeartbeatRevocationPresence:
         try:
             with (
                 patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
-                patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+                patch.object(ws_mod, "clear_ws_presence", AsyncMock()) as clear_mock,
                 patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
             ):
                 await ws_mod.heartbeat_task(old_ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1)
@@ -110,7 +110,7 @@ class TestHeartbeatRevocationPresence:
 
         with (
             patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=3)),
-            patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+            patch.object(ws_mod, "clear_ws_presence", AsyncMock()) as clear_mock,
             patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
         ):
             await ws_mod.heartbeat_task(ws, "driver_u2", user_id="u2", driver_id="drv-2", claim_token_version=3)

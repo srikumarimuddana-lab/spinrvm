@@ -271,6 +271,11 @@ Metrics are under the "Spinr metrics (Grafana Cloud)" data source.
 - **Private network reachability.** Grafana (password-protected) and the
   pre-existing Alloy UI on `:12345` (no auth) are reachable from any app on
   the org's private 6PN network, not only via `fly proxy`.
+- **Secrets briefly visible as process arguments.** `entrypoint.sh` passes
+  each process's secrets through `env -i KEY=VALUE …` so no process inherits
+  another's secrets; for the instant before `env` execs, those values are in
+  its argv (`/proc/<pid>/cmdline`). Only root, `alloy` and `grafana` exist on
+  this machine, so this was accepted as low risk.
 - **PII retention.** Anything the backend already logs is now kept and
   searchable for 7 days. Logs stay in Fly's Toronto region (`yyz`), but
   CLAUDE.md forbids GPS, phone numbers, emails and names in logs — any leak

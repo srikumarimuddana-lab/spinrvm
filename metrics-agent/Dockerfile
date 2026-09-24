@@ -61,17 +61,21 @@ RUN sed -i 's/\r$//' /usr/local/bin/discover-targets.sh /usr/local/bin/entrypoin
     && touch /etc/alloy/targets.json \
     && chown -R alloy:alloy /etc/alloy 2>/dev/null || true
 
+# Grafana is the only process here reachable from outside the machine (via
+# `fly proxy`), so it gets its own unprivileged user and can't read the
+# Loki/Vector data under /data owned by `alloy`. Created before the COPY so
+# the Grafana tree can be chowned to it: the upstream image owns it as UID
+# 472, which doesn't exist here, so readability would otherwise depend on
+# upstream's permission bits.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin grafana
+
 COPY --from=loki /usr/bin/loki /usr/local/bin/loki
 COPY --from=vector /usr/bin/vector /usr/local/bin/vector
-COPY --from=grafana /usr/share/grafana /usr/share/grafana
+COPY --from=grafana --chown=grafana:grafana /usr/share/grafana /usr/share/grafana
 COPY loki.yaml /etc/loki/loki.yaml
 COPY vector.toml /etc/vector/vector.toml
 COPY grafana/provisioning /etc/grafana/provisioning
 COPY grafana/provisioning-optional /etc/grafana/provisioning-optional
-# Grafana is the only process here reachable from outside the machine (via
-# `fly proxy`), so it gets its own unprivileged user and can't read the
-# Loki/Vector data under /data owned by `alloy`.
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin grafana
 
 # The entrypoint starts as root ONLY to chown the /data volume (Fly mounts
 # it root-owned) and assemble Grafana's provisioning; every long-running

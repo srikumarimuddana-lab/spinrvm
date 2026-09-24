@@ -31,7 +31,11 @@ supervise() {
   while :; do
     echo "[entrypoint] starting ${name}"
     if "$@"; then rc=0; else rc=$?; fi
-    echo "[entrypoint] ERROR: ${name} exited with status ${rc}; restarting in 10s" >&2
+    if [ "$rc" -eq 0 ]; then
+      echo "[entrypoint] WARNING: ${name} exited cleanly (status 0) but should run forever; restarting in 10s" >&2
+    else
+      echo "[entrypoint] ERROR: ${name} exited with status ${rc}; restarting in 10s" >&2
+    fi
     sleep 10
   done
 }
@@ -46,7 +50,8 @@ start_log_stack() {
     return 0
   fi
 
-  if ! { mkdir -p /data/loki /data/vector /data/grafana \
+  if ! { chmod 755 /data \
+      && mkdir -p /data/loki /data/vector /data/grafana \
       && chown alloy:alloy /data/loki /data/vector \
       && chown grafana:grafana /data/grafana \
       && chmod 700 /data/loki /data/vector /data/grafana; }; then

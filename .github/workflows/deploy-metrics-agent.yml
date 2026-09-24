@@ -58,6 +58,19 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      # fly.toml declares a [mounts] volume (7-day log store). If it doesn't
+      # exist yet, fail here with the fix instead of a raw flyctl error —
+      # see metrics-agent/README.md "Logs & Grafana" one-time setup.
+      - name: Verify fly_logs volume exists
+        run: |
+          if ! flyctl volumes list -a "${FLY_APP}" | grep -qw fly_logs; then
+            echo "::error title=Volume missing::${FLY_APP} has no 'fly_logs' volume."
+            echo "Follow metrics-agent/README.md 'Logs & Grafana' steps 1-3 (create volume, set secrets, replace machine), then re-run."
+            exit 1
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       # Build context must be metrics-agent/ so the Docker build picks up its
       # own Dockerfile, config.alloy, and discover-targets.sh.
       - name: Deploy to Fly.io

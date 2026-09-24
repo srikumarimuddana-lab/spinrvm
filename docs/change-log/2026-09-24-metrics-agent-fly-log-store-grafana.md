@@ -54,6 +54,7 @@ Riders, drivers and corporate admins see nothing. Internal ops/engineering gain 
 | `metrics-agent/grafana/provisioning/datasources/loki.yaml` (new) | Loki data source | Search logs in Grafana |
 | `metrics-agent/grafana/provisioning-optional/prometheus-grafana-cloud.yaml` (new) | Grafana Cloud Prometheus data source, installed only when the read token is set | View metrics in the same Grafana |
 | `metrics-agent/README.md` | "Logs & Grafana" runbook: setup order, access, operation, known gaps | Operator instructions |
+| `.github/workflows/deploy-metrics-agent.yml` | New "Verify fly_logs volume exists" step before deploy | A premature merge now fails with the setup instructions instead of a raw flyctl error |
 
 ## 7. Before / after
 
@@ -83,7 +84,7 @@ exec /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
 - `sh -n` / `dash -n` on `entrypoint.sh`. TOML parsing of `fly.toml` and `vector.toml`, and YAML parsing of `loki.yaml` and both Grafana provisioning files (Python `tomllib`/`yaml`).
 - **Stub-binary behaviour test of `entrypoint.sh`** (scratch harness; `setpriv`, `mountpoint`, `chown` and every binary stubbed) across 7 scenarios: full config; no log-stack secrets; short Grafana password and no read token; volume not mounted; kill switch off; missing Alloy secret (must fail, and did); `chown` on `/data` failing. In every non-failing scenario Alloy and discovery started. Grafana received only `GF_*` plus its data-source vars, with no `LOG_STREAM_*` or `METRICS_AUTH_TOKEN`. Loki received no secrets. Vector received only `LOG_STREAM_*`. The derived query URL was `…/api/prom`.
   - This test caught and fixed a real bug: under `set -e`, a failed `cp`/`chown` in the log setup aborted the entrypoint before Alloy started.
-- `spinr-cicd-infra-reviewer` agent run against the diff (findings addressed in the same commit where valid).
+- `spinr-cicd-infra-reviewer` agent run against the diff. Fixed in a follow-up commit: Grafana tree now `COPY --chown=grafana` (the upstream UID 472 doesn't exist in this image); `chmod 755 /data`; `supervise` logs a clean exit as WARNING rather than ERROR; deploy workflow guards on the volume existing. Not changed: (a) dropping the `instance` Loki label — the Loki sink uses the `text` codec, so the ID wouldn't be queryable from the body, and Fly keeps machine IDs across rolling deploys, so the number of streams stays small; (b) secrets briefly in `env`'s argv at process start — accepted as low risk and documented in the README's known gaps.
 
 ## 10. What was NOT verified
 

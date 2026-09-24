@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -25,6 +26,16 @@ _EXPIRY_FIELDS = (
 
 class AvailabilityLookupError(RuntimeError):
     """Availability could not be authoritatively assembled."""
+
+
+async def driver_availability_v2_enabled() -> bool:
+    try:
+        rows = await db_supabase.get_rows(
+            "settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled"
+        )
+    except Exception as exc:
+        raise AvailabilityLookupError("availability rollout flag unavailable") from exc
+    return bool(rows and rows[0].get("driver_availability_v2_enabled", False))
 
 
 def _as_utc(value: Any) -> datetime | None:
@@ -212,6 +223,7 @@ async def get_driver_availability(
     elif is_online:
         availability_state = "paused"
         reason = {
+            "pause_policy": "POLICY_BLOCKED",
             "pause_idle": "READY_TIMEOUT",
             "pause_unreachable": "PRESENCE_UNAVAILABLE",
             "pause_misses": "MISSED_OFFERS",
@@ -300,3 +312,42 @@ async def change_driver_availability(
         return result
     snapshot = await get_driver_availability(user_id, authenticated_session_id)
     return {**snapshot, "code": "OK", "transition": result}
+
+
+async def pause_driver_for_policy(
+    user_id: str,
+    *,
+    blocking_statuses: set[str],
+    request_id: str,
+) -> dict[str, Any]:
+    """Pause offers after a trusted caller has committed a blocking policy state.
+
+    Re-read and recheck the blocking status on the single stale-epoch retry;
+    never adopt an epoch captured by a stale event or callback.
+    """
+    for attempt in range(2):
+        raw = await _read_snapshot(user_id)
+        if not raw.get("protocol_enabled"):
+            return {"code": "AVAILABILITY_V2_DISABLED"}
+        driver = raw["driver"]
+        if driver.get("status") not in blocking_statuses:
+            return {"code": "POLICY_STATE_CHANGED"}
+        try:
+            users = await db_supabase.get_rows(
+                "users", {"id": user_id}, limit=1, columns="current_session_id"
+            )
+            session_id = users[0].get("current_session_id") if users else None
+            if not session_id:
+                return {"code": "SESSION_RECONCILE_REQUIRED"}
+            result = await driver_availability_repo.transition_driver_availability(
+                str(driver["id"]),
+                int(driver.get("online_epoch") or 0),
+                str(session_id),
+                "pause_policy",
+                request_id if attempt == 0 else str(uuid.uuid4()),
+            )
+        except Exception as exc:
+            raise AvailabilityLookupError("policy availability pause unavailable") from exc
+        if result.get("code") != "ONLINE_EPOCH_STALE" or attempt == 1:
+            return result
+    return {"code": "ONLINE_EPOCH_STALE"}

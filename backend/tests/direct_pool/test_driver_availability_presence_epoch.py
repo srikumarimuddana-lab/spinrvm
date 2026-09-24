@@ -14,7 +14,7 @@ def presence_db(pg_cur):
     pg_cur.execute("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()")
     for migration_name in ("42_drivers_last_status_changed_at.sql", "97_driver_intent_timestamps.sql"):
         _apply_migration_sql(pg_cur, (migrations / migration_name).read_text(encoding="utf-8"))
-    _apply_migration_sql(pg_cur, (migrations / "456_driver_availability_epoch.sql").read_text(encoding="utf-8"))
+    _apply_migration_sql(pg_cur, (migrations / "457_driver_availability_epoch.sql").read_text(encoding="utf-8"))
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0")
     pg_cur.execute("INSERT INTO users (id, phone, current_session_id) VALUES ('presence-user', '+13060000997', 'sess-A')")

@@ -34,7 +34,6 @@ from ._deps import (  # noqa: F401
     location_update_limit,
     logger,
     parse_iso_utc,
-    present_driver_ids_checked,
     timedelta,
     timezone,
 )
@@ -45,14 +44,14 @@ from ._shared import (  # noqa: F401
 try:
     from ...utils import metrics
     from ...utils.driver_presence import renew_driver_presence as renew_scoped_presence
-    from ...utils.driver_presence import scoped_present_driver_ids_checked
+    from ...utils.driver_presence import availability_aware_present_driver_ids_checked
     from ...utils.error_handling import DatabaseError
     from ...utils.gps_filtering import point_epoch_seconds
     from ...utils.location_write_gate import should_write_marker
 except ImportError:  # pragma: no cover - top-level execution fallback
     from utils import metrics  # type: ignore
     from utils.driver_presence import renew_driver_presence as renew_scoped_presence  # type: ignore
-    from utils.driver_presence import scoped_present_driver_ids_checked  # type: ignore
+    from utils.driver_presence import availability_aware_present_driver_ids_checked  # type: ignore
     from utils.error_handling import DatabaseError  # type: ignore
     from utils.gps_filtering import point_epoch_seconds
     from utils.location_write_gate import should_write_marker  # type: ignore
@@ -779,7 +778,7 @@ async def get_nearby_drivers_public(
     # ghost cars on the map and tries to book someone who will never receive
     # the offer.
     #
-    # Three cases, distinguished via present_driver_ids_checked():
+    # Three cases, distinguished by the active lease reader:
     #   * reachable + non-empty → filter normally (ghost drivers removed).
     #   * reachable + empty     → every candidate is genuinely offline; hide
     #     them all (an empty map is correct here, not a bug).
@@ -790,10 +789,7 @@ async def get_nearby_drivers_public(
     try:
         driver_ids = [d["id"] for d in drivers if d.get("id")]
         if driver_ids:
-            presence_reader = (
-                scoped_present_driver_ids_checked if await _availability_v2_enabled() else present_driver_ids_checked
-            )
-            present, reachable = await presence_reader(driver_ids)
+            present, reachable = await availability_aware_present_driver_ids_checked(driver_ids)
             if reachable:
                 drivers = [d for d in drivers if d["id"] in present]
             else:

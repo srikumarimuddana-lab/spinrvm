@@ -116,6 +116,76 @@ class TestDriverAction:
         assert updates["is_available"] is False
         assert updates["suspension_reason"] == "fraud report"
 
+    def test_v2_suspend_persists_policy_without_raw_offline_flip(self):
+        import asyncio
+
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = {**DRIVER, "status": "active"}
+        update = AsyncMock()
+        pause = AsyncMock(return_value={"code": "OK"})
+        with (
+            patch.object(admin_drivers.db_supabase, "get_driver_by_id", AsyncMock(return_value=driver)),
+            patch.object(admin_drivers.db_supabase, "update_one", update),
+            patch.object(admin_drivers, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(admin_drivers, "pause_driver_for_policy", pause),
+            patch.object(admin_drivers, "_log_driver_activity", AsyncMock()),
+            patch.object(admin_drivers, "log_admin_action", AsyncMock(return_value="audit-1")),
+            patch.object(admin_drivers, "notify_driver_status_change", AsyncMock()),
+            patch.object(admin_drivers, "close_period_for_forced_offline", AsyncMock()) as close_period,
+        ):
+            asyncio.run(
+                admin_drivers.admin_driver_action(
+                    driver_id="drv-1",
+                    req=admin_drivers.DriverActionRequest(action="suspend", reason="policy"),
+                    admin={"id": "admin-1", "role": "admin"},
+                )
+            )
+        updates = update.await_args.args[2]
+        assert updates["status"] == "suspended"
+        assert "is_online" not in updates and "is_available" not in updates
+        pause.assert_awaited_once_with(
+            "usr-1",
+            blocking_statuses={"rejected", "suspended", "banned", "needs_review"},
+            request_id=pause.await_args.kwargs["request_id"],
+        )
+        close_period.assert_not_awaited()
+
+    def test_v2_policy_pause_race_returns_conflict_without_success_side_effects(self):
+        import asyncio
+
+        from fastapi import HTTPException
+
+        from backend.routes.admin import drivers as admin_drivers
+
+        update = AsyncMock()
+        activity = AsyncMock()
+        audit = AsyncMock()
+        notify = AsyncMock()
+        with (
+            patch.object(admin_drivers.db_supabase, "get_driver_by_id", AsyncMock(return_value={**DRIVER, "status": "active"})),
+            patch.object(admin_drivers.db_supabase, "update_one", update),
+            patch.object(admin_drivers, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(admin_drivers, "pause_driver_for_policy", AsyncMock(return_value={"code": "POLICY_STATE_CHANGED"})),
+            patch.object(admin_drivers, "_log_driver_activity", activity),
+            patch.object(admin_drivers, "log_admin_action", audit),
+            patch.object(admin_drivers, "notify_driver_status_change", notify),
+        ):
+            with pytest.raises(HTTPException) as error:
+                asyncio.run(
+                    admin_drivers.admin_driver_action(
+                        driver_id="drv-1",
+                        req=admin_drivers.DriverActionRequest(action="suspend", reason="policy"),
+                        admin={"id": "admin-1", "role": "admin"},
+                    )
+                )
+
+        assert error.value.status_code == 409
+        update.assert_awaited_once()  # durable policy write happened first
+        activity.assert_not_awaited()
+        audit.assert_not_awaited()
+        notify.assert_not_awaited()
+
     def test_ban_requires_reason(self, test_client, super_admin_override):
         with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)):
             resp = self._post(test_client, "ban")

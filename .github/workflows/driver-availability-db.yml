@@ -5,9 +5,12 @@ on:
     branches: [main, staging]
     paths:
       - '.github/workflows/driver-availability-db.yml'
-      - 'backend/migrations/456_driver_availability_epoch.sql'
-      - 'backend/migrations/457_driver_claim_epoch_fence.sql'
-      - 'backend/migrations/458_offer_decision_atomicity.sql'
+      - 'backend/migrations/457_*.sql'
+      - 'backend/migrations/458_*.sql'
+      - 'backend/migrations/459_*.sql'
+      - 'backend/migrations/460_*.sql'
+      - 'backend/migrations/461_*.sql'
+      - 'backend/migrations/462_*.sql'
       - 'backend/repositories/driver_availability_repo.py'
       - 'backend/repositories/driver_presence_repo.py'
       - 'backend/repositories/driver_repo.py'
@@ -24,9 +27,12 @@ on:
     branches: [main, staging]
     paths:
       - '.github/workflows/driver-availability-db.yml'
-      - 'backend/migrations/456_driver_availability_epoch.sql'
-      - 'backend/migrations/457_driver_claim_epoch_fence.sql'
-      - 'backend/migrations/458_offer_decision_atomicity.sql'
+      - 'backend/migrations/457_*.sql'
+      - 'backend/migrations/458_*.sql'
+      - 'backend/migrations/459_*.sql'
+      - 'backend/migrations/460_*.sql'
+      - 'backend/migrations/461_*.sql'
+      - 'backend/migrations/462_*.sql'
       - 'backend/repositories/driver_availability_repo.py'
       - 'backend/repositories/driver_presence_repo.py'
       - 'backend/repositories/driver_repo.py'

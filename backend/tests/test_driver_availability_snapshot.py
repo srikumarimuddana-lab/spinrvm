@@ -220,6 +220,50 @@ async def test_snapshot_blocks_online_unverified_driver_with_specific_reason():
 
 
 @pytest.mark.anyio
+async def test_policy_pause_rechecks_blocking_state_before_one_epoch_retry():
+    first = _raw(driver=_driver(status="suspended", online_epoch=4, accepting_requests=True))
+    second = _raw(driver=_driver(status="suspended", online_epoch=5, accepting_requests=True))
+    with (
+        patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, second])),
+        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
+        patch.object(
+            service.driver_availability_repo,
+            "transition_driver_availability",
+            AsyncMock(side_effect=[{"code": "ONLINE_EPOCH_STALE"}, {"code": "OK"}]),
+        ) as transition,
+    ):
+        result = await service.pause_driver_for_policy(
+            "user-1", blocking_statuses={"suspended"}, request_id="admin-pause"
+        )
+    assert result["code"] == "OK"
+    assert transition.await_count == 2
+    first_call, retry_call = transition.await_args_list
+    assert first_call.args[:4] == ("drv-1", 4, "current", "pause_policy")
+    assert retry_call.args[:4] == ("drv-1", 5, "current", "pause_policy")
+    assert retry_call.args[4] != "admin-pause"
+
+
+@pytest.mark.anyio
+async def test_policy_pause_does_not_adopt_epoch_after_policy_cleared():
+    first = _raw(driver=_driver(status="suspended", online_epoch=4, accepting_requests=True))
+    retry = _raw(driver=_driver(status="active", online_epoch=5, accepting_requests=True))
+    with (
+        patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, retry])),
+        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
+        patch.object(
+            service.driver_availability_repo,
+            "transition_driver_availability",
+            AsyncMock(return_value={"code": "ONLINE_EPOCH_STALE"}),
+        ) as transition,
+    ):
+        result = await service.pause_driver_for_policy(
+            "user-1", blocking_statuses={"suspended"}, request_id="admin-pause"
+        )
+    assert result["code"] == "POLICY_STATE_CHANGED"
+    transition.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_status_snapshot_lookup_failure_maps_to_503_contract():
     from backend.routes.drivers import status
 

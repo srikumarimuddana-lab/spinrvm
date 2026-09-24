@@ -73,7 +73,7 @@ BEGIN
        OR p_expected_epoch IS NULL OR p_expected_epoch < 0 THEN
         RAISE EXCEPTION 'request_id, authenticated session, and non-negative expected epoch are required' USING ERRCODE = '22023';
     END IF;
-    IF p_action IS NULL OR p_action NOT IN ('go_online','go_offline','stop_requests','pause_unreachable',
+    IF p_action IS NULL OR p_action NOT IN ('go_online','go_offline','stop_requests','pause_policy','pause_unreachable',
                         'pause_idle','pause_misses','displace_controller') THEN
         RAISE EXCEPTION 'unsupported availability action: %', p_action USING ERRCODE = '22023';
     END IF;
@@ -102,6 +102,15 @@ BEGIN
                    AND u.current_session_id = p_authenticated_session_id) THEN
         RETURN jsonb_build_object('code','UNAUTHORIZED_SESSION');
     END IF;
+    -- Eligibility is checked by the API before this RPC too, but a trusted
+    -- policy status update can race that read. Recheck under the driver lock
+    -- so an earlier Go request cannot restore availability after suspension.
+    IF p_action = 'go_online' AND COALESCE(v_driver.status,'') <> 'active' THEN
+        RETURN jsonb_build_object('code','ELIGIBILITY_BLOCKED','reason_code','ACCOUNT_INELIGIBLE');
+    END IF;
+    IF p_action = 'pause_policy' AND COALESCE(v_driver.status,'') NOT IN ('rejected','suspended','banned','needs_review') THEN
+        RETURN jsonb_build_object('code','POLICY_STATE_CHANGED');
+    END IF;
     IF v_driver.online_epoch <> p_expected_epoch THEN
         RETURN jsonb_build_object('code','ONLINE_EPOCH_STALE',
                                   'online_epoch',v_driver.online_epoch::text,
@@ -109,7 +118,7 @@ BEGIN
     END IF;
     IF v_driver.controller_session_id IS NOT NULL
        AND v_driver.controller_session_id <> p_authenticated_session_id
-       AND p_action <> 'displace_controller' THEN
+       AND p_action NOT IN ('displace_controller','pause_policy') THEN
         RETURN jsonb_build_object('code','CONTROLLER_SESSION_MISMATCH',
                                   'online_epoch',v_driver.online_epoch::text,
                                   'state_version',v_driver.state_version::text);
@@ -153,7 +162,7 @@ BEGIN
         v_next_online := true; v_next_accepting := true;
     ELSIF p_action = 'go_offline' THEN
         v_next_online := false; v_next_accepting := false;
-    ELSIF p_action = 'stop_requests' OR p_action IN ('pause_unreachable','pause_idle','pause_misses') THEN
+    ELSIF p_action = 'stop_requests' OR p_action IN ('pause_policy','pause_unreachable','pause_idle','pause_misses') THEN
         v_next_accepting := false;
         IF NOT v_has_obligation THEN v_next_online := false; END IF;
     ELSIF p_action = 'displace_controller' THEN

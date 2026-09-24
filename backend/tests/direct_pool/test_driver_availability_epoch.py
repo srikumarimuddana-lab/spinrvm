@@ -15,7 +15,7 @@ def availability_db(pg_cur):
     pg_cur.execute("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()")
     for migration_name in ("42_drivers_last_status_changed_at.sql", "97_driver_intent_timestamps.sql"):
         _apply_migration_sql(pg_cur, (migrations / migration_name).read_text(encoding="utf-8"))
-    migration = migrations / "456_driver_availability_epoch.sql"
+    migration = migrations / "457_driver_availability_epoch.sql"
     _apply_migration_sql(pg_cur, migration.read_text(encoding="utf-8"))
     pg_cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
@@ -151,6 +151,41 @@ def test_go_offline_blocked_by_obligation(availability_db):
     result = _transition(cur, 0, "go_offline", "offline-obligation")
     assert result["code"] == "OBLIGATION_ACTIVE"
     assert result["online_epoch"] == "0"
+
+
+def test_trusted_policy_pause_preserves_active_obligation_and_insurance(availability_db):
+    cur = availability_db
+    cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
+    cur.execute("UPDATE drivers SET status='suspended' WHERE id='avail-driver'")
+    cur.execute("UPDATE drivers SET controller_session_id='replaced-session' WHERE id='avail-driver'")
+    cur.execute(
+        "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('policy-ride','avail-driver','a',0,0,'b',0,0,'in_progress')"
+    )
+    cur.execute("INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('avail-driver',3,'policy-ride')")
+
+    raced_go = _transition(cur, 0, "go_online", "go-after-suspension")
+    assert raced_go["code"] == "ELIGIBILITY_BLOCKED"
+    assert raced_go["reason_code"] == "ACCOUNT_INELIGIBLE"
+
+    result = _transition(cur, 0, "pause_policy", "policy-pause")
+
+    assert result["code"] == "OK"
+    assert result["is_online"] is True
+    assert result["accepting_requests"] is False
+    assert result["availability_reason"] == "pause_policy"
+    assert result["controller_session_id"] == "replaced-session"
+    cur.execute("SELECT period,ride_id,ended_at FROM driver_insurance_periods WHERE driver_id='avail-driver'")
+    assert cur.fetchone() == (3, "policy-ride", None)
+
+
+def test_policy_pause_rechecks_terminal_status_under_driver_lock(availability_db):
+    cur = availability_db
+    cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
+    result = _transition(cur, 0, "pause_policy", "policy-no-longer-blocked")
+    assert result["code"] == "POLICY_STATE_CHANGED"
+    cur.execute("SELECT is_online,accepting_requests,online_epoch FROM drivers WHERE id='avail-driver'")
+    assert cur.fetchone() == (True, True, 0)
 
 
 def test_go_online_binds_existing_session_without_changing_generation(availability_db):

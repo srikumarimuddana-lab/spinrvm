@@ -15,6 +15,7 @@ SUPPORTED_ACTIONS = frozenset(
         "go_online",
         "go_offline",
         "stop_requests",
+        "pause_policy",
         "pause_unreachable",
         "pause_idle",
         "pause_misses",

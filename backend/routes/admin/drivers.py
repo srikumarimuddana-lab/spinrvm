@@ -15,6 +15,11 @@ try:
     from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
+    from ...services.driver_availability_service import (
+        AvailabilityLookupError,
+        driver_availability_v2_enabled,
+        pause_driver_for_policy,
+    )
     from ...services.driver_dormancy_service import fetch_dormancy_flagged_ids
     from ...services.driver_import_service import (
         dob_source,
@@ -44,6 +49,11 @@ except ImportError:
     from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
+    from services.driver_availability_service import (  # type: ignore
+        AvailabilityLookupError,
+        driver_availability_v2_enabled,
+        pause_driver_for_policy,
+    )
     from services.driver_dormancy_service import fetch_dormancy_flagged_ids  # type: ignore
     from services.driver_import_service import (  # type: ignore
         dob_source,
@@ -2119,6 +2129,15 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     current_status = driver.get("status", "pending")
     now = datetime.now(timezone.utc).isoformat()
     updates: Dict[str, Any] = {"updated_at": now}
+    policy_offline_action = req.action in {"reject", "suspend", "ban"}
+    availability_v2 = False
+    if policy_offline_action:
+        try:
+            availability_v2 = await driver_availability_v2_enabled()
+        except AvailabilityLookupError:
+            # Unknown gate state must not trigger an unfenced offline write.
+            availability_v2 = True
+            logger.error("availability flag unavailable during admin driver action", exc_info=True)
 
     if req.action == "approve":
         # Approve → Active: driver can go online
@@ -2181,6 +2200,10 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
 
+    if availability_v2 and policy_offline_action:
+        updates.pop("is_online", None)
+        updates.pop("is_available", None)
+
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
@@ -2189,11 +2212,25 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
-    # reject/suspend/ban just forced is_online=False. Close the driver's open
-    # insurance period to what they actually are now (Period 0, or kept 2/3
-    # if a ride/offer is still theirs — see the helper). The reconciler cannot
-    # do this: it only scans online drivers. Never raises on a DB error.
-    if updates.get("is_online") is False:
+    if availability_v2 and policy_offline_action:
+        if not driver.get("user_id"):
+            raise HTTPException(status_code=422, detail="Driver has no linked user account")
+        try:
+            pause_result = await pause_driver_for_policy(
+                driver["user_id"],
+                blocking_statuses={"rejected", "suspended", "banned", "needs_review"},
+                request_id=f"admin-policy-{uuid.uuid4()}",
+            )
+        except AvailabilityLookupError as exc:
+            logger.error("admin policy pause failed after status persisted driver=%s", driver_id, exc_info=True)
+            raise HTTPException(status_code=503, detail="Driver policy pause could not be confirmed") from exc
+        if pause_result.get("code") == "POLICY_STATE_CHANGED":
+            raise HTTPException(status_code=409, detail="Driver policy state changed; refresh and retry")
+        if pause_result.get("code") != "OK":
+            logger.error("admin policy pause rejected driver=%s code=%s", driver_id, pause_result.get("code"))
+            raise HTTPException(status_code=503, detail="Driver policy pause could not be confirmed")
+    # Flag-off behavior retains the legacy forced-offline insurance close.
+    elif updates.get("is_online") is False:
         await close_period_for_forced_offline(driver_id, reason=f"admin_{req.action}")
 
     # Auto-log to activity timeline

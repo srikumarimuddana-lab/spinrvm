@@ -45,6 +45,10 @@ holds.
 - **Live systems:** use connectors only if they are connected, and read-only. Sentry
   and Stripe MCP connections have failed in recent sessions, so no lane may depend on
   them. Static code and docs come first.
+- **Network:** WebFetch to some company domains (e.g. `lyft.com`, `grab.com`, `uber.com`)
+  has been blocked by the environment's network policy. If a fetch is blocked, use
+  WebSearch results instead, label the claim INFERRED, and list the blocked host in
+  `DEFERRED.md`. Don't retry blocked hosts.
 
 ## 3. Wave A lanes (all start together)
 
@@ -52,7 +56,7 @@ holds.
 |---|---|---|---|---|
 | **A1** Inventory & history | haiku | Explore | Verify each row of `standards-and-scale.md` §1 (correct / wrong / partial, with `path:line`). Name the top 5 recurrence families from `ACTION_ITEMS.md` + `docs/change-log/`. Draft an L2/L3 epic list | master §3.0 |
 | **A2** Security, crypto & data protection | fable | general-purpose | Map to the OWASP ASVS L2 / API Top 10 / MASVS-L1 headline controls: JWT (HS256), OTP, pgsodium status, secrets, RLS dormancy, PII in logs, cert-pinning decision. Research new techniques from §6 security | `.claude/agents/spinr-security-auditor.md`, `docs/threat-model/` |
-| **A3** Transmission, compression, caching & SaaS capacity | fable | general-purpose | Fill the §5 capacity table (limits cited from vendor docs/plans in the repo). Response compression, WS payload size, caching, 10× break points. Research new techniques from §6 transmission | `.claude/agents/spinr-performance-sla-reviewer.md`, `spinr-cicd-infra-reviewer.md` |
+| **A3** Transmission, compression, caching & SaaS capacity | fable | general-purpose | Fill the §5 capacity table (limits cited from vendor docs/plans in the repo). Response compression, WS payload size, caching, 10× break points. Research new techniques from §6 transmission. Verify and correct `industry-stack-benchmark.md` against primary sources where the network allows | `.claude/agents/spinr-performance-sla-reviewer.md`, `spinr-cicd-infra-reviewer.md`, `industry-stack-benchmark.md` |
 | **A4** Dispatch, state machine & realtime | sonnet | spinr-dispatch-reviewer | Count the state-guard implementations; WS emit on every transition; replay-safety of the 42 loops; offer/timeout races | `spinr-realtime-reliability-reviewer.md` |
 | **A5** Money, ledger & CRA | sonnet | spinr-money-auditor | Float leaks, ledger vs Stripe reconciliation, receipt tax lines, payout ≤ collected, CRA items in `sweep-catalog.md` §4.1 (as questions; primary-source status) | `spinr-regulatory-compliance-checker.md` |
 | **A6** Observability & tagging | sonnet | spinr-observability-reviewer | Coverage of the `standards-and-scale.md` §4 keys today (Sentry tags, metric names, log fields, table comments, CODEOWNERS); SLA → metric → alert gaps; a tagging rollout plan | CLAUDE.md Observability |
@@ -123,4 +127,7 @@ Minute 55–60: commit (one commit per ≤ 3 files), push to this session's bran
 open a draft PR using .github/pull_request_template.md. Then report to me: top 10
 findings, the verifier's error rate, the decisions needing me, what was NOT verified,
 and the 3 next work items that can run in parallel without touching the same files.
+Also say which of the five research sessions in
+docs/audit/clean-sheet-prompt/research-sessions.md should run first, and why,
+based on these findings.
 ```

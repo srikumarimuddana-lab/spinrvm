@@ -1047,8 +1047,89 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "claim"}):
             # ── Batch claim ───────────────────────────────────────────────
             claimed_drivers: list[tuple[dict, int]] = []
+            _v3_claimed = False
 
-            if _direct_pool_enabled:
+            if _availability_v2:
+                # ── v3 claim path ─────────────────────────────────────────
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "v3"})
+                try:
+                    from ...repositories import driver_offer_repo as _offer_repo  # type: ignore
+                except ImportError:
+                    from repositories import driver_offer_repo as _offer_repo  # type: ignore
+
+                _v3_candidates = []
+                _v3_eta_by_id: dict[str, int] = {}
+                for d, eta_sec, _dist in ranked:
+                    admission = d.get("_admission", {})
+                    _v3_candidates.append({
+                        "driver_id": d["id"],
+                        "session_id": admission.get("session_id"),
+                        "online_epoch": admission.get("online_epoch"),
+                        "contact_valid_until": admission.get("contact_valid_until"),
+                        "location_valid_until": admission.get("location_valid_until"),
+                        "eta_seconds": eta_sec,
+                    })
+                    _v3_eta_by_id[d["id"]] = eta_sec
+
+                _sub_required_for_claim = bool(_sub_required) if "_sub_required" in dir() else False
+                _v3_result = await _offer_repo.claim_offers(
+                    ride_id,
+                    _v3_candidates,
+                    max_offers=max_offers,
+                    offer_ttl_seconds=offer_timeout,
+                    require_subscription=_sub_required_for_claim,
+                    mode="automatic",
+                )
+
+                _v3_code = _v3_result.get("code", "")
+                if _v3_code == "OK":
+                    _v3_claimed = True
+                    _offer_expires_at = _v3_result.get("expires_at")
+                    if isinstance(_offer_expires_at, str) and _offer_expires_at:
+                        pass
+                    else:
+                        _offer_expires_at = _v3_result.get("expires_at", "")
+                    for entry in _v3_result.get("results") or []:
+                        if not isinstance(entry, dict):
+                            continue
+                        if entry.get("claimed"):
+                            # Re-read the driver for the notify phase
+                            _v3_driver = await _deps.db_supabase.get_driver_by_id(entry["driver_id"])
+                            if _v3_driver:
+                                claimed_drivers.append((_v3_driver, _v3_eta_by_id.get(entry["driver_id"], 0)))
+                            if entry.get("insurance_written") is False:
+                                logger.error(
+                                    "[INSURANCE] Period 2 write failed inside dispatch_claim_offers_v3 "
+                                    "for driver {} ride {} (claim and offer stand)",
+                                    entry["driver_id"],
+                                    ride_id,
+                                )
+                                _metric_inc(
+                                    "spinr_insurance_period_write_failed_total",
+                                    {"reason": "claim_v3", "period": "2"},
+                                )
+                        else:
+                            _metric_inc(
+                                "spinr_dispatch_claim_rejected_total",
+                                {"reason": entry.get("reason_code", "unknown")},
+                            )
+                elif _v3_code == "AVAILABILITY_V2_DISABLED":
+                    # Flag turned off mid-dispatch: fall through to legacy path
+                    _v3_claimed = False
+                    _availability_v2 = False
+                elif _v3_code == "RIDE_STATE_CONFLICT":
+                    logger.info(
+                        "[DISPATCH] v3 claim RIDE_STATE_CONFLICT for ride {} (status={})",
+                        ride_id,
+                        _v3_result.get("ride_status"),
+                    )
+                    return
+                else:
+                    raise RuntimeError(
+                        f"dispatch_claim_offers_v3 unexpected code={_v3_code} for ride {ride_id}"
+                    )
+
+            if not _v3_claimed and _direct_pool_enabled:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
 
                 _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
@@ -1180,7 +1261,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             "spinr_insurance_period_write_failed_total",
                             {"reason": "direct_pool", "period": "2"},
                         )
-            else:
+            elif not _v3_claimed:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
                 try:
                     for driver, eta_sec, _ in ranked:
@@ -1267,7 +1348,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             )
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "offer_insert"}):
-            if _direct_pool_enabled:
+            if _v3_claimed or _direct_pool_enabled:
                 # ride_offers rows were already inserted by dispatch_claim_batch,
                 # in the same transaction as the claim (T12) — nothing to do here.
                 # Still a real (near-zero) timed block so the per-phase histogram
@@ -1295,7 +1376,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     raise
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "insurance"}):
-            if _direct_pool_enabled:
+            if _v3_claimed or _direct_pool_enabled:
                 # Insurance Period 2 transitions were already written by
                 # dispatch_claim_batch, in the same transaction as the claim and
                 # the ride_offers insert (T12) — nothing to do here. See
@@ -1484,6 +1565,21 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     "planned_route_polyline": ride.get("planned_route_polyline") or None,
                     "service_area_polygon": _service_area_polygon,
                 }
+
+                # ── v2 offer envelope (§C1) ──────────────────────────────
+                if _v3_claimed:
+                    # Find the matching result entry for this driver
+                    _v3_entry = None
+                    for _re in (_v3_result.get("results") or []):
+                        if isinstance(_re, dict) and _re.get("driver_id") == driver.get("id"):
+                            _v3_entry = _re
+                            break
+                    dispatch_payload["offer_protocol"] = "v2"
+                    dispatch_payload["offer_id"] = str(_v3_entry["offer_id"]) if _v3_entry and _v3_entry.get("offer_id") else None
+                    dispatch_payload["claim_id"] = str(_v3_entry["claim_id"]) if _v3_entry and _v3_entry.get("claim_id") else None
+                    dispatch_payload["online_epoch"] = str(_v3_entry["online_epoch"]) if _v3_entry and _v3_entry.get("online_epoch") else None
+                    dispatch_payload["server_time"] = str(_v3_result.get("server_time", ""))
+                    dispatch_payload["expires_at"] = str(_v3_result.get("expires_at", ""))
 
                 if driver.get("user_id"):
                     await _deps.manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")

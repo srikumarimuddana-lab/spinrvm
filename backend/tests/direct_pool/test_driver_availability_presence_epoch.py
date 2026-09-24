@@ -17,7 +17,9 @@ def presence_db(pg_cur):
     _apply_migration_sql(pg_cur, (migrations / "457_driver_availability_epoch.sql").read_text(encoding="utf-8"))
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0")
-    pg_cur.execute("INSERT INTO users (id, phone, current_session_id) VALUES ('presence-user', '+13060000997', 'sess-A')")
+    pg_cur.execute(
+        "INSERT INTO users (id, phone, current_session_id) VALUES ('presence-user', '+13060000997', 'sess-A')"
+    )
     pg_cur.execute(
         "INSERT INTO drivers (id,user_id,name,phone,is_online,is_available,is_verified,status,online_epoch,"
         "controller_session_id,accepting_requests,last_contact_at,ready_until) "
@@ -92,12 +94,18 @@ def test_five_minute_contact_gap_fences_epoch_and_preserves_trip_obligation(pres
     cur.execute("""INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,
                  dropoff_address,dropoff_lat,dropoff_lng,status)
                  VALUES ('presence-trip','presence-driver','a',0,0,'b',0,0,'in_progress')""")
-    cur.execute("INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('presence-driver',3,'presence-trip')")
-    cur.execute("UPDATE drivers SET last_contact_at=clock_timestamp()-interval '5 minutes 1 second' WHERE id='presence-driver'")
+    cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('presence-driver',3,'presence-trip')"
+    )
+    cur.execute(
+        "UPDATE drivers SET last_contact_at=clock_timestamp()-interval '5 minutes 1 second' WHERE id='presence-driver'"
+    )
     result = _renew(cur)
     assert result["code"] == "CONTACT_GAP"
     assert result["online_epoch"] == "13"
-    cur.execute("SELECT is_online,accepting_requests,is_available,online_epoch,ready_until FROM drivers WHERE id='presence-driver'")
+    cur.execute(
+        "SELECT is_online,accepting_requests,is_available,online_epoch,ready_until FROM drivers WHERE id='presence-driver'"
+    )
     assert cur.fetchone() == (True, False, False, 13, None)
     cur.execute("SELECT period,ride_id,ended_at FROM driver_insurance_periods WHERE driver_id='presence-driver'")
     assert cur.fetchone() == (3, "presence-trip", None)
@@ -113,18 +121,26 @@ def test_five_minute_contact_gap_fences_epoch_and_preserves_trip_obligation(pres
 
 def test_offline_driver_and_dark_flag_cannot_be_revived_by_renewal(presence_db):
     cur = presence_db
-    cur.execute("UPDATE drivers SET is_online=false,is_available=false,accepting_requests=false WHERE id='presence-driver'")
+    cur.execute(
+        "UPDATE drivers SET is_online=false,is_available=false,accepting_requests=false WHERE id='presence-driver'"
+    )
     assert _renew(cur)["code"] == "OFFLINE"
-    cur.execute("UPDATE drivers SET is_online=true,is_available=true,accepting_requests=true WHERE id='presence-driver'")
+    cur.execute(
+        "UPDATE drivers SET is_online=true,is_available=true,accepting_requests=true WHERE id='presence-driver'"
+    )
     cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     assert _renew(cur)["code"] == "AVAILABILITY_V2_DISABLED"
 
 
 def test_presence_rpc_is_service_role_only(presence_db):
     cur = presence_db
-    cur.execute("SELECT has_function_privilege('authenticated', 'renew_driver_presence(text,text,bigint,timestamptz)', 'EXECUTE')")
+    cur.execute(
+        "SELECT has_function_privilege('authenticated', 'renew_driver_presence(text,text,bigint,timestamptz)', 'EXECUTE')"
+    )
     assert cur.fetchone()[0] is False
-    cur.execute("SELECT has_function_privilege('service_role', 'renew_driver_presence(text,text,bigint,timestamptz)', 'EXECUTE')")
+    cur.execute(
+        "SELECT has_function_privilege('service_role', 'renew_driver_presence(text,text,bigint,timestamptz)', 'EXECUTE')"
+    )
     assert cur.fetchone()[0] is True
 
 

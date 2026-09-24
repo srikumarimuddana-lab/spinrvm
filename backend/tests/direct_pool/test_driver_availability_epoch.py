@@ -68,7 +68,9 @@ def test_snapshot_is_single_authoritative_view_and_service_role_only(availabilit
     assert snapshot["protocol_enabled"] is True
     assert snapshot["pending_offer"]["ride_id"] == "snapshot-ride"
 
-    cur.execute("UPDATE ride_offers SET expires_at=clock_timestamp() - interval '1 second' WHERE ride_id='snapshot-ride'")
+    cur.execute(
+        "UPDATE ride_offers SET expires_at=clock_timestamp() - interval '1 second' WHERE ride_id='snapshot-ride'"
+    )
     snapshot = _snapshot(cur)
     assert snapshot["pending_offer"] is None
     assert snapshot["offer_reconciliation_required"] is True
@@ -80,9 +82,13 @@ def test_dark_by_default_and_rejects_client_execute(availability_db):
     assert result["code"] == "AVAILABILITY_V2_DISABLED"
     cur.execute("SELECT is_online, state_version FROM drivers WHERE id='avail-driver'")
     assert cur.fetchone() == (True, 0)
-    cur.execute("SELECT has_function_privilege('authenticated', 'transition_driver_availability(text,bigint,text,text,text)', 'EXECUTE')")
+    cur.execute(
+        "SELECT has_function_privilege('authenticated', 'transition_driver_availability(text,bigint,text,text,text)', 'EXECUTE')"
+    )
     assert cur.fetchone()[0] is False
-    cur.execute("SELECT has_function_privilege('service_role', 'transition_driver_availability(text,bigint,text,text,text)', 'EXECUTE')")
+    cur.execute(
+        "SELECT has_function_privilege('service_role', 'transition_driver_availability(text,bigint,text,text,text)', 'EXECUTE')"
+    )
     assert cur.fetchone()[0] is True
 
 
@@ -133,7 +139,9 @@ def test_active_trip_stop_keeps_online_and_period(availability_db):
         "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
         "VALUES ('active-ride','avail-driver','a',0,0,'b',0,0,'in_progress')"
     )
-    cur.execute("INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('avail-driver',3,'active-ride')")
+    cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('avail-driver',3,'active-ride')"
+    )
     result = _transition(cur, 0, "stop_requests", "stop-trip")
     assert result["is_online"] is True
     assert result["accepting_requests"] is False
@@ -162,7 +170,9 @@ def test_trusted_policy_pause_preserves_active_obligation_and_insurance(availabi
         "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
         "VALUES ('policy-ride','avail-driver','a',0,0,'b',0,0,'in_progress')"
     )
-    cur.execute("INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('avail-driver',3,'policy-ride')")
+    cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id,period,ride_id) VALUES ('avail-driver',3,'policy-ride')"
+    )
 
     raced_go = _transition(cur, 0, "go_online", "go-after-suspension")
     assert raced_go["code"] == "ELIGIBILITY_BLOCKED"
@@ -227,7 +237,9 @@ def test_failed_insurance_result_rolls_back_availability_transition(availability
     try:
         with pytest.raises(psycopg2.Error, match="availability Period-1 transition failed"):
             _transition(cur, 0, "go_online", "period-race")
-        cur.execute("SELECT is_online,is_available,accepting_requests,online_epoch,state_version FROM drivers WHERE id='avail-driver'")
+        cur.execute(
+            "SELECT is_online,is_available,accepting_requests,online_epoch,state_version FROM drivers WHERE id='avail-driver'"
+        )
         assert cur.fetchone() == (True, True, False, 0, 0)
         cur.execute("SELECT period,ended_at FROM driver_insurance_periods WHERE driver_id='avail-driver'")
         assert cur.fetchone() == (0, None)

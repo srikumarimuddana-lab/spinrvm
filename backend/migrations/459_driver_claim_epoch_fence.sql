@@ -229,8 +229,11 @@ BEGIN
             RETURN jsonb_build_object('code','RIDE_STATE_CONFLICT','ride_status',v_ride.status);
         END IF;
     ELSE
-        -- admin_direct: ride must be driver_assigned with driver_id = candidate
-        IF v_ride.status <> 'driver_assigned' THEN
+        -- New callers leave the ride unassigned until this transaction commits.
+        -- Keep already-assigned input for older callers during rolling deploys.
+        IF NOT COALESCE((v_ride.status = 'searching' AND v_ride.driver_id IS NULL)
+                OR (v_ride.status = 'driver_assigned'
+                    AND v_ride.driver_id = (p_candidates->0->>'driver_id')), false) THEN
             RETURN jsonb_build_object('code','RIDE_STATE_CONFLICT','ride_status',v_ride.status);
         END IF;
     END IF;
@@ -330,7 +333,11 @@ BEGIN
             RETURN jsonb_build_object('code','RIDE_STATE_CONFLICT','ride_status',v_ride.status,'results',v_results);
         END IF;
     ELSE
-        IF v_ride.status <> 'driver_assigned' THEN
+        IF NOT COALESCE((v_ride.status = 'searching' AND v_ride.driver_id IS NULL)
+                OR (v_ride.status = 'driver_assigned'
+                    AND v_ride.driver_id = (p_candidates->0->>'driver_id')), false)
+           OR EXISTS (SELECT 1 FROM public.ride_offers ro WHERE ro.ride_id = p_ride_id
+                        AND ro.status IN ('pending','accepted')) THEN
             v_results := v_results || jsonb_build_object(
                 'driver_id', v_locked_drivers[1], 'claimed', false, 'reason_code', 'RIDE_STATE_CONFLICT');
             RETURN jsonb_build_object('code','RIDE_STATE_CONFLICT','ride_status',v_ride.status,'results',v_results);
@@ -416,9 +423,12 @@ BEGIN
                 v_driver.online_epoch, v_driver.controller_session_id
             ) RETURNING id INTO v_offer_id;
         ELSE
-            -- admin_direct: no offer row, update ride notified timestamp
+            -- Assignment, claim and Period 2 commit together; rejection leaves
+            -- a new ride searching and unassigned without notifying a driver.
             v_offer_id := NULL;
-            UPDATE public.rides SET driver_notified_at = v_offer_now WHERE id = p_ride_id;
+            UPDATE public.rides SET status = 'driver_assigned', driver_id = v_driver_id,
+                driver_notified_at = v_offer_now, updated_at = v_offer_now
+             WHERE id = p_ride_id RETURNING * INTO v_ride;
         END IF;
 
         -- Claim, offer and insurance Period 2 are one transaction. Never

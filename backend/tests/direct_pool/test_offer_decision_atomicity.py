@@ -190,3 +190,66 @@ def test_migration_460_applies_twice(offer_db):
     _apply(cur, "460_offer_decision_atomicity.sql")
     cur.execute("SELECT count(*) FROM pg_constraint WHERE conname='ride_offers_outcome_check'")
     assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("eligible", [True, False])
+def test_admin_claim_assigns_only_after_admission(offer_db, eligible):
+    cur = offer_db
+    cur.execute("UPDATE drivers SET accepting_requests=%s WHERE id='d1'", (eligible,))
+    cur.execute(
+        "INSERT INTO rides (id,rider_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('admin-new','rider','a',0,0,'b',0,0,'searching')"
+    )
+    cur.execute(
+        "SELECT dispatch_claim_offers_v3('admin-new',"
+        "jsonb_build_array(jsonb_build_object('driver_id','d1')),1,30,false,'admin_direct')"
+    )
+    result = cur.fetchone()[0]
+    assert result["code"] == "OK"
+    assert result["results"][0]["claimed"] is eligible
+    cur.execute("SELECT status,driver_id,driver_notified_at FROM rides WHERE id='admin-new'")
+    status, driver_id, notified = cur.fetchone()
+    assert (status, driver_id) == (("driver_assigned", "d1") if eligible else ("searching", None))
+    assert (notified is not None) is eligible
+    cur.execute("SELECT is_available,availability_claim_id FROM drivers WHERE id='d1'")
+    available, claim_id = cur.fetchone()
+    assert available is not eligible
+    assert (claim_id is not None) is eligible
+    cur.execute("SELECT count(*) FROM driver_insurance_periods WHERE ride_id='admin-new' AND period=2")
+    assert cur.fetchone()[0] == int(eligible)
+
+
+def test_admin_claim_cannot_overlap_existing_batch_offer(offer_db):
+    cur = offer_db
+    cur.execute(
+        "INSERT INTO rides (id,rider_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('admin-race','rider','a',0,0,'b',0,0,'searching')"
+    )
+    cur.execute("INSERT INTO ride_offers(ride_id,driver_id,status) VALUES ('admin-race','d2','pending')")
+    cur.execute(
+        "SELECT dispatch_claim_offers_v3('admin-race',"
+        "jsonb_build_array(jsonb_build_object('driver_id','d1')),1,30,false,'admin_direct')"
+    )
+    assert cur.fetchone()[0]["code"] == "RIDE_STATE_CONFLICT"
+    cur.execute("SELECT status,driver_id FROM rides WHERE id='admin-race'")
+    assert cur.fetchone() == ("searching", None)
+    cur.execute("SELECT is_available,availability_claim_id FROM drivers WHERE id='d1'")
+    assert cur.fetchone() == (True, None)
+
+
+@pytest.mark.parametrize("assigned_driver,expected", [("d1", "OK"), ("d2", "RIDE_STATE_CONFLICT"), (None, "RIDE_STATE_CONFLICT")])
+def test_admin_claim_legacy_assignment_must_match_candidate(offer_db, assigned_driver, expected):
+    cur = offer_db
+    cur.execute(
+        "INSERT INTO rides (id,driver_id,rider_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('admin-legacy',%s,'rider','a',0,0,'b',0,0,'driver_assigned')",
+        (assigned_driver,),
+    )
+    cur.execute(
+        "SELECT dispatch_claim_offers_v3('admin-legacy',"
+        "jsonb_build_array(jsonb_build_object('driver_id','d1')),1,30,false,'admin_direct')"
+    )
+    assert cur.fetchone()[0]["code"] == expected
+    if expected != "OK":
+        cur.execute("SELECT is_available,availability_claim_id FROM drivers WHERE id='d1'")
+        assert cur.fetchone() == (True, None)

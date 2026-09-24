@@ -102,9 +102,11 @@ async def test_flag_off_or_missing_is_legacy(svc, settings):
 
 
 @pytest.mark.asyncio
-async def test_settings_error_is_legacy(svc):
+async def test_settings_error_fails_closed_without_legacy_cleanup(svc):
     svc.get_app_settings.side_effect = RuntimeError("db down")
-    assert await _run(svc) == "legacy"
+    assert await _run(svc) == "failed"
+    svc.driver_availability_repo.get_driver_availability_snapshot.assert_not_awaited()
+    svc.driver_availability_repo.transition_driver_availability.assert_not_awaited()
 
 
 @pytest.mark.asyncio

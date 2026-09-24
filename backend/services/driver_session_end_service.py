@@ -11,8 +11,8 @@
 
 Return values:
 
-* ``"legacy"``  -- v2 is off, unreadable, or the driver has no controller;
-  the caller keeps its flag-off cleanup.
+* ``"legacy"``  -- v2 is explicitly off or the driver has no controller;
+  the caller keeps its flag-off cleanup. A settings read failure is ``failed``.
 * ``"skipped"`` -- nothing to stop (no driver, offline, or ``logout`` from a
   session that is not the controller).
 * ``"stopped"`` -- T1 committed the stop.
@@ -101,12 +101,12 @@ async def stop_requests_for_session_end(
     if cause not in _CAUSES:
         raise ValueError(f"unsupported session end cause: {cause}")
 
-    # Step 1: flag. A read error or a missing flag is legacy.
+    # Step 1: flag. A read failure fails closed; an absent/false flag stays legacy.
     try:
         settings = await get_app_settings()
     except Exception:
-        logger.warning("session_end: settings read failed; legacy path user=%s", user_id, exc_info=True)
-        return "legacy"
+        logger.error("session_end: settings read failed; refusing legacy cleanup user=%s", user_id, exc_info=True)
+        return "failed"
     if not (settings or {}).get("driver_availability_v2_enabled"):
         return "legacy"
 

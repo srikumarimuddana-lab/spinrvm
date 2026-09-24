@@ -748,7 +748,9 @@ async def decline_ride(
     # v2 offers are declined atomically (claim release, readiness, one
     # insurance transition). Legacy offers return None and fall through.
     if not is_assigned and is_v2_driver(driver):
-        _decision_body = await parse_decision_body(request) if _raw_body else {}
+        # The parser accepts an absent/empty body for older clients, while
+        # rejecting malformed or non-object bodies before any decision RPC.
+        _decision_body = await parse_decision_body(request)
         try:
             v2_result = await driver_offer_service.decline_offer_v2(
                 ride_id, driver, token_session_id, _decision_body, reason=reason

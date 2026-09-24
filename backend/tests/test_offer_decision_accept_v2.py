@@ -1,6 +1,6 @@
 """accept_ride / decline_ride v2 branches (T5-5, T5-6): atomic RPC vs legacy paths."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -149,3 +149,20 @@ async def test_legacy_decline_offer_falls_through(env):
             await _decline()
     # Legacy path ran (its offer update failed, so the ownership guard answers 403).
     assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("raw", [b"{not json", b"[1,2]"])
+async def test_v2_decline_rejects_malformed_or_non_object_body_before_rpc(env, raw):
+    request = MagicMock()
+    if raw.startswith(b"{"):
+        request.json = AsyncMock(side_effect=ValueError("bad json"))
+    else:
+        request.json = AsyncMock(return_value=[1, 2])
+    request.body = AsyncMock(return_value=raw)
+    with pytest.raises(HTTPException) as exc:
+        await ride_flow.decline_ride(
+            "r1", request=request, current_user={"id": "u1"}, token_session_id="sess"
+        )
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "INVALID_OFFER_DECISION"
+    env["decline"].assert_not_awaited()

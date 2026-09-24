@@ -24,6 +24,15 @@ set -eu
 
 BASE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Soft memory caps for the Go processes on this 1 GB machine (fly.toml):
+# the Go runtime collects garbage harder as it nears the cap instead of
+# growing until the machine is OOM-killed (which would take metrics down
+# too). Budget: Alloy 250 + Loki 300 + Grafana 200 + Vector (Rust, ~60,
+# uncapped) + OS ~100 = ~910 MiB, with 512 MB swap as a backstop.
+ALLOY_GOMEMLIMIT="250MiB"
+LOKI_GOMEMLIMIT="300MiB"
+GRAFANA_GOMEMLIMIT="200MiB"
+
 supervise() {
   # supervise <name> <cmd...> — restart <cmd> forever, reporting every exit.
   name="$1"
@@ -60,7 +69,7 @@ start_log_stack() {
   fi
 
   # Loki: 127.0.0.1 only, so no auth of its own is needed.
-  supervise loki env -i PATH="$BASE_PATH" HOME=/data/loki \
+  supervise loki env -i PATH="$BASE_PATH" HOME=/data/loki GOMEMLIMIT="$LOKI_GOMEMLIMIT" \
     /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
     /usr/local/bin/loki -config.file=/etc/loki/loki.yaml &
 
@@ -96,6 +105,7 @@ start_log_stack() {
   fi
 
   supervise grafana env -i PATH="$BASE_PATH" HOME=/data/grafana \
+    GOMEMLIMIT="$GRAFANA_GOMEMLIMIT" \
     GF_PATHS_HOME=/usr/share/grafana \
     GF_PATHS_DATA=/data/grafana \
     GF_PATHS_PLUGINS=/data/grafana/plugins \
@@ -129,6 +139,8 @@ fi
 /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
   /usr/local/bin/discover-targets.sh &
 
+GOMEMLIMIT="$ALLOY_GOMEMLIMIT"
+export GOMEMLIMIT
 exec /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
   /bin/alloy run /etc/alloy/config.alloy \
   --storage.path=/var/lib/alloy/data \

@@ -178,7 +178,7 @@ steps 1–3 must be done **before** the change is merged.
 
 1. **Create the volume** (Toronto, same region as the machine):
    ```bash
-   fly volumes create fly_logs --region yyz --size 10 -a spinr-metrics-agent-yyz
+   fly volumes create fly_logs --region yyz --size 5 -a spinr-metrics-agent-yyz
    ```
 2. **Set the new secrets**, staged so nothing restarts yet:
    ```bash
@@ -257,7 +257,9 @@ Metrics are under the "Spinr metrics (Grafana Cloud)" data source.
 - **Single copy.** The volume lives on one host's disk. If the host fails,
   recovery is from Fly's daily volume snapshots (kept 5 days by default),
   so up to a day of logs can be lost.
-- **Volume size is a guess.** 10 GB has not been measured against real log
+- **Sizing is a guess.** The 1 GB VM (with 512 MB swap and per-process
+  `GOMEMLIMIT` caps in `entrypoint.sh`) and the 5 GB volume have not been
+  measured against real log
   volume from up to 8 backend machines — check `df -h /data` after the
   first few days.
 - **Images are pinned by tag, not digest** (`Dockerfile` explains why).

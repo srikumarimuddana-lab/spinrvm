@@ -26,7 +26,7 @@ The owner decided to reuse the existing `spinr-metrics-agent-yyz` machine rather
 - **Loki** is bound to `127.0.0.1`, stores data on a new Fly volume at `/data`, and keeps 168h (7 days), enforced by the compactor.
 - **Grafana** listens on `:3000` with no public service. It uses an admin password secret, has anonymous access and sign-up off, and is provisioned with the Loki data source plus an optional Grafana Cloud Prometheus data source that needs a `metrics:read` token.
 - `entrypoint.sh` starts as root only to prepare `/data` and provisioning. Every process runs as an unprivileged user via `setpriv`, and Loki, Vector and Grafana get a scrubbed environment (`env -i`) holding only their own secrets.
-- VM memory goes from 512 MB to 2 GB.
+- VM memory goes from 512 MB to 1 GB, with 512 MB swap and soft `GOMEMLIMIT` caps on the Go processes (Alloy 250 MiB, Loki 300 MiB, Grafana 200 MiB). The first version of this change used 2 GB; the owner asked for the cheaper 1 GB setup (about $3.25/month over today, vs about $9).
 
 ## 4. Risk & impact on existing functionality
 
@@ -34,7 +34,7 @@ The owner decided to reuse the existing `spinr-metrics-agent-yyz` machine rather
 - **Existing consumer of this app: the Alloy metrics pipeline** (Grafana Cloud dashboards and alert rules in `metrics-agent/grafana/`). Risks to it:
   - *Entrypoint now starts as root, then drops to `alloy` via `setpriv`.* Alloy runs as the same user as before. If `setpriv` were missing from the image, Alloy wouldn't start. `util-linux` is now installed explicitly in the Dockerfile to guard against that.
   - *A log-stack failure blocking Alloy.* Mitigated: `start_log_stack` is called inside `if`, so `set -e` can't abort the entrypoint, and each component runs in its own background restart loop. Stub tests confirmed Alloy still starts with a missing volume, missing secrets, a short password, or a failed `chown`.
-  - *Memory contention.* Four processes now share one VM, raised to 2 GB. The per-process budget is an estimate, not a measurement.
+  - *Memory contention.* Four processes now share one 1 GB VM. The per-process budget is an estimate, not a measurement. The `GOMEMLIMIT` caps and 512 MB swap reduce, but don't remove, the chance of an out-of-memory restart, which would also interrupt metrics. Alloy now runs with a 250 MiB soft cap it didn't have before.
   - *Deploy ordering.* `deploy-metrics-agent.yml` auto-deploys on merge, and the new `[mounts]` needs the `fly_logs` volume to exist, with the existing machine replaced. If this merges before README steps 1–3, the deploy fails, and the currently running machine is expected to keep serving metrics (flyctl validates mounts before replacing machines — not verified here).
 - **Other Fly apps** (`hermes-spinr`, `spinr-burst-controller-yyz`, `spinr-backend-yyz`): their logs are now also stored for 7 days. Nothing about their behaviour changes.
 
@@ -48,7 +48,7 @@ Riders, drivers and corporate admins see nothing. Internal ops/engineering gain 
 |---|---|---|
 | `metrics-agent/Dockerfile` | Copy Loki, Vector and Grafana binaries from tag-pinned images; install `util-linux`; add `grafana` user; copy configs; entrypoint runs as root | Ship the log stack in the existing image |
 | `metrics-agent/entrypoint.sh` | Add `start_log_stack` (volume/secret checks, supervised background processes, scrubbed env); Alloy and discovery now started via `setpriv` as `alloy` | Run the log stack without risking metrics |
-| `metrics-agent/fly.toml` | `[mounts] fly_logs → /data`; memory 512 MB → 2 GB; `LOGS_STACK_ENABLED`, `LOG_STREAM_ORG` env | Persistent log storage, headroom, kill switch |
+| `metrics-agent/fly.toml` | `[mounts] fly_logs → /data`; memory 512 MB → 1 GB; `swap_size_mb = 512`; `LOGS_STACK_ENABLED`, `LOG_STREAM_ORG` env | Persistent log storage, headroom, kill switch |
 | `metrics-agent/loki.yaml` (new) | Single-binary Loki, filesystem storage, 168h retention, 127.0.0.1 only | 7-day log store |
 | `metrics-agent/vector.toml` (new) | NATS source → remap (label defaults, timestamp parse) → Loki sink | Collect Fly logs |
 | `metrics-agent/grafana/provisioning/datasources/loki.yaml` (new) | Loki data source | Search logs in Grafana |
@@ -93,5 +93,5 @@ exec /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
 - **Images pinned by tag, not digest**, contrary to this directory's Alloy convention. Versions are ~1.5 years old because they're the newest that could be confirmed without registry access.
 - **Fly NATS log-stream auth with a `fly tokens create readonly` org token** is taken from Fly's log-shipper pattern, not tested. The org slug `spinr_backend` is taken from `infra/burst_controller/fly.toml`.
 - **flyctl behaviour when adding `[mounts]` to an app whose existing machine has no volume** — the README prescribes destroying the machine first to avoid depending on it.
-- **Memory headroom, disk sizing (10 GB), and log volume** are not measured.
+- **Memory headroom (1 GB + swap), disk sizing (5 GB), and log volume** are not measured.
 - **PII content of existing backend logs** not audited. It's now retained for 7 days, in-region (`yyz`).

@@ -15,6 +15,10 @@ app = "spinr-metrics-agent-yyz"
 primary_region = "yyz"
 kill_signal = "SIGTERM"
 kill_timeout = "15s"
+# Backstop for the 1 GB VM below: a memory spike slows the machine down
+# instead of OOM-killing it (and Alloy/metrics with it). The Go processes
+# also have soft GOMEMLIMIT caps set in entrypoint.sh.
+swap_size_mb = 512
 
 [build]
   dockerfile = "Dockerfile"
@@ -55,11 +59,12 @@ kill_timeout = "15s"
   # footprint (WAL buffering for remote_write) proves tight at this
   # metric volume; not measured yet (see PR body "What was NOT verified").
   #
-  # Raised 512mb -> 2gb when Loki, Vector and Grafana were added alongside
-  # Alloy on this machine (rough budget: Alloy ~150MB, Loki ~300-600MB,
-  # Grafana ~200MB, Vector ~50MB — estimates, not measured).
+  # Raised 512mb -> 1gb when Loki, Vector and Grafana were added alongside
+  # Alloy on this machine. Typical idle total is ~400-600MB (estimate, not
+  # measured); per-process GOMEMLIMIT caps are in entrypoint.sh. If
+  # `fly logs` shows OOM restarts, raise to 2gb.
   size = "shared-cpu-1x"
-  memory = "2gb"
+  memory = "1gb"
 
 [[restart]]
   policy = "always"

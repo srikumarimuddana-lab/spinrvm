@@ -27,7 +27,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
-    from ..utils.driver_presence import present_driver_ids
+    from ..utils.driver_presence import present_driver_ids, scoped_driver_presence_evidence
     from ..utils.metrics import inc as _metric_inc
     from ..utils.service_area_scope import (
         build_driver_area_filter,
@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - allow direct module imports in tests
     from settings_loader import get_app_settings
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.driver_presence import present_driver_ids
+    from utils.driver_presence import present_driver_ids, scoped_driver_presence_evidence  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
@@ -665,3 +665,63 @@ class DispatchService:
             if await self.claim_driver(driver["id"]):
                 return driver
         return None
+
+
+# ── v2 dispatch admission ───────────────────────────────────────────────
+
+
+async def admit_candidates_v2(
+    candidates: List[Dict[str, Any]],
+) -> tuple[list[Dict[str, Any]], str]:
+    """Build scoped presence evidence for v2 admission.
+
+    Returns ``(admitted, outcome)`` where *outcome* is one of:
+    ``ok``, ``none_present``, ``store_unavailable``, or ``error``.
+
+    Each admitted driver dict gets an ``_admission`` key with the evidence
+    the v3 claim RPC requires: ``session_id``, ``online_epoch`` (str),
+    ``contact_valid_until`` (ISO), ``location_valid_until`` (ISO).
+
+    Never fails open: an unreachable store or an exception returns ``[]``
+    and increments ``spinr_dispatch_presence_filter_failed_total{mode=v2_closed}``.
+    """
+    if not candidates:
+        return [], "ok"
+    candidate_ids = [d["id"] for d in candidates]
+    try:
+        evidence, reachable = await scoped_driver_presence_evidence(candidate_ids)
+    except Exception:
+        logger.error("admit_candidates_v2: scoped evidence failed", exc_info=True)
+        _metric_inc("spinr_dispatch_presence_filter_failed_total", labels={"mode": "v2_closed"})
+        return [], "error"
+
+    if not reachable:
+        logger.warning("admit_candidates_v2: presence store unreachable — returning empty")
+        _metric_inc("spinr_dispatch_presence_filter_failed_total", labels={"mode": "v2_closed"})
+        return [], "store_unavailable"
+
+    if not evidence:
+        return [], "none_present"
+
+    admitted: list[Dict[str, Any]] = []
+    for driver in candidates:
+        ev = evidence.get(driver["id"])
+        if ev is None:
+            continue
+        # Build ISO timestamps from epoch-ms evidence
+        contact_ms = ev.get("contact_valid_until_ms")
+        location_ms = ev.get("location_valid_until_ms")
+        if not isinstance(contact_ms, int) or not isinstance(location_ms, int):
+            continue
+        contact_dt = datetime.fromtimestamp(contact_ms / 1000, tz=timezone.utc)
+        location_dt = datetime.fromtimestamp(location_ms / 1000, tz=timezone.utc)
+        driver["_admission"] = {
+            "session_id": ev["session_id"],
+            "online_epoch": str(ev["online_epoch"]),
+            "contact_valid_until": contact_dt.isoformat(),
+            "location_valid_until": location_dt.isoformat(),
+        }
+        admitted.append(driver)
+
+    return admitted, "ok"
+

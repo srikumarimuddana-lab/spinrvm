@@ -567,6 +567,23 @@ async def force_offline_if_exhausted(
     if not status or not status.get("exhausted"):
         return None
 
+    # V2 keeps availability intent separate from subscription eligibility.
+    # New-offer admission/snapshot own the dynamic entitlement block; this
+    # completion hook must not write raw offline state, Period 0, global Redis
+    # clear, or a false went-offline activity event. Unknown rollout state is
+    # treated the same way so a settings outage cannot authorize legacy writes.
+    try:
+        try:
+            from ..services.driver_availability_service import driver_availability_v2_enabled  # type: ignore
+        except ImportError:
+            from services.driver_availability_service import driver_availability_v2_enabled  # type: ignore
+        if await driver_availability_v2_enabled():
+            logger.info("force_offline_if_exhausted: v2 entitlement block deferred to admission driver=%s", driver_id)
+            return None
+    except Exception:
+        logger.error("force_offline_if_exhausted: availability mode unavailable; deferring raw offline driver=%s", driver_id)
+        return None
+
     # 2026-09-23 mid-trip guard (follow-up to the forced-offline insurance-
     # period audit): this runs right after a ride completes, and the driver
     # is made available again just before this call. If dispatch re-claims

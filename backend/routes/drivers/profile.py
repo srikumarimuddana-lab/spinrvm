@@ -4,6 +4,8 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import uuid as _uuid
+
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -245,8 +247,6 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # Auto-create a driver row if one doesn't exist yet (new driver adding
     # vehicle details for the first time from the vehicle-info screen).
     if not driver:
-        import uuid
-
         first = current_user.get("first_name", "")
         last = current_user.get("last_name", "")
         # regulatory_authority/regulatory_region must never be left NULL on a
@@ -254,7 +254,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         # own docstring for why.
         _reg_authority, _reg_region = await _shared._resolve_regulatory_defaults(updates.get("service_area_id"))
         new_driver = {
-            "id": str(uuid.uuid4()),
+            "id": str(_uuid.uuid4()),
             "driver_code": generate_driver_code(),
             "user_id": current_user["id"],
             "name": f"{first} {last}".strip() or current_user.get("phone", ""),
@@ -290,6 +290,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     # Check if an active driver changed vehicle/document fields → needs review
     changed_vehicle = any(k in vehicle_fields for k in updates)
     _forced_offline_for_review = False
+    _availability_v2_for_review = False
     if changed_vehicle and driver.get("status") == "active":
         updates["status"] = "needs_review"
         # 2026-09-23 mid-trip guard (follow-up to the forced-offline insurance-
@@ -303,8 +304,24 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         # trip ends, same as any other forced-offline case. `None` (lookup
         # failed) is treated the same as an obligation — deferring one tick
         # is safer than guessing it's fine to disrupt an active trip.
+        try:
+            from ...services.driver_availability_service import (
+                AvailabilityLookupError,
+                driver_availability_v2_enabled,
+            )
+        except ImportError:  # pragma: no cover - backend top-level import mode
+            from services.driver_availability_service import (  # type: ignore
+                AvailabilityLookupError,
+                driver_availability_v2_enabled,
+            )
+        try:
+            _availability_v2_for_review = await driver_availability_v2_enabled()
+        except AvailabilityLookupError:
+            # Unknown mode must never authorize the legacy raw offline write.
+            _availability_v2_for_review = True
+            logger.error("[DRIVER] availability flag unavailable during profile review", exc_info=True)
         _obligated = await _deps.has_active_ride_obligation(driver["id"])
-        if _obligated is False:
+        if _obligated is False and not _availability_v2_for_review:
             updates["is_online"] = False
             updates["is_available"] = False
             _forced_offline_for_review = True
@@ -346,6 +363,29 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         await record_vehicle_changes(
             driver["id"], driver, updates, changed_by_user_id=current_user["id"], role="driver"
         )
+    if _availability_v2_for_review:
+        try:
+            from ...services.driver_availability_service import (
+                AvailabilityLookupError,
+                pause_driver_for_policy,
+            )
+        except ImportError:  # pragma: no cover - backend top-level import mode
+            from services.driver_availability_service import (  # type: ignore
+                AvailabilityLookupError,
+                pause_driver_for_policy,
+            )
+        try:
+            pause_result = await pause_driver_for_policy(
+                current_user["id"],
+                blocking_statuses={"needs_review"},
+                request_id=f"profile-review-{_uuid.uuid4()}",
+            )
+        except AvailabilityLookupError as exc:
+            raise HTTPException(status_code=503, detail="Driver review pause could not be confirmed") from exc
+        if pause_result.get("code") == "POLICY_STATE_CHANGED":
+            raise HTTPException(status_code=409, detail="Driver policy state changed; refresh and retry")
+        if pause_result.get("code") != "OK":
+            raise HTTPException(status_code=503, detail="Driver review pause could not be confirmed")
     # M-5: SGI insurance period audit — vehicle/document edits flip an
     # active driver to needs_review and force them offline. If they were
     # actually online before this update, that's a 1→0 transition.

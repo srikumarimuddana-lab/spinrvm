@@ -182,10 +182,18 @@ def test_trusted_policy_pause_preserves_active_obligation_and_insurance(availabi
 def test_policy_pause_rechecks_terminal_status_under_driver_lock(availability_db):
     cur = availability_db
     cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
+    cur.execute(
+        "SELECT is_online,accepting_requests,online_epoch,state_version,availability_reason,controller_session_id "
+        "FROM drivers WHERE id='avail-driver'"
+    )
+    before = cur.fetchone()
     result = _transition(cur, 0, "pause_policy", "policy-no-longer-blocked")
     assert result["code"] == "POLICY_STATE_CHANGED"
-    cur.execute("SELECT is_online,accepting_requests,online_epoch FROM drivers WHERE id='avail-driver'")
-    assert cur.fetchone() == (True, True, 0)
+    cur.execute(
+        "SELECT is_online,accepting_requests,online_epoch,state_version,availability_reason,controller_session_id "
+        "FROM drivers WHERE id='avail-driver'"
+    )
+    assert cur.fetchone() == before
 
 
 def test_go_online_binds_existing_session_without_changing_generation(availability_db):

@@ -194,6 +194,14 @@ class _FakeDB:
 
 @pytest.fixture
 def patch_db(monkeypatch):
+    from backend.services import driver_availability_service
+
+    monkeypatch.setattr(
+        driver_availability_service,
+        "driver_availability_v2_enabled",
+        AsyncMock(return_value=False),
+    )
+
     def _install(db):
         monkeypatch.setattr(spinr_pass, "_db", lambda: db)
         return db
@@ -297,7 +305,8 @@ class TestForceOfflineIfExhausted:
         db = _FakeDB(count=4)
         patch_db(db)
         sub = {"id": "s1", "rides_per_day": 4}
-        status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
+        with patch("backend.services.driver_availability_service.driver_availability_v2_enabled", AsyncMock(return_value=False)):
+            status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
         assert status is not None
         assert status["exhausted"] is True
         # The driver row was flipped offline.
@@ -346,6 +355,20 @@ class TestForceOfflineIfExhausted:
             status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
         assert status is None
         assert [u for u in db.updated if u[0] == "drivers"] == []
+
+    async def test_v2_exhaustion_defers_dynamic_entitlement_without_offline_writes(self, patch_db):
+        db = _FakeDB(count=4)
+        patch_db(db)
+        sub = {"id": "s1", "rides_per_day": 4}
+        with patch(
+            "backend.services.driver_availability_service.driver_availability_v2_enabled",
+            AsyncMock(return_value=True),
+        ):
+            status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
+
+        assert status is None
+        assert [u for u in db.updated if u[0] == "drivers"] == []
+        assert [i for i in db.inserted if i[0] == "driver_activity_log"] == []
 
 
 @pytest.mark.anyio

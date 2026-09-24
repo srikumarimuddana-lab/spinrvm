@@ -250,10 +250,32 @@ async def check_expiring_documents():
             # push. Re-ticks (driver already suspended) and sibling replicas match
             # zero rows, so the driver is not re-suspended or re-notified every 12h.
             try:
+                try:
+                    from ..services.driver_availability_service import (
+                        AvailabilityLookupError,
+                        driver_availability_v2_enabled,
+                        pause_driver_for_policy,
+                    )
+                except ImportError:  # pragma: no cover - backend top-level import mode
+                    from services.driver_availability_service import (  # type: ignore
+                        AvailabilityLookupError,
+                        driver_availability_v2_enabled,
+                        pause_driver_for_policy,
+                    )
+                try:
+                    availability_v2 = await driver_availability_v2_enabled()
+                except AvailabilityLookupError:
+                    # An unknown rollout state must never authorize legacy
+                    # global presence/insurance cleanup.
+                    logger.exception("Doc expiry: availability mode unavailable; deferring suspension")
+                    continue
+                suspension = {"status": "suspended"}
+                if not availability_v2:
+                    suspension.update({"is_online": False, "is_available": False})
                 claimed = await db.update_one(
                     "drivers",
                     {"id": driver["id"], "status": {"$ne": "suspended"}},
-                    {"is_online": False, "is_available": False, "status": "suspended"},
+                    suspension,
                 )
             except Exception as e:
                 logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}", exc_info=True)
@@ -262,20 +284,34 @@ async def check_expiring_documents():
                 # Already suspended by a prior tick or another replica — nothing to do.
                 continue
             logger.warning(f"Doc expiry: driver {driver['id']} suspended for expired docs ({doc_list})")
-            # The write above forced is_online=False. Close the driver's open
-            # insurance period to what they actually are now — Period 0, unless
-            # a ride/offer is still theirs (then it stays 2/3; see the helper).
-            # Nothing else would: the reconciler only scans online drivers.
-            # The helper never raises on a DB error (logs at ERROR instead).
-            await close_period_for_forced_offline(driver["id"], reason="document_expired")
-            # Clear Redis presence so dispatch filters drop this driver
-            # immediately — otherwise they'd remain eligible for up to
-            # PRESENCE_TTL (90 s) and could still be assigned a ride.
-            try:
-                await clear_presence(driver["id"])
-            except Exception as e:
-                logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
-            manager.disconnect(f"driver_{user_id}")
+            if availability_v2:
+                # The locked policy pause preserves active obligations; its
+                # epoch change makes any prior scoped lease ineligible.
+                # Keep the authenticated socket available for trip history.
+                try:
+                    result = await pause_driver_for_policy(
+                        driver["user_id"],
+                        blocking_statuses={"suspended"},
+                        request_id=f"document-expiry-{driver['id']}-{int(now.timestamp())}",
+                    )
+                    if result.get("code") == "POLICY_STATE_CHANGED":
+                        logger.info(
+                            "Doc expiry: suspension was superseded by current policy state for %s; suppressing notice",
+                            driver["id"],
+                        )
+                        continue
+                    if result.get("code") != "OK":
+                        logger.error("Doc expiry: scoped policy pause did not complete for %s: %s", driver["id"], result)
+                except Exception:
+                    logger.error("Doc expiry: scoped policy pause failed for %s", driver["id"], exc_info=True)
+            else:
+                # Legacy mode retains raw offline, insurance and global clear.
+                await close_period_for_forced_offline(driver["id"], reason="document_expired")
+                try:
+                    await clear_presence(driver["id"])
+                except Exception as e:
+                    logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
+                manager.disconnect(f"driver_{user_id}")
             _suspend_title = "Account suspended — expired documents"
             _suspend_body = f"Your account has been suspended: {doc_list}. Please renew to continue driving."
             try:

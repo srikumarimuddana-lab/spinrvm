@@ -1,0 +1,116 @@
+name: Driver Availability DB Tests
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - '.github/workflows/driver-availability-db.yml'
+      - 'backend/migrations/457_*.sql'
+      - 'backend/migrations/458_*.sql'
+      - 'backend/migrations/459_*.sql'
+      - 'backend/migrations/460_*.sql'
+      - 'backend/migrations/461_*.sql'
+      - 'backend/migrations/462_*.sql'
+      - 'backend/repositories/driver_availability_repo.py'
+      - 'backend/repositories/driver_presence_repo.py'
+      - 'backend/repositories/driver_repo.py'
+      - 'backend/repositories/driver_offer_repo.py'
+      - 'backend/utils/driver_presence.py'
+      - 'backend/utils/redis_client.py'
+      - 'backend/routes/drivers/status.py'
+      - 'backend/services/driver_availability_service.py'
+      - 'backend/tests/direct_pool/conftest.py'
+      - 'backend/tests/direct_pool/test_driver_availability_*.py'
+      - 'backend/tests/direct_pool/test_driver_claim_epoch_fence.py'
+      - 'backend/tests/direct_pool/test_offer_decision_atomicity.py'
+  push:
+    branches: [main, staging]
+    paths:
+      - '.github/workflows/driver-availability-db.yml'
+      - 'backend/migrations/457_*.sql'
+      - 'backend/migrations/458_*.sql'
+      - 'backend/migrations/459_*.sql'
+      - 'backend/migrations/460_*.sql'
+      - 'backend/migrations/461_*.sql'
+      - 'backend/migrations/462_*.sql'
+      - 'backend/repositories/driver_availability_repo.py'
+      - 'backend/repositories/driver_presence_repo.py'
+      - 'backend/repositories/driver_repo.py'
+      - 'backend/repositories/driver_offer_repo.py'
+      - 'backend/utils/driver_presence.py'
+      - 'backend/utils/redis_client.py'
+      - 'backend/routes/drivers/status.py'
+      - 'backend/services/driver_availability_service.py'
+      - 'backend/tests/direct_pool/conftest.py'
+      - 'backend/tests/direct_pool/test_driver_availability_*.py'
+      - 'backend/tests/direct_pool/test_driver_claim_epoch_fence.py'
+      - 'backend/tests/direct_pool/test_offer_decision_atomicity.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: driver-availability-db-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  availability-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: spinr_test
+          PGUSER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install direct-pool test dependencies
+        run: python -m pip install --disable-pip-version-check pytest==9.1.1 pytest-asyncio==1.4.0 psycopg2-binary==2.9.12 redis==8.1.0
+
+      - name: Run focused availability SQL tests
+        working-directory: backend
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: spinr_test
+          REDIS_TEST_URL: redis://localhost:6379/0
+        run: |
+          export TEST_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          shopt -s nullglob
+          test_files=(
+            tests/direct_pool/test_driver_availability_*.py
+            tests/direct_pool/test_driver_claim_epoch_fence*.py
+            tests/direct_pool/test_offer_decision_atomicity*.py
+          )
+          if ((${#test_files[@]} == 0)); then
+            echo 'No focused driver-availability SQL tests were found.' >&2
+            exit 1
+          fi
+          python -m pytest "${test_files[@]}" -c /dev/null --confcutdir=tests/direct_pool -q

@@ -1311,6 +1311,7 @@ async def _run_once(**extra_patches):
         "backend.routes.drivers._deps.asyncio.sleep": _stop_sleep(),
         "backend.utils.redis_client.redis_set_nx": AsyncMock(return_value=True),
         "backend.settings_loader.get_app_settings": AsyncMock(return_value={"require_driver_subscription": False}),
+        "backend.services.driver_availability_service.driver_availability_v2_enabled": AsyncMock(return_value=False),
         "backend.db_supabase.get_rows": AsyncMock(return_value=[]),
         "backend.db_supabase.find_one": AsyncMock(return_value=None),
         "backend.db_supabase.update_one": AsyncMock(),
@@ -1479,6 +1480,91 @@ class TestCheckExpiringSubscriptionsLockAndSweep:
 
 
 class TestCheckExpiringSubscriptionsMainLoopBranches:
+    async def test_v2_expired_entitlement_skips_raw_offline_and_broadcast(self):
+        from datetime import datetime, timedelta, timezone
+
+        sub = {
+            "id": "expired-sub",
+            "driver_id": "d-v2",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        }
+
+        def fake_get_rows(table, filters, **kwargs):
+            if table == "driver_subscriptions" and filters.get("status") == "active":
+                return [sub]
+            return []
+
+        update = AsyncMock()
+        push = AsyncMock()
+        clear = AsyncMock()
+        period = AsyncMock()
+        manager_mock = MagicMock()
+        manager_mock.disconnect = MagicMock()
+        manager_mock.broadcast_to_admins = AsyncMock()
+        await _run_once(
+            **{
+                "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
+                "backend.db_supabase.update_one": update,
+                "backend.routes.drivers._deps.clear_presence": clear,
+                "backend.routes.drivers._deps.record_period_transition": period,
+                "backend.routes.drivers._deps.send_push_notification": push,
+                "backend.routes.drivers._deps.manager": manager_mock,
+                "backend.settings_loader.get_app_settings": AsyncMock(
+                    return_value={"require_driver_subscription": True}
+                ),
+                "backend.services.driver_availability_service.driver_availability_v2_enabled": AsyncMock(
+                    return_value=True
+                ),
+            }
+        )
+
+        update.assert_awaited_once_with("driver_subscriptions", {"id": "expired-sub"}, {"status": "expired"})
+        clear.assert_not_awaited()
+        period.assert_not_awaited()
+        push.assert_not_awaited()
+        manager_mock.disconnect.assert_not_called()
+        manager_mock.broadcast_to_admins.assert_not_awaited()
+
+    async def test_rollout_mode_is_rechecked_for_each_expiry_tick(self):
+        from datetime import datetime, timedelta, timezone
+
+        sub = {
+            "id": "expired-sub",
+            "driver_id": "d-v2",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        }
+
+        def fake_get_rows(table, filters, **kwargs):
+            if table == "driver_subscriptions" and filters.get("status") == "active":
+                return [sub]
+            return []
+
+        update = AsyncMock()
+        flag = AsyncMock(side_effect=[False, True])
+        await _run_once(
+            **{
+                "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
+                "backend.db_supabase.find_one": AsyncMock(return_value={"id": "d-v2", "user_id": "u-v2", "is_online": True}),
+                "backend.db_supabase.update_one": update,
+                "backend.settings_loader.get_app_settings": AsyncMock(
+                    return_value={"require_driver_subscription": True}
+                ),
+                "backend.utils.redis_client.redis_set_nx": AsyncMock(return_value=True),
+                "backend.services.driver_availability_service.driver_availability_v2_enabled": flag,
+                "backend.routes.drivers._deps.asyncio.sleep": AsyncMock(side_effect=[None, Exception("stop")]),
+                "backend.routes.drivers._deps.clear_presence": AsyncMock(),
+                "backend.routes.drivers._deps.record_period_transition": AsyncMock(),
+                "backend.routes.drivers._deps.send_push_notification": AsyncMock(),
+            }
+        )
+
+        assert flag.await_count == 2
+        driver_offline_writes = [
+            call for call in update.await_args_list
+            if call.args[0] == "drivers" and call.args[2].get("is_online") is False
+        ]
+        assert len(driver_offline_writes) == 1  # first tick flag-off only; second tick rechecked v2
+
     async def test_skip_branches_and_full_enforcement_happy_path(self):
         """Combines several independent per-row branches of the main
         active_subs loop into a single run (each row hits exactly one

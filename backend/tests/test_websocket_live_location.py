@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -96,6 +98,122 @@ def test_handshake_rejects_a_tombstoned_session() -> None:
     prevented from persisting."""
     handshake = SOURCE.split('"message": "session_revoked"')[0]
     assert "await is_session_revoked(ws_session_id)" in handshake
+
+
+def test_v2_ws_epoch_is_client_bound_once_and_reconcile_is_explicit() -> None:
+    """A late socket cannot adopt a replacement Go Online epoch from DB."""
+    assert 'raw_online_epoch = auth_msg.get("online_epoch")' in SOURCE
+    assert "bind_ws_presence_epoch(" in SOURCE
+    assert '"presence_status":' in SOURCE
+    assert '"reconcile_required"' in SOURCE
+    assert '"type": "availability_reconcile_required"' in SOURCE
+
+
+def test_ws_epoch_binding_requires_explicit_matching_handshake_epoch() -> None:
+    from backend.utils import driver_presence as presence
+
+    state = {"availability_v2": True}
+    assert not presence.bind_ws_presence_epoch(state, "session-1", None, {"is_online": True, "online_epoch": "4"})
+    assert "presence_epoch" not in state
+    assert not presence.bind_ws_presence_epoch(state, "session-1", "3", {"is_online": True, "online_epoch": "4"})
+    assert "presence_epoch" not in state
+    assert presence.bind_ws_presence_epoch(state, "session-1", "4", {"is_online": True, "online_epoch": "4"})
+    assert state["presence_session_id"] == "session-1"
+    assert state["presence_epoch"] == "4"
+
+
+@pytest.mark.anyio
+async def test_ws_contact_renewal_does_not_include_gps_and_stale_epoch_unbinds(monkeypatch) -> None:
+    from backend.utils import driver_presence as presence
+
+    renew = AsyncMock(return_value={"status": "renewed"})
+    monkeypatch.setattr(presence, "renew_driver_presence", renew)
+    state = {"presence_session_id": "session-1", "presence_epoch": "4"}
+    await presence.renew_ws_presence("driver-1", state)
+    renew.assert_awaited_once_with("driver-1", "session-1", 4)
+    renew.reset_mock(return_value=True)
+    renew.return_value = {"status": "stale_epoch", "code": "ONLINE_EPOCH_STALE"}
+    await presence.renew_ws_presence("driver-1", state)
+    assert state["presence_epoch"] is None
+    assert state["presence_reconcile_required"] is True
+
+
+@pytest.mark.anyio
+async def test_ws_batch_gps_uses_approved_timestamp_and_captured_socket_fence(monkeypatch) -> None:
+    from backend.utils import driver_presence as presence
+
+    renew = AsyncMock(return_value={"status": "renewed"})
+    monkeypatch.setattr(presence, "renew_ws_presence", renew)
+    stamp = datetime.now(timezone.utc)
+    state = {"presence_session_id": "session-1", "presence_epoch": "4"}
+    await presence.renew_ws_batch_location("driver-1", state, stamp, trusted=True)
+    renew.assert_awaited_once_with("driver-1", state, location_captured_at=stamp)
+    renew.reset_mock()
+    await presence.renew_ws_batch_location("driver-1", state, stamp, trusted=False)
+    renew.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_stale_socket_disconnect_deletes_only_its_scoped_presence(monkeypatch) -> None:
+    from backend.utils import driver_presence
+
+    class FakeRedis:
+        def __init__(self):
+            self.hashes = {}
+
+        async def delete(self, key):
+            self.hashes.pop(key, None)
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(driver_presence, "_get_redis", AsyncMock(return_value=fake_redis))
+    old_key = driver_presence.scoped_presence_key("driver-1", "old-session", 8)
+    current_key = driver_presence.scoped_presence_key("driver-1", "new-session", 9)
+    fake_redis.hashes[old_key] = {"contact_received_ms": "1"}
+    fake_redis.hashes[current_key] = {"contact_received_ms": "2"}
+    await driver_presence.clear_ws_presence(
+        "driver-1",
+        {"availability_v2": True, "presence_session_id": "old-session", "presence_epoch": "8"},
+    )
+    assert old_key not in fake_redis.hashes
+    assert current_key in fake_redis.hashes
+
+
+@pytest.mark.anyio
+def test_superseded_session_classification_is_terminal():
+    from backend.utils import driver_presence as presence
+
+    assert presence.ws_session_was_superseded({"code": "SESSION_SUPERSEDED"})
+    assert not presence.ws_session_was_superseded({"code": "ONLINE_EPOCH_STALE"})
+
+
+@pytest.mark.anyio
+async def test_fenced_marker_requires_an_actual_write_before_fanout(monkeypatch) -> None:
+    from backend.utils import driver_presence as presence
+
+    assert not presence.scoped_marker_allows_fanout(None, fenced=True, attempted=False)
+    assert not presence.scoped_marker_allows_fanout(None, fenced=True)
+    assert not presence.scoped_marker_allows_fanout(False, fenced=True)
+    assert presence.scoped_marker_allows_fanout(True, fenced=True)
+    assert presence.scoped_marker_allows_fanout(None, fenced=False, attempted=False)
+
+
+def test_v2_ws_pong_contact_does_not_refresh_location_evidence() -> None:
+    """Pongs call contact-only renewal; GPS deadlines are never supplied."""
+    pong_section = SOURCE.split('if data.get("type") == "pong":')[1].split(
+        'if data.get("type") in ("driver_location", "location_update"):'
+    )[0]
+    assert "renew_ws_presence(" in pong_section
+    assert "location_captured_at" not in pong_section
+    assert 'elif not conn_state.get("availability_v2"):' in pong_section
+
+
+def test_v2_ws_marker_writes_use_the_handshake_fence() -> None:
+    """Stale v2 sockets cannot fall back to the unscoped marker RPC."""
+    assert "authenticated_session_id=presence_session_id" in SOURCE
+    assert "online_epoch=presence_epoch" in SOURCE
+    assert 'conn_state.get("availability_v2") and conn_state.get("presence_epoch") is None' in SOURCE
+    assert "renew_ws_batch_location(" in SOURCE
+    assert 'allow_untimed=not conn_state.get("availability_v2")' in SOURCE
 
 
 # ── 3. Breadcrumb flush must not delay the rider/admin fan-out ─────────────

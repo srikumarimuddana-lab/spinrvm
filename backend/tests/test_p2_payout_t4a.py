@@ -730,3 +730,70 @@ class TestUpdateDriverGstFields:
         _, _filter, updates = update_mock.call_args.args
         assert "gst_registered" not in updates
         assert "gst_bn" not in updates
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("obligated", [False, True])
+    async def test_v2_vehicle_edit_uses_policy_pause_without_raw_offline_write(self, obligated):
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+        from backend.routes.drivers import profile as profile_route
+        from backend.services import driver_availability_service
+
+        driver = self._make_driver(is_online=True, is_available=True, is_verified=True)
+        update_mock = AsyncMock(return_value={"id": DRIVER_ID})
+        pause = AsyncMock(return_value={"code": "OK", "is_online": True, "accepting_requests": False,
+                                       "has_trip": obligated})
+        period = AsyncMock()
+        with (
+            self._patches(driver, update_mock),
+            patch.object(profile_route._deps, "has_active_ride_obligation", AsyncMock(return_value=obligated)),
+            patch.object(profile_route._deps, "record_period_transition", period),
+            patch("backend.utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.notify_driver_status_change", AsyncMock()),
+            patch.object(driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(driver_availability_service, "pause_driver_for_policy", pause),
+        ):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(vehicle_color="blue"),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        updates = update_mock.await_args.args[2]
+        assert updates["status"] == "needs_review"
+        assert "is_online" not in updates and "is_available" not in updates
+        pause.assert_awaited_once_with(
+            DRIVER_USER_ID,
+            blocking_statuses={"needs_review"},
+            request_id=pause.await_args.kwargs["request_id"],
+        )
+        period.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_v2_profile_policy_race_returns_conflict_before_notice(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+        from backend.routes.drivers import profile as profile_route
+        from backend.services import driver_availability_service
+
+        driver = self._make_driver(is_online=True, is_available=True, is_verified=True)
+        update_mock = AsyncMock(return_value={"id": DRIVER_ID})
+        notify = AsyncMock()
+        pause = AsyncMock(return_value={"code": "POLICY_STATE_CHANGED"})
+        with (
+            self._patches(driver, update_mock),
+            patch.object(profile_route._deps, "has_active_ride_obligation", AsyncMock(return_value=False)),
+            patch("backend.utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.notify_driver_status_change", notify),
+            patch.object(driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(driver_availability_service, "pause_driver_for_policy", pause),
+        ):
+            with pytest.raises(HTTPException) as error:
+                await update_my_driver(
+                    body=UpdateDriverProfileRequest(vehicle_color="blue"),
+                    current_user={"id": DRIVER_USER_ID},
+                )
+
+        assert error.value.status_code == 409
+        assert update_mock.await_args.args[2]["status"] == "needs_review"
+        assert "is_online" not in update_mock.await_args.args[2]
+        notify.assert_not_awaited()

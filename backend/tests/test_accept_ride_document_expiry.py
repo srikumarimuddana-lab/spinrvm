@@ -133,6 +133,30 @@ class TestAcceptRideRejectsExpiredLegacyDocumentField:
         assert suspend_calls[0].args[2]["is_online"] is False
         assert suspend_calls[0].args[2]["is_available"] is False
 
+    def test_v2_document_suspend_uses_policy_pause_without_raw_offline(self):
+        from backend.routes.drivers import _shared
+        from backend.services import driver_availability_service
+
+        update = AsyncMock(return_value={"id": DRIVER_ID, "status": "suspended"})
+        lookup = AsyncMock(return_value=[{"user_id": DRIVER_USER_ID}])
+        pause = AsyncMock(return_value={"code": "OK", "is_online": True, "accepting_requests": False,
+                                       "has_trip": True})
+        insurance = AsyncMock()
+        with (
+            patch.object(_shared.db_supabase, "update_one", update),
+            patch.object(_shared.db_supabase, "get_rows", lookup),
+            patch.object(_shared._deps, "close_period_for_forced_offline", insurance),
+            patch.object(driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(driver_availability_service, "pause_driver_for_policy", pause),
+        ):
+            asyncio.run(_shared._suspend_driver_for_expired_documents(DRIVER_ID, ["Driver's License"]))
+
+        assert update.await_args.args[2] == {"status": "suspended"}
+        pause.assert_awaited_once()
+        assert pause.await_args.args == (DRIVER_USER_ID,)
+        insurance.assert_not_awaited()
+        assert pause.return_value["has_trip"] is True
+
     def test_expired_insurance_blocks_accept(self):
         from backend.utils.error_handling import SpinrException
         from backend.utils.error_keys import ErrorKeys

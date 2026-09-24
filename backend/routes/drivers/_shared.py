@@ -1036,10 +1036,29 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
     later, same as today.
     """
     try:
+        try:
+            from ...services.driver_availability_service import (
+                AvailabilityLookupError,
+                driver_availability_v2_enabled,
+                pause_driver_for_policy,
+            )
+        except ImportError:  # pragma: no cover - backend top-level import mode
+            from services.driver_availability_service import (  # type: ignore
+                AvailabilityLookupError,
+                driver_availability_v2_enabled,
+                pause_driver_for_policy,
+            )
+        try:
+            availability_v2 = await driver_availability_v2_enabled()
+        except AvailabilityLookupError:
+            # A rollout read failure must not authorize legacy global clear.
+            availability_v2 = True
         claimed = await db_supabase.update_one(
             "drivers",
             {"id": driver_id, "status": {"$ne": "suspended"}},
-            {"is_online": False, "is_available": False, "status": "suspended"},
+            {"status": "suspended"}
+            if availability_v2
+            else {"is_online": False, "is_available": False, "status": "suspended"},
         )
         logger.info(
             "[ACCEPT] driver %s suspended mid-session for expired documents: %s",
@@ -1056,11 +1075,25 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
         )
         return
     if claimed:
-        # Same insurance-period close as utils/document_expiry.py's suspension:
-        # this write forced is_online=False, and once status is 'suspended'
-        # the 12h sweep's CAS matches zero rows, so it will never close the
-        # period for this driver. Never raises on a DB error.
-        await _deps.close_period_for_forced_offline(driver_id, reason="document_expired")
+        if availability_v2:
+            import uuid as _uuid
+
+            rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1, columns="user_id")
+            user_id = rows[0].get("user_id") if rows else None
+            if user_id:
+                try:
+                    result = await pause_driver_for_policy(
+                        user_id,
+                        blocking_statuses={"suspended"},
+                        request_id=f"document-expiry-{_uuid.uuid4()}",
+                    )
+                    if result.get("code") not in {"OK", "POLICY_STATE_CHANGED"}:
+                        logger.error("[ACCEPT] scoped document policy pause failed driver=%s result=%s", driver_id, result)
+                except Exception:
+                    logger.error("[ACCEPT] scoped document policy pause failed driver=%s", driver_id, exc_info=True)
+        else:
+            # Same insurance-period close as before the scoped protocol.
+            await _deps.close_period_for_forced_offline(driver_id, reason="document_expired")
 
 
 async def check_driver_documents_current(driver: Dict[str, Any]) -> None:

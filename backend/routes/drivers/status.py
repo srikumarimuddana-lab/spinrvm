@@ -31,6 +31,7 @@ from ._deps import (  # noqa: F401
     datetime,
     db_supabase,
     get_current_user,
+    get_token_session_id,
     logger,
     parse_iso_utc,
     reset_miss_streak,
@@ -42,6 +43,153 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+
+def _availability_error(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}
+
+
+async def _availability_v2_enabled() -> bool:
+    """Read the rollout gate directly; settings_loader's cache is not an authz gate."""
+    try:
+        rows = await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1)
+    except Exception as exc:
+        logger.error("driver availability rollout flag lookup failed", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to verify availability protocol."),
+        ) from exc
+    return bool(rows and rows[0].get("driver_availability_v2_enabled", False))
+
+
+async def _change_availability_status(user_id: str, command: dict, token_session_id: str | None) -> dict:
+    try:
+        from ...services.driver_availability_service import (
+            AvailabilityLookupError,
+            change_driver_availability,
+        )
+    except ImportError:  # pragma: no cover - top-level backend import mode
+        from services.driver_availability_service import (  # type: ignore
+            AvailabilityLookupError,
+            change_driver_availability,
+        )
+    try:
+        return await asyncio.wait_for(change_driver_availability(user_id, command, token_session_id), timeout=10)
+    except (AvailabilityLookupError, TimeoutError) as exc:
+        logger.error("driver availability command unavailable", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to update availability right now."),
+        ) from exc
+
+
+async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str | None = None) -> dict:
+    code = result.get("code")
+    if code != "OK":
+        status_by_code = {
+            "DRIVER_NOT_FOUND": 404,
+            "UNAUTHORIZED_SESSION": 409,
+            "SESSION_RECONCILE_REQUIRED": 409,
+            "CONTROLLER_SESSION_MISMATCH": 409,
+            "ONLINE_EPOCH_STALE": 409,
+            "IDEMPOTENCY_KEY_CONFLICT": 409,
+            "OBLIGATION_ACTIVE": 409,
+            "AVAILABILITY_V2_DISABLED": 409,
+            "AVAILABILITY_UPGRADE_REQUIRED": 409,
+            "ELIGIBILITY_BLOCKED": 409,
+            "INVALID_AVAILABILITY_COMMAND": 422,
+        }
+        safe_detail = {"code": code or "AVAILABILITY_UNAVAILABLE"}
+        for key in ("online_epoch", "state_version", "reason_code", "has_trip", "has_pending_offer"):
+            if key in result:
+                safe_detail[key] = result[key]
+        raise HTTPException(status_code=status_by_code.get(code, 503), detail=safe_detail)
+
+    transition = result.get("transition") or {}
+    action = transition.get("availability_reason")
+    transition_epoch = transition.get("online_epoch")
+    transition_version = transition.get("state_version")
+    snapshot_matches_transition = (
+        transition_epoch is not None
+        and transition_version is not None
+        and str(result.get("online_epoch")) == str(transition_epoch)
+        and str(result.get("state_version")) == str(transition_version)
+    )
+    if snapshot_matches_transition and result.get("is_online"):
+        try:
+            from ...utils.driver_presence import renew_driver_presence
+        except ImportError:  # pragma: no cover - top-level backend import mode
+            from utils.driver_presence import renew_driver_presence  # type: ignore
+        if not token_session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=_availability_error(
+                    "AVAILABILITY_UPGRADE_REQUIRED", "Reconnect to refresh driver availability."
+                ),
+            )
+        try:
+            epoch = int(str(transition_epoch))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=503,
+                detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to refresh driver availability."),
+            ) from None
+        presence = await renew_driver_presence(driver_id, token_session_id, epoch)
+        if presence.get("status") in {"stale_epoch", "offline"}:
+            raise HTTPException(
+                status_code=409, detail={"code": presence.get("code"), "online_epoch": presence.get("online_epoch")}
+            )
+        if (
+            action == "go_online"
+            and result.get("accepting_requests")
+            and result.get("is_available")
+            and not result.get("active_ride")
+            and not result.get("pending_offer")
+            and not result.get("offer_reconciliation_required")
+        ):
+            await reset_miss_streak(driver_id)
+    elif snapshot_matches_transition and not transition.get("is_online") and not result.get("is_online"):
+        # This transition has already advanced the durable epoch. Delete only
+        # its immediately preceding scoped lease; legacy clearing is reserved
+        # for the default-off branch.
+        try:
+            from ...utils.driver_presence import clear_scoped_driver_presence
+        except ImportError:  # pragma: no cover
+            from utils.driver_presence import clear_scoped_driver_presence  # type: ignore
+        if (
+            token_session_id
+            and str(transition_epoch).isascii()
+            and str(transition_epoch).isdecimal()
+            and int(transition_epoch) > 0
+        ):
+            await clear_scoped_driver_presence(driver_id, token_session_id, int(transition_epoch) - 1)
+    return {"success": True, **result}
+
+
+@router.get("/me/availability")
+async def get_my_availability(
+    current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
+):
+    """Return a safe, self-only availability snapshot."""
+    try:
+        from ...services.driver_availability_service import (
+            AvailabilityLookupError,
+            get_driver_availability,
+        )
+    except ImportError:  # pragma: no cover - top-level backend import mode
+        from services.driver_availability_service import (  # type: ignore
+            AvailabilityLookupError,
+            get_driver_availability,
+        )
+    try:
+        return await asyncio.wait_for(get_driver_availability(current_user["id"], token_session_id), timeout=10)
+    except (AvailabilityLookupError, TimeoutError) as exc:
+        logger.error("driver availability snapshot unavailable", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to check your availability right now."),
+        ) from exc
 
 
 # ─── Catch-all driver ID routes MUST be last to avoid shadowing named routes ───
@@ -129,7 +277,11 @@ async def update_driver_status(
     # default (0, 0) and be invisible to riders/admins.
     lat: Optional[float] = Body(None, embed=True),
     lng: Optional[float] = Body(None, embed=True),
+    online_epoch: Optional[str] = Body(None, embed=True),
+    request_id: Optional[str] = Body(None, embed=True),
+    availability_action: Optional[str] = Body(None, embed=True),
     current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
 ):
     """Toggle the driver's online flag (driver-facing "Go online" / "Go offline").
 
@@ -156,6 +308,40 @@ async def update_driver_status(
 
     if driver.get("user_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Read the rollout flag fresh before choosing a write path; the settings
+    # loader cache is not an authorization boundary for the protocol.
+    availability_v2_enabled = await _availability_v2_enabled()
+    if availability_v2_enabled:
+        v2_epoch = online_epoch if isinstance(online_epoch, str) else None
+        v2_request_id = request_id if isinstance(request_id, str) else None
+        v2_action = availability_action if isinstance(availability_action, str) else None
+        v2_action = v2_action or ("go_online" if is_online else "stop_requests")
+        if v2_action not in {"go_online", "go_offline", "stop_requests"}:
+            raise HTTPException(
+                status_code=422,
+                detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Unsupported availability action."),
+            )
+        if v2_epoch is None or v2_request_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail=_availability_error(
+                    "AVAILABILITY_UPGRADE_REQUIRED",
+                    "Update the driver app to reconcile availability before changing status.",
+                ),
+            )
+        if (v2_action == "go_online") != bool(is_online) or (v2_action == "go_offline" and is_online):
+            raise HTTPException(
+                status_code=422,
+                detail=_availability_error("INVALID_AVAILABILITY_COMMAND", "Action does not match requested status."),
+            )
+        if not is_online:
+            result = await _change_availability_status(
+                current_user["id"],
+                {"action": v2_action, "online_epoch": v2_epoch, "request_id": v2_request_id},
+                token_session_id,
+            )
+            return await _finish_v2_status(result, driver_id, token_session_id)
 
     # CR-4104 / A34 dual-run cutover guard: block go-online for a
     # legacy-imported driver an operator has confirmed is still active on
@@ -769,6 +955,14 @@ async def update_driver_status(
         # Anchor the quota day on the driver's service-area timezone (Regina
         # fallback) so the reset matches their local calendar day under DST.
         await assert_quota_available(driver_id, area_id=driver.get("service_area_id"))
+
+    if availability_v2_enabled:
+        result = await _change_availability_status(
+            current_user["id"],
+            {"action": v2_action, "online_epoch": v2_epoch, "request_id": v2_request_id},
+            token_session_id,
+        )
+        return await _finish_v2_status(result, driver_id, token_session_id)
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "

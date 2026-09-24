@@ -38,7 +38,15 @@ try:
     )
     from ..socket_manager import manager
     from ..utils import metrics
-    from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.driver_presence import (
+        bind_ws_presence_epoch,
+        clear_ws_presence,
+        mark_present,
+        renew_ws_batch_location,
+        renew_ws_presence,
+        scoped_marker_allows_fanout,
+        ws_session_was_superseded,
+    )
     from ..utils.error_handling import DatabaseError
     from ..utils.location_write_gate import should_write_marker
     from ..utils.redis_client import redis_expire, redis_incr
@@ -53,7 +61,15 @@ except ImportError:
     )
     from socket_manager import manager
     from utils import metrics  # type: ignore
-    from utils.driver_presence import clear_presence, mark_present
+    from utils.driver_presence import (  # type: ignore
+        bind_ws_presence_epoch,
+        clear_ws_presence,
+        mark_present,
+        renew_ws_batch_location,
+        renew_ws_presence,
+        scoped_marker_allows_fanout,
+        ws_session_was_superseded,
+    )
     from utils.error_handling import DatabaseError  # type: ignore
     from utils.location_write_gate import should_write_marker  # type: ignore
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
@@ -168,7 +184,10 @@ def _report_ws_marker_write_failure(driver_id, path, exc) -> None:
         logger.debug(f"[WS] marker-failure Sentry capture skipped: {_sentry_err}")
 
 
-async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
+async def _write_ws_marker(
+    driver_id, lat, lng, heading, captured_at, path, *, presence_session_id=None, presence_epoch=None
+):
+    fenced = presence_session_id is not None and presence_epoch is not None
     if await should_write_marker(driver_id, path=path, unthrottled_before=False):
         try:
             accepted = await db_supabase.update_driver_location(
@@ -177,6 +196,8 @@ async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
                 lng,
                 heading=heading,
                 captured_at=captured_at,
+                authenticated_session_id=presence_session_id,
+                online_epoch=presence_epoch,
             )
         except DatabaseError as exc:
             # Narrow on purpose: only a DB failure of the marker write is made
@@ -184,10 +205,9 @@ async def _write_ws_marker(driver_id, lat, lng, heading, captured_at, path):
             # live fan-out and presence continue (same rule as the REST v2
             # path: live delivery must not depend on the storage write).
             _report_ws_marker_write_failure(driver_id, path, exc)
-            return True
-        return accepted is not False
-    # Coalescing limits storage writes, not delivery of fresh sensor samples.
-    return True
+            return scoped_marker_allows_fanout(None, fenced=fenced, attempted=True)
+        return scoped_marker_allows_fanout(accepted, fenced=fenced)
+    return scoped_marker_allows_fanout(None, fenced=fenced, attempted=False)
 
 
 def _valid_live_coordinates(lat: float, lng: float) -> bool:
@@ -280,9 +300,28 @@ RIDE_STATUS_ECHO_COOLDOWN_S = 2.0
 
 def _safe_ws_close_reason(reason: str | None) -> str:
     # Close-frame text is peer-controlled. Never persist arbitrary text/PII.
-    if reason in ("app_backgrounded", "heartbeat_timeout", "token_revoked", "heartbeat_send_failed", "handler_error"):
+    if reason in (
+        "app_backgrounded",
+        "heartbeat_timeout",
+        "token_revoked",
+        "heartbeat_send_failed",
+        "handler_error",
+        "session_superseded",
+    ):
         return reason
     return "other" if reason else "unspecified"
+
+
+async def _close_superseded_ws(websocket, conn_state: dict, result: dict) -> bool:
+    """A DB-confirmed replacement session cannot keep uploading on this socket."""
+    if not ws_session_was_superseded(result):
+        return False
+    conn_state["presence_epoch"] = None
+    conn_state["presence_reconcile_required"] = True
+    conn_state["server_close_reason"] = "token_revoked"
+    await websocket.send_json({"type": "error", "message": "session_superseded"})
+    await websocket.close(code=1008, reason="session_superseded")
+    return True
 
 
 async def _handle_driver_ws_disconnect(
@@ -507,7 +546,7 @@ async def heartbeat_task(
                     # disconnect branch uses before its own cleanup.
                     if driver_id and manager.active_connections.get(connection_key) is websocket:
                         try:
-                            await clear_presence(driver_id)
+                            await clear_ws_presence(driver_id, conn_state or {})
                         except Exception:  # noqa: S110 — presence best-effort; TTL still bounds it
                             pass
                     try:
@@ -567,6 +606,7 @@ async def websocket_endpoint(
     user = None
     connection_key = None
     hb_task = None
+    requested_online_epoch: str | None = None
     conn_state: dict = {"connected_at": asyncio.get_running_loop().time()}
     # Track the driver row id when this socket authenticates as a driver so
     # the disconnect / error branches can clear Redis presence regardless of
@@ -594,6 +634,9 @@ async def websocket_endpoint(
             return
 
         token = auth_msg.get("token")
+        raw_online_epoch = auth_msg.get("online_epoch")
+        if isinstance(raw_online_epoch, str):
+            requested_online_epoch = raw_online_epoch
         # Phase 1 — token verification only, no DB. verify_id_token is a
         # synchronous crypto call (RSA verify + key fetch) that blocks the
         # event loop for tens of ms under cold-cache — enough to stall every
@@ -793,6 +836,31 @@ async def websocket_endpoint(
                 await websocket.close()
                 return
             current_driver_id = driver_profile["id"]
+            # Capture the controller fence once at handshake. A socket never
+            # adopts a later session/epoch after reconnect or an offline flip.
+            try:
+                availability_rows = await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1)
+                conn_state["availability_v2"] = bool(
+                    availability_rows and availability_rows[0].get("driver_availability_v2_enabled")
+                )
+                if conn_state["availability_v2"] and ws_session_id and requested_online_epoch is not None:
+                    try:
+                        from ..services.driver_availability_service import get_driver_availability
+                    except ImportError:  # pragma: no cover
+                        from services.driver_availability_service import get_driver_availability  # type: ignore
+                    availability = await get_driver_availability(user["id"], ws_session_id)
+                    bind_ws_presence_epoch(
+                        conn_state,
+                        ws_session_id,
+                        requested_online_epoch,
+                        availability,
+                    )
+                elif conn_state["availability_v2"]:
+                    conn_state["presence_reconcile_required"] = True
+            except Exception:
+                logger.opt(exception=True).error("WS availability fence lookup failed")
+                conn_state["availability_v2"] = True
+                conn_state["presence_reconcile_required"] = True
         elif client_type == "admin":
             # P0: gate on the private _admin_verified marker that ONLY
             # _verify_admin_payload sets after the full admin pipeline
@@ -820,7 +888,23 @@ async def websocket_endpoint(
         # message is the 30s-later heartbeat ping — the UI sits on
         # "Connection lost" for that whole window and users assume the
         # socket is broken (observed: repeated online toggles on Railway).
-        await websocket.send_json({"type": "auth_success", "client_type": client_type})
+        await websocket.send_json(
+            {
+                "type": "auth_success",
+                "client_type": client_type,
+                **(
+                    {
+                        "availability_protocol": "v2",
+                        "presence_status": "bound"
+                        if conn_state.get("presence_epoch") is not None
+                        else "reconcile_required",
+                        "online_epoch": conn_state.get("presence_epoch"),
+                    }
+                    if client_type == "driver" and conn_state.get("availability_v2")
+                    else {}
+                ),
+            }
+        )
 
         # Notify admins the driver's socket reconnected. Reflect whatever
         # the DB says about is_online — don't assume reconnect == online,
@@ -832,7 +916,20 @@ async def websocket_endpoint(
             # Uber/Lyft-style presence: socket is alive → driver is present.
             # Expires after PRESENCE_TTL if the socket dies without a
             # clean disconnect. Refreshed on every pong and location ping.
-            await mark_present(current_driver_id)
+            if conn_state.get("presence_epoch") is not None:
+                initial_presence = await renew_ws_presence(current_driver_id, conn_state)
+                if initial_presence.get("status") in {"stale_epoch", "offline"}:
+                    if await _close_superseded_ws(websocket, conn_state, initial_presence):
+                        return
+                    await websocket.send_json(
+                        {
+                            "type": "availability_reconcile_required",
+                            "code": initial_presence.get("code"),
+                            "online_epoch": initial_presence.get("online_epoch"),
+                        }
+                    )
+            elif not conn_state.get("availability_v2"):
+                await mark_present(current_driver_id)
             await manager.broadcast_to_admins(
                 {
                     "type": "driver_status_changed",
@@ -963,7 +1060,20 @@ async def websocket_endpoint(
                 # Refresh presence TTL on every heartbeat — this is the
                 # primary signal that the driver is still reachable.
                 if current_driver_id:
-                    await mark_present(current_driver_id)
+                    if conn_state.get("presence_epoch") is not None:
+                        pong_presence = await renew_ws_presence(current_driver_id, conn_state)
+                        if pong_presence.get("status") in {"stale_epoch", "offline"}:
+                            if await _close_superseded_ws(websocket, conn_state, pong_presence):
+                                continue
+                            await websocket.send_json(
+                                {
+                                    "type": "availability_reconcile_required",
+                                    "code": pong_presence.get("code"),
+                                    "online_epoch": pong_presence.get("online_epoch"),
+                                }
+                            )
+                    elif not conn_state.get("availability_v2"):
+                        await mark_present(current_driver_id)
                 continue
 
             if data.get("type") in ("driver_location", "location_update"):
@@ -977,7 +1087,10 @@ async def websocket_endpoint(
                 driver_id = current_driver_id if client_type == "driver" else None
 
                 if driver_id and lat is not None and lng is not None and _valid_live_coordinates(lat, lng):
-                    live_captured_at = _live_capture_time(data, allow_untimed=True)
+                    live_captured_at = _live_capture_time(
+                        data,
+                        allow_untimed=not conn_state.get("availability_v2"),
+                    )
                     if live_captured_at is None:
                         if data.get("durable", True) and not await _ws_session_revoked():
                             await buffer_ride_breadcrumb(driver_id, data)
@@ -993,6 +1106,31 @@ async def websocket_endpoint(
                     if not trusted:
                         continue
 
+                    if conn_state.get("availability_v2") and conn_state.get("presence_epoch") is None:
+                        if data.get("durable", True) and not await _ws_session_revoked():
+                            await buffer_ride_breadcrumb(driver_id, data)
+                        continue
+
+                    if conn_state.get("presence_epoch") is not None:
+                        presence_result = await renew_ws_presence(
+                            driver_id,
+                            conn_state,
+                            location_captured_at=_live_capture_time(data),
+                        )
+                        if presence_result.get("status") in {"stale_epoch", "offline"}:
+                            if await _close_superseded_ws(websocket, conn_state, presence_result):
+                                continue
+                            await websocket.send_json(
+                                {
+                                    "type": "availability_reconcile_required",
+                                    "code": presence_result.get("code"),
+                                    "online_epoch": presence_result.get("online_epoch"),
+                                }
+                            )
+                            if data.get("durable", True) and not await _ws_session_revoked():
+                                await buffer_ride_breadcrumb(driver_id, data)
+                            continue
+
                     # Persist to the authoritative drivers table, THROTTLED:
                     # at 1 Hz pings this was one Postgres UPDATE per second per
                     # driver (write amplification vs the 150ms location-write
@@ -1006,7 +1144,18 @@ async def websocket_endpoint(
                     # did neither, so a driver flushing REST while pinging over
                     # WS wrote this row from two uncoordinated throttles.
                     if not await _write_ws_marker(
-                        driver_id, lat, lng, data.get("heading"), live_captured_at, "ws_single"
+                        driver_id,
+                        lat,
+                        lng,
+                        data.get("heading"),
+                        live_captured_at,
+                        "ws_single",
+                        presence_session_id=conn_state.get("presence_session_id")
+                        if conn_state.get("presence_epoch") is not None
+                        else None,
+                        presence_epoch=int(conn_state["presence_epoch"])
+                        if conn_state.get("presence_epoch") is not None
+                        else None,
                     ):
                         if data.get("durable", True) and not await _ws_session_revoked():
                             await buffer_ride_breadcrumb(driver_id, data)
@@ -1014,7 +1163,8 @@ async def websocket_endpoint(
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
-                    await mark_present(driver_id)
+                    if not conn_state.get("availability_v2"):
+                        await mark_present(driver_id)
 
                     # Resolve active rides for rider fan-out. B3.1: served from
                     # a 5 s Redis cache — this runs on EVERY GPS ping and used
@@ -1210,6 +1360,18 @@ async def websocket_endpoint(
                     if await _ws_session_revoked():
                         await websocket.send_json({"type": "location_batch_ack", "count": 0})
                         continue
+                    if conn_state.get("presence_epoch") is not None:
+                        batch_contact = await renew_ws_presence(driver_id, conn_state)
+                        if batch_contact.get("status") in {"stale_epoch", "offline"}:
+                            if await _close_superseded_ws(websocket, conn_state, batch_contact):
+                                continue
+                            await websocket.send_json(
+                                {
+                                    "type": "availability_reconcile_required",
+                                    "code": batch_contact.get("code"),
+                                    "online_epoch": batch_contact.get("online_epoch"),
+                                }
+                            )
                     # Shared persistence with the REST path: server-derived phase
                     # per point (from its own timestamp vs the ride milestones),
                     # stale / other-ride discard, and the 500-point cap. Never
@@ -1247,10 +1409,42 @@ async def websocket_endpoint(
                             accuracy=last_pt.get("accuracy"),
                             mocked=last_pt.get("mocked"),
                         )
-                        if trusted and await _write_ws_marker(
-                            driver_id, _lat, _lng, last_pt.get("heading"), _batch_captured_at, "ws_batch"
+                        if trusted and conn_state.get("presence_epoch") is not None:
+                            presence_result = await renew_ws_batch_location(
+                                driver_id, conn_state, _batch_captured_at, trusted=trusted
+                            )
+                            if presence_result.get("status") in {"stale_epoch", "offline"}:
+                                if await _close_superseded_ws(websocket, conn_state, presence_result):
+                                    continue
+                                await websocket.send_json(
+                                    {
+                                        "type": "availability_reconcile_required",
+                                        "code": presence_result.get("code"),
+                                        "online_epoch": presence_result.get("online_epoch"),
+                                    }
+                                )
+                                await websocket.send_json({"type": "location_batch_ack", "count": inserted})
+                                continue
+                        if (
+                            trusted
+                            and not (conn_state.get("availability_v2") and conn_state.get("presence_epoch") is None)
+                            and await _write_ws_marker(
+                                driver_id,
+                                _lat,
+                                _lng,
+                                last_pt.get("heading"),
+                                _batch_captured_at,
+                                "ws_batch",
+                                presence_session_id=conn_state.get("presence_session_id")
+                                if conn_state.get("presence_epoch") is not None
+                                else None,
+                                presence_epoch=int(conn_state["presence_epoch"])
+                                if conn_state.get("presence_epoch") is not None
+                                else None,
+                            )
                         ):
-                            await mark_present(driver_id)
+                            if not conn_state.get("availability_v2"):
+                                await mark_present(driver_id)
 
                             # Fan-out latest batch position to riders — the single-ping
                             # handler does this for `driver_location` messages; batches

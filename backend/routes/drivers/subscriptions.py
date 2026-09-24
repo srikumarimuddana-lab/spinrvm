@@ -1674,6 +1674,19 @@ async def check_expiring_subscriptions():
             await asyncio.sleep(6 * 3600)
             continue
         try:
+            try:
+                try:
+                    from ...services.driver_availability_service import driver_availability_v2_enabled  # type: ignore
+                except ImportError:
+                    from services.driver_availability_service import driver_availability_v2_enabled  # type: ignore
+                availability_v2 = await driver_availability_v2_enabled()
+            except Exception:
+                # A rollout lookup failure must not authorize a raw/global offline path.
+                availability_v2 = True
+                logger.error(
+                    "[SUB-EXPIRY] availability mode unavailable; suppressing legacy offline enforcement",
+                    exc_info=True,
+                )
             now = datetime.now(timezone.utc)
             window_24h = now + timedelta(hours=24)
             window_3d = now + timedelta(hours=72)
@@ -1760,6 +1773,17 @@ async def check_expiring_subscriptions():
                         # Gate is off — just flip the row state, leave the
                         # driver alone. (They'll re-gate on next Go Online
                         # if the admin turns enforcement back on.)
+                        continue
+
+                    if availability_v2:
+                        # Keep entitlement distinct from online intent. Task4
+                        # admission/snapshot blocks new work with an explicit
+                        # subscription reason; existing obligations and their
+                        # contact/history path remain intact here.
+                        logger.info(
+                            "[SUB-EXPIRY] expired entitlement left online under availability v2 driver=%s",
+                            sub["driver_id"],
+                        )
                         continue
 
                     driver = await _deps.db.find_one("drivers", {"id": sub["driver_id"]})

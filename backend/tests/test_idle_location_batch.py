@@ -154,8 +154,10 @@ def test_parse_routes_idle_bodies_to_idle_model():
 def _wire_route(monkeypatch, *, flag=True, online=True, active_ride=None):
     driver = {"id": "drv-1", "user_id": "u-1", "is_online": online, "period1_accum_km": 1.0}
     monkeypatch.setattr(loc.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+    monkeypatch.setattr(loc, "_availability_v2_enabled", AsyncMock(return_value=False))
     update_one = AsyncMock(return_value=driver)
     monkeypatch.setattr(loc.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(loc.db_supabase, "update_driver_location", update_one)
     monkeypatch.setattr(loc._deps, "mark_present", AsyncMock())
     import backend.settings_loader as sl
 
@@ -177,9 +179,27 @@ async def test_route_persists_and_feeds_period1_accumulator(monkeypatch):
     ack = await loc._persist_v2_idle_batch(request, {"id": "u-1"})
 
     assert ack["acked_through"] == 1
-    fields = update_one.await_args.args[2]
-    assert "lat" in fields and "lng" in fields
-    assert fields["period1_accum_km"] > 1.0  # accumulated on top of the existing 1.0
+    assert update_one.await_args.args[1] == pytest.approx(52.13, abs=0.001)
+    assert update_one.await_args.args[2] == pytest.approx(-106.67)
+    assert update_one.await_args.kwargs["extra_fields"]["period1_accum_km"] > 1.0
+
+
+@pytest.mark.anyio
+async def test_v2_idle_batch_requires_epoch_before_durable_write(monkeypatch):
+    _wire_route(monkeypatch)
+    monkeypatch.setattr(loc, "_availability_v2_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(loc, "_current_online_epoch", AsyncMock(return_value="7"))
+    persist = AsyncMock()
+    monkeypatch.setattr(bc, "persist_idle_location_batch", persist)
+    request = loc.IdleLocationBatchRequest.model_validate(_idle_body())
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await loc._persist_v2_idle_batch(request, {"id": "u-1"}, "session-1")
+    assert exc.value.status_code == 409
+    assert exc.value.detail["reason_code"] == "ONLINE_EPOCH_REQUIRED"
+    persist.assert_not_awaited()
 
 
 @pytest.mark.anyio

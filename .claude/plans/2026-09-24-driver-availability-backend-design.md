@@ -641,3 +641,204 @@ The snapshot's `reason_code` gains LOCATION_STALE, SUBSCRIPTION_REQUIRED and QUO
 - /home/user/spinrvm/backend/routes/drivers/ride_flow.py
 - /home/user/spinrvm/backend/services/driver_availability_service.py
 - /home/user/spinrvm/backend/utils/error_handling.py
+
+---
+
+# Addendum A (2026-09-24): architect answers to mobile asks X1–X10, and must-fix F2(e)
+
+Binding together with the contract-decisions file, which still wins where they conflict. The architect withdrew these earlier drafts:
+- X4 via PUT status, and the field name `readiness_policy_enabled`;
+- the X6 commit (F8);
+- an opt-in `ERR_AUTH_UNAVAILABLE`;
+- extra `auto_offline` fields;
+- removing `controller_session_id`;
+- `system:logout_all`.
+
+## A1. Answers to X1–X10
+
+### X1 — Offer envelope: accepted as C1
+- `offer_id` is `ride_offers.id`, taken from v3's `INSERT … RETURNING id`. It is the same as `snapshot.pending_offer.id` and the new `pending_offer.offer_id` alias.
+- WS `new_ride_assignment` and FCM data carry:
+  - `offer_protocol:"v2"`, `offer_id`, `claim_id`;
+  - `online_epoch` as a decimal string;
+  - `server_time` (v3's returned DB time), `expires_at`, and `offer_expires_at` equal to `expires_at`;
+  - `countdown_seconds`.
+- FCM values are strings.
+- Admin-direct offers have no offer row. `offer_id` is null on WS and absent on FCM. The app sends no receipts and uses the legacy accept-by-ride.
+- The stored-offer GET and `pending_offer` also add `offer_protocol` and `server_time`, only when the row has `online_epoch` (T6-7).
+
+### X2 — Accept and decline: accepted as C2
+- Optional request body: `{offer_id, claim_id, online_epoch, request_id}`, plus `reason` for decline. Missing fields default to the offer row's values, and `request_id` defaults to `"{action}:{offer_id}:{session}"`.
+- Success responses only gain keys:
+  - accept → `{success:true, offer_id, already_accepted}`;
+  - decline → `{success:true, outcome, already_resolved}`.
+- Declining an offer that is no longer pending: the RPC releases the claim with `keep` and returns `OFFER_ALREADY_RESOLVED` plus the outcome. The HTTP response depends on the outcome:
+
+| Outcome | HTTP response |
+|---|---|
+| `declined` | 200 with `already_resolved:true` |
+| `expired_*` | 409 `OFFER_EXPIRED` |
+| `preempted` | 409 `RIDE_STATE_CONFLICT` / `RIDE_TAKEN` |
+| `cancelled` | 409 `RIDE_STATE_CONFLICT` / `RIDE_CANCELLED` |
+
+- Accepting an offer that was already declined → 409 `OFFER_ALREADY_RESOLVED`.
+- The 409 detail key is **`snapshot`**, built with `get_driver_availability(user_id, token_session_id)` after the RPC. On any exception, omit it and call `logger.error(..., exc_info=True)` (ride_flow uses stdlib logging).
+- Legacy offers and flag-off keep the 403 "No active offer for this ride".
+
+### X3 — Receipts: accepted with changes (C3)
+- `app_state` is one of `active|background|inactive|unknown`. It replaces `foreground` in the 460 CHECK, the `presented` rule and the seam predicate.
+- `presented` requires `active`, otherwise 422 `INVALID_RECEIPT`.
+- `remaining_ms` accepts any JSON number, is converted with `int(round(x))`, and must be within ±3,600,000 (else 422).
+- The primary key `(offer_id, session_id, event)` with `ON CONFLICT DO NOTHING` makes it idempotent. A duplicate returns 200 with `recorded:false`.
+
+### X4 — Confirm ready: accepted with changes (C4)
+- The command is `POST /api/v1/drivers/me/availability` with `{action:"confirm_ready", online_epoch, request_id}`. The snapshot fields are `readiness_enforced` and `readiness_prompt_at`.
+- A successful confirm changes only `ready_until`, `readiness_prompt_sent_for` and `state_version`. It does not bump the epoch or reset the miss streak.
+- A confirm after the deadline pauses the driver (`pause_idle`, epoch bump) and returns `READINESS_EXPIRED`.
+- Check order in `confirm_driver_ready` (replaces the backend design's order):
+  1. caller is not `users.current_session_id`, or is `system:` → `SESSION_SUPERSEDED`;
+  2. driver offline → `DRIVER_OFFLINE`;
+  3. controller is not the caller → `REQUESTS_PAUSED` with `reason_code:"CONTROLLER_SESSION_MISMATCH"`;
+  4. epoch differs → `ONLINE_EPOCH_STALE`;
+  5. not accepting → `REQUESTS_PAUSED`;
+  6. readiness enforced, driver idle, and `ready_until <= clock_timestamp()` → pause, then `READINESS_EXPIRED`;
+  7. otherwise → OK.
+
+### X5 — Stop requests when a session ends: accepted (C8, C9; T11 backend)
+New service function `stop_requests_for_session_end(user_id, *, cause: "logout"|"logout-all"|"superseded", ended_session_id)`. It returns `"stopped"`, `"skipped"`, `"legacy"` or `"failed"`. Steps:
+1. Read the flag with `settings_loader.get_app_settings()`. A read error or a missing flag → `"legacy"`.
+2. Read the driver with `driver_availability_repo.get_driver_availability_snapshot(user_id)`.
+   - controller is NULL → `"legacy"`;
+   - no driver, or not `is_online` → `"skipped"`;
+   - cause is `logout` and the controller is not `ended_session_id` → `"skipped"`.
+3. Call T1 with `(driver_id, epoch, "system:logout", "stop_requests", f"{cause}:{ended_session_id or 'all'}:{epoch}")`. The request id must be at most 128 characters.
+   - `ONLINE_EPOCH_STALE` → re-read once, re-check step 2, and retry once.
+   - OK → best-effort `clear_scoped_driver_presence(driver_id, controller, epoch)`, then `notify_availability_changed`.
+   - Anything else, or an exception → log with `exc_info=True` and return `"failed"`.
+
+What T1 then does:
+- No obligation → the driver goes offline and Period 0 opens.
+- An obligation → the driver stays online but not accepting; the trip and Period 2/3 are kept.
+- A pending offer runs out as `expired_availability_changed` (the epoch has moved, so no miss is counted). T5's `system:finalize` completes offline later.
+
+Wiring in auth (stdlib logger):
+- **`logout()`**: at the top, for a driver that has a `token_session_id`, call it with `cause="logout"` inside try/except, before `revoke_refresh_token`. Logout must never fail because of it.
+- **`_offline_driver_for_logout_all(user_id, *, cause="logout-all", ended_session_id=None)`**: call the service first and return unless it answered `"legacy"`. Under v2 with a controller, never run the raw offer declines or the raw offline + Period 0 writes, even on `"failed"`: they break epoch rules. The v3 predicate and the contact-gap reconciler protect a failed stop.
+- **Re-login cleanup** in verify-otp, firebase and `_cleanup_superseded_session`: pass `cause="superseded", ended_session_id=str(previous_session_id)`.
+- Keep exactly 5 `get_real_client_ip(request)` calls in auth.py. routes/admin/auth.py stays untouched.
+
+### X6 — Rejected (C5)
+- The 409 already carries the current epoch, and mobile §2.6 defers and reconciles.
+- **Enablement gate:** builds without T9 send no epoch. Under v2 their live location gets a 409 for the whole trip, which freezes the rider's map marker; trip history is not affected. **Do not enable v2 until the forced-upgrade floor is at or above T9.**
+
+### X7 — Accepted (C10)
+- refresh_tokens.py `lookup_refresh_token` raises `DatabaseError(message="Could not verify session; please try again") from e`, matching the users lookup nearby.
+- Not-found, revoked and expired still return None, so the anti-oracle rule is unchanged.
+- The client receives a 503 with `error.code 9005`. The shared client already exempts `/auth/refresh` from its automatic 503 retry. Admin refresh also becomes 503; that is intended, and routes/admin/auth.py stays unchanged.
+- Replace `test_lookup_refresh_token_db_error_returns_none` with `…_raises_503`, modelled on test_refresh_generation_binding.py.
+
+### X8 — Accepted, default off (C10)
+Needs a security audit before commit, and the flag is never enabled in this PR.
+
+**Migration 462.** `ALTER TABLE public.settings` goes on one line and `ADD COLUMN IF NOT EXISTS refresh_successor_commitment_enabled boolean NOT NULL DEFAULT false;` on the next, inside `BEGIN; SET LOCAL lock_timeout='2s'; … COMMIT; NOTIFY pgrst, 'reload schema';`, with a `-- Rollback:` comment.
+
+**`issue_refresh_token(..., raw: Optional[str] = None)`**:
+- uses `raw` when given;
+- on a UNIQUE conflict (`23505`) retries once with a server-generated token;
+- never logs token data.
+
+**`classify_committed_replay(parent_raw, proposed_raw) -> ("recover"|"dead"|"no_match", successor|None)`**:
+- The parent is not revoked, or has no `replaced_by` → `no_match`.
+- The successor's `token_hash` does not match sha256(proposed), compared with `hmac.compare_digest` → `no_match`.
+- `recover` only when all of these hold:
+  - same `user_id`;
+  - audience is rider or driver;
+  - successor not revoked and not expired;
+  - same `token_version`;
+  - `refresh_token_generation_matches(successor, user)`.
+- Anything else → `dead`. DB errors raise `DatabaseError`.
+
+**Route.**
+- `RefreshRequest.proposed_refresh_token: Optional[str]`, ignored unless it matches `^[A-Za-z0-9_-]{64}$` and the flag is on. An unreadable flag counts as off.
+- Classify before `lookup_refresh_token`:
+  - **recover**: load the user and `_enforce_account_active`. Build the response through a shared helper extracted from the normal path. Return `refresh_token = proposed` and `refresh_expires_at = successor.expires_at`. No new row, no cascade. Increment `spinr_auth_refresh_recovered_total`.
+  - **dead**: `TokenExpiredException` (401, code 1003), no cascade.
+  - **no_match**: today's path, rotating with `issue_refresh_token(..., raw=proposed)`.
+- Commits: 462 → 11-5b1 (tokens) → 11-5b2 (route) → 11-5b3 (docs/known-forks.md note: rider/driver only, by design).
+
+### X9 — Accepted with changes (C4)
+- `auto_offline` keeps its shape.
+- After every successful, non-replayed v2 **system** transition, `notify_availability_changed` (F2-9) sends WS `availability_changed {online_epoch, state_version, reason_code, server_time}` to `driver_{user_id}`.
+  - `reason_code` comes from `availability_reason_code(is_online, availability_reason)`, which is extracted from the snapshot mapping.
+  - `server_time` comes from T1's new `server_time` result key.
+- Emitters: policy pause, T5 expiry pause (still followed by `auto_offline`), the T12 reconciler, T12-7 stale-intent, T12-8 finalize, and the X5 stop. Commands the driver makes do not emit it.
+- T12-2's candidate rows carry `{driver_id, user_id, online_epoch, ready_until}`.
+
+### X10 — Rejected (C11)
+
+## A2. Findings (a) and (b)
+
+**(a) Confirmed and unintended.** With the flag off, an online driver shows `paused/REQUESTS_PAUSED` in the snapshot.
+- Fixed in F2-4: `accepting = bool(driver.get("accepting_requests")) if raw.get("protocol_enabled") else is_online`.
+
+**(b) Missed offers are counted exactly once under v2.**
+- The move from pending to terminal happens once, under the driver → ride → offer locks. The streak is incremented only for `expired_nonresponse`, in the same transaction.
+- The batch timeout and the reaper share the request id `expire:{offer_id}`, so the second call replays. With a different id, it gets `OFFER_ALREADY_RESOLVED` and no increment.
+- An accept at or after the deadline becomes `expired_late_response`, which is not a miss.
+- Crossing the threshold runs exactly one `pause_misses` (id `miss-pause:{offer_id}`), which resets the streak.
+- 459's seam keeps legacy counting until 460's receipt-based seam lands.
+- **Gate:** enable v2 only after 458, 459 and 460 are deployed and the D1 client is at the forced-upgrade floor.
+
+## A3. Must-fix F2(e): the newest login is told it has been superseded
+
+**Evidence.** Every path checks `users.current_session_id` before the controller. So a controller mismatch always means the *stored* controller is stale. But today:
+- renewal returns `CONTROLLER_SESSION_MISMATCH` even when the driver is offline;
+- presence maps that to `SESSION_SUPERSEDED`, and the WS closes with 1008;
+- live location returns 409 `SESSION_SUPERSEDED`;
+- the snapshot reports `SESSION_SUPERSEDED` whenever the controller is not the caller.
+
+Result: every new login loops through "session ended", and GO is never shown.
+
+**Fix.**
+- **F2-7** (457 in place):
+  - In `renew_driver_presence`, the order becomes flag, current session, epoch, offline, controller.
+  - The snapshot RPC adds `current_session_id` for server use only.
+- **F2-8a** (presence):
+  - `CONTROLLER_SESSION_MISMATCH` → `ONLINE_EPOCH_STALE` with `reason_code:"CONTROLLER_SESSION_MISMATCH"`.
+  - `UNAUTHORIZED_SESSION` stays `SESSION_SUPERSEDED`.
+  - `_presence_conflict` passes `reason_code` through (F2-6).
+- **F2-8b** (service), under v2:
+  - a controller but no caller session or no current session → `reconnecting/SESSION_RECONCILE_REQUIRED`;
+  - caller is not the current session → `reconnecting/SESSION_SUPERSEDED`;
+  - controller is not the caller and the driver is online → `paused/REQUESTS_PAUSED`; GO rebinds.
+  - Never send `current_session_id` to the client, and test that the key is absent.
+- **F2-1** (C7 as SQL):
+  - Remove `go_online` from the mismatch guard for non-system callers.
+  - Bind with `IF p_action IN ('go_online','displace_controller') THEN controller := caller`. The caller is always current, so this matches C7.
+  - `OBLIGATION_ACTIVE` still refuses GO during a trip or pending offer.
+  - The result gains `controller_rebound` and `server_time`.
+- **T5-2**, accept or decline:
+  - caller is not the current session → `SESSION_SUPERSEDED`;
+  - caller is current, but the offer's session or the controller differs → 409 `OFFER_EXPIRED` with `reason_code:"OFFER_SESSION_ENDED"`. No state change and no decision row.
+- **Tests** replace "online re-login still MISMATCH":
+  - re-login over an online old controller with no obligation → OK, new controller, epoch + 1;
+  - the same with a `driver_assigned` ride → `OBLIGATION_ACTIVE`;
+  - the old session → `UNAUTHORIZED_SESSION`;
+  - a system `go_online` → 22023.
+- **Known limitation:** after a re-login during a trip, phone B cannot move the rider's map marker until the trip ends. Trip batches still work. Active-trip takeover is out of scope.
+
+## A4. Revised commit order
+1. F1, then F2-1 … F2-9, then F3, F5, F7.
+2. T11-B1 (`stop_requests_for_session_end` + tests/test_driver_availability_session_end.py) and T11-B2 (auth wiring + tests/test_auth_logout_availability_v2.py). Both need F2-1, F2-2 and F2-9.
+3. T4, then T5 (with the X2 and F2(e) changes), then T6 (with the X3 changes), then T12 (confirm order, `user_id` in candidate rows, emitting through F2-9).
+
+11-5a (X7) can go at any time. X8 (462, 11-5b1–3) goes only after a `spinr-security-auditor` pass.
+
+## A5. Enablement gates
+| Setting | Enable only when |
+|---|---|
+| v2 | 458–460 are deployed and the mobile T7–T10 build is at the forced-upgrade floor |
+| Readiness | 461 is deployed, the T12 mobile work is shipped, and the copy has passed a legal check |
+| Successor commitment | a security audit has passed; never in this PR |
+
+The PR stays a draft with no flags enabled.

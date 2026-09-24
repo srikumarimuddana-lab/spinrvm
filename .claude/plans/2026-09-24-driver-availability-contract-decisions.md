@@ -5,7 +5,7 @@ Date: 2026-09-24. Lead reconciliation of the two architect designs:
 - backend: `.claude/plans/2026-09-24-driver-availability-backend-design.md`
 - mobile/auth: `.claude/plans/2026-09-24-driver-availability-mobile-auth-design.md`
 
-**This file wins wherever either design disagrees with it.** Anything not listed here follows the owning design as written.
+**This file wins wherever either design disagrees with it.** Backend design "Addendum A" is binding as well; where the two disagree, this file wins. Anything not listed here follows the owning design as written.
 
 ## Migration map
 
@@ -100,16 +100,19 @@ Flag-off strings are unchanged.
 ## C6. Structured 5xx and session codes
 
 - **F1.** 5xx dict details pass through the error handler only with the allow-listed keys `{code, reason_code, online_epoch, state_version, retry_after_ms}`.
-- **F3.** Status commands map `UNAUTHORIZED_SESSION` and `CONTROLLER_SESSION_MISMATCH` to `SESSION_SUPERSEDED`. The original goes in `reason_code`.
+- **F3, as amended by lead decision D-A.** Status commands map:
+  - `UNAUTHORIZED_SESSION` → 409 `SESSION_SUPERSEDED`;
+  - `CONTROLLER_SESSION_MISMATCH` → 409 `ONLINE_EPOCH_STALE` with `reason_code: "CONTROLLER_SESSION_MISMATCH"`.
+- **`SESSION_SUPERSEDED` must only ever reach an old, non-current session.** The newest login is never told its session ended (backend design Addendum A3, F2(e)).
 
 ## C7. Controller rebind (F2-1; closes the "re-login can never go online" gap)
 
-`go_online` from the caller's current session rebinds `controller_session_id` when any of these holds:
-- the controller is NULL;
-- the driver is offline;
-- the existing controller is no longer `users.current_session_id`, meaning it was superseded by a newer login.
+T1 already requires the caller to be `users.current_session_id`, so a controller that differs from the caller is always stale.
 
-A rebind always increments the epoch. Taking over from a session that is still current and online is still refused with `SESSION_SUPERSEDED` / `CONTROLLER_SESSION_MISMATCH`. Active-trip takeover remains out of scope.
+- `go_online` (and `displace_controller`) from the current session rebinds `controller_session_id` to the caller and bumps the epoch.
+- The existing `OBLIGATION_ACTIVE` check still refuses GO during a trip or a pending offer.
+- The newest login sees snapshot `paused/REQUESTS_PAUSED` with a GO action (Addendum A3).
+- Active-trip takeover is out of scope. The known limitation is recorded in Addendum A3.
 
 ## C8. System actors
 
@@ -117,14 +120,16 @@ The T1 session argument `system:<source>` is accepted only for these actions: `s
 
 The allowed sources are `policy`, `contact_gap`, `readiness`, `missed_offers`, `finalize`, `stale_intent` and **`logout`**. The last one is new, for the T11 backend.
 
-## C9. Logout (ask X5; T11 backend)
+## C9. Logout and re-login (ask X5; T11 backend)
 
-For drivers whose `controller_session_id` is set and when v2 is enabled:
-- `/auth/logout` runs T1 `stop_requests` with `system:logout` for the session being logged out, before revoking it. It does this only if that session is the controller.
-- `logout-all` does the same for the controller.
-- T5's `_finalize_deferred_availability_locked` completes the offline transition once no obligation remains.
+This follows backend design Addendum A1/X5: `stop_requests_for_session_end(user_id, cause, ended_session_id)` runs T1 `stop_requests` through `system:logout`.
 
-The legacy raw-offline write stays for flag-off. The mobile side still sends v2 stop fields on its pre-logout PUT (mobile 8-10/8-11). The server path makes logout correct for every client.
+It is wired into:
+- `/auth/logout`;
+- `logout-all`;
+- the three re-login cleanup sites (verify-otp, firebase, `_cleanup_superseded_session`), with `cause="superseded"`.
+
+Under v2 with a controller, the raw offer declines and the raw offline + Period 0 writes never run. Flag-off behaviour is unchanged. The mobile side still sends v2 stop fields on its pre-logout PUT.
 
 ## C10. Refresh-token hardening (T11 backend)
 

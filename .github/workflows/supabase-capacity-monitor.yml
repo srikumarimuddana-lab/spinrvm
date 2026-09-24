@@ -23,8 +23,15 @@ name: Supabase capacity monitor (optional)
 
 on:
   schedule:
-    # Daily 11:00 UTC.
-    - cron: "0 11 * * *"
+    # Mon/Wed/Fri 11:00 UTC.
+    # Reduced from daily (2026-09-23 CI-cost review, ahead of a possible
+    # repo-visibility change to private, where Actions minutes stop being
+    # free): database size grows gradually with real usage, not overnight,
+    # so a same-week check still gives days of runway before the
+    # docs/runbooks/capacity-scaling.md §9 ceiling this workflow watches
+    # for. If usage growth ever becomes bursty enough that days of latency
+    # matter, revert to daily rather than going more sparse.
+    - cron: "0 11 * * 1,3,5"
   workflow_dispatch:
     inputs:
       force_open_issue:

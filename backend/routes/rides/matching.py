@@ -622,6 +622,26 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
                     _metric_inc("spinr_dispatch_presence_filter_failed_total")
 
+                # ── Shadow mode: compare legacy presence with v2 evidence ─
+                if bool(app_settings.get("dispatch_admission_shadow_enabled")):
+                    try:
+                        _shadow_ids = {d["id"] for d in all_drivers}
+                        _shadow_admitted, _shadow_outcome = await _admit_v2(
+                            [d for d in all_drivers]
+                        )
+                        _shadow_v2_ids = {d["id"] for d in _shadow_admitted}
+                        _same = _shadow_ids & _shadow_v2_ids
+                        _legacy_only = _shadow_ids - _shadow_v2_ids
+                        _v2_only = _shadow_v2_ids - _shadow_ids
+                        if _same:
+                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "same"}, by=len(_same))
+                        if _legacy_only:
+                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "legacy_only"}, by=len(_legacy_only))
+                        if _v2_only:
+                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "v2_only"}, by=len(_v2_only))
+                    except Exception:
+                        logger.warning("[DISPATCH] shadow admission comparison failed")
+
             # Skip drivers who recently timed out or declined this specific offer
             # so the same driver is not hammered with repeat notifications. Batch the
             # lookups into one MGET — the old per-candidate redis_get was an N+1 on the

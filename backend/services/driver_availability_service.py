@@ -160,9 +160,7 @@ async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> 
             _area = _areas[0] if _areas else None
             _sub_required = bool(_area and _area.get("subscription_required"))
             if not _sub_required and _area and _area.get("parent_service_area_id"):
-                _parents = await db_supabase.get_rows(
-                    "service_areas", {"id": _area["parent_service_area_id"]}, limit=1
-                )
+                _parents = await db_supabase.get_rows("service_areas", {"id": _area["parent_service_area_id"]}, limit=1)
                 _parent = _parents[0] if _parents else None
                 _sub_required = bool(_parent and _parent.get("subscription_required"))
         except Exception as exc:
@@ -322,7 +320,20 @@ async def get_driver_availability(user_id: str, authenticated_session_id: str | 
     def safe_offer(value: dict[str, Any] | None) -> dict[str, Any] | None:
         if not value:
             return None
-        return {key: value.get(key) for key in ("id", "ride_id", "offered_at", "expires_at", "ride_status")}
+        offer = {key: value.get(key) for key in ("id", "ride_id", "offered_at", "expires_at", "ride_status")}
+        # v2 envelope (C1, T6-7): only offers created by the v3 claim carry
+        # online_epoch; legacy offers keep the original five keys.
+        if value.get("online_epoch") is not None:
+            offer.update(
+                {
+                    "offer_protocol": "v2",
+                    "offer_id": value.get("offer_id") or value.get("id"),
+                    "claim_id": value.get("claim_id"),
+                    "online_epoch": str(value.get("online_epoch")),
+                    "server_time": value.get("offered_at"),
+                }
+            )
+        return offer
 
     return {
         "protocol_enabled": bool(raw.get("protocol_enabled")),

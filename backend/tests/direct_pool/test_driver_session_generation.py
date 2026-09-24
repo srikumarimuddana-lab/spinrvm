@@ -22,7 +22,13 @@ def session_db(pg_cur):
         "VALUES ('login-user', 'mobile', 'rider', now()+interval '1 day'), "
         "('login-user', 'admin', 'admin', now()+interval '1 day')"
     )
-    from scripts.run_migrations import _split_sql_statements
+    try:
+        from backend.scripts.run_migrations import _split_sql_statements
+    except ImportError:  # pragma: no cover - import style varies by entrypoint
+        import sys as _sys
+
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+        from backend.scripts.run_migrations import _split_sql_statements
 
     for statement in _split_sql_statements(
         (migrations / "452_driver_session_generation.sql").read_text(encoding="utf-8")

@@ -247,7 +247,13 @@ def test_failed_insurance_result_rolls_back_availability_transition(availability
         assert cur.fetchone() == (0, None)
     finally:
         migrations = Path(__file__).resolve().parents[2] / "migrations"
-        from scripts.run_migrations import _split_sql_statements
+        try:
+            from backend.scripts.run_migrations import _split_sql_statements
+        except ImportError:  # pragma: no cover - import style varies by entrypoint
+            import sys as _sys
+
+            _sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+            from backend.scripts.run_migrations import _split_sql_statements
 
         for statement in _split_sql_statements(
             (migrations / "421_insurance_period_ride_identity.sql").read_text(encoding="utf-8")

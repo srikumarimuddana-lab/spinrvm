@@ -180,8 +180,7 @@ DECLARE
     v_claimed_count int := 0;
     v_claim_id uuid;
     v_offer_id uuid;
-    v_insurance_written boolean;
-    v_ins_status text;
+    v_period_result jsonb;
     -- candidate parse vars
     v_driver_id text;
     v_session_id text;
@@ -422,16 +421,13 @@ BEGIN
             UPDATE public.rides SET driver_notified_at = v_offer_now WHERE id = p_ride_id;
         END IF;
 
-        -- Insurance Period 2 (best-effort sub-transaction per 448 pattern)
-        v_insurance_written := true;
-        BEGIN
-            PERFORM public.record_insurance_period_transition(v_driver_id, 2::smallint, p_ride_id);
-        EXCEPTION WHEN OTHERS THEN
-            v_insurance_written := false;
-            RAISE WARNING
-                'dispatch_claim_offers_v3: insurance-period-2 write failed for driver % ride % — %',
-                v_driver_id, p_ride_id, SQLERRM;
-        END;
+        -- Claim, offer and insurance Period 2 are one transaction. Never
+        -- leave a dispatch-busy driver or live offer without its audit row.
+        v_period_result := public.record_insurance_period_transition(v_driver_id, 2::smallint, p_ride_id);
+        IF COALESCE(v_period_result->>'status','') NOT IN ('ok','noop') THEN
+            RAISE EXCEPTION 'dispatch_claim_offers_v3: insurance Period-2 transition failed for driver % ride %: %',
+                v_driver_id, p_ride_id, v_period_result USING ERRCODE = 'P0001';
+        END IF;
 
         v_claimed_count := v_claimed_count + 1;
         v_results := v_results || jsonb_build_object(
@@ -442,7 +438,7 @@ BEGIN
             'claim_id', v_claim_id,
             'online_epoch', v_driver.online_epoch::text,
             'eta_seconds', v_eta_seconds,
-            'insurance_written', v_insurance_written
+            'insurance_written', true
         );
     END LOOP;
 

@@ -100,6 +100,48 @@ def test_finalize_is_noop_when_accepting_or_other_reason(offer_db):
     assert _driver(cur)[0] is True
 
 
+@pytest.mark.parametrize("result", [None, {"status": "race", "opened": False}])
+def test_claim_rolls_back_when_period_2_is_not_recorded(offer_db, result):
+    cur = offer_db
+    cur.execute("UPDATE drivers SET location_captured_at=clock_timestamp() WHERE id='d1'")
+    cur.execute(
+        "INSERT INTO rides (id,rider_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('claim-insurance-failure','rider','a',0,0,'b',0,0,'searching')"
+    )
+    if result is None:
+        failure_body = "BEGIN RAISE EXCEPTION 'forced insurance failure'; END;"
+    else:
+        failure_body = "BEGIN RETURN '{\"status\":\"race\",\"opened\":false}'::jsonb; END;"
+    cur.execute(
+        "CREATE OR REPLACE FUNCTION public.record_insurance_period_transition("
+        "p_driver_id text,p_new_period smallint,p_ride_id text DEFAULT NULL) "
+        "RETURNS jsonb LANGUAGE plpgsql AS $$ " + failure_body + " $$"
+    )
+    try:
+        with pytest.raises(Exception, match="insurance"):
+            cur.execute(
+                "SELECT public.dispatch_claim_offers_v3(%s,"
+                "jsonb_build_array(jsonb_build_object("
+                "'driver_id','d1','session_id','sess-1','online_epoch','5',"
+                "'contact_valid_until',clock_timestamp()+interval '30 seconds',"
+                "'location_valid_until',clock_timestamp()+interval '30 seconds')),"
+                "1,15,false,'automatic')",
+                ("claim-insurance-failure",),
+            )
+    finally:
+        _apply(cur, "421_insurance_period_ride_identity.sql")
+
+    cur.execute("SELECT is_available,availability_claim_id FROM drivers WHERE id='d1'")
+    assert cur.fetchone() == (True, None)
+    cur.execute("SELECT count(*) FROM ride_offers WHERE ride_id='claim-insurance-failure'")
+    assert cur.fetchone()[0] == 0
+    cur.execute(
+        "SELECT count(*) FROM driver_insurance_periods WHERE driver_id='d1' "
+        "AND ride_id='claim-insurance-failure' AND period=2"
+    )
+    assert cur.fetchone()[0] == 0
+
+
 def test_finalize_blocked_by_obligation(offer_db):
     cur = offer_db
     cur.execute(

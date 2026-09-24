@@ -237,13 +237,23 @@ async def renew_driver_presence(
     if status != "renewed":
         external_code = {
             "UNAUTHORIZED_SESSION": "SESSION_SUPERSEDED",
-            "CONTROLLER_SESSION_MISMATCH": "SESSION_SUPERSEDED",
+            # F2-8a: a controller mismatch when the caller IS the current session
+            # means the stored controller is stale, not that the caller is. Map to
+            # ONLINE_EPOCH_STALE with the original code as reason_code.
+            "CONTROLLER_SESSION_MISMATCH": "ONLINE_EPOCH_STALE",
             "ONLINE_EPOCH_STALE": "ONLINE_EPOCH_STALE",
             "OFFLINE": "DRIVER_OFFLINE",
             "CONTACT_GAP": "CONTACT_GAP",
+            # F2-5: readiness-expired maps to itself.
+            "READINESS_EXPIRED": "READINESS_EXPIRED",
             "AVAILABILITY_V2_DISABLED": "AVAILABILITY_V2_DISABLED",
         }.get(code, code or "PRESENCE_UNAVAILABLE")
-        return {**result, "code": external_code}
+        mapped = {**result, "code": external_code}
+        # Preserve the original T1/renew code as reason_code when the external
+        # code differs, so _presence_conflict can pass it through.
+        if external_code != code and "reason_code" not in mapped:
+            mapped["reason_code"] = code
+        return mapped
 
     try:
         key = scoped_presence_key(driver_id, session_id, online_epoch)

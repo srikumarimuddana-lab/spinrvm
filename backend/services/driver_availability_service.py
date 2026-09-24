@@ -184,14 +184,22 @@ async def get_driver_availability(user_id: str, authenticated_session_id: str | 
     active_ride = raw.get("active_ride")
     pending_offer = raw.get("pending_offer")
     is_online = bool(driver.get("is_online"))
-    accepting = bool(driver.get("accepting_requests"))
+    # A2(a): with the flag off, an online driver must not show paused/REQUESTS_PAUSED.
+    accepting = bool(driver.get("accepting_requests")) if raw.get("protocol_enabled") else is_online
     reason = blocked_reason
     verification_reason = "DRIVER_UNVERIFIED" if driver.get("is_verified") is not True else None
-    controller_mismatch = bool(
-        raw.get("protocol_enabled")
-        and driver.get("controller_session_id")
-        and (not authenticated_session_id or driver.get("controller_session_id") != authenticated_session_id)
-    )
+    # F2-8b: session/controller checks use current_session_id from the snapshot.
+    # The newest login must never be told its session ended (Addendum A3).
+    has_controller = bool(raw.get("protocol_enabled") and driver.get("controller_session_id"))
+    current_session_id = raw.get("current_session_id")
+    if has_controller and (not authenticated_session_id or not current_session_id):
+        session_state = "SESSION_RECONCILE_REQUIRED"
+    elif has_controller and authenticated_session_id != current_session_id:
+        session_state = "SESSION_SUPERSEDED"
+    elif has_controller and driver.get("controller_session_id") != authenticated_session_id and is_online:
+        session_state = "REQUESTS_PAUSED"
+    else:
+        session_state = None
     if active_ride and active_ride.get("status") in _ACTIVE_RIDE_STATUSES:
         availability_state, reason = "paused", "ACTIVE_TRIP"
     elif blocked_reason:
@@ -200,15 +208,19 @@ async def get_driver_availability(user_id: str, authenticated_session_id: str | 
         availability_state, reason = "blocked", verification_reason
     elif raw.get("offer_reconciliation_required"):
         availability_state, reason = "reconnecting", "RECOVERY_REQUIRED"
-    elif controller_mismatch:
-        availability_state = "reconnecting"
-        reason = "SESSION_RECONCILE_REQUIRED" if not authenticated_session_id else "SESSION_SUPERSEDED"
+    elif session_state == "SESSION_RECONCILE_REQUIRED":
+        availability_state, reason = "reconnecting", "SESSION_RECONCILE_REQUIRED"
+    elif session_state == "SESSION_SUPERSEDED":
+        availability_state, reason = "reconnecting", "SESSION_SUPERSEDED"
+    elif session_state == "REQUESTS_PAUSED":
+        availability_state, reason = "paused", "REQUESTS_PAUSED"
     elif pending_offer:
         availability_state, reason = "paused", "OFFER_PENDING"
     elif is_online and accepting and bool(driver.get("is_available")):
         ready_until = _as_utc(driver.get("ready_until"))
         last_contact = _as_utc(driver.get("last_contact_at"))
-        if raw.get("protocol_enabled") and (ready_until is None or ready_until <= server_time):
+        # F2-4: READY_TIMEOUT only when readiness is enforced.
+        if raw.get("readiness_enforced") and (ready_until is None or ready_until <= server_time):
             availability_state, reason = "paused", "READY_TIMEOUT"
         elif raw.get("protocol_enabled") and (
             last_contact is None or (server_time - last_contact).total_seconds() > 90
@@ -268,6 +280,8 @@ async def get_driver_availability(user_id: str, authenticated_session_id: str | 
         "snapshot_issued_at": raw["server_time"],
         "last_contact_at": driver.get("last_contact_at"),
         "ready_until": driver.get("ready_until"),
+        "readiness_enforced": bool(raw.get("readiness_enforced")),
+        "readiness_prompt_at": raw.get("readiness_prompt_at"),
         "active_ride": safe_ride(active_ride),
         "pending_offer": safe_offer(pending_offer),
         "offer_reconciliation_required": bool(raw.get("offer_reconciliation_required")),

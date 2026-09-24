@@ -54,15 +54,19 @@ except ImportError:
 try:
     from .. import db_supabase as db
     from ..features import send_push_notification
+    from ..repositories import driver_availability_repo
     from ..settings_loader import get_app_settings
-    from .driver_presence import present_driver_ids_checked
+    from ..socket_manager import manager
+    from .driver_presence import present_driver_ids_checked, scoped_driver_presence_evidence
     from .insurance_periods import record_period_transition
     from .redis_client import get_redis_stats
 except ImportError:
     import db_supabase as db  # type: ignore
     from features import send_push_notification  # type: ignore
+    from repositories import driver_availability_repo  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
-    from utils.driver_presence import present_driver_ids_checked  # type: ignore
+    from socket_manager import manager  # type: ignore
+    from utils.driver_presence import present_driver_ids_checked, scoped_driver_presence_evidence  # type: ignore
     from utils.insurance_periods import record_period_transition  # type: ignore
     from utils.redis_client import get_redis_stats  # type: ignore
 
@@ -84,25 +88,144 @@ ACTIVE_RIDE_STATUSES = [
 ]
 
 
-async def _stale_hours() -> float | None:
-    """Configured threshold, or None when settings can't be read.
+async def _stale_settings() -> tuple[float, bool] | None:
+    """(threshold hours, availability v2 flag), or None when settings can't be read.
 
     A failed settings read must NOT silently fall back to the default: an
     operator may have raised the threshold (e.g. to 24h), and flipping
     drivers at 4h during a settings outage would override that. The caller
     skips the tick on None. The default only applies when settings load
-    fine but the key is absent/invalid.
+    fine but the key is absent/invalid. The v2 flag is read from the same
+    cached settings; the T1 RPC re-checks it authoritatively.
     """
     try:
         settings = await get_app_settings()
     except Exception as exc:
         logger.error(f"stale_intent: settings read failed — tick skipped: {exc}")
         return None
+    v2 = bool((settings or {}).get("driver_availability_v2_enabled"))
     try:
         hours = float(settings.get("stale_intent_offline_hours", DEFAULT_STALE_HOURS))
     except (TypeError, ValueError):
-        return DEFAULT_STALE_HOURS
-    return hours if hours > 0 else DEFAULT_STALE_HOURS
+        return DEFAULT_STALE_HOURS, v2
+    return (hours if hours > 0 else DEFAULT_STALE_HOURS), v2
+
+
+async def _notify_v2_pause(driver: dict, result: dict) -> None:
+    user_id = driver.get("user_id")
+    if not user_id:
+        return
+    try:
+        await manager.send_personal_message(
+            {
+                "type": "availability_changed",
+                "online_epoch": result.get("online_epoch"),
+                "state_version": result.get("state_version"),
+                "reason_code": "PRESENCE_UNAVAILABLE",
+                "server_time": result.get("server_time"),
+            },
+            f"driver_{user_id}",
+        )
+    except Exception as exc:
+        logger.warning(f"stale_intent: availability_changed WS failed for driver {driver.get('id')}: {exc}")
+    if result.get("is_online") is not False:
+        return  # still online for a trip; no "you're offline" push
+    try:
+        await send_push_notification(
+            str(user_id),
+            "You're now offline",
+            "We couldn't reach your app for a while, so you were taken "
+            "offline. Tap 'Go Online' when you're ready to drive again.",
+            data={"type": "auto_offline", "reason": "unreachable"},
+            target_app="driver",
+        )
+    except Exception as exc:
+        logger.warning(f"stale_intent: offline push failed for driver {driver.get('id')}: {exc}")
+
+
+async def _reconcile_stale_intent_v2(now: datetime, hours: float, stats: dict[str, int]) -> dict[str, int]:
+    """v2: pause long-unreachable drivers through T1 as ``system:stale_intent``.
+
+    Candidates are online drivers whose device-contact stamp is older than
+    the cutoff, plus legacy rows that never had one (NULL) and whose
+    ``updated_at`` is. T1 records Period 0 and bumps the epoch; the request
+    id ``stale-intent:{driver}:{epoch}`` makes a replayed tick a no-op.
+    """
+    cutoff = (now - timedelta(hours=hours)).isoformat()
+    columns = "id,user_id,online_epoch,controller_session_id,last_contact_at,updated_at"
+    queries = (
+        ({"is_online": True, "last_contact_at": {"$lt": cutoff}}, "last_contact_at"),
+        ({"is_online": True, "last_contact_at": None, "updated_at": {"$lt": cutoff}}, "updated_at"),
+    )
+    for filters, order in queries:
+        offset = 0
+        while stats["candidates"] < MAX_CANDIDATES_PER_TICK:
+            candidates = await db.get_rows(
+                "drivers", filters, order=order, limit=CANDIDATE_LIMIT, offset=offset, columns=columns
+            )
+            stats["candidates"] += len(candidates)
+            if not candidates:
+                break
+            ids = [str(d["id"]) for d in candidates if d.get("id")]
+            try:
+                evidence, reachable = await scoped_driver_presence_evidence(ids)
+            except Exception as exc:
+                logger.warning(f"stale_intent: scoped presence lookup failed — tick aborted: {exc}")
+                return stats
+            if not reachable:
+                logger.warning("stale_intent: scoped presence unreachable — tick aborted")
+                return stats
+            active_rides = await db.get_rows_batched_in(
+                "rides",
+                "driver_id",
+                ids,
+                {"status": {"$in": ACTIVE_RIDE_STATUSES}},
+                limit=CANDIDATE_LIMIT,
+                columns="id,driver_id",
+            )
+            drivers_on_ride = {str(r["driver_id"]) for r in active_rides if r.get("driver_id")}
+
+            page_skips = 0
+            for driver in candidates:
+                driver_id = str(driver["id"])
+                if driver_id in evidence:
+                    stats["skipped_present"] += 1
+                    page_skips += 1
+                    continue
+                if driver_id in drivers_on_ride:
+                    stats["skipped_active_ride"] += 1
+                    page_skips += 1
+                    continue
+                epoch = driver.get("online_epoch")
+                if type(epoch) is not int or epoch < 0:
+                    page_skips += 1
+                    continue
+                try:
+                    result = await driver_availability_repo.transition_driver_availability(
+                        driver_id,
+                        epoch,
+                        driver_availability_repo.system_actor("stale_intent"),
+                        "pause_unreachable",
+                        f"stale-intent:{driver_id}:{epoch}",
+                    )
+                except Exception as exc:
+                    logger.error(f"stale_intent: v2 pause failed for driver {driver_id}: {exc}", exc_info=True)
+                    page_skips += 1
+                    continue
+                if result.get("code") != "OK" or result.get("replayed"):
+                    page_skips += 1
+                    continue
+                if result.get("is_online") is not False:
+                    page_skips += 1
+                stats["flipped"] += 1
+                logger.info(f"stale_intent: driver {driver_id} paused unreachable (v2, epoch {epoch})")
+                await _notify_v2_pause(driver, result)
+            if len(candidates) < CANDIDATE_LIMIT:
+                break
+            offset += page_skips
+    if stats["flipped"]:
+        logger.info(f"stale_intent: {stats}")
+    return stats
 
 
 async def reconcile_stale_intent(now_utc: datetime | None = None) -> dict[str, int]:
@@ -116,11 +239,14 @@ async def reconcile_stale_intent(now_utc: datetime | None = None) -> dict[str, i
         logger.debug("stale_intent: Redis not connected — tick skipped")
         return stats
 
-    hours = await _stale_hours()
-    if hours is None:
+    loaded = await _stale_settings()
+    if loaded is None:
         return stats
+    hours, availability_v2 = loaded
 
     now = now_utc or datetime.now(timezone.utc)
+    if availability_v2:
+        return await _reconcile_stale_intent_v2(now, hours, stats)
     cutoff = (now - timedelta(hours=hours)).isoformat()
     now_iso = now.isoformat()
 

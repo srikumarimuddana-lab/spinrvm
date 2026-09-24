@@ -900,6 +900,57 @@ class TestUpdateMyDriverAutoCreateAndReview:
         notify_mock.assert_awaited_once()
         assert result["status"] == "needs_review"
 
+    async def test_obligation_check_runs_immediately_before_the_write(self):
+        """#5747: has_active_ride_obligation must be the last thing checked
+        before the drivers UPDATE, not re-used from an earlier snapshot with
+        real awaits (PII encryption, an availability-mode lookup) still ahead
+        of it — a driver could be assigned a new ride by dispatch in that gap
+        and this path would then force them offline / record Period 0 over a
+        live obligation it never saw."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {
+            "id": "d1",
+            "user_id": "u1",
+            "status": "active",
+            "is_online": True,
+            "vehicle_make": "Toyota",
+        }
+        updated = {**driver, "status": "needs_review", "is_online": False, "is_available": False}
+        call_order: list[str] = []
+
+        async def _encrypt(d):
+            call_order.append("encrypt")
+            return d
+
+        async def _obligation_check(_driver_id):
+            call_order.append("obligation_check")
+            return False
+
+        async def _update_one(*a, **kw):
+            call_order.append("update_one")
+            return None
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.profile.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.drivers.profile.db_supabase.get_driver_by_id", AsyncMock(return_value=updated)),
+            patch("backend.routes.drivers.profile._shared._encrypt_driver_pii", AsyncMock(side_effect=_encrypt)),
+            patch("backend.routes.drivers.profile._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.notify_driver_status_change", AsyncMock()),
+            patch("backend.utils.driver_status_notifications.status_message", return_value="needs review"),
+            patch(
+                "backend.routes.drivers.profile._deps.has_active_ride_obligation",
+                AsyncMock(side_effect=_obligation_check),
+            ),
+            patch("backend.routes.drivers.profile._deps.record_period_transition", AsyncMock()),
+        ):
+            req = profile_mod.UpdateDriverProfileRequest(vehicle_make="Honda")
+            await profile_mod.update_my_driver(body=req, current_user={"id": "u1"})
+
+        assert call_order == ["encrypt", "obligation_check", "update_one"], call_order
+
     async def test_mid_trip_vehicle_change_flags_review_but_defers_offline_and_period(self):
         """2026-09-23 mid-trip guard: a driver with an obligated ride (or a
         pending offer) who edits a vehicle/document field is still flagged

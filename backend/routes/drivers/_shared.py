@@ -1032,8 +1032,12 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
     CAS on status != 'suspended' so a concurrent request/sweep tick doesn't
     double-write. Failure here must NOT block the caller's rejection of this
     accept — the accept is already being denied via the SpinrException the
-    caller raises; a failed suspend-write just means the sweep catches it
-    later, same as today.
+    caller raises; a failed *status* write just means the sweep catches it
+    later, same as today. That self-healing claim does NOT extend to the v2
+    availability-pause step below the status write: once status='suspended'
+    lands, the sweep's own CAS (status != 'suspended') never re-matches this
+    driver, so a failed/skipped pause here is never retried by anyone — it
+    must be logged loudly, not treated as "the sweep will catch it."
     """
     try:
         try:
@@ -1088,9 +1092,22 @@ async def _suspend_driver_for_expired_documents(driver_id: str, expired_labels: 
                         request_id=f"document-expiry-{_uuid.uuid4()}",
                     )
                     if result.get("code") not in {"OK", "POLICY_STATE_CHANGED"}:
-                        logger.error("[ACCEPT] scoped document policy pause failed driver=%s result=%s", driver_id, result)
+                        logger.error(
+                            "[ACCEPT] scoped document policy pause failed driver=%s result=%s", driver_id, result
+                        )
                 except Exception:
                     logger.error("[ACCEPT] scoped document policy pause failed driver=%s", driver_id, exc_info=True)
+            else:
+                # Not self-healing: the status write above already landed, so
+                # the 12h sweep's own CAS (status != 'suspended') will never
+                # re-match this driver and retry the pause. Unlike the
+                # status-write failure above, this must surface loudly.
+                logger.error(
+                    "[ACCEPT] scoped document policy pause skipped for driver=%s — "
+                    "user_id lookup returned no row; driver is status=suspended "
+                    "but was never taken through the availability-pause fence",
+                    driver_id,
+                )
         else:
             # Same insurance-period close as before the scoped protocol.
             await _deps.close_period_for_forced_offline(driver_id, reason="document_expired")

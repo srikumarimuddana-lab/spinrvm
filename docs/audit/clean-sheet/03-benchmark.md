@@ -313,7 +313,7 @@ lacks or has only partially built. Each is a §7.1-format finding card.
 - Severity: MEDIUM-HIGH   Priority score: S×B×L = high × high × medium (driver-retention-relevant; Uber/Lyft treat Instant Pay as a headline driver-facing benefit)
 - Status: VERIFIED (this lane, direct code read)   Existing item: new — not previously filed as its own finding; `strategy.md` U5 notes the fee mechanics but not the missing UI
 - Adversary: none directly, but a real retention/competitive-disadvantage risk — CLAUDE.md's own "Weekly active driver retention" KPI is below target territory territory and Uber/Lyft's own driver-facing marketing leans on Instant Pay/Express Pay as a differentiator
-- Evidence: `backend/routes/drivers/payouts.py:829-887` (instant-payout endpoint, fee schema, and its own code comment: "don't advertise instant payout while the driver app has no instant-payout UI to tap"); `driver-app/app/driver/payout.tsx` and `payout-history.tsx` (grepped for "instant" — zero hits, confirming the comment)
+- Evidence: `backend/routes/drivers/payouts.py:1081` (`POST /payouts/instant` endpoint) and `:829-887` (fee schema, and its own code comment: "don't advertise instant payout while the driver app has no instant-payout UI to tap"); `driver-app/app/driver/payout.tsx` and `payout-history.tsx` (grepped for "instant" — zero hits, confirming the comment)
 - What happens (plain language): the fee-bearing instant cash-out that would match Uber Instant Pay / Lyft Express Pay already works on the server; a driver has no way to trigger it from the app they actually use.
 - Root cause: same "server built, client orphaned" pattern as `RIDERJ-001` — a second, independently-discovered instance of it in this audit.
 - Recommendation: build the driver-app instant-payout screen against the existing endpoint.   Alternative considered: leave weekly-only and market 0% commission instead of instant pay as the retention lever — plausible, but should be a deliberate product decision (see §9), not a silent gap.
@@ -373,3 +373,261 @@ lacks or has only partially built. Each is a §7.1-format finding card.
 - Rollout: additive (fixes existing broken UX, no new surface).   Rollback: revert to the greyed toggle (not a regression from today).
 - Verification to close: a WAV request in a service area with zero WAV drivers online shows the documented fallback message, not a silent dead toggle.
 
+
+### BENCH-009 — No automated recovery for an in-progress ride abandoned by a dead/killed driver phone; RideCheck/Smart Trip Check-In-class proactive detection does not exist
+- Hierarchy: L2 Ride Fulfillment › L3 Driver-side ride flow › L4 S-fulfil-10 › L5 driver's phone dies or the app is force-killed mid-trip
+- Severity: HIGH   Priority score: S×B×L = high × high × low-medium (rare but high-impact — a stranded rider with no resolution path)
+- Status: VERIFIED   Existing item: `DRIVER-005`, `RIDERJ-002`
+- Adversary: hostile network/device persona (flaky network, force-killed app), and the rider left stranded is a real safety exposure, not just a UX one
+- Evidence: `DRIVER-005` (alert-only detection + manual admin closure only); `RIDERJ-002` (rider has no self-facing resolution)
+- What happens (plain language): both Uber and Lyft proactively detect an unexpectedly-stopped or early-ended trip and check in with both parties automatically; Spinr detects the same condition but only alerts an admin, who must notice and act manually, while the rider sees nothing.
+- Root cause: route-deviation/stuck-ride detection was built as an ops alerting feature, not as a rider/driver-facing automated recovery flow.
+- Recommendation: extend the existing stuck-ride sweeper loop (already in CLAUDE.md's loop registry) to trigger a rider-facing "having trouble reaching your driver?" prompt with a one-tap rebook/cancel-without-fee path, mirroring RideCheck/Smart Trip Check-In's pattern.   Alternative considered: keep admin-only and rely on faster admin response times — rejected: this is a safety-adjacent gap during live app testing and the fix is additive to an existing loop, not a new subsystem.
+- Blast radius: `stuck-ride sweeper` loop (CLAUDE.md-named), rider-app in-trip screen (net-new prompt).
+- Rollout: additive, flagged.   Rollback: flag off, current alert-only behavior unchanged.
+- Verification to close: a simulated dead-driver-app scenario in the `mock_supabase_client` fixture set produces a rider-facing prompt within a bounded time window.
+
+### BENCH-010 — No customer-facing outage/incident communications; no-show fee push has no dispute affordance
+- Hierarchy: L2 Notifications & Messaging › L3 In-app notifications (+ cross-cutting: Reliability) › L4 S-notif-03 › L5 a platform-wide outage, or a disputed no-show charge
+- Severity: MEDIUM   Priority score: S×B×L = medium × medium × medium
+- Status: VERIFIED   Existing item: `SKB-004` (no status page/outage copy), `SKB-007` (no-show fee push has no dispute-affordance, on "the most disputable charge" per the support-kb lane's own channel-coverage audit)
+- Adversary: none directly — a trust/CSAT gap, and a compounding factor on top of `BENCH-002`'s missing rider dispute path
+- Evidence: `SKB-004`, `SKB-007`
+- What happens (plain language): during an outage, riders/drivers get silence instead of a status update; when charged a no-show fee (the single most commonly disputed charge type per Spinr's own support-tooling audit), the notification that informs them of the charge gives no way to contest it from that notification.
+- Root cause: incident-comms tooling and dispute-affordance-on-charge-notifications were never built as first-class features — a gap common to a young platform, but a known industry table-stake for the two competitors here.
+- Recommendation: (1) a minimal status page or templated in-app banner for known outages; (2) add a "dispute this charge" deep link to the no-show fee push, feeding into `BENCH-002`'s rider dispute path once built.   Alternative considered: rely on support-ticket volume as the outage signal — rejected: reactive, not proactive, and doesn't fix the no-show dispute gap either.
+- Blast radius: `routes/rides/ride_cancel.py:808-814` (no-show push), new status-page surface (net-new, low blast radius).
+- Rollout: additive.   Rollback: N/A (no existing behavior removed).
+- Verification to close: a no-show push notification includes a working dispute deep link in a manual test; an outage-comms template exists and is reachable without deploying code.
+
+---
+
+## §4 Where Spinr is ahead
+
+**Steelman first.**
+
+1. **0% driver commission, disclosed at the fare layer.** `strategy.md`'s own worked example
+   (VERIFIED, `payouts.py`/`fare_service.py` read) confirms `driver_earnings = total_fare −
+   (booking_fee + airport_fee)`, both disclosed line items, tip 100% to driver — genuinely true at
+   the fare layer, a real structural difference from Uber's ~25-30% effective take rate (VERIFIED,
+   [Uber's own driver-earnings explainer](https://medium.com/uber-under-the-hood/understanding-ubers-share-of-driver-earnings-899d5eb733bd)
+   and `strategy.md`'s worked comparison). This is a genuine, defensible product edge — Maturity 5,
+   GREEN, on the narrow claim "driver keeps the fare."
+2. **Insurance-period tracking as an append-only, per-second audit trail.** CLAUDE.md's four-period
+   model (`backend/utils/insurance_periods.py`) with mandatory append-only logging for a 7-year
+   regulatory window is a level of auditability Uber/Lyft don't publish at this granularity (their
+   coverage-tier structure is disclosed at a policy level, not as a queryable state machine).
+   Maturity 4-5, GREEN, genuinely differentiated *if* the enforcement gaps below don't undermine it.
+3. **Surge cap (2.5x hard ceiling, disclosed pre-booking) vs Uber's uncapped, opaque-multiplier
+   model.** Uber's own help pages (VERIFIED) no longer always show the exact multiplier, and surge
+   can reach 7-8x in extreme events; Spinr's cap and pre-booking disclosure is a real trust
+   advantage, even though the *engine* itself (§2) is technically less sophisticated (area-level,
+   not micro-zone). This is the clearest case in this report of "behind on sophistication, ahead on
+   trust" — the two are genuinely different axes and shouldn't be collapsed.
+4. **Saskatchewan-specific compliance scaffolding exists as code, not just policy** — insurance
+   periods, document-expiry gates, T4A generation, GST/PST line items are all *present* as real
+   code paths (even where individual line items have defects, per `compliance.md`/`money-cra.md`).
+   Uber/Lyft's Canadian compliance posture is not independently verifiable from public sources
+   (UNKNOWN) — Spinr's is at least auditable because it's a small, single-market codebase.
+5. **Corporate wallet as a first-class, row-level-locked ledger function** (`corporate_wallet_apply_delta`)
+   is architecturally sound (idempotent by design, even where two TOCTOU-class bugs were found and
+   are noted as risks in `CORP-001`-`003`) — this is a genuine engineering asset for the
+   "profit engine" epic, even though it is not yet a sellable product (§2's Invoicing/subscriptions
+   row, RED).
+
+**Now attack — is each lead real in code, or only in docs?**
+
+1. **0% commission** — real in code (VERIFIED), but `STRAT-002`/`STRAT-003` (per-ride contribution
+   margin is negative, and "100% of your fare" is only true because the booking fee is currently
+   switched off) mean the *business model* behind the claim is not yet sustainable at $0 booking
+   fee. The rider-facing claim is true today; whether it survives the fee being turned back on
+   (which the strategy lane flags as likely necessary) is an open question, not a settled edge.
+2. **Insurance-period auditability** — real in code, but `SAFETY-003`/`COMP-014` (cited in
+   `compliance.md`) note "declared online but unreachable" keeps an open Period 1 row, and the
+   audit trail can't distinguish "waiting" from "phone dead." The *mechanism* is ahead; its
+   *coverage of edge cases* has known gaps, so the lead is real but not yet airtight.
+3. **Surge cap** — real and simple to verify (`SURGE_CAP = 2.5` in code, VERIFIED), a genuinely
+   durable trust advantage that's cheap to keep. This is the strongest "ahead" claim in this report
+   because it requires no further work to remain true — it just needs to not be relaxed (CLAUDE.md
+   already says as much: "Never suggest raising it without explicit business + legal review").
+4. **Compliance-as-code** — real code exists, but `compliance.md`'s own COMP-001 through COMP-018
+   findings (18 of them) show most SK-specific rules beyond document expiry are flag-gated *off* in
+   production (`COMP-002`). The scaffolding is ahead; the live enforcement is not — this is the
+   single biggest gap between "ahead in the codebase" and "ahead in what a rider/driver/regulator
+   actually experiences today."
+5. **Corporate wallet ledger** — architecturally sound, but unsellable (`STRAT-010`): no self-serve
+   signup for pricing, no MRR metric, billing dark. An engineering asset without a go-to-market is
+   not yet a competitive lead — it's potential.
+
+**Net read:** Spinr's clearest, most durable lead is the disclosed surge cap and the fare-layer 0%
+commission claim (both cheap to keep true and independently verifiable in code today). Its other
+claimed leads are real architecture with real enforcement gaps — "ahead in the codebase, not yet
+ahead in what happens in production" is the correct, more precise framing for insurance-period
+tracking and compliance-as-code specifically.
+
+---
+
+
+## §5 Deliberately do NOT copy
+
+Per CLAUDE.md's "What Spinr Is NOT," these Uber/Lyft patterns are explicitly out of scope, and
+this section flags where Spinr has already drifted toward one.
+
+| Uber/Lyft pattern | Why Spinr should not copy it | Has Spinr already drifted? |
+|---|---|---|
+| Uncapped/opaque surge (7-8x observed, multiplier not always shown) | CLAUDE.md: "Not a surge-first product... Never hide surge before booking confirmation" | **No drift found.** `SURGE_CAP = 2.5` is enforced at every fare-calc call site per CLAUDE.md's own description, re-confirmed by `money-cra.md`/`dispatch.md` not flagging a bypass. Keep watching — this is the asset from §4, don't let it erode. |
+| Third-party ad SDKs / behavioral retargeting (Uber's own first-party "Journey Ads"/"Journey Takeover" business, $2B+ 2025 revenue, now expanding to third-party programmatic and off-platform placements) | CLAUDE.md: "Not a data-harvesting product... Never add third-party ad SDKs or behavioral retargeting" | **Yes — this is the report's most serious "do not copy, but did" finding.** `STRAT-004` (`strategy.md`, VERIFIED): a Meta ad SDK is integrated with per-ride `Purchase` conversion events, undisclosed to users, and collides directly with the "no ad SDKs" guardrail. This is not Uber's own first-party in-app ad placements (which Spinr isn't attempting) — it is worse in one specific way: it sends *ride-taking behavior* to a third-party ad network for conversion optimization, which is exactly the "behavioral retargeting" pattern CLAUDE.md names as prohibited. Escalate per gate 9 (this touches the "What Spinr Is NOT" guardrail directly) — do not treat as a routine cleanup item. |
+| Driver acceptance-rate penalties with insufficient disclosure | CLAUDE.md: "Not a driver-control platform... don't dictate shifts... Features that nudge toward control-of-work patterns require legal review" — and separately, Uber's *own* policy publicly discloses the mechanism (see §2's Offer acceptance/decline row) | **Yes — partial drift.** `DRIVER-004`: a driver's decline of an offer lowers their future offer priority, and this is undisclosed anywhere in-app. The mechanism itself (temporarily deprioritizing low-acceptance drivers) is not unusual — Uber does something similar — but Uber *discloses* it in a public policy page. Spinr's version is the same control lever with less transparency than the platform CLAUDE.md explicitly warns against emulating. Fix is disclosure, not necessarily removal of the mechanism (see `BENCH-007`-adjacent recommendation in driver-journey.md). |
+| Hidden/bundled service fees (a fee not mapped to a disclosed receipt line) | CLAUDE.md: "Not a hidden-fee operator... Every charge on the receipt maps to a disclosed line item" | **Partial, flagged not confirmed.** `strategy.md` §2.2 U3: an airport surcharge is retained as platform revenue with no remittance path found — "if the airport charges Spinr a fee, that is a pass-through; if not, it is a location-based platform fee labelled 'surcharge.'" This is UNKNOWN, not confirmed drift — flagged in `strategy.md` as needing a founder/finance answer, carried into this report's §9. |
+| Percentage-commission monetization | CLAUDE.md: "Not a commission-taking marketplace. Driver keeps 100% of the fare" | **Live code contradicts the stated model, though not yet exercised on a rider.** `STRAT-005`: `platform_fee_percent` is an admin-writable percentage-commission setting with no reader (dead config, not active commission-taking) — worth closing (remove the dead field or explicitly document why it exists) so it can't be silently activated later without anyone noticing it violates the stated model. |
+| Control-of-work language (mandatory shifts, uniforms, quota-style passes) | CLAUDE.md: "Not a driver-control platform... Any control-of-work language... triggers re-classification risk" | **Flagged, not fully confirmed this pass.** `strategy.md` cites a "Spinr Pass" driver N-day pass with a daily ride quota as a "pay-to-work" optics risk, recommending it be modified into an optional, benefits-based subscription rather than a licence to work. This wasn't independently re-verified by this lane — carried forward as an open item from `strategy.md`, not re-derived here. |
+
+**Where Spinr should stay clearly ahead by construction:** Uber's 2026 advertising expansion
+(Journey Takeover, Offsite Ads reaching Google Shopping, $2B+ ad revenue) is the clearest sign the
+incumbents are trending toward exactly what CLAUDE.md prohibits. This is a genuine long-run
+positioning opportunity for Spinr — "we will never sell your ride data to advertisers" is a
+credible claim only as long as `STRAT-004` is fixed, not while it's open.
+
+---
+
+## §6 Fairness benchmark
+
+**What incumbents publish (or have had published about them):** a peer-reviewed-adjacent 2020-2021
+study (Pandey & Caliskan, George Washington University; analyzed 100M+ Chicago trips,
+Nov 2018-Dec 2019) found Uber and Lyft's per-mile fares were systematically higher for trips with a
+pickup or dropoff in neighborhoods with a higher non-white population share, lower median house
+price, or lower average education level, even after controlling for demand/speed — described by
+the researchers as "social bias" in dynamic pricing, not proven discriminatory intent (VERIFIED,
+[CACM coverage](https://cacm.acm.org/news/245817-uber-lyft-pricing-algorithms-charge-more-in-non-white-areas/fulltext?mobile=false),
+[VentureBeat](https://venturebeat.com/ai/researchers-find-racial-discrimination-in-dynamic-pricing-algorithms-used-by-uber-lyft-and-others)).
+An earlier 2016 study (cited in the same coverage) found cancellation-rate disparities by
+passenger-name-inferred race. Neither company has published its own fairness-by-neighborhood
+methodology or a rebuttal dataset publicly (UNKNOWN — Uber's public statement disputed the
+causal framing but did not release its own neighborhood-level fairness analysis, per the same
+sources).
+
+**What Spinr can measure today (VERIFIED against code, not aspirational):**
+- Surge is computed per **service area**, not per micro-zone (`backend/utils/surge_engine.py`,
+  CLAUDE.md's tier table) — this is coarser than Uber/Lyft's few-block zones, which cuts both ways:
+  it's *less* able to price-discriminate at a fine neighborhood level than Uber/Lyft's own studied
+  mechanism, but it's also less responsive to genuine hyper-local demand spikes. This coarseness is
+  a plausible, if unproven, structural mitigant against the exact bias pattern the Chicago study
+  found — worth stating as a hypothesis, not a proven fairness property (INFERRED, not VERIFIED;
+  nobody has run the equivalent study on Spinr's own trip data).
+- Dispatch matching logic (`services/dispatch_service.py`) was not re-read line-by-line by this
+  lane for any neighborhood/demographic signal — none was found by W1-W3 either (no finding in
+  `dispatch.md` mentions demographic or neighborhood-based dispatch weighting). Absence of evidence
+  is not evidence of absence here; nobody has run a fairness audit on Spinr's own dispatch data.
+- Spinr has no published or internal-only fairness-by-neighborhood metric today (UNKNOWN — not
+  found in `admin-dashboard`'s analytics endpoints per the epics inventory, and not named in any
+  W1-W3 finding).
+
+**Recommendation (PROPOSED, net-new — not previously flagged by any W1-W3 lane):** before Spinr
+scales beyond Saskatchewan, run an internal, Chicago-study-style analysis of Spinr's own historical
+trip data (fare-per-km, match rate, and driver cancellation rate by service-area geography cross-
+referenced with publicly available census/neighborhood demographic data) as a proactive
+self-audit, and publish the methodology (not necessarily the raw data) as a trust differentiator —
+directly extending greenfield-extensions.md §12's "Fairness audit: dispatch, ETA, and pricing
+outcomes by neighbourhood" item, which named this lane (R18) alongside R8/R9 as an owner. This is
+Maturity 1 (missing) today for Spinr specifically, and effectively Maturity 2 (documented external
+critique, no internal remediation confirmed) for the industry baseline — there is no "parity"
+target to match here; doing this analysis *at all* would be a differentiator, not table-stakes.
+
+---
+
+## §7 Top 10 gaps ranked by severity × blast radius × likelihood
+
+1. **`STRAT-004` — Meta ad SDK + per-ride `Purchase` conversions, undisclosed, direct violation of "What Spinr Is NOT."** Severity CRITICAL (guardrail breach) × blast radius (every rider) × likelihood (already live). See §5.
+2. **`TSF-010` / `BENCH-001` — No trip verification PIN.** A basic, cheap-to-build safety table-stake every competitor ships. HIGH × every trip × low-but-nonzero incident rate.
+3. **`RIDERJ-003` / `BENCH-002` — No rider self-serve dispute/refund path.** HIGH × every rider with a billing question × frequent.
+4. **`COMP-002` / `DRIVER-003` / `BENCH-005` — Driver eligibility re-check is flag-gated off; only document-expiry is live.** HIGH × entire active driver fleet × regulatory/insurance liability window is continuous, not one-time.
+5. **`TSF-002`/`003`/`004`/`005` / `BENCH-006` — No fraud-collusion/cancellation-farming/chargeback-velocity detection at all.** HIGH × platform-wide × increases with scale.
+6. **`COMP-010` / `BENCH-008` — WAV dispatch fallback UX not built (regulatory accessibility requirement).** HIGH × every WAV-needing rider in a service area with no WAV driver online × Saskatchewan legal requirement, not optional.
+7. **`DRIVER-001` / `BENCH-007` — No driver-facing suspension/ban explanation or appeal path.** HIGH × every deactivation × misclassification/wrongful-termination legal exposure for a contractor model.
+8. **`DRIVER-005` / `RIDERJ-002` / `BENCH-009` — No automated recovery for an abandoned in-progress ride; competitors proactively check in (RideCheck/Smart Trip Check-In).** HIGH × rare but safety-relevant × a stranded rider today has no path but manual admin action.
+9. **`MONEY-011` — Receipts carry no GST/HST registration number.** HIGH-leaning-CRITICAL as a compliance gap × every receipt × ongoing tax-audit exposure (see `compliance.md`/`money-cra.md` for the full CRA thread; this file does not re-litigate the tax determination itself).
+10. **Driver instant cash-out (new finding, this pass) — built in the backend, unreachable in the driver app; Instant Pay/Express Pay is a headline Uber/Lyft driver-retention feature Spinr already half-has.** MEDIUM-HIGH × entire driver fleet × directly relevant to CLAUDE.md's own "Weekly active driver retention" KPI, which the PRD itself flags as below-target/unmeasured.
+
+**Honorable mention, not in the top 10 only because it is process, not product:** `CARTO-002`/
+`CARTO-003` (shared-layer and Maps & Routing have no owning review agent) are the root cause behind
+several of the above (CarMarker/notification/referral forks trace to the same unowned surface) —
+fixing agent ownership is the highest-leverage single process change available, even though it
+doesn't itself close any one gap above.
+
+---
+
+## §8 What was NOT verified
+
+- **Every Uber/Lyft feature cited above** was sourced from a public help-centre, newsroom, or blog
+  page — none of it is Uber/Lyft's actual production code, so "parity" claims compare Spinr's code
+  to competitors' *documented* behavior, not their implementation. A documented feature could be
+  imperfectly implemented in practice (this report cannot know that either way).
+- **The local Saskatoon/Regina taxi-dispatch comparator** — no citable primary source exists (see
+  §0); every "local taxi" cell in §2 is ASSUMED from general knowledge of Canadian taxi-dispatch
+  operations, not fetched or confirmed.
+- **Whether Uber Canada's receipts carry a GST/HST registration number** (relevant to the `MONEY-011`
+  comparison) — not independently fetched; marked ASSUMED/UNKNOWN in §2's Receipt generation row.
+- **Whether Uber Canada correctly issues T4A-equivalent tax documents** — UNKNOWN, not found in the
+  time budget; the `MONEY-012` row is scored on Spinr's own regulatory-correctness defect, not a
+  head-to-head comparison.
+- **Rating, Lost & found, Fare split, Membership lifecycle rows** — scored from traceability unit
+  counts (a proxy for implementation depth) rather than a specific W1-W3 finding card or this
+  lane's own direct code read; flagged INFERRED with explicitly lower confidence in §2, not treated
+  as equivalent-strength evidence to a cited finding ID.
+- **`ux-a11y.md` and `support-kb.md`'s full content** — `ux-a11y.md` is a section-header skeleton
+  with almost no body content as of this write (18 headers, 83 lines); this report used
+  `support-kb.md`'s final content (confirmed on disk, `SKB-001` through `SKB-008`) but could not
+  draw on a completed accessibility lane report. Any WCAG/accessibility-specific competitive
+  positioning claim beyond what `COMP-011`/`RIDERJ-004` already established is therefore not made
+  here.
+- **`admin-ops.md`'s full 500 lines** were grepped for headers and spot-read for the items this
+  report needed (dispute resolution, RBAC); not read in full line-by-line, consistent with §0's
+  scoping decision that admin-dashboard functional maturity is out of this file's competitive remit.
+- **`reliability.md`'s and `integrations.md`'s findings** — cited by ID where directly relevant to a
+  rider/driver-facing row, but their full reliability/vendor-risk detail was not re-derived or
+  independently re-verified by this lane; treated as W2/W3's settled findings per the audit
+  prompt's own instruction not to re-audit domains other lanes already swept.
+- **No 10% VERIFIED-finding re-sample was performed by this lane** — Step 6's cross-model
+  re-verification is a W5/Synthesizer-stage activity per the master prompt's own execution plan,
+  not something this individual lane repeats independently.
+- **Whether the airport-surcharge remittance question (§5) is genuinely an undisclosed fee or a
+  legitimate pass-through** — explicitly UNKNOWN, carried from `strategy.md`, not resolved here.
+
+---
+
+## §9 Human-only questions
+
+1. **`STRAT-004` (Meta ad SDK): should it be removed, disclosed via consent, or is there a business
+   justification for it that a founder/legal decision should weigh against the "What Spinr Is NOT"
+   guardrail?** This is the single highest-severity finding in this report and needs a founder/legal
+   decision, not an engineering default.
+2. **Is the airport surcharge a genuine pass-through to the airport authority, or undisclosed
+   platform revenue labelled as a fee?** (`strategy.md` U3, carried into this report's §5) — only
+   finance/founder can answer whether a remittance agreement exists.
+3. **Should Spinr build a driver-facing Instant Pay-equivalent UI (the backend already exists), or
+   is 0%-commission-plus-weekly-payout the deliberate retention strategy instead?** A product
+   decision, not obviously "yes, build it" — the counter-case (differentiate on commission, not
+   payout speed) is plausible and should be a stated choice, not a default from an unfinished
+   feature.
+4. **Is Spinr's coarser (service-area-level) surge granularity a deliberate fairness safeguard, or
+   just a technical limitation that happens to look that way?** (§6) If deliberate, it's worth
+   stating publicly as a trust differentiator; if incidental, that should be known before it's
+   marketed as one.
+5. **Should Spinr commission or self-run a neighborhood-level fairness audit of its own dispatch/
+   pricing data before or after expanding beyond Saskatchewan?** (§6, PROPOSED, net-new to this
+   audit wave) — a founder/board-level prioritization call, not something an engineering lane can
+   schedule unilaterally.
+6. **What is the actual current appetite to disclose the acceptance-rate-penalty mechanism
+   (`DRIVER-004`) to drivers, given the "not a driver-control platform" guardrail — full disclosure
+   like Uber's public policy, or a redesign of the mechanism itself?** A legal-review question per
+   CLAUDE.md's own "control-of-work language... requires legal review" line.
+7. **Does the founder consider WAV dispatch (`COMP-010`) a near-term regulatory-risk item to
+   prioritize, or an acceptable gap given current WAV driver supply?** The fix is cheap (a fallback
+   message), but the prioritization call (regulatory risk vs. current WAV rider volume) needs
+   product/legal judgment this lane cannot supply.
+
+---
+
+*End of `03-benchmark.md`. Companion files: `02-findings/*.md` (source findings, cited throughout),
+`01-inventory/epics.md` (L2/L3 feature list this report scores against), `04-blueprint.md` (W4
+Chief Architect, not authored by this lane).*

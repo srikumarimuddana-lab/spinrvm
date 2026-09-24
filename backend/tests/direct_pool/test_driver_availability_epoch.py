@@ -108,7 +108,9 @@ def test_idempotency_and_authenticated_controller(availability_db):
     cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
     first = _transition(cur, 0, "stop_requests", "same-id")
     duplicate = _transition(cur, 0, "stop_requests", "same-id")
-    assert duplicate == first
+    # A replay returns the saved result, marked so callers skip side effects.
+    assert "replayed" not in first
+    assert duplicate == {**first, "replayed": True}
     conflict = _transition(cur, 0, "go_online", "same-id")
     assert conflict["code"] == "IDEMPOTENCY_KEY_CONFLICT"
     unauthorized = _transition(cur, 1, "go_online", "bad-session", session="old-session")
@@ -272,7 +274,8 @@ def test_system_actor_pauses_without_current_session_or_controller(availability_
     assert result["code"] == "OK"
     assert (result["is_online"], result["accepting_requests"], result["online_epoch"]) == (False, False, "1")
     assert result["controller_session_id"] == "sess-old"
-    assert _transition(cur, 0, "pause_policy", "policy-pause", session="system:policy") == result
+    replay = _transition(cur, 0, "pause_policy", "policy-pause", session="system:policy")
+    assert replay == {**result, "replayed": True}
 
 
 @pytest.mark.parametrize(
@@ -316,11 +319,11 @@ def test_system_stop_is_not_device_contact(availability_db):
 
 
 @pytest.mark.parametrize(
-    "is_online,controller",
-    [(True, None), (False, "sess-old"), (True, "sess-old")],
-    ids=["no-controller", "offline-old-controller", "online-superseded-controller"],
+    "is_online,controller,rebound",
+    [(True, None, False), (False, "sess-A", False), (False, "sess-old", True), (True, "sess-old", True)],
+    ids=["no-controller", "same-controller", "offline-old-controller", "online-old-controller"],
 )
-def test_go_online_from_current_session_rebinds_controller(availability_db, is_online, controller):
+def test_go_online_from_current_session_binds_controller(availability_db, is_online, controller, rebound):
     cur = availability_db
     _enable_v2(cur)
     cur.execute(
@@ -334,30 +337,43 @@ def test_go_online_from_current_session_rebinds_controller(availability_db, is_o
     assert result["code"] == "OK"
     assert result["controller_session_id"] == "sess-A"
     assert result["online_epoch"] == "1"
+    assert result["controller_rebound"] is rebound
+    assert result["server_time"]
     assert (result["is_online"], result["accepting_requests"]) == (True, True)
 
 
-def test_go_online_cannot_take_over_a_current_controller_or_an_active_trip(availability_db):
+def test_relogin_takes_over_an_online_controller_only_without_obligation(availability_db):
     cur = availability_db
     _enable_v2(cur)
     cur.execute("UPDATE drivers SET controller_session_id='sess-A',accepting_requests=true WHERE id='avail-driver'")
+    # A session that is not current cannot act, even with the controller online.
+    assert _transition(cur, 0, "go_online", "early-takeover", session="sess-B")["code"] == "UNAUTHORIZED_SESSION"
 
-    # The controller is still the current, online session: nobody else can act.
-    assert _transition(cur, 0, "go_online", "takeover", session="sess-B")["code"] == "UNAUTHORIZED_SESSION"
-
-    # Once superseded, assigned work still blocks the takeover (no active-trip
-    # displacement here), and non-Go commands stay fenced to the controller.
     cur.execute("UPDATE users SET current_session_id='sess-B' WHERE id='avail-user'")
     cur.execute(
         "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
-        "VALUES ('rebind-trip','avail-driver','a',0,0,'b',0,0,'in_progress')"
+        "VALUES ('relogin-ride','avail-driver','a',0,0,'b',0,0,'driver_assigned')"
     )
-    assert _transition(cur, 0, "go_online", "trip-takeover", session="sess-B")["code"] == "OBLIGATION_ACTIVE"
-    assert (
-        _transition(cur, 0, "stop_requests", "foreign-stop", session="sess-B")["code"] == "CONTROLLER_SESSION_MISMATCH"
+    # (b) Assigned work refuses the takeover and leaves the controller alone;
+    # other commands from the new session stay fenced to the controller.
+    assert _transition(cur, 0, "go_online", "relogin-blocked", session="sess-B")["code"] == "OBLIGATION_ACTIVE"
+    assert _transition(cur, 0, "stop_requests", "relogin-stop", session="sess-B")["code"] == (
+        "CONTROLLER_SESSION_MISMATCH"
     )
     cur.execute("SELECT controller_session_id,online_epoch FROM drivers WHERE id='avail-driver'")
     assert cur.fetchone() == ("sess-A", 0)
+
+    # (a) Without the obligation the newest login rebinds and bumps the epoch.
+    cur.execute("UPDATE rides SET status='completed' WHERE id='relogin-ride'")
+    result = _transition(cur, 0, "go_online", "relogin-go", session="sess-B")
+    assert result["code"] == "OK"
+    assert (result["controller_session_id"], result["online_epoch"], result["controller_rebound"]) == (
+        "sess-B",
+        "1",
+        True,
+    )
+    # (c) The old session is refused outright.
+    assert _transition(cur, 1, "stop_requests", "old-stop", session="sess-A")["code"] == "UNAUTHORIZED_SESSION"
 
 
 _SEAMS = ("driver_ready_window()", "driver_readiness_prompt_lead()", "driver_readiness_enforced()")

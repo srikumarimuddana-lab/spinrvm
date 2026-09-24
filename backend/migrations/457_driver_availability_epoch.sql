@@ -101,7 +101,7 @@ DECLARE
     v_period_result jsonb;
     v_system boolean;
     v_current_session_id text;
-    v_rebind boolean;
+    v_rebound boolean;
 BEGIN
     IF p_request_id IS NULL OR length(btrim(p_request_id)) = 0
        OR p_authenticated_session_id IS NULL OR length(btrim(p_authenticated_session_id)) = 0
@@ -137,7 +137,8 @@ BEGIN
            OR v_saved.authenticated_session_id <> p_authenticated_session_id OR v_saved.action <> p_action THEN
             RETURN jsonb_build_object('code','IDEMPOTENCY_KEY_CONFLICT');
         END IF;
-        RETURN v_saved.result;
+        -- Callers must not repeat side effects (events, pushes) for a replay.
+        RETURN v_saved.result || jsonb_build_object('replayed', true);
     END IF;
 
     IF NOT COALESCE((SELECT driver_availability_v2_enabled FROM public.settings WHERE id='app_settings'), false) THEN
@@ -165,17 +166,15 @@ BEGIN
                                   'online_epoch',v_driver.online_epoch::text,
                                   'state_version',v_driver.state_version::text);
     END IF;
-    -- Go from the caller's current session takes over when there is no
-    -- controller, the driver is offline, or the controller was superseded by a
-    -- newer login. The epoch bump below fences the old controller's leases.
-    -- Taking over from a controller that is still current stays refused.
-    v_rebind := p_action = 'go_online' AND (
-        v_driver.controller_session_id IS NULL OR NOT v_driver.is_online
-        OR v_driver.controller_session_id IS DISTINCT FROM v_current_session_id);
-    IF NOT v_system AND NOT v_rebind
+    -- The caller is already users.current_session_id, so a controller that
+    -- differs from it is stale by definition: Go (like displacement) rebinds,
+    -- and the epoch bump below fences the old controller's leases.
+    -- OBLIGATION_ACTIVE still refuses Go during a trip or a pending offer.
+    -- Every other command stays fenced to the controller.
+    IF NOT v_system
        AND v_driver.controller_session_id IS NOT NULL
        AND v_driver.controller_session_id <> p_authenticated_session_id
-       AND p_action NOT IN ('displace_controller','pause_policy') THEN
+       AND p_action NOT IN ('go_online','displace_controller','pause_policy') THEN
         RETURN jsonb_build_object('code','CONTROLLER_SESSION_MISMATCH',
                                   'online_epoch',v_driver.online_epoch::text,
                                   'state_version',v_driver.state_version::text);
@@ -227,9 +226,11 @@ BEGIN
         v_reason := 'controller_displaced';
     END IF;
 
-    IF v_rebind THEN
-        v_driver.controller_session_id := p_authenticated_session_id;
-    ELSIF p_action = 'displace_controller' THEN
+    -- controller_rebound: an existing, different controller was replaced.
+    v_rebound := p_action IN ('go_online','displace_controller')
+                 AND v_driver.controller_session_id IS NOT NULL
+                 AND v_driver.controller_session_id <> p_authenticated_session_id;
+    IF p_action IN ('go_online','displace_controller') THEN
         v_driver.controller_session_id := p_authenticated_session_id;
     END IF;
 
@@ -280,7 +281,8 @@ BEGIN
         'last_contact_at',v_driver.last_contact_at,'ready_until',v_driver.ready_until,
         'availability_reason',v_driver.availability_reason,'state_version',v_driver.state_version::text,
         'has_trip',v_has_trip,'has_pending_offer',v_has_offer,
-        'pending_reason',CASE WHEN v_has_trip THEN 'active_trip' WHEN v_has_offer THEN 'offer_obligation' ELSE NULL END
+        'pending_reason',CASE WHEN v_has_trip THEN 'active_trip' WHEN v_has_offer THEN 'offer_obligation' ELSE NULL END,
+        'controller_rebound',v_rebound,'server_time',clock_timestamp()
     );
     INSERT INTO public.driver_availability_requests
         (request_id,driver_id,expected_epoch,authenticated_session_id,action,result)

@@ -21,6 +21,7 @@ This prompt is the **umbrella** above both — where they already produced a rep
 | `docs/audit/clean-sheet-prompt/roles.md` | Launching any role/lane — every role's charter, adversary stance, owned files, mapped `spinr-*` agent |
 | `docs/audit/clean-sheet-prompt/sweep-catalog.md` | Doing the actual sweep — domain checklists, ride-share edge-case catalog, CRA/regulatory checks |
 | `docs/audit/clean-sheet-prompt/operating-model.md` | Phase 6 — weekly audits, issue/PR/CR lifecycle, incident loop, agent loops, access guardrails |
+| `docs/audit/clean-sheet-prompt/greenfield-extensions.md` | Phases 3–5 and W4/W5 lanes — required matrices, feature-completeness dimensions, invariants, simulation/chaos, compliance-as-code, agent control plane, dispute prevention, keep/modify/replace/remove, model routing, decision tie-breakers |
 
 **Framework alignment:** `audit-framework/ground-rules.md` (evidence + severity rules),
 `audit-framework/dimensions/01–24`, `audit-framework/modules/*`, `CLAUDE.md` (release
@@ -124,9 +125,15 @@ Produce:
   (`ground-rules.md` §6).
 - **Competitive position** (Dimension 24): Maturity 1–5 + Gap GREEN/YELLOW/RED. Report
   both where both apply — a maturity-4 feature can still carry a CRITICAL defect.
-- **Verification status on every finding:** VERIFIED (reproduced/read the code path),
-  INFERRED (reasoned from code, not executed), or ASSUMED (needs a human or primary
-  source). Never let INFERRED read as VERIFIED.
+- **Evidence label on every statement:** VERIFIED (observed directly — read the code
+  path, ran it, or cited a primary source), INFERRED (reasoned from evidence, not
+  executed), ASSUMED (needed to proceed; must be confirmed by a human or primary
+  source), PROPOSED (future-state recommendation), UNKNOWN (must be obtained — list who
+  can answer). Never let INFERRED or ASSUMED read as VERIFIED.
+- **Tie-breakers** when two goals conflict: reliable over clever; understandable over
+  feature-rich; controlled automation over autonomous; safe over fast; operationally
+  robust over elegant; understand why incumbents do it before copying or rejecting it;
+  **incremental on the live product over rewrite** (Spinr is in live testing).
 - **Regulatory/tax/legal claims** must cite a primary source (CRA, SGI, Government of
   Saskatchewan, OPC, municipal bylaw). If none was fetched, the claim is ASSUMED and
   goes to the legal/finance escalation list — never presented as settled.
@@ -205,12 +212,15 @@ inputs and write disjoint files. Map each lane to its existing `spinr-*` agent(s
 
 ```markdown
 ## Epic: <name>
+- Verdict per inherited pattern: KEEP / MODIFY / REPLACE / REMOVE — with evidence
 - Keep (already best-in-class): …
 - Uber/Lyft do: … (source)       Spinr today: … (evidence)
 - Clean-sheet Spinr would: …      Why (the edge it creates): …
 - How (architecture/pattern): …   Who (role/owner): …   When (Now / Next / Later / Rewrite-only)
 - Incremental path from today (no big-bang): step 1 → 2 → 3, each shippable & flagged
-- Cost/effort (S/M/L) · Risk · Reversibility
+- Cost/effort (S/M/L) · Risk · Reversibility · Build / Buy / Partner / Open source
+- Advantage type: feature (easy to copy) / data / operational / network / cost / trust — is it defensible?
+- "Why not?": why doesn't this exist already; could something simpler get the same result?
 ```
 
 ---
@@ -228,6 +238,7 @@ docs/audit/clean-sheet/
 ├── 03-benchmark.md            # W4 Competitive Analyst
 ├── 04-blueprint.md            # W4 Chief Architect — Rebuild Delta cards
 ├── 05-escalations.md          # W5 — legal/finance/founder decisions only a human can make
+├── matrices/                  # Tier A required, Tier B if time — greenfield-extensions.md §2
 └── 06-operating-model.md      # W5 Operating-Model Designer
 ```
 
@@ -259,11 +270,16 @@ single output path. Require the §7 card formats.
 Step 4 — Run W4 (Architect + Competitive Analyst) over W1–W3 output.
 Step 5 — Run W5: synthesize, de-duplicate, score, write EXECUTIVE_SUMMARY.md (plain
 language for a non-engineer), ROADMAP.md, 05-escalations.md, 06-operating-model.md.
-Step 6 — Self-correct: re-read every output for contradictions, unsupported claims,
-INFERRED-presented-as-VERIFIED, and scope creep. Fix before reporting.
+Step 6 — Self-correct: assume the blueprint is wrong. Re-review it as a hostile
+competitor, driver, rider, fraudster, regulator, SRE, CFO, and COO. Re-verify a random
+10% sample of VERIFIED findings with a different model/agent than the author and report
+the error rate. Fix contradictions, unsupported claims, and scope creep before reporting.
 Step 7 — Report to me: top 10 findings, top 5 rebuild deltas, escalations needing my
 decision, what was NOT verified, and the next 3 work items that can run in parallel
-without touching the same files.
+without touching the same files. End by answering: if Uber/Lyft had to rebuild from
+scratch tomorrow, what would a Spinr-native platform do differently — structurally,
+economically, operationally, technically, experientially — split into obvious,
+meaningful, difficult, genuinely novel, and "sounds good but should NOT be built".
 ```
 
 ---

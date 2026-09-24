@@ -1,6 +1,6 @@
 # A6 — Observability & tagging
 
-**Lane:** A6 · **Model:** sonnet / spinr-observability-reviewer · **Returned:** 2026-09-24 ~14:29 UTC (partial, 25-minute time box) · **Orchestrator note:** lane output pasted verbatim below; only this header was added. The tagging rollout plan (section d) is duplicated into `tagging-plan.md` per the one-hour-run.md §5 layout. Static code only — the Sentry connector was not used.
+**Lane:** A6 · **Model:** sonnet / spinr-observability-reviewer · **Returned:** 2026-09-24 ~14:29 UTC (partial, 25-minute time box) · **Orchestrator note:** lane output pasted verbatim below; only this header was added. The tagging rollout plan (section d) is duplicated into `tagging-plan.md` per the one-hour-run.md §5 layout. Static code only — the Sentry connector was not used. **Verifier corrections (see `verification.md`):** OBS-001's "122 in matching.py" is a misattribution — `matching.py` has 31 `.error(` calls; the whole `routes/rides/` package has 121 (1 `.bind(`), `routes/drivers/*.py` has 167 (0 `.bind(`); the ~290 total and the mechanism hold. OBS-001 and OBS-006 overlap open ACTION_ITEMS **R4** ("Sweep `.bind(domain=...)` across the remaining Sentry-bound ERROR logs"); treat them as the quantified, larger scope of R4 and its missing CI half, not as previously undocumented. OBS-002 should also cite C11 (nothing scrapes production metrics) and note that Sentry tracing at 0.1 sample rate gives sampled transaction latency for those paths.
 
 ---
 

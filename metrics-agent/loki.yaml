@@ -1,0 +1,61 @@
+# Loki (single-binary, filesystem storage) for the Fly log store on this
+# machine. Receives logs only from Vector on the same machine and is queried
+# only by the Grafana on the same machine — so it listens on 127.0.0.1 and
+# runs with auth disabled (single tenant). Never add an [http_service] or
+# bind this to :: — it has no authentication of its own.
+#
+# Retention: 7 days (168h), enforced by the compactor. Storage lives on the
+# Fly volume mounted at /data (see fly.toml [mounts]); the Alloy metrics
+# pipeline deliberately does NOT use /data, so a full log volume cannot
+# stop metrics scraping/remote_write.
+auth_enabled: false
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3100
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /data/loki
+  storage:
+    filesystem:
+      chunks_directory: /data/loki/chunks
+      rules_directory: /data/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 168h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  max_query_parallelism: 2
+
+querier:
+  max_concurrent: 2
+
+compactor:
+  working_directory: /data/loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

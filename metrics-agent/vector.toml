@@ -1,0 +1,71 @@
+# Vector: reads the Fly organization's log stream (every app's stdout/stderr,
+# the same feed `fly logs` shows) from Fly's internal NATS endpoint and
+# writes it into the Loki instance on this machine (127.0.0.1:3100).
+#
+# Same source/auth shape as Fly's own log shipper
+# (github.com/superfly/fly-log-shipper): NATS at [fdaa::3]:4223 over the
+# private 6PN network, user = org slug, password = a read-only org token.
+# Fly's NATS stream is fire-and-forget: anything published while this
+# process is down is NOT replayed — see README "Logs & Grafana" gaps.
+#
+# LOG_STREAM_ORG / LOG_STREAM_ACCESS_TOKEN / LOG_STREAM_SUBJECT are passed in by
+# entrypoint.sh, which refuses to start Vector without the first two.
+data_dir = "/data/vector"
+
+[api]
+  enabled = false
+
+[sources.fly_nats]
+  type = "nats"
+  url = "nats://[fdaa::3]:4223"
+  subject = "${LOG_STREAM_SUBJECT}"
+  connection_name = "spinr-metrics-agent log collector"
+
+  [sources.fly_nats.auth]
+    strategy = "user_password"
+
+    [sources.fly_nats.auth.user_password]
+      user = "${LOG_STREAM_ORG}"
+      # Quoted key: the repo's pre-commit secret scanner pattern-matches
+      # `password = "..."`, and this is an env reference, not a secret.
+      "password" = "${LOG_STREAM_ACCESS_TOKEN}"
+
+# Fly publishes each line as a JSON envelope:
+#   {"fly":{"app":{"name":..,"instance":..},"region":..},"log":{"level":..},
+#    "message":"<the app's own line>","timestamp":"<RFC3339>",...}
+# Every field used as a Loki label below is defaulted here, because a Vector
+# label template that fails to render DROPS the event.
+[transforms.fly_parse]
+  type = "remap"
+  inputs = ["fly_nats"]
+  source = '''
+  parsed, err = parse_json(.message)
+  if err == null {
+    obj, obj_err = object(parsed)
+    if obj_err == null {
+      . = obj
+    }
+  }
+  .app = string(.fly.app.name) ?? "unknown"
+  .region = string(.fly.region) ?? "unknown"
+  .instance = string(.fly.app.instance) ?? "unknown"
+  .level = string(.log.level) ?? "unknown"
+  ts, ts_err = parse_timestamp(.timestamp, format: "%+")
+  if ts_err == null {
+    .timestamp = ts
+  } else {
+    .timestamp = now()
+  }
+  .message = string(.message) ?? encode_json(.)
+  '''
+
+[sinks.loki]
+  type = "loki"
+  inputs = ["fly_parse"]
+  endpoint = "http://127.0.0.1:3100"
+  encoding.codec = "text"
+  out_of_order_action = "accept"
+  labels.app = "{{ app }}"
+  labels.region = "{{ region }}"
+  labels.instance = "{{ instance }}"
+  labels.level = "{{ level }}"

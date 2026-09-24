@@ -1,0 +1,18 @@
+# Copied into Grafana's provisioning directory by entrypoint.sh ONLY when
+# GRAFANA_CLOUD_METRICS_READ_TOKEN is set. Queries the same Grafana Cloud
+# Prometheus stack Alloy remote_writes to. The query URL is derived from
+# GRAFANA_REMOTE_WRITE_URL by entrypoint.sh (".../api/prom/push" ->
+# ".../api/prom") unless GRAFANA_CLOUD_PROM_QUERY_URL overrides it.
+# $VAR references are expanded by Grafana from its own environment.
+apiVersion: 1
+datasources:
+  - name: Spinr metrics (Grafana Cloud)
+    uid: grafana-cloud-prom
+    type: prometheus
+    access: proxy
+    url: $GRAFANA_CLOUD_PROM_QUERY_URL
+    basicAuth: true
+    basicAuthUser: $GRAFANA_REMOTE_WRITE_USERNAME
+    editable: false
+    secureJsonData:
+      basicAuthPassword: $GRAFANA_CLOUD_METRICS_READ_TOKEN

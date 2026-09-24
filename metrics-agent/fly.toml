@@ -25,20 +25,41 @@ kill_timeout = "15s"
   # backend/fly.toml's `app = "spinr-backend-yyz"`.
   BACKEND_APP_NAME = "spinr-backend-yyz"
   DISCOVERY_INTERVAL_SECONDS = "30"
+  # Log stack (README "Logs & Grafana"). Kill switch: set to "false" (here, or
+  # `fly secrets set LOGS_STACK_ENABLED=false`, which overrides [env]) to run
+  # metrics only — no code revert needed.
+  LOGS_STACK_ENABLED = "true"
+  # Fly org slug whose log stream Vector reads. Taken from
+  # infra/burst_controller/fly.toml's FLY_ORG; confirm with `fly orgs list`.
+  LOG_STREAM_ORG = "spinr_backend"
 
 # Secrets (set via `fly secrets set -a spinr-metrics-agent-yyz`, never in
 # this file): METRICS_AUTH_TOKEN, GRAFANA_REMOTE_WRITE_URL,
 # GRAFANA_REMOTE_WRITE_USERNAME, GRAFANA_REMOTE_WRITE_API_KEY.
+# Log stack secrets: LOG_STREAM_ACCESS_TOKEN, GRAFANA_ADMIN_PASSWORD, and
+# optionally GRAFANA_CLOUD_METRICS_READ_TOKEN (see README "Logs & Grafana").
 # See metrics-agent/README.md for the exact commands and where each value
 # comes from.
+
+# 7 days of Fly logs (Loki) + Grafana's own database. The volume must exist
+# BEFORE this config is deployed — see README "Logs & Grafana" for the
+# one-time create/replace-machine steps. Alloy does not use /data, so a full
+# log volume cannot stop metrics.
+[mounts]
+  source = "fly_logs"
+  destination = "/data"
 
 [[vm]]
   # Smallest available size — this process only scrapes and forwards, no
   # request handling, no DB connections. Revisit if Alloy's own memory
   # footprint (WAL buffering for remote_write) proves tight at this
   # metric volume; not measured yet (see PR body "What was NOT verified").
+  #
+  # Raised 512mb -> 2gb when Loki, Vector and Grafana were added alongside
+  # Alloy on this machine (rough budget: Alloy ~150MB, Loki ~300-600MB,
+  # Grafana ~200MB, Vector ~50MB — estimates, not measured).
   size = "shared-cpu-1x"
-  memory = "512mb"
+  memory = "2gb"
 
 [[restart]]
   policy = "always"

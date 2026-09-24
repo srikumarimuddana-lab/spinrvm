@@ -9,3 +9,5 @@ A5 returned ~14:26Z; A2 returned ~14:27Z (written 14:31Z)
 A7 returned ~14:28Z (written 14:32Z)
 A6 returned ~14:29Z (written 14:34Z)
 A3 returned ~14:31Z (written 14:37Z) — all 8 lanes in; Wave B launching
+Verifier returned ~14:44Z (verification.md written 14:43Z)
+Architect returned ~14:46Z (blueprint written 14:45Z)

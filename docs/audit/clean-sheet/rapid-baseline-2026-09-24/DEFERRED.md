@@ -18,7 +18,7 @@ None. All eight Wave A lanes returned before the minute-35 cutoff (last one at ~
 | A1 | Full git history (clone is shallow, 310 commits visible; GitHub API not used); threat-model file contents; Semgrep rule audit; live-schema check | Recurrence families rest on ACTION_ITEMS + change-log text, not commit history |
 | A2 | ASVS row-by-row beyond ~24 headline controls; full MASVS-L1; loguru positional-arg / f-string PII sweep; per-screen mobile token storage | Control map is headline-level |
 | A3 | Every vendor limit (all vendor doc hosts blocked); real CPU/RSS at 750 connections; actual export sizes; live driver count | Every 10× figure is arithmetic; capacity table cannot be VERIFIED from the repo |
-| A4 | 37 of 45 background loops not read for replay safety (only the 5 dispatch-critical ones); rider WS coverage of `driver_arrived → in_progress` to the driver's own socket; `scheduled → searching` WS emit | Loop safety is attested for 5 loops, UNKNOWN for the rest |
+| A4 | Only 5 of the 44 background loops (45 registry entries incl. the watchdog — CLAUDE.md's "42" is stale) were read for replay safety; rider WS coverage of `driver_arrived → in_progress` to the driver's own socket; `scheduled → searching` WS emit | Loop safety is attested for 5 loops, UNKNOWN for the rest |
 | A5 | `routes/tips.py`, `routes/corporate_wallet.py`, `utils/surge_engine.py` internals; `email_receipt.py` fallback mirror; SURGE_CAP clamp at every fare call site; corporate/scheduled surge exemptions; payout ≤ collected invariant; `corporate_wallet_apply_delta` idempotency per caller; corporate invoice ITC format; semgrep not re-executed | Surge and corporate-billing invariants from CLAUDE.md were not independently re-verified this run |
 | A6 | Full `logger.warning` sweep (~15 of 97+ sampled); support/Zoho files beyond level grep; PR-label taxonomy; migration-apply timing | BLOCKER pattern "absent in sample", not fleet-wide |
 | A7 | Mid-trip destination change / re-pricing UX; stuck-ride sweeper threshold and rider copy; WS reconnect REST resync; admin concurrent-edit beyond `drivers.py`; contrast ratios; bundle size / startup timing; corporate mid-trip suspension | Scenario table has 1 UNKNOWN and 3 PARTIAL rows |
@@ -37,5 +37,5 @@ None. All eight Wave A lanes returned before the minute-35 cutoff (last one at ~
 
 ## 6. Recommended next runs
 1. Research session 5 (Security, data & infrastructure) — see the report's closing recommendation.
-2. A full 42/45-loop replay-safety pass (`spinr-realtime-reliability-reviewer`) to close A4's UNKNOWNs.
+2. A full 44-loop replay-safety pass (`spinr-realtime-reliability-reviewer`) to close A4's UNKNOWNs.
 3. A PIPEDA retention + insurance-period pass (`spinr-regulatory-compliance-checker` + `spinr-insurance-period-auditor`) to close A8's unreached scope.

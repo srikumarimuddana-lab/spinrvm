@@ -27,7 +27,13 @@ export type EligibilityReasonCode =
   | 'LICENSE_EXPIRED' | 'INSURANCE_EXPIRED' | 'DRIVER_UNVERIFIED'
   | 'SUBSCRIPTION_REQUIRED' | 'QUOTA_EXHAUSTED';
 
-/** Snapshot `reason_code`. QUOTA_EXHAUSTED is also mapped client-side from WS `auto_offline`. */
+/**
+ * Snapshot `reason_code`. SESSION_SUPERSEDED reaches only an old, non-current
+ * session. The newest login, while an older session is still the controller,
+ * reads paused/REQUESTS_PAUSED (GO rebinds). reconnecting/
+ * SESSION_RECONCILE_REQUIRED means the server could not resolve the session.
+ * QUOTA_EXHAUSTED is also mapped client-side from WS `auto_offline`.
+ */
 export type AvailabilityReasonCode =
   | EligibilityReasonCode
   | 'ACTIVE_TRIP' | 'OFFER_PENDING' | 'RECOVERY_REQUIRED' | 'SESSION_RECONCILE_REQUIRED'
@@ -118,14 +124,20 @@ export interface ConfirmReadySuccessWire extends AvailabilitySnapshotWire {
   code: 'OK';
 }
 
-/** `detail.code` values. Read them from `err.data.detail.code` or `err.response.data.detail.code`. */
+/**
+ * `detail.code` values. Read them from `err.data.detail.code` or
+ * `err.response.data.detail.code`. SESSION_SUPERSEDED reaches only an old,
+ * non-current session; the newest login gets ONLINE_EPOCH_STALE with reason
+ * CONTROLLER_SESSION_MISMATCH instead and should reconcile.
+ */
 export type AvailabilityErrorCode =
   | 'DRIVER_OFFLINE' | 'ONLINE_EPOCH_STALE' | 'CONTACT_GAP' | 'SESSION_SUPERSEDED'
   | 'SESSION_RECONCILE_REQUIRED' | 'PRESENCE_UNAVAILABLE' | 'ELIGIBILITY_UNAVAILABLE'
   | 'ELIGIBILITY_BLOCKED' | 'AVAILABILITY_UPGRADE_REQUIRED' | 'AVAILABILITY_V2_DISABLED'
-  | 'AVAILABILITY_UNAVAILABLE' | 'UNAUTHORIZED_SESSION' | 'CONTROLLER_SESSION_MISMATCH'
-  | 'IDEMPOTENCY_KEY_CONFLICT' | 'OBLIGATION_ACTIVE' | 'INVALID_AVAILABILITY_COMMAND'
-  | 'DRIVER_NOT_FOUND' | 'SESSION_AUTHORITY_UNAVAILABLE'
+  | 'AVAILABILITY_UNAVAILABLE' | 'IDEMPOTENCY_KEY_CONFLICT' | 'OBLIGATION_ACTIVE'
+  | 'INVALID_AVAILABILITY_COMMAND' | 'DRIVER_NOT_FOUND' | 'SESSION_AUTHORITY_UNAVAILABLE'
+  // Sent as codes only by servers without F3; now reason codes (below).
+  | 'UNAUTHORIZED_SESSION' | 'CONTROLLER_SESSION_MISMATCH'
   // Readiness confirm (C4).
   | 'READINESS_EXPIRED' | 'REQUESTS_PAUSED'
   // Offer decisions and receipts (C2, C3).
@@ -135,9 +147,11 @@ export type AvailabilityErrorCode =
 /** `detail.reason_code` values, which qualify a `detail.code`. */
 export type AvailabilityErrorReasonCode =
   | EligibilityReasonCode // under ELIGIBILITY_BLOCKED
-  | 'ONLINE_EPOCH_STALE' | 'CONTACT_GAP' | 'READINESS_EXPIRED' // under ONLINE_EPOCH_STALE
-  | 'UNAUTHORIZED_SESSION' | 'CONTROLLER_SESSION_MISMATCH' // under SESSION_SUPERSEDED (C6, F3)
+  // Under ONLINE_EPOCH_STALE; CONTROLLER_SESSION_MISMATCH means "reconcile", never "session ended".
+  | 'ONLINE_EPOCH_STALE' | 'CONTACT_GAP' | 'READINESS_EXPIRED' | 'CONTROLLER_SESSION_MISMATCH'
+  | 'UNAUTHORIZED_SESSION' // under SESSION_SUPERSEDED (C6, F3)
   | 'SESSION_MISSING' | 'ONLINE_EPOCH_REQUIRED' // location.py:132-137
+  | 'OFFER_SESSION_ENDED' // under OFFER_EXPIRED: offer addressed to an older session; same handling
   | 'RIDE_TAKEN' | 'RIDE_CANCELLED' | 'RIDE_NOT_SEARCHING'; // under RIDE_STATE_CONFLICT (C2)
 
 /** Structured `detail` of a 4xx/5xx; 5xx details keep only the C6 (F1) allow-listed keys. */
@@ -164,12 +178,18 @@ export interface WsAuthSuccessAvailabilityWire {
   presence_status?: 'bound' | 'reconcile_required';
   online_epoch?: DecimalString | null;
 }
+/** Sent instead of a 1008 close when the newest login is not yet the controller. */
 export interface WsAvailabilityReconcileRequiredWire {
   type: 'availability_reconcile_required';
   code: AvailabilityErrorCode | string;
+  reason_code?: AvailabilityErrorReasonCode | string | null;
   online_epoch: DecimalString | null;
 }
-/** C4: a hint to reconcile; the snapshot stays the authority. */
+/**
+ * C4: sent after a server-side system transition (policy, missed-offer and
+ * readiness pauses, logout stop). A server signal: reconcile; the snapshot
+ * stays the authority.
+ */
 export interface WsAvailabilityChangedWire {
   type: 'availability_changed';
   online_epoch: DecimalString;
@@ -192,6 +212,28 @@ export interface OfferEnvelopeWire extends OfferEnvelopeFieldsWire {
   offer_expires_at?: IsoTimestamp | null;
   countdown_seconds?: number | string | null;
 }
+/** C2: accept/decline body; the server defaults every omitted field from the offer row. */
+export interface OfferDecisionRequestWire {
+  offer_id?: string;
+  claim_id?: string;
+  online_epoch?: DecimalString;
+  /** Stable per user action, so a retry is idempotent. */
+  request_id?: string;
+  /** Decline only. */
+  reason?: string;
+}
+/** v2 accept; flag-off servers omit the optional fields. */
+export interface OfferAcceptSuccessWire {
+  success: true;
+  offer_id?: string | null;
+  already_accepted?: boolean;
+}
+/** v2 decline; declining an already-declined offer is also a 200, with `already_resolved: true`. */
+export interface OfferDeclineSuccessWire {
+  success: true;
+  outcome?: string;
+  already_resolved?: boolean;
+}
 
 export type OfferReceiptEvent = 'received' | 'presented';
 export type OfferReceiptChannel = 'ws' | 'push' | 'stored' | 'android_auto';
@@ -203,6 +245,7 @@ export interface OfferReceiptRequestWire {
   event: OfferReceiptEvent;
   channel: OfferReceiptChannel;
   app_state: OfferReceiptAppState;
+  /** Any number; the server rounds it. */
   remaining_ms: number;
 }
 

@@ -12,7 +12,7 @@ Supabase is needed.
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -314,6 +314,36 @@ class TestForceOfflineIfExhausted:
         patch_db(db)
         sub = {"id": "s1", "rides_per_day": 4}
         status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
+        assert status is None
+        assert [u for u in db.updated if u[0] == "drivers"] == []
+
+    async def test_defers_when_driver_reclaimed_for_new_ride(self, patch_db):
+        """2026-09-23 mid-trip guard: if dispatch re-claims this driver for a
+        new ride/offer in the race window right after their last completion,
+        force_offline_if_exhausted must NOT force them offline or record
+        Period 0 — that would wrongly close the new ride's Period 2/3."""
+        db = _FakeDB(count=4)
+        patch_db(db)
+        sub = {"id": "s1", "rides_per_day": 4}
+        with patch(
+            "backend.utils.insurance_periods.has_active_ride_obligation",
+            AsyncMock(return_value=True),
+        ):
+            status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
+        assert status is None
+        assert [u for u in db.updated if u[0] == "drivers"] == []
+
+    async def test_defers_when_obligation_lookup_fails(self, patch_db):
+        """A failed obligation lookup must fail toward NOT disrupting a
+        possible active trip — same as an explicit True."""
+        db = _FakeDB(count=4)
+        patch_db(db)
+        sub = {"id": "s1", "rides_per_day": 4}
+        with patch(
+            "backend.utils.insurance_periods.has_active_ride_obligation",
+            AsyncMock(return_value=None),
+        ):
+            status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
         assert status is None
         assert [u for u in db.updated if u[0] == "drivers"] == []
 

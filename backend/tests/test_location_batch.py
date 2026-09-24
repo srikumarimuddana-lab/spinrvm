@@ -103,7 +103,7 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
         assert active_ride["id"] == "ride_1"
         # The caller passes the already-fetched driver row's position (no
         # extra DB read) so the batch's first point is checked against it.
-        assert driver_last_known == {"lat": None, "lng": None, "updated_at": None}
+        assert driver_last_known == {"lat": None, "lng": None, "location_captured_at": None}
         return _result()
 
     async def update(*args, **kwargs):

@@ -1040,6 +1040,15 @@ async def update_driver_status(
     if is_online and lat is not None and lng is not None and (lat != 0 or lng != 0):
         _base["lat"] = lat
         _base["lng"] = lng
+        # #5357: location_captured_at (migration 445) is the sensor-timestamp
+        # column the GPS-plausibility chain seeds from — set it alongside
+        # lat/lng here too, not just updated_at (which this dict already
+        # bumps on every go-online/go-offline call regardless of whether a
+        # fresh fix came with it). Without this, the chain-seed in
+        # utils/breadcrumbs.py could read a stale lat/lng next to a just-now
+        # updated_at and falsely reject the first real breadcrumb of the
+        # next trip as a "teleport".
+        _base["location_captured_at"] = _now_iso
     # Invariant guardrail: is_available => is_online (see handler docstring).
     # This is a sanity check on the payload we are about to write — never
     # gate user behaviour on the assert; if it ever trips, the bug is in the
@@ -1081,7 +1090,19 @@ async def update_driver_status(
             logger.warning(
                 f"[GO-ONLINE] intent timestamp column(s) missing; retrying minimal. original={_detail or _col_exc}"
             )
-            await db_supabase.update_one("drivers", {"id": driver_id}, _base)
+            # The generic "pgrst204" substring match above also fires if
+            # location_captured_at itself is the missing column (not just
+            # the intent-timestamp columns it was written for) — on a
+            # pre-migration-445 schema, say. _base still carries
+            # location_captured_at (see #5357), so retrying with _base
+            # unmodified would hit the identical PGRST204 and raise
+            # unhandled instead of degrading gracefully. Drop it from the
+            # retry payload too; the column already exists everywhere
+            # location.py's marker writes rely on it unconditionally, so
+            # losing it only on this one retry path is a safe degrade, not
+            # a silent behavior change to the happy path.
+            _minimal = {k: v for k, v in _base.items() if k != "location_captured_at"}
+            await db_supabase.update_one("drivers", {"id": driver_id}, _minimal)
         else:
             raise
 

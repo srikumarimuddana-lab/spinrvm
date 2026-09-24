@@ -220,12 +220,15 @@ class TestUpdateMyDriver:
 
         assert saved[field] == "2000-01-02"
 
-    @pytest.mark.parametrize(("field", "value"), [
-        ("date_of_birth", "not-a-date"),
-        ("date_of_birth", "2000-1-2"),
-        ("date_of_birth", "2010-01-01"),
-        ("license_issue_date", "2025-01-01"),
-    ])
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("date_of_birth", "not-a-date"),
+            ("date_of_birth", "2000-1-2"),
+            ("date_of_birth", "2010-01-01"),
+            ("license_issue_date", "2025-01-01"),
+        ],
+    )
     def test_invalid_eligibility_date_is_rejected(self, field, value):
         from fastapi import HTTPException
 
@@ -349,6 +352,7 @@ class TestUpdateMyDriver:
             patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
             patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.has_active_ride_obligation", AsyncMock(return_value=False)),
             patch(
                 "backend.utils.driver_status_notifications.notify_driver_status_change",
                 AsyncMock(),
@@ -439,14 +443,17 @@ class TestCreateDriver:
 
 
 class TestRegisterDriver:
-    @pytest.mark.parametrize("field,value", [
-        ("date_of_birth", "not-a-date"),
-        ("license_issue_date", "2020-02-30"),
-        ("date_of_birth", "2000-1-2"),
-        ("date_of_birth", "2010-01-01"),
-        ("license_issue_date", "2025-01-01"),
-        ("vehicle_year", "20xx"),
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("date_of_birth", "not-a-date"),
+            ("license_issue_date", "2020-02-30"),
+            ("date_of_birth", "2000-1-2"),
+            ("date_of_birth", "2010-01-01"),
+            ("license_issue_date", "2025-01-01"),
+            ("vehicle_year", "20xx"),
+        ],
+    )
     def test_rejects_malformed_eligibility_registration_values(self, field, value):
         from fastapi import HTTPException
 
@@ -457,9 +464,7 @@ class TestRegisterDriver:
             patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock()) as insert,
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    drv.register_driver(body={field: value}, current_user={"id": USER_ID, "phone": ""})
-                )
+                asyncio.run(drv.register_driver(body={field: value}, current_user={"id": USER_ID, "phone": ""}))
 
         assert exc.value.status_code == 422
         insert.assert_not_awaited()
@@ -1815,6 +1820,7 @@ class TestDeclineRide:
     @pytest.mark.parametrize("reason", [None, "vehicle_breakdown", "unsafe_pickup"])
     def test_service_animal_trip_allows_unrelated_decline(self, reason):
         from types import SimpleNamespace
+
         from backend.routes import drivers as drv
 
         ride = _ride("searching", driver_id=None)
@@ -1824,37 +1830,49 @@ class TestDeclineRide:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(return_value=SimpleNamespace(data=[{"id": "offer"}]))),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync",
+                AsyncMock(return_value=SimpleNamespace(data=[{"id": "offer"}])),
+            ),
             patch("backend.routes.drivers._deps.release_driver_and_close_period", release),
             patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
             patch("backend.routes.drivers._deps.db.insert_one", audit),
         ):
-            result = asyncio.run(drv.decline_ride(
-                ride_id=RIDE_ID,
-                request=_FakeRequest({"reason": reason}) if reason else None,
-                current_user={"id": USER_ID},
-            ))
+            result = asyncio.run(
+                drv.decline_ride(
+                    ride_id=RIDE_ID,
+                    request=_FakeRequest({"reason": reason}) if reason else None,
+                    current_user={"id": USER_ID},
+                )
+            )
         assert result == {"success": True}
         release.assert_awaited_once()
         assert audit.await_args.args[1]["action"] == "ride_declined"
         assert audit.await_args.args[1]["details"]["reason"] == reason
 
     def test_unoffered_driver_cannot_record_service_animal_refusal(self):
-        from backend.routes import drivers as drv
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
 
         audit = AsyncMock()
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=[[_driver()], []])),
-            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("searching", driver_id=None))),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_ride",
+                AsyncMock(return_value=_ride("searching", driver_id=None)),
+            ),
             patch("backend.routes.drivers._deps.db.insert_one", audit),
         ):
             with pytest.raises(HTTPException) as error:
-                asyncio.run(drv.decline_ride(
-                    ride_id=RIDE_ID, request=_FakeRequest({"reason": "service_animal"}),
-                    current_user={"id": USER_ID},
-                ))
+                asyncio.run(
+                    drv.decline_ride(
+                        ride_id=RIDE_ID,
+                        request=_FakeRequest({"reason": "service_animal"}),
+                        current_user={"id": USER_ID},
+                    )
+                )
         assert error.value.status_code == 403
         audit.assert_not_awaited()
 

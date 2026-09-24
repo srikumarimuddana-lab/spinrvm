@@ -28792,7 +28792,40 @@ as evidence that the thing it configures exists.
 
 ### C125. Production is missing 8 pending migrations beyond 430/431 — unreviewed, none applied
 
-- [ ] **Status:** OPEN — found 2026-09-20 while confirming migration 430 was
+- [ ] **Status:** OPEN — content reviewed 2026-09-23 (read-only, per this entry's own
+  action item steps 1-2), still not applied — applying needs `DATABASE_URL`, which no
+  sandboxed session has, and is a decision for whoever owns that step, not something
+  read-only review resolves.
+  **Per-file findings:**
+  - `379_enable_rls_settings_document_files_driver_imports.sql` — this **is** C43's own
+    prepared fix (its own header says "PREPARED, NOT APPLIED"); still correctly deferred
+    per the 2026-08-25 product-owner decision recorded there. Not a new/separate item.
+  - `424_settings_minimal_fcm_offer_payload_enabled.sql`, `425_route_interleaved_capture_flag.sql`,
+    `427_background_location_delivery_flag.sql`, `428_driver_stationary_tracking_flag.sql`,
+    `428_posthog_session_replay.sql` — 5 default-`FALSE` dark-launch kill-switch columns on
+    `settings`, same additive shape as migration 401. Low risk, no schema-object dependency
+    on anything else in this list.
+  - `426_service_area_scheduled_rides.sql` — adds a JSONB config column to `service_areas`,
+    a UUID column to `rides`, a validating CHECK constraint, and a `CREATE INDEX
+    CONCURRENTLY` (correctly outside the transaction, `lock_timeout` set, fully
+    `IF NOT EXISTS`-idempotent). Default-disabled behavior (`'{}'` = off). Low risk.
+  - `429_agent_action_log.sql` — new append-only audit table, RLS enabled. **New,
+    previously-undiscovered observation, not fixed here:** its admin-read policy checks
+    `(auth.jwt() ->> 'role') = 'admin'` — the same class of currently-dormant policy this
+    file's own C107/C108/C123/C129 family found elsewhere: per C108, no real Supabase Auth
+    session is ever issued to an admin (admin auth is a wholly separate custom-JWT scheme),
+    so this policy can't be satisfied by real production traffic today. Not a live security
+    hole for the same reason C108 established (no reachable path to trigger it either way) —
+    but worth a documentation/consistency note if this migration is ever revisited, since
+    it's structurally the same unreachable-check pattern.
+  - **Confirmed for action-item step (2):** none of the 8 reference or depend on any table,
+    function, or column that only `70_fix_financial_events_rls.sql`,
+    `78_fix_pii_function_search_path.sql`, `137_fix_pii_encrypt_pgsodium_perms.sql`, or
+    `26_rls_coverage_gap.sql` (the 4 permanently-skipped files) would have provided.
+  - **Not done:** step (3), the actual `run_migrations.py --dry-run` then real-run
+    application — needs `DATABASE_URL` and a human decision on timing, unchanged from this
+    entry's original scope.
+  Old status: OPEN — found 2026-09-20 while confirming migration 430 was
   actually applied to production. Comparing the full `backend/migrations/`
   file list against production's `schema_migrations` table (by filename, not
   the misleading lexicographic `ORDER BY ... DESC`) found 13 files never
@@ -28940,7 +28973,22 @@ as evidence that the thing it configures exists.
 
 ### C129. `financial_event_entries` and `reconciliation_discrepancies` share the unreachable `users.role = 'admin'` RLS pattern C107/C123 fixed elsewhere — missed by all three sweeps; `subscription_payments`' "Append-only ledger" claim has zero DB-level enforcement
 
-- [ ] **Status:** OPEN — found 2026-09-21 while writing this session's C49
+- [x] **Status:** closed 2026-09-23 on `fix/financial-ledger-rls-unreachable-c129`. Migration 456
+  extends the C107/C123 `USING (false)` pattern to `financial_event_entries_select` and
+  `reconciliation_discrepancies`' `recon_admin_only`, and adds `subscription_payments_no_mutate`
+  (blocks UPDATE + DELETE — broader than `financial_event_entries_no_update`'s UPDATE-only scope,
+  safe here since `subscription_payments` has no FK/cascade relationship to any parent row).
+  Found via a proactive edge-case/error-handling sweep. **Verified against a real local Postgres
+  16 instance, not just mocked** — all 32 tests in `test_financial_ledger_extension_rls.py` pass
+  (3 flipped, 2 new), plus the full `tests/rls` suite (425 passed; 6 pre-existing failures in
+  `tests/rls/money/*.py` confirmed unrelated via `git stash` — same failures reproduce with this
+  diff fully reverted, root cause is an environment DB-auth issue unconnected to this change).
+  `spinr-migration-reviewer` reviewed: SHIP IT AS-IS — independently re-verified the migration
+  numbering, idempotency, the DELETE-safety claim (re-grepped for FK/cascade/write call sites
+  rather than trusting the PR description), and that the rollback plan actually executes as
+  written. See `docs/change-log/2026-09-23-financial-ledger-rls-unreachable-c129.md` for the
+  full trace.
+  Old status: OPEN — found 2026-09-21 while writing this session's C49
   round (`docs/change-log/2026-09-21-c49-financial-ledger-extension-rls-coverage.md`),
   confirmed by `spinr-security-auditor` against the actual migration SQL.
 - **Issue/gap (finding 1):** `financial_event_entries_select`

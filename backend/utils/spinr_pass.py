@@ -567,6 +567,27 @@ async def force_offline_if_exhausted(
     if not status or not status.get("exhausted"):
         return None
 
+    # 2026-09-23 mid-trip guard (follow-up to the forced-offline insurance-
+    # period audit): this runs right after a ride completes, and the driver
+    # is made available again just before this call. If dispatch re-claims
+    # this same driver for a new ride/offer in that window (plausible in a
+    # high-utilization area), forcing them offline and recording Period 0
+    # here would wrongly close the brand-new obligation's Period 2. `None`
+    # (lookup failed) is treated the same as an obligation — deferring
+    # enforcement to the driver's next ride completion is safer than
+    # guessing it's fine to disrupt a ride they were just handed.
+    try:
+        from .insurance_periods import has_active_ride_obligation  # type: ignore
+    except ImportError:
+        from utils.insurance_periods import has_active_ride_obligation  # type: ignore
+    if await has_active_ride_obligation(driver_id) is not False:
+        logger.info(
+            "force_offline_if_exhausted: deferring — driver=%s has (or may have) an active ride "
+            "obligation right after completion; will re-check on their next ride completion",
+            driver_id,
+        )
+        return None
+
     now = now or datetime.now(timezone.utc)
     iso = now.isoformat()
     db = _db()

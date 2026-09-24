@@ -167,3 +167,32 @@ class TestClosePeriodForForcedOffline:
     async def test_unknown_reason_is_programmer_error(self):
         with pytest.raises(ValueError):
             await mod.close_period_for_forced_offline(DRIVER, reason="bogus")
+
+
+class TestHasActiveRideObligation:
+    """2026-09-23 follow-up audit: shared obligation check for callers (like
+    profile.py's vehicle-edit path and spinr_pass.py's quota enforcement)
+    that must skip forcing a driver offline entirely — not just skip the
+    period write — while the driver is on an obligated ride or has a
+    pending offer.
+    """
+
+    async def test_no_ride_no_offer_returns_false(self):
+        with patch.object(mod.db_supabase, "get_rows", _get_rows_returning()):
+            assert await mod.has_active_ride_obligation(DRIVER) is False
+
+    async def test_obligated_ride_returns_true(self):
+        with patch.object(
+            mod.db_supabase, "get_rows", _get_rows_returning(rides=[{"id": RIDE, "status": "in_progress"}])
+        ):
+            assert await mod.has_active_ride_obligation(DRIVER) is True
+
+    async def test_pending_offer_with_no_ride_returns_true(self):
+        with patch.object(mod.db_supabase, "get_rows", _get_rows_returning(offers=[{"ride_id": RIDE}])):
+            assert await mod.has_active_ride_obligation(DRIVER) is True
+
+    async def test_lookup_failure_returns_none_not_false(self):
+        """None must never be conflated with False — callers must fail
+        toward NOT disrupting a possible active trip."""
+        with patch.object(mod.db_supabase, "get_rows", _get_rows_returning(raises=RuntimeError("db down"))):
+            assert await mod.has_active_ride_obligation(DRIVER) is None

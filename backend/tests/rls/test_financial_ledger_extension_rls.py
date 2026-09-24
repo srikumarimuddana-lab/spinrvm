@@ -38,11 +38,12 @@ admin read would see zero rows by design"). This is a real, testable
 contrast with its two siblings above, both of which do carry an admin read
 path.
 
-Two real, previously-undiscovered findings, neither fixed here:
+Two findings, both fixed 2026-09-23 by migration 456 (ACTION_ITEMS.md C129,
+closed) -- tests below pin the fixed behavior, not the original gap:
 
 1. **Unreachable admin-role RLS, a pair missed by the C107/C123 sweeps.**
    `financial_event_entries_select` (286) and `reconciliation_discrepancies`'
-   `recon_admin_only` (59) both gate on
+   `recon_admin_only` (59) both gated on
    `(SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'` -- the
    exact pattern migrations 430/432/433 found permanently unreachable in
    production (migration 256's `chk_users_role_not_admin` CHECK means
@@ -51,32 +52,29 @@ Two real, previously-undiscovered findings, neither fixed here:
    `USING (false)` deny across every other table carrying it. A repo-wide
    grep (`grep -rl financial_event_entries\\|reconciliation_discrepancies
    backend/migrations/430_*.sql backend/migrations/432_*.sql
-   backend/migrations/433_*.sql`) confirms neither table appears in any of
-   the three fixes. Filed as ACTION_ITEMS.md C129 (new) -- fixing production
-   RLS policies is a schema change with its own review scope, out of scope
-   for a test-coverage-only PR, same reasoning C118 used for its analogous
-   finding last round.
-2. **`subscription_payments` claims "Append-only ledger" in its own
-   `COMMENT ON TABLE` but has zero DB-level enforcement of that claim** --
+   backend/migrations/433_*.sql`) had confirmed neither table appeared in
+   any of the three fixes. Migration 456 extends the same `USING (false)`
+   pattern to both.
+2. **`subscription_payments` claimed "Append-only ledger" in its own
+   `COMMENT ON TABLE` but had zero DB-level enforcement of that claim** --
    no trigger of any kind, unlike its sibling `financial_event_entries`
    (real UPDATE-blocking trigger) and the established pattern for audit
    tables making the same claim (`audit_logs`, `compliance_export_events`).
-   Since `service_role` bypasses RLS entirely and there is no trigger, a
-   direct `service_role` UPDATE/DELETE is completely unenforced at the DB
-   layer -- the guarantee rests entirely on application discipline (no
-   production code path issues one; confirmed by grepping `routes/`,
-   `services/`, `utils/` for `subscription_payments` writes: only
-   `INSERT`s, never an `UPDATE`/`DELETE`). Same gap class as C118
-   (`ride_distance_integrity_events`/`ride_distance_recomputes`), a new
-   instance -- cross-referenced from the same C129 entry rather than filed
-   separately, since both findings surfaced in the same round and share the
-   same "not fixed here, needs its own migration review" disposition.
+   Since `service_role` bypasses RLS entirely, only a trigger can constrain
+   it. No production code path ever issued an UPDATE/DELETE here (confirmed
+   by grepping `routes/`, `services/`, `utils/`), so this was a defense-in-
+   depth gap, not a live incident -- migration 456 adds
+   `subscription_payments_no_mutate`, blocking BOTH UPDATE and DELETE
+   (unlike `financial_event_entries_no_update`, which is UPDATE-only to
+   avoid breaking its parent's `ON DELETE CASCADE` -- `subscription_payments`
+   has no FK/cascade relationship to any parent row, confirmed by grepping
+   every migration touching it for a `REFERENCES`/`FOREIGN KEY` on
+   `driver_id`: none exists).
 """
 
 from __future__ import annotations
 
 import uuid
-from decimal import Decimal
 
 import pytest
 
@@ -152,7 +150,13 @@ def test_service_role_bypasses_select(pg_cur):
     assert cur.fetchall() == [(event_id,)]
 
 
-def test_admin_authenticated_can_select(pg_cur):
+def test_admin_authenticated_cannot_select(pg_cur):
+    """ACTION_ITEMS.md C129 / migration 456: financial_event_entries_select's
+    users.role = 'admin' check is unreachable -- migration 256's CHECK
+    constraint makes that value impossible to hold, same root cause as
+    migration 430 (C107). 456 replaces it with an explicit USING (false)
+    deny; an admin-shaped authenticated session is denied identically to
+    any other non-admin user."""
     user_id, admin_id = _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, user_id)
@@ -165,7 +169,7 @@ def test_admin_authenticated_can_select(pg_cur):
     )
     cur = as_role(pg_cur, "authenticated", {"sub": admin_id, "role": "authenticated"})
     cur.execute("SELECT event_id FROM financial_event_entries WHERE event_id = %s", (event_id,))
-    assert cur.fetchall() == [(event_id,)]
+    assert cur.fetchall() == []
 
 
 def test_non_admin_authenticated_cannot_select(pg_cur):
@@ -363,7 +367,15 @@ def test_recon_service_role_bypasses_all(pg_cur):
     assert cur.fetchall() == [(disc_id,)]
 
 
-def test_recon_admin_authenticated_can_select_and_update(pg_cur):
+def test_recon_admin_authenticated_cannot_select_or_update(pg_cur):
+    """ACTION_ITEMS.md C129 / migration 456: recon_admin_only's
+    users.role = 'admin' check is the same unreachable pattern as
+    financial_event_entries_select above. 456 replaces the FOR ALL policy
+    with USING (false) WITH CHECK (false) -- an admin-shaped session can
+    neither see nor update a row. The UPDATE affects zero rows rather than
+    raising (RLS filters the target row away before the write; there is no
+    grant-layer REVOKE on this table to raise InsufficientPrivilege
+    instead)."""
     admin_id, disc_id = _uuid(), _uuid()
     as_role(pg_cur, None)
     _seed_user(pg_cur, admin_id, role="admin")
@@ -375,13 +387,14 @@ def test_recon_admin_authenticated_can_select_and_update(pg_cur):
     )
     cur = as_role(pg_cur, "authenticated", {"sub": admin_id, "role": "authenticated"})
     cur.execute("SELECT id FROM reconciliation_discrepancies WHERE id = %s", (disc_id,))
-    assert cur.fetchall() == [(disc_id,)]
+    assert cur.fetchall() == []
     cur.execute(
         "UPDATE reconciliation_discrepancies SET status = 'resolved', resolved_by = %s WHERE id = %s",
         (admin_id, disc_id),
     )
-    cur.execute("SELECT status FROM reconciliation_discrepancies WHERE id = %s", (disc_id,))
-    assert cur.fetchall() == [("resolved",)]
+    assert cur.rowcount == 0
+    as_role(pg_cur, "service_role").execute("SELECT status FROM reconciliation_discrepancies WHERE id = %s", (disc_id,))
+    assert pg_cur.fetchall() == [("open",)]
 
 
 def test_recon_non_admin_authenticated_cannot_select(pg_cur):
@@ -584,14 +597,29 @@ def test_sub_unique_stripe_invoice_id_dedupes(pg_cur):
         )
 
 
-def test_sub_no_immutability_trigger_service_role_can_mutate_despite_appendonly_comment(pg_cur):
+def test_sub_immutability_trigger_blocks_service_role_update(pg_cur):
+    """ACTION_ITEMS.md C129 / migration 456: subscription_payments_no_mutate
+    now enforces the table's own "Append-only ledger" COMMENT ON TABLE claim
+    at the trigger level -- RLS bypass (service_role) is not trigger bypass,
+    matching financial_event_entries_no_update's precedent."""
     user_id, driver_id, payment_id = _uuid(), _uuid(), _uuid()
     cur = as_role(pg_cur, "service_role")
     _seed_user(cur, user_id, role="driver")
     _seed_driver(cur, driver_id, user_id)
     _seed_subscription_payment(cur, payment_id, driver_id)
-    # No trigger exists to block this, unlike financial_event_entries'
-    # UPDATE trigger -- documents current (gap) behavior, does not fix it.
-    cur.execute("UPDATE subscription_payments SET amount = 999.99 WHERE id = %s", (payment_id,))
-    cur.execute("SELECT amount FROM subscription_payments WHERE id = %s", (payment_id,))
-    assert cur.fetchall() == [(Decimal("999.99"),)]
+    with pytest.raises(psycopg2.errors.RaiseException):
+        cur.execute("UPDATE subscription_payments SET amount = 999.99 WHERE id = %s", (payment_id,))
+
+
+def test_sub_immutability_trigger_blocks_service_role_delete(pg_cur):
+    """Unlike financial_event_entries_no_update (UPDATE-only, to avoid
+    breaking its parent's ON DELETE CASCADE), subscription_payments has no
+    FK/cascade relationship to any parent row -- so this trigger blocks
+    DELETE too, making the table genuinely append-only end to end."""
+    user_id, driver_id, payment_id = _uuid(), _uuid(), _uuid()
+    cur = as_role(pg_cur, "service_role")
+    _seed_user(cur, user_id, role="driver")
+    _seed_driver(cur, driver_id, user_id)
+    _seed_subscription_payment(cur, payment_id, driver_id)
+    with pytest.raises(psycopg2.errors.RaiseException):
+        cur.execute("DELETE FROM subscription_payments WHERE id = %s", (payment_id,))

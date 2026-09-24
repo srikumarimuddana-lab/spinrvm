@@ -32,6 +32,7 @@ def offer_db(pg_cur):
         "458_driver_availability_f2_fixes.sql",
         "459_driver_claim_epoch_fence.sql",
         "460_offer_decision_atomicity.sql",
+        "464_driver_availability_transition_hardening.sql",
     ):
         _apply(cur, name)
     cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")

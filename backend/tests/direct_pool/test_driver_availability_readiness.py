@@ -147,3 +147,79 @@ def test_heartbeats_never_extend_readiness(readiness_db):
     cur.execute("SELECT public.renew_driver_presence('d1','sess-1',5,NULL)")
     assert cur.fetchone()[0]["status"] == "renewed"
     assert _row(cur)[2] == before
+
+
+def test_go_online_uses_configured_readiness_window(readiness_db):
+    cur = readiness_db
+    cur.execute(
+        "UPDATE settings SET driver_readiness_idle_minutes=15, driver_readiness_prompt_minutes=2 "
+        "WHERE id='app_settings'"
+    )
+    cur.execute(
+        "UPDATE drivers SET is_online=false, is_available=false, accepting_requests=false, "
+        "controller_session_id=NULL WHERE id='d1'"
+    )
+    cur.execute("SELECT clock_timestamp()")
+    before = cur.fetchone()[0]
+    cur.execute(
+        "SELECT public.transition_driver_availability('d1',5,'sess-1','go_online','go-window')"
+    )
+    result = cur.fetchone()[0]
+    assert result["code"] == "OK"
+    ready_until = _row(cur)[2]
+    assert 17 * 60 <= (ready_until - before).total_seconds() <= 17 * 60 + 5
+
+
+def test_system_actor_allowlist_skips_user_session_and_contact_mutation(readiness_db):
+    cur = readiness_db
+    cur.execute("UPDATE users SET current_session_id=NULL WHERE id='u1'")
+    cur.execute(
+        "UPDATE drivers SET controller_session_id='replaced-session', "
+        "last_contact_at=clock_timestamp() - interval '10 minutes' WHERE id='d1'"
+    )
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='d1'")
+    contact_before = cur.fetchone()[0]
+
+    cur.execute(
+        "SELECT public.transition_driver_availability('d1',5,'system:finalize','pause_idle','system-finalize')"
+    )
+    result = cur.fetchone()[0]
+    assert result["code"] == "OK"
+    assert result["is_online"] is False
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='d1'")
+    assert cur.fetchone()[0] == contact_before
+
+    cur.execute(
+        "SELECT public.transition_driver_availability('d1',6,'system:logout','pause_idle','bad-pair')"
+    )
+    assert cur.fetchone()[0]["code"] == "UNAUTHORIZED_SESSION"
+    cur.execute("SELECT is_online,online_epoch FROM drivers WHERE id='d1'")
+    assert cur.fetchone() == (False, 6)
+
+
+def test_logout_system_actor_preserves_active_obligation(readiness_db):
+    cur = readiness_db
+    cur.execute("UPDATE users SET current_session_id=NULL WHERE id='u1'")
+    cur.execute("UPDATE drivers SET controller_session_id='replaced-session' WHERE id='d1'")
+    cur.execute(
+        "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('system-logout-ride','d1','a',0,0,'b',0,0,'in_progress')"
+    )
+    cur.execute(
+        "INSERT INTO driver_insurance_periods (driver_id,period,ride_id) "
+        "VALUES ('d1',3,'system-logout-ride')"
+    )
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='d1'")
+    contact_before = cur.fetchone()[0]
+
+    cur.execute(
+        "SELECT public.transition_driver_availability('d1',5,'system:logout','stop_requests','logout-active-ride')"
+    )
+    result = cur.fetchone()[0]
+    assert result["code"] == "OK"
+    assert result["is_online"] is True
+    assert result["accepting_requests"] is False
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='d1'")
+    assert cur.fetchone()[0] == contact_before
+    cur.execute("SELECT period,ride_id,ended_at FROM driver_insurance_periods WHERE driver_id='d1'")
+    assert cur.fetchone() == (3, "system-logout-ride", None)

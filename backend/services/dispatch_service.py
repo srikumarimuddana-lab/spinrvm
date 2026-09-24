@@ -724,4 +724,3 @@ async def admit_candidates_v2(
         admitted.append(driver)
 
     return admitted, "ok"
-

@@ -149,6 +149,65 @@ async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> 
         expiry = _as_utc(driver.get(field))
         if expiry and expiry < server_time:
             return code
+
+    # ── Subscription / entitlement checks ────────────────────────────
+    driver_id = driver.get("id")
+    area_id = driver.get("service_area_id")
+    _sub_required = False
+    if area_id:
+        try:
+            _areas = await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
+            _area = _areas[0] if _areas else None
+            _sub_required = bool(_area and _area.get("subscription_required"))
+            if not _sub_required and _area and _area.get("parent_service_area_id"):
+                _parents = await db_supabase.get_rows(
+                    "service_areas", {"id": _area["parent_service_area_id"]}, limit=1
+                )
+                _parent = _parents[0] if _parents else None
+                _sub_required = bool(_parent and _parent.get("subscription_required"))
+        except Exception as exc:
+            raise AvailabilityLookupError("subscription area lookup unavailable") from exc
+    if not _sub_required:
+        try:
+            _settings = await db_supabase.get_rows(
+                "settings", {"id": "app_settings"}, limit=1, columns="require_driver_subscription"
+            )
+            _sub_required = bool(_settings and _settings[0].get("require_driver_subscription"))
+        except Exception:  # noqa: S110 — global flag missing is not fatal
+            pass
+
+    if _sub_required and driver_id:
+        try:
+            _subs = await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": driver_id, "status": "active"},
+                limit=1,
+                columns="id,expires_at",
+            )
+            _has_active = False
+            for _s in _subs or []:
+                _exp = _as_utc(_s.get("expires_at"))
+                if _exp is None or _exp > server_time:
+                    _has_active = True
+                    break
+            if not _has_active:
+                return "SUBSCRIPTION_REQUIRED"
+        except Exception as exc:
+            raise AvailabilityLookupError("subscription lookup unavailable") from exc
+
+    # Quota check — fail open (logged, ignored)
+    if driver_id:
+        try:
+            try:
+                from ..utils.spinr_pass import quota_status as _quota_status
+            except ImportError:
+                from utils.spinr_pass import quota_status as _quota_status  # type: ignore
+            _qs = await _quota_status(driver_id)
+            if _qs == "exhausted":
+                return "QUOTA_EXHAUSTED"
+        except Exception:  # noqa: S110 — quota check failure is non-fatal
+            pass
+
     return None
 
 

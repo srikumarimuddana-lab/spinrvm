@@ -218,8 +218,14 @@ async def _call_nearby(drivers, settings, radius=None):
     with (
         patch("backend.routes.drivers.location.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        # location.py does `from ...utils.driver_presence import
+        # availability_aware_present_driver_ids_checked` at module scope (not
+        # `present_driver_ids_checked`, and not a function-local import), so
+        # the name to patch is location.py's own bound reference, not the
+        # defining module -- patching the source module has no effect on an
+        # already-bound `from x import y` name.
         patch(
-            "backend.routes.drivers.location.present_driver_ids_checked",
+            "backend.routes.drivers.location.availability_aware_present_driver_ids_checked",
             AsyncMock(return_value=({d["id"] for d in drivers}, True)),
         ),
     ):

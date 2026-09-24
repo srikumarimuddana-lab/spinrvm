@@ -295,7 +295,10 @@ async def change_driver_availability(
         or len(request_id) > 128
     ):
         return {"code": "AVAILABILITY_UPGRADE_REQUIRED"}
-    if not authenticated_session_id:
+    # A token session can never act as a trusted system actor.
+    if not authenticated_session_id or str(authenticated_session_id).startswith(
+        driver_availability_repo.SYSTEM_ACTOR_PREFIX
+    ):
         return {"code": "SESSION_RECONCILE_REQUIRED"}
 
     raw = await _read_snapshot(user_id)
@@ -326,6 +329,8 @@ async def pause_driver_for_policy(
 ) -> dict[str, Any]:
     """Pause offers after a trusted caller has committed a blocking policy state.
 
+    Runs as the trusted ``system:policy`` actor, so it works whether the
+    driver's current session is NULL, current, or not the controller.
     Re-read and recheck the blocking status on the single stale-epoch retry;
     never adopt an epoch captured by a stale event or callback.
     """
@@ -337,14 +342,10 @@ async def pause_driver_for_policy(
         if driver.get("status") not in blocking_statuses:
             return {"code": "POLICY_STATE_CHANGED"}
         try:
-            users = await db_supabase.get_rows("users", {"id": user_id}, limit=1, columns="current_session_id")
-            session_id = users[0].get("current_session_id") if users else None
-            if not session_id:
-                return {"code": "SESSION_RECONCILE_REQUIRED"}
             result = await driver_availability_repo.transition_driver_availability(
                 str(driver["id"]),
                 int(driver.get("online_epoch") or 0),
-                str(session_id),
+                driver_availability_repo.system_actor("policy"),
                 "pause_policy",
                 request_id if attempt == 0 else str(uuid.uuid4()),
             )

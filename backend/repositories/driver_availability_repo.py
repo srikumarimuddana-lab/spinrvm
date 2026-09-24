@@ -23,6 +23,20 @@ SUPPORTED_ACTIONS = frozenset(
     }
 )
 
+# Trusted backend actors. Migration 457 accepts exactly these for stop and
+# pause actions only, and skips the user-session and controller checks.
+SYSTEM_ACTOR_PREFIX = "system:"
+SYSTEM_ACTOR_SOURCES = frozenset(
+    {"policy", "contact_gap", "readiness", "missed_offers", "finalize", "stale_intent", "logout"}
+)
+
+
+def system_actor(source: str) -> str:
+    """Session argument for a trusted backend actor; never a user session."""
+    if source not in SYSTEM_ACTOR_SOURCES:
+        raise ValueError(f"unsupported system availability actor: {source}")
+    return SYSTEM_ACTOR_PREFIX + source
+
 
 async def get_driver_availability_snapshot(user_id: str) -> dict[str, Any]:
     """Read driver, obligations, feature gate, and DB time in one SQL snapshot."""
@@ -53,7 +67,8 @@ async def transition_driver_availability(
     """Commit one availability command through the backend-only SQL RPC.
 
     The authenticated session ID must come from the already-validated request
-    context. The repository calls the existing Supabase RPC transport and
+    context, or be ``system_actor(...)`` for a trusted backend stop or pause.
+    The repository calls the existing Supabase RPC transport and
     never falls back to another database path. The function returns the
     committed JSON snapshot, including ``code``, ``online_epoch``,
     ``controller_session_id``, ``is_online``, ``accepting_requests``,

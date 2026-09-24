@@ -227,7 +227,7 @@ async def test_policy_pause_rechecks_blocking_state_before_one_epoch_retry():
     second = _raw(driver=_driver(status="suspended", online_epoch=5, accepting_requests=True))
     with (
         patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, second])),
-        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
+        patch.object(service.db_supabase, "get_rows", AsyncMock()) as get_rows,
         patch.object(
             service.driver_availability_repo,
             "transition_driver_availability",
@@ -240,9 +240,11 @@ async def test_policy_pause_rechecks_blocking_state_before_one_epoch_retry():
     assert result["code"] == "OK"
     assert transition.await_count == 2
     first_call, retry_call = transition.await_args_list
-    assert first_call.args[:4] == ("drv-1", 4, "current", "pause_policy")
-    assert retry_call.args[:4] == ("drv-1", 5, "current", "pause_policy")
+    # The pause runs as the trusted system actor; it never borrows a user session.
+    assert first_call.args[:4] == ("drv-1", 4, "system:policy", "pause_policy")
+    assert retry_call.args[:4] == ("drv-1", 5, "system:policy", "pause_policy")
     assert retry_call.args[4] != "admin-pause"
+    get_rows.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -251,7 +253,6 @@ async def test_policy_pause_does_not_adopt_epoch_after_policy_cleared():
     retry = _raw(driver=_driver(status="active", online_epoch=5, accepting_requests=True))
     with (
         patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, retry])),
-        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
         patch.object(
             service.driver_availability_repo,
             "transition_driver_availability",
@@ -263,6 +264,31 @@ async def test_policy_pause_does_not_adopt_epoch_after_policy_cleared():
         )
     assert result["code"] == "POLICY_STATE_CHANGED"
     transition.assert_awaited_once()
+
+
+def test_system_actor_only_builds_known_sources():
+    from backend.repositories import driver_availability_repo as repo
+
+    assert repo.system_actor("policy") == "system:policy"
+    assert repo.system_actor("logout") == "system:logout"
+    with pytest.raises(ValueError):
+        repo.system_actor("admin")
+
+
+@pytest.mark.anyio
+async def test_token_session_cannot_act_as_a_system_actor():
+    with (
+        patch.object(service, "_read_snapshot", AsyncMock()) as read,
+        patch.object(service.driver_availability_repo, "transition_driver_availability", AsyncMock()) as transition,
+    ):
+        result = await service.change_driver_availability(
+            "user-1",
+            {"action": "stop_requests", "online_epoch": "3", "request_id": "stop-1"},
+            "system:policy",
+        )
+    assert result == {"code": "SESSION_RECONCILE_REQUIRED"}
+    read.assert_not_awaited()
+    transition.assert_not_awaited()
 
 
 @pytest.mark.anyio

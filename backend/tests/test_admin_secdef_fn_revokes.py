@@ -147,6 +147,12 @@ def test_guard_would_have_caught_380_to_395_without_450():
     flagged = {
         line.split("SECURITY DEFINER ")[1].split("(")[0] for line in _violations(sources) if "FROM PUBLIC" in line
     }
+    # admin_payout_period_snapshot/admin_payout_window_stats (384, 391) are
+    # deliberately absent here even though 450 revoked them too: migration 454
+    # independently CREATE OR REPLACEs and REVOKEs both in the same file, so
+    # _scan() re-registers their "created" index at 454 and the revoke check
+    # (revoked_later) is satisfied without needing 450 at all. Only the 13
+    # functions with no other revoke depend solely on 450.
     assert flagged == {
         "admin_audit_actor_stats",
         "admin_cloud_message_stats_rollup",
@@ -158,8 +164,6 @@ def test_guard_would_have_caught_380_to_395_without_450():
         "admin_email_log_stats",
         "admin_incentive_claims_sum",
         "admin_mrr_at_cutoff",
-        "admin_payout_period_snapshot",
-        "admin_payout_window_stats",
         "admin_promo_stats",
         "admin_referred_user_count",
         "admin_subscription_stats_rollup",

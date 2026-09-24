@@ -83,3 +83,20 @@ Report-only. No code, config, or data was changed to produce this file.
 - Effect: the finding shrinks to the push notification only. That is a smaller gap, because the rider does get a written record that includes a way to contest the charge.
 - **Labelling:** VERIFIED over-claims. The "both channels" part was evidently not read.
 
+### TSF-004 (trust-safety-fraud.md), card label VERIFIED, MEDIUM — **CONFIRMED**
+- `backend/services/payment_service.py:529` `record_dispute_close_events` exists. `backend/utils/dispute_evidence_pack.py:113,145-148,186-188` computes `rider_prior_dispute_count` and uses it only as cover-letter text; the one other reader is `utils/dispute_evidence_pdf.py:86-87`, the same evidence PDF.
+- Absence claim re-checked with several spellings: `prior_dispute`, `dispute_count`, `chargeback_count` / `rate` / `velocity`, repeat or serial disputer, `count_disputes`, across `backend/` and `admin-dashboard/src`. I also listed every non-test reader of `stripe_disputes`: `payment_collection.py` (comment only), `routes/admin/support.py:194-219` (a plain chargebacks list), the evidence pack, pack download and submission routes, `dispute_evidence_reminder.py`, `webhooks.py`, and `scripts/verify_restore.py`. None of them has a velocity threshold or a per-rider flag, and `services/` and `utils/` contain no fraud or risk module. The absence holds.
+- The VERIFIED label is appropriate.
+
+### UXA11Y-002 (ux-a11y.md), card label VERIFIED (arithmetic, disclosed as not measured), HIGH — **CONFIRMED**
+- Token values in `shared/theme/index.ts:49-73` (light) and `:79-105` (dark) match the card. I recomputed all 13 WCAG ratios with the standard relative-luminance formula, and every one matches the card to two decimals: 2.54, 2.15, 3.68, 3.76, 3.55, 4.98, 2.41, 2.02, 3.44, 3.38, and dark mode 10.92, 12.58, 6.16.
+- Call sites check out. `rider-app/app/ride-options.tsx:1796-1807`: `retryButton` has `backgroundColor: colors.primary` and `retryButtonText` has `color: '#FFF'`. `rider-app/app/ai-assistant.tsx:727` is exact. `rider-app/app/driver-arriving.tsx:973` is an 11px bold label in `colors.primary`. `.claude/context/brand-spinr.md:21` documents `primaryDark` as the AA-safe choice.
+- Minor count drift: I count 657 `colors.primary` and 22 `colors.primaryDark` in rider-app and driver-app `app/` and `components/` (680 and 22 across all app `.ts`/`.tsx`), against the card's 644 and 25. The "under 4%" conclusion (22/680 = 3.2%) still holds.
+- The label is appropriate. The card correctly says the figures are computed rather than rendered or measured.
+
+### BENCH-006 (03-benchmark.md), card label VERIFIED, HIGH — **CONFIRMED** (derivative; no competitor claim to check)
+- The card cites no competitor URL or external fact. Its evidence is only `TSF-002`, `TSF-003` and `TSF-004`, so there was nothing to check with WebFetch or WebSearch. Its standalone value as a *benchmark* finding is therefore limited: it restates three lane findings rather than adding competitor evidence.
+- Independent checks: TSF-004 is confirmed above. For TSF-002 and TSF-003, my grep of `backend/{routes,services,utils,migrations,core}` for collusion, repeat or same pair, driver-rider pair, fee farming, no-show or cancellation-fee abuse or velocity, `fraud_flag`, and suspicious ride/pair/cancel found no detection logic. The only "anomal" hits are unrelated comments and import-quality flags. `.claude/agents/spinr-fraud-auditor.md` exists. The "no detection signal" claim holds.
+- Detail the card and TSF-002 omit, not a refutation: `backend/routes/rides/matching.py:191` `_exclude_rider_owned_candidates` *prevents* the degenerate case of a driver being dispatched their own ride request. That is prevention of same-account self-dealing, not detection of a colluding pair of separate accounts.
+- **Labelling:** VERIFIED is acceptable for the absence. A benchmark card with no external citation is really an INFERRED cross-reference, and the synthesizer should not count it as independent corroboration of TSF-002, TSF-003 and TSF-004.
+

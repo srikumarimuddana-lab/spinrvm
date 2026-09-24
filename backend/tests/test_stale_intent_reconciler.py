@@ -235,3 +235,117 @@ async def test_no_candidates_is_a_cheap_noop(patched):
     assert stats["candidates"] == 0
     assert fake_db.updates == []
     rec.present_driver_ids_checked.assert_not_awaited()
+
+
+class FakeV2DB:
+    """drivers rows by query shape; records what the v2 path asks for."""
+
+    def __init__(self, by_contact=None, legacy=None, active_rides=None):
+        self.by_contact = by_contact or []
+        self.legacy = legacy or []
+        self.active_rides = active_rides or []
+        self.queries: list[dict] = []
+        self.updates: list = []
+
+    async def get_rows(self, table, filters=None, **kwargs):
+        if table != "drivers":
+            return []
+        self.queries.append({"filters": filters, **kwargs})
+        rows = self.legacy if filters.get("last_contact_at", "x") is None else self.by_contact
+        offset = kwargs.get("offset") or 0
+        return rows[offset : offset + kwargs["limit"]]
+
+    async def get_rows_batched_in(self, table, column, values, extra_filters=None, **kwargs):
+        return [r for r in self.active_rides if r["driver_id"] in values]
+
+    async def update_one(self, *args, **kwargs):  # pragma: no cover - v2 never raw-writes
+        raise AssertionError("v2 must not write drivers directly")
+
+
+@pytest.fixture
+def patched_v2(monkeypatch):
+    from utils import stale_intent_reconciler as rec
+
+    fake_db = FakeV2DB()
+    monkeypatch.setattr(rec, "db", fake_db)
+    monkeypatch.setattr(rec, "get_redis_stats", AsyncMock(return_value={"connected": True}))
+    monkeypatch.setattr(rec, "get_app_settings", AsyncMock(return_value={"driver_availability_v2_enabled": True}))
+    monkeypatch.setattr(rec, "scoped_driver_presence_evidence", AsyncMock(return_value=({}, True)))
+    monkeypatch.setattr(rec, "record_period_transition", AsyncMock())
+    monkeypatch.setattr(rec, "send_push_notification", AsyncMock(return_value=True))
+    monkeypatch.setattr(rec.manager, "send_personal_message", AsyncMock())
+    transition = AsyncMock(
+        return_value={"code": "OK", "online_epoch": "8", "state_version": "3", "is_online": False, "server_time": "t"}
+    )
+    monkeypatch.setattr(rec.driver_availability_repo, "transition_driver_availability", transition)
+    return rec, fake_db, transition
+
+
+@pytest.mark.asyncio
+async def test_v2_pauses_through_t1_system_actor(patched_v2):
+    rec, fake_db, transition = patched_v2
+    fake_db.by_contact = [{"id": "d1", "user_id": "u1", "online_epoch": 7}]
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 1
+    transition.assert_awaited_once_with("d1", 7, "system:stale_intent", "pause_unreachable", "stale-intent:d1:7")
+    rec.record_period_transition.assert_not_awaited()
+    rec.send_push_notification.assert_awaited_once()
+    ws = rec.manager.send_personal_message.await_args.args
+    assert ws[0]["type"] == "availability_changed" and ws[1] == "driver_u1"
+    contact_q, legacy_q = fake_db.queries[0], fake_db.queries[1]
+    assert "$lt" in contact_q["filters"]["last_contact_at"]
+    assert legacy_q["filters"]["last_contact_at"] is None
+    assert "$lt" in legacy_q["filters"]["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_v2_skips_live_scoped_evidence_and_active_rides(patched_v2):
+    rec, fake_db, transition = patched_v2
+    fake_db.by_contact = [{"id": "d1", "online_epoch": 1}, {"id": "d2", "online_epoch": 1}]
+    fake_db.active_rides = [{"id": "r", "driver_id": "d2"}]
+    rec.scoped_driver_presence_evidence.return_value = ({"d1": {}}, True)
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert (stats["skipped_present"], stats["skipped_active_ride"], stats["flipped"]) == (1, 1, 0)
+    transition.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_unreachable_presence_aborts(patched_v2):
+    rec, fake_db, transition = patched_v2
+    fake_db.by_contact = [{"id": "d1", "online_epoch": 1}]
+    rec.scoped_driver_presence_evidence.return_value = ({}, False)
+
+    await rec.reconcile_stale_intent(NOW)
+
+    transition.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_push_only_when_result_is_offline(patched_v2):
+    rec, fake_db, transition = patched_v2
+    fake_db.legacy = [{"id": "d1", "user_id": "u1", "online_epoch": 2}]
+    transition.return_value = {"code": "OK", "is_online": True, "online_epoch": "3"}
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 1
+    rec.send_push_notification.assert_not_awaited()
+    rec.manager.send_personal_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [{"code": "ONLINE_EPOCH_STALE"}, {"code": "OK", "replayed": True}])
+async def test_v2_stale_or_replayed_does_nothing(patched_v2, result):
+    rec, fake_db, transition = patched_v2
+    fake_db.by_contact = [{"id": "d1", "user_id": "u1", "online_epoch": 2}]
+    transition.return_value = result
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 0
+    rec.send_push_notification.assert_not_awaited()
+    rec.manager.send_personal_message.assert_not_awaited()

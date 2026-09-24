@@ -80,6 +80,48 @@ class TestShouldSanitize5xxDetail:
         assert _should_sanitize_5xx_detail(None) is True
         assert _should_sanitize_5xx_detail(500) is True
 
+    def test_passes_through_allow_listed_structured_dict(self):
+        """Availability 503s carry machine codes the driver app branches on.
+        A dict made only of allow-listed keys with vetted shapes passes."""
+        from utils.error_handling import _should_sanitize_5xx_detail
+
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE"}) is False
+        assert (
+            _should_sanitize_5xx_detail(
+                {
+                    "code": "ELIGIBILITY_UNAVAILABLE",
+                    "reason_code": "ONLINE_EPOCH_STALE",
+                    "online_epoch": "12",
+                    "state_version": "40",
+                    "retry_after_ms": 2000,
+                }
+            )
+            is False
+        )
+
+    def test_sanitises_structured_dict_with_extra_key_or_bad_shape(self):
+        """One unknown key or badly shaped value sanitises the whole dict —
+        in particular the payment/AI {code, message} details, whose message
+        can carry provider text."""
+        from utils.error_handling import _should_sanitize_5xx_detail
+
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "message": "db down"}) is True
+        assert _should_sanitize_5xx_detail({"code": "CARD_DECLINED", "message": "ch_123 declined"}) is True
+        # code is required and must be an upper-snake code.
+        assert _should_sanitize_5xx_detail({"online_epoch": "12"}) is True
+        assert _should_sanitize_5xx_detail({"code": "presence_unavailable"}) is True
+        assert _should_sanitize_5xx_detail({"code": "AB"}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE\n"}) is True
+        assert _should_sanitize_5xx_detail({"code": 503}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "reason_code": "see logs"}) is True
+        # Epoch/version are decimal strings; retry_after_ms a non-negative int.
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "online_epoch": 12}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "online_epoch": "-1"}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "state_version": "1" * 21}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "retry_after_ms": "2000"}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "retry_after_ms": True}) is True
+        assert _should_sanitize_5xx_detail({"code": "PRESENCE_UNAVAILABLE", "retry_after_ms": -1}) is True
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _resolve_request_id — middleware read with fallback
@@ -155,6 +197,17 @@ def _app_with_handler():
         raise HTTPException(
             status_code=500,
             detail='duplicate key value violates unique constraint "users_phone_key"',
+        )
+
+    @app.get("/structured-503")
+    async def structured_503():
+        raise HTTPException(status_code=503, detail={"code": "PRESENCE_UNAVAILABLE", "online_epoch": "7"})
+
+    @app.get("/structured-503-with-message")
+    async def structured_503_with_message():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "ELIGIBILITY_UNAVAILABLE", "message": "pool at 10.0.0.5 exhausted"},
         )
 
     @app.get("/4xx-passthrough")
@@ -236,6 +289,31 @@ class TestHttpExceptionHandlerEndToEnd:
         assert body["error"]["message"] == "ERR_AUTH_UNAVAILABLE"
         # No "sanitised" flag on a pass-through.
         assert "sanitised" not in body["error"]
+
+    def test_5xx_allow_listed_structured_detail_passes_through(self):
+        """The driver app reads ``detail.code`` on availability 503s; an
+        allow-listed dict must reach the wire intact, not the generic text."""
+        from fastapi.testclient import TestClient
+
+        client = TestClient(_app_with_handler())
+        r = client.get("/structured-503")
+
+        assert r.status_code == 503
+        body = r.json()
+        assert body["detail"] == {"code": "PRESENCE_UNAVAILABLE", "online_epoch": "7"}
+        assert body["error"]["message"] == {"code": "PRESENCE_UNAVAILABLE", "online_epoch": "7"}
+        assert "sanitised" not in body["error"]
+
+    def test_5xx_structured_detail_with_extra_key_is_sanitised(self):
+        from fastapi.testclient import TestClient
+
+        client = TestClient(_app_with_handler())
+        r = client.get("/structured-503-with-message")
+
+        assert r.status_code == 503
+        assert "10.0.0.5" not in r.text
+        assert r.json()["detail"] == "Something went wrong on our end. Please try again in a moment."
+        assert r.json()["error"]["sanitised"] is True
 
     def test_4xx_detail_passes_through_unchanged(self):
         """The sanitiser fires on >=500 only. 4xx messages are user-

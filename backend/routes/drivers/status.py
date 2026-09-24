@@ -49,6 +49,13 @@ def _availability_error(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+# 5xx details reach the client only as allow-listed code dicts (see
+# utils/error_handling.py); a "message" key would get the whole detail
+# replaced by the generic sanitised sentence.
+def _availability_unavailable() -> dict[str, str]:
+    return {"code": "ELIGIBILITY_UNAVAILABLE"}
+
+
 async def _availability_v2_enabled() -> bool:
     """Read the rollout gate directly; settings_loader's cache is not an authz gate."""
     try:
@@ -57,7 +64,7 @@ async def _availability_v2_enabled() -> bool:
         logger.error("driver availability rollout flag lookup failed", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to verify availability protocol."),
+            detail=_availability_unavailable(),
         ) from exc
     return bool(rows and rows[0].get("driver_availability_v2_enabled", False))
 
@@ -79,18 +86,27 @@ async def _change_availability_status(user_id: str, command: dict, token_session
         logger.error("driver availability command unavailable", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to update availability right now."),
+            detail=_availability_unavailable(),
         ) from exc
 
 
 async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str | None = None) -> dict:
     code = result.get("code")
     if code != "OK":
+        # F3: map internal T1 session codes to the wire contract.
+        # UNAUTHORIZED_SESSION → SESSION_SUPERSEDED;
+        # CONTROLLER_SESSION_MISMATCH → ONLINE_EPOCH_STALE with reason_code.
+        wire_code = code
+        extra_reason = None
+        if code == "UNAUTHORIZED_SESSION":
+            wire_code = "SESSION_SUPERSEDED"
+        elif code == "CONTROLLER_SESSION_MISMATCH":
+            wire_code = "ONLINE_EPOCH_STALE"
+            extra_reason = "CONTROLLER_SESSION_MISMATCH"
         status_by_code = {
             "DRIVER_NOT_FOUND": 404,
-            "UNAUTHORIZED_SESSION": 409,
+            "SESSION_SUPERSEDED": 409,
             "SESSION_RECONCILE_REQUIRED": 409,
-            "CONTROLLER_SESSION_MISMATCH": 409,
             "ONLINE_EPOCH_STALE": 409,
             "IDEMPOTENCY_KEY_CONFLICT": 409,
             "OBLIGATION_ACTIVE": 409,
@@ -99,11 +115,13 @@ async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str 
             "ELIGIBILITY_BLOCKED": 409,
             "INVALID_AVAILABILITY_COMMAND": 422,
         }
-        safe_detail = {"code": code or "AVAILABILITY_UNAVAILABLE"}
+        safe_detail = {"code": wire_code or "AVAILABILITY_UNAVAILABLE"}
+        if extra_reason:
+            safe_detail["reason_code"] = extra_reason
         for key in ("online_epoch", "state_version", "reason_code", "has_trip", "has_pending_offer"):
-            if key in result:
+            if key in result and key not in safe_detail:
                 safe_detail[key] = result[key]
-        raise HTTPException(status_code=status_by_code.get(code, 503), detail=safe_detail)
+        raise HTTPException(status_code=status_by_code.get(wire_code, 503), detail=safe_detail)
 
     transition = result.get("transition") or {}
     action = transition.get("availability_reason")
@@ -132,7 +150,7 @@ async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str 
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=503,
-                detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to refresh driver availability."),
+                detail=_availability_unavailable(),
             ) from None
         presence = await renew_driver_presence(driver_id, token_session_id, epoch)
         if presence.get("status") in {"stale_epoch", "offline"}:
@@ -188,8 +206,60 @@ async def get_my_availability(
         logger.error("driver availability snapshot unavailable", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to check your availability right now."),
+            detail=_availability_unavailable(),
         ) from exc
+
+
+_READINESS_STATUS_BY_CODE = {
+    "INVALID_AVAILABILITY_COMMAND": 422,
+    "DRIVER_NOT_FOUND": 404,
+    "SESSION_SUPERSEDED": 409,
+    "DRIVER_OFFLINE": 409,
+    "REQUESTS_PAUSED": 409,
+    "ONLINE_EPOCH_STALE": 409,
+    "READINESS_EXPIRED": 409,
+    "IDEMPOTENCY_KEY_CONFLICT": 409,
+    "AVAILABILITY_V2_DISABLED": 409,
+}
+
+
+@router.post("/me/availability")
+async def post_my_availability(
+    body: Dict[str, Any] = Body(...),
+    current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
+):
+    """Readiness command (C4): ``{"action":"confirm_ready","online_epoch","request_id"}``.
+
+    Returns the fresh availability snapshot plus ``"code": "OK"``. Go, Stop
+    and Offline stay on ``PUT /drivers/{id}/status`` (eligibility gates).
+    """
+    try:
+        from ...services.driver_availability_service import (
+            AvailabilityLookupError,
+            confirm_driver_ready,
+        )
+    except ImportError:  # pragma: no cover - top-level backend import mode
+        from services.driver_availability_service import (  # type: ignore
+            AvailabilityLookupError,
+            confirm_driver_ready,
+        )
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail={"code": "INVALID_AVAILABILITY_COMMAND"})
+    session = token_session_id if isinstance(token_session_id, str) else None
+    try:
+        result = await asyncio.wait_for(confirm_driver_ready(current_user["id"], body, session), timeout=10)
+    except (AvailabilityLookupError, TimeoutError) as exc:
+        logger.error("driver readiness confirmation unavailable", exc_info=True)
+        raise HTTPException(status_code=503, detail=_availability_unavailable()) from exc
+    code = result.get("code")
+    if code == "OK":
+        return {"success": True, **result}
+    detail = {"code": code or "AVAILABILITY_UNAVAILABLE"}
+    for key in ("reason_code", "online_epoch", "state_version"):
+        if result.get(key) is not None:
+            detail[key] = result[key]
+    raise HTTPException(status_code=_READINESS_STATUS_BY_CODE.get(code, 503), detail=detail)
 
 
 # ─── Catch-all driver ID routes MUST be last to avoid shadowing named routes ───

@@ -343,6 +343,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # been removed — resolve_matching_config does its own find_one
         # against the same table.
         app_settings = await _deps.get_app_settings()
+        _availability_v2 = bool(app_settings.get("driver_availability_v2_enabled"))
         # Compute offer timeout early so it can be embedded in dispatch payloads —
         # driver-app uses this for the per-offer countdown instead of a cached
         # value, which drifted when admin changed the setting mid-session.
@@ -497,6 +498,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 "vehicle_type_id": ride["vehicle_type_id"],
                 "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
             }
+            if _availability_v2:
+                _dispatch_filter["accepting_requests"] = True
             if ride.get("requires_wav"):
                 _dispatch_filter["is_wav"] = True
             # ── Cross-service-area ride guard ─────────────────────────────
@@ -562,67 +565,90 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 )
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "rank"}):
-            # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
-            # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
-            # facing /drivers/nearby endpoint so the cars a rider sees on the map are
-            # exactly the drivers who can receive an offer.
-            # Presence filter: prefer dispatching to drivers whose Redis heartbeat key
-            # is alive (Uber/Lyft-style ghost suppression). Semantics mirror
-            # DispatchService.find_candidate_drivers exactly — filter only on a
-            # *non-empty, reachable* present set; fail open otherwise:
-            #   - reachable=False (Redis configured but unavailable) → skip the filter
-            #     so a Redis outage can't empty the pool and strand every ride. A
-            #     liveness probe on the client object is NOT sufficient here — the lazy
-            #     client looks live mid-outage while MGET fails; only the checked
-            #     variant reports whether the presence store actually answered.
-            #   - reachable=True, non-empty set → apply the filter; ghosts among the
-            #     non-present candidates get no offer.
-            #   - reachable=True, empty set → the answer depends on WHERE presence
-            #     lives. A configured, answering Redis is the authoritative multi-
-            #     replica source: an empty set means every candidate's heartbeat has
-            #     expired (all ghosts), so drop them and let the no-drivers / cascade
-            #     retry fire immediately rather than burn 15s offer timeouts on phones
-            #     that can't receive. The in-process dict (no REDIS_URL — dev / single
-            #     replica / tests) is only a single-process view and is empty until a
-            #     heartbeat is recorded, so an empty set there is NOT authoritative →
-            #     fail open and keep DB-online drivers.
-            try:
+            # ── Presence filter ────────────────────────────────────────────
+            if _availability_v2:
+                # v2: use scoped presence evidence (fail closed, not open)
                 try:
-                    from ...utils.driver_presence import (
-                        present_driver_ids_checked as _present_ids_checked,  # type: ignore
-                    )
-                    from ...utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
+                    from ...services.dispatch_service import admit_candidates_v2 as _admit_v2  # type: ignore
                 except ImportError:
-                    from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
-                    from utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
-                _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
-                if not _presence_reachable:
+                    from services.dispatch_service import admit_candidates_v2 as _admit_v2  # type: ignore
+                all_drivers, _admit_outcome = await _admit_v2(all_drivers)
+                if _admit_outcome != "ok":
                     logger.warning(
-                        "[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers"
+                        "[DISPATCH] v2 admission outcome={} — {} candidates dropped",
+                        _admit_outcome,
+                        len(all_drivers),
                     )
+                logger.info(
+                    "[DISPATCH] v2 presence: {} driver(s) admitted (outcome={})",
+                    len(all_drivers),
+                    _admit_outcome,
+                )
+            else:
+                # Legacy presence filter: prefer dispatching to drivers whose Redis heartbeat key
+                # is alive (Uber/Lyft-style ghost suppression).
+                try:
+                    try:
+                        from ...utils.driver_presence import (
+                            present_driver_ids_checked as _present_ids_checked,  # type: ignore
+                        )
+                        from ...utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
+                    except ImportError:
+                        from utils.driver_presence import (  # type: ignore
+                            present_driver_ids_checked as _present_ids_checked,
+                        )
+                        from utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
+                    _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
+                    if not _presence_reachable:
+                        logger.warning(
+                            "[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers"
+                        )
+                        _metric_inc("spinr_dispatch_presence_filter_failed_total")
+                    elif _present_ids_set:
+                        before_presence = len(all_drivers)
+                        all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
+                        logger.info(
+                            f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable"
+                        )
+                    elif await _rc_get_redis() is not None:
+                        logger.info(
+                            f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
+                            f"(Redis authoritative) — all candidates are ghosts, deferring to cascade/retry"
+                        )
+                        all_drivers = []
+                    else:
+                        logger.info(
+                            "[DISPATCH] presence set empty (in-process dict, no Redis) — keeping all DB-online drivers"
+                        )
+                except Exception as _pres_exc:
+                    logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
                     _metric_inc("spinr_dispatch_presence_filter_failed_total")
-                elif _present_ids_set:
-                    before_presence = len(all_drivers)
-                    all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
-                    logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
-                elif await _rc_get_redis() is not None:
-                    # Redis is configured and answered with zero live heartbeats — every
-                    # candidate is a ghost. Empty the pool so cascade / no-drivers retry
-                    # fires instead of offering to phones that can't receive.
-                    logger.info(
-                        f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
-                        f"(Redis authoritative) — all candidates are ghosts, deferring to cascade/retry"
-                    )
-                    all_drivers = []
-                else:
-                    # In-process presence dict (no REDIS_URL): single-process view, not
-                    # authoritative for dispatch. Fail open and keep DB-online drivers.
-                    logger.info(
-                        "[DISPATCH] presence set empty (in-process dict, no Redis) — keeping all DB-online drivers"
-                    )
-            except Exception as _pres_exc:
-                logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
-                _metric_inc("spinr_dispatch_presence_filter_failed_total")
+
+                # ── Shadow mode: compare legacy presence with v2 evidence ─
+                if bool(app_settings.get("dispatch_admission_shadow_enabled")):
+                    try:
+                        _shadow_ids = {d["id"] for d in all_drivers}
+                        _shadow_admitted, _shadow_outcome = await _admit_v2([d for d in all_drivers])
+                        _shadow_v2_ids = {d["id"] for d in _shadow_admitted}
+                        _same = _shadow_ids & _shadow_v2_ids
+                        _legacy_only = _shadow_ids - _shadow_v2_ids
+                        _v2_only = _shadow_v2_ids - _shadow_ids
+                        if _same:
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total", labels={"result": "same"}, by=len(_same)
+                            )
+                        if _legacy_only:
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total",
+                                labels={"result": "legacy_only"},
+                                by=len(_legacy_only),
+                            )
+                        if _v2_only:
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total", labels={"result": "v2_only"}, by=len(_v2_only)
+                            )
+                    except Exception:
+                        logger.warning("[DISPATCH] shadow admission comparison failed")
 
             # Skip drivers who recently timed out or declined this specific offer
             # so the same driver is not hammered with repeat notifications. Batch the
@@ -792,6 +818,10 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         "[DISPATCH] quota filter failed for area={} — dispatching unfiltered by quota",
                         ride.get("service_area_id"),
                     )
+                    if _availability_v2:
+                        # v2 removed the forced-offline backstop in spinr_pass.py,
+                        # so a failed quota lookup must fail closed.
+                        all_drivers = []
 
             # Pure filter+rank: drops orphan/no-location/low-rated drivers and
             # attaches per-driver distance. Pure function — no I/O.
@@ -842,6 +872,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             # here has the identical row-501 false-negative failure mode.
                             "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
                         }
+                        if _availability_v2:
+                            _casc_filter["accepting_requests"] = True
                         if ride.get("requires_wav"):
                             _casc_filter["is_wav"] = True
                         if _area_ids is not None:
@@ -861,37 +893,46 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             ride_id=ride_id,
                         )
                         _casc_pool = _exclude_rider_owned_candidates(ride, _casc_pool)
-                        # Fix 4: Presence filter using _checked variant so a Redis outage
-                        # (configured-but-unavailable) cannot silently empty the cascade pool.
-                        # present_driver_ids_checked returns (set, reachable=False) on failure;
-                        # we only apply the filter when the presence store was actually reached.
-                        try:
-                            try:
-                                from ...utils.driver_presence import (
-                                    present_driver_ids_checked as _casc_presence_checked,  # type: ignore
-                                )
-                                from ...utils.redis_client import redis_mget as _casc_mget
-                            except ImportError:
-                                from utils.driver_presence import (
-                                    present_driver_ids_checked as _casc_presence_checked,  # type: ignore
-                                )
-                                from utils.redis_client import redis_mget as _casc_mget
-                            _casc_present_set, _casc_reachable = await _casc_presence_checked(
-                                [d["id"] for d in _casc_pool]
-                            )
-                            if _casc_reachable:
-                                _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
-                            else:
+                        # Presence filter — v2 uses scoped evidence (fail closed),
+                        # legacy uses the checked heartbeat variant (fail open).
+                        if _availability_v2:
+                            _casc_pool, _casc_outcome = await _admit_v2(_casc_pool)
+                            if _casc_outcome != "ok":
                                 logger.warning(
-                                    "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride {}",
+                                    "[DISPATCH] cascade v2 admission outcome={} for ride {}",
+                                    _casc_outcome,
                                     ride_id,
                                 )
-                            # Skip drivers who already timed-out / declined this ride
-                            _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
-                            _casc_skip_vals = await _casc_mget(_casc_skip_keys)
-                            _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
-                        except Exception as _casc_redis_exc:
-                            logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc)
+                        else:
+                            try:
+                                try:
+                                    from ...utils.driver_presence import (
+                                        present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                                    )
+                                    from ...utils.redis_client import redis_mget as _casc_mget
+                                except ImportError:
+                                    from utils.driver_presence import (
+                                        present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                                    )
+                                    from utils.redis_client import redis_mget as _casc_mget
+                                _casc_present_set, _casc_reachable = await _casc_presence_checked(
+                                    [d["id"] for d in _casc_pool]
+                                )
+                                if _casc_reachable:
+                                    _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
+                                else:
+                                    logger.warning(
+                                        "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride {}",
+                                        ride_id,
+                                    )
+                                # Skip drivers who already timed-out / declined this ride
+                                _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
+                                _casc_skip_vals = await _casc_mget(_casc_skip_keys)
+                                _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
+                            except Exception as _casc_redis_exc:
+                                logger.warning(
+                                    "[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc
+                                )
                         # Fix 2: apply subscription filter to cascade pool when the service area
                         # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                         if _sub_required and _casc_pool:
@@ -1036,8 +1077,89 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "claim"}):
             # ── Batch claim ───────────────────────────────────────────────
             claimed_drivers: list[tuple[dict, int]] = []
+            _v3_claimed = False
 
-            if _direct_pool_enabled:
+            if _availability_v2:
+                # ── v3 claim path ─────────────────────────────────────────
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "v3"})
+                try:
+                    from ...repositories import driver_offer_repo as _offer_repo  # type: ignore
+                except ImportError:
+                    from repositories import driver_offer_repo as _offer_repo  # type: ignore
+
+                _v3_candidates = []
+                _v3_eta_by_id: dict[str, int] = {}
+                for d, eta_sec, _dist in ranked:
+                    admission = d.get("_admission", {})
+                    _v3_candidates.append(
+                        {
+                            "driver_id": d["id"],
+                            "session_id": admission.get("session_id"),
+                            "online_epoch": admission.get("online_epoch"),
+                            "contact_valid_until": admission.get("contact_valid_until"),
+                            "location_valid_until": admission.get("location_valid_until"),
+                            "eta_seconds": eta_sec,
+                        }
+                    )
+                    _v3_eta_by_id[d["id"]] = eta_sec
+
+                _sub_required_for_claim = bool(_sub_required) if "_sub_required" in dir() else False
+                _v3_result = await _offer_repo.claim_offers(
+                    ride_id,
+                    _v3_candidates,
+                    max_offers=max_offers,
+                    offer_ttl_seconds=offer_timeout,
+                    require_subscription=_sub_required_for_claim,
+                    mode="automatic",
+                )
+
+                _v3_code = _v3_result.get("code", "")
+                if _v3_code == "OK":
+                    _v3_claimed = True
+                    _offer_expires_at = _v3_result.get("expires_at")
+                    if isinstance(_offer_expires_at, str) and _offer_expires_at:
+                        pass
+                    else:
+                        _offer_expires_at = _v3_result.get("expires_at", "")
+                    for entry in _v3_result.get("results") or []:
+                        if not isinstance(entry, dict):
+                            continue
+                        if entry.get("claimed"):
+                            # Re-read the driver for the notify phase
+                            _v3_driver = await _deps.db_supabase.get_driver_by_id(entry["driver_id"])
+                            if _v3_driver:
+                                claimed_drivers.append((_v3_driver, _v3_eta_by_id.get(entry["driver_id"], 0)))
+                            if entry.get("insurance_written") is False:
+                                logger.error(
+                                    "[INSURANCE] Period 2 write failed inside dispatch_claim_offers_v3 "
+                                    "for driver {} ride {} (claim and offer stand)",
+                                    entry["driver_id"],
+                                    ride_id,
+                                )
+                                _metric_inc(
+                                    "spinr_insurance_period_write_failed_total",
+                                    {"reason": "claim_v3", "period": "2"},
+                                )
+                        else:
+                            _metric_inc(
+                                "spinr_dispatch_claim_rejected_total",
+                                {"reason": entry.get("reason_code", "unknown")},
+                            )
+                elif _v3_code == "AVAILABILITY_V2_DISABLED":
+                    # Flag turned off mid-dispatch: fall through to legacy path
+                    _v3_claimed = False
+                    _availability_v2 = False
+                elif _v3_code == "RIDE_STATE_CONFLICT":
+                    logger.info(
+                        "[DISPATCH] v3 claim RIDE_STATE_CONFLICT for ride {} (status={})",
+                        ride_id,
+                        _v3_result.get("ride_status"),
+                    )
+                    return
+                else:
+                    raise RuntimeError(f"dispatch_claim_offers_v3 unexpected code={_v3_code} for ride {ride_id}")
+
+            if not _v3_claimed and _direct_pool_enabled:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
 
                 _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
@@ -1169,7 +1291,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             "spinr_insurance_period_write_failed_total",
                             {"reason": "direct_pool", "period": "2"},
                         )
-            else:
+            elif not _v3_claimed:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
                 try:
                     for driver, eta_sec, _ in ranked:
@@ -1256,7 +1378,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             )
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "offer_insert"}):
-            if _direct_pool_enabled:
+            if _v3_claimed or _direct_pool_enabled:
                 # ride_offers rows were already inserted by dispatch_claim_batch,
                 # in the same transaction as the claim (T12) — nothing to do here.
                 # Still a real (near-zero) timed block so the per-phase histogram
@@ -1284,7 +1406,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     raise
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "insurance"}):
-            if _direct_pool_enabled:
+            if _v3_claimed or _direct_pool_enabled:
                 # Insurance Period 2 transitions were already written by
                 # dispatch_claim_batch, in the same transaction as the claim and
                 # the ride_offers insert (T12) — nothing to do here. See
@@ -1473,6 +1595,27 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     "planned_route_polyline": ride.get("planned_route_polyline") or None,
                     "service_area_polygon": _service_area_polygon,
                 }
+
+                # ── v2 offer envelope (§C1) ──────────────────────────────
+                if _v3_claimed:
+                    # Find the matching result entry for this driver
+                    _v3_entry = None
+                    for _re in _v3_result.get("results") or []:
+                        if isinstance(_re, dict) and _re.get("driver_id") == driver.get("id"):
+                            _v3_entry = _re
+                            break
+                    dispatch_payload["offer_protocol"] = "v2"
+                    dispatch_payload["offer_id"] = (
+                        str(_v3_entry["offer_id"]) if _v3_entry and _v3_entry.get("offer_id") else None
+                    )
+                    dispatch_payload["claim_id"] = (
+                        str(_v3_entry["claim_id"]) if _v3_entry and _v3_entry.get("claim_id") else None
+                    )
+                    dispatch_payload["online_epoch"] = (
+                        str(_v3_entry["online_epoch"]) if _v3_entry and _v3_entry.get("online_epoch") else None
+                    )
+                    dispatch_payload["server_time"] = str(_v3_result.get("server_time", ""))
+                    dispatch_payload["expires_at"] = str(_v3_result.get("expires_at", ""))
 
                 if driver.get("user_id"):
                     await _deps.manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
@@ -1672,15 +1815,25 @@ async def _offer_timeout_handler(
             f"didn't respond within {timeout_seconds}s — re-searching"
         )
 
-        # Track consecutive misses and decide whether to auto-offline.
-        miss_count = await increment_miss_streak(driver_id)
         try:
             settings = await _deps.get_app_settings()
             miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
         except Exception:
+            settings = {}
             miss_threshold = 3
 
-        auto_offline = miss_count >= miss_threshold
+        # T5-9: under v2 the durable miss streak lives on the driver row and
+        # only resolve_driver_offer may pause (via T1, epoch-fenced). An
+        # admin-direct offer has no offer row, so it never counts as a miss
+        # here: no Redis streak, no raw is_online=false write — just release.
+        availability_v2 = bool((settings or {}).get("driver_availability_v2_enabled"))
+        if availability_v2:
+            miss_count = 0
+            auto_offline = False
+        else:
+            # Track consecutive misses and decide whether to auto-offline.
+            miss_count = await increment_miss_streak(driver_id)
+            auto_offline = miss_count >= miss_threshold
 
         if auto_offline:
             # Driver has missed N consecutive offers — take them offline.
@@ -1771,7 +1924,27 @@ async def _offer_timeout_handler(
         )
 
 
-async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: int) -> bool:
+async def _expire_offer_v2(offer: dict, miss_threshold: int) -> bool:
+    """Expire a v3-created offer through resolve_driver_offer (T5).
+
+    The RPC decides the outcome, the streak and any pause under driver ->
+    ride -> offer locks; the shared request id ``expire:{offer_id}`` makes the
+    batch handler and the reaper replay each other instead of double-counting.
+    """
+    try:
+        from ...services import driver_offer_service
+    except ImportError:
+        from services import driver_offer_service  # type: ignore
+    try:
+        return await driver_offer_service.expire_offer_v2(offer, miss_threshold)
+    except Exception as e:
+        logger.opt(exception=True).error(f"[DISPATCH] v2 offer expiry failed offer={offer.get('id')}: {e}")
+        return False
+
+
+async def process_expired_offer(
+    ride_id: str, driver_id: str, miss_threshold: int, *, offer: dict | None = None
+) -> bool:
     """Atomically expire ONE pending ride_offer and run its release side-effects.
 
     Idempotent: the pending->expired claim is the single gate. If another actor
@@ -1784,7 +1957,18 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
     auto-offline (Period 0) at the miss threshold, else a committed-state-guarded
     Period 1 (mirrors the single-offer guard), an offer-skip key, and a WS notice
     to the driver. Ride-level concerns (rider WS, re-dispatch) are the caller's.
+
+    ``offer`` is the offer row when the caller has it. A v3-created offer
+    (``online_epoch`` set) is decided by resolve_driver_offer instead; the
+    protocol follows the offer, so no settings read is needed here.
     """
+    if offer is not None:
+        try:
+            from ...services.driver_offer_service import is_v2_offer
+        except ImportError:
+            from services.driver_offer_service import is_v2_offer  # type: ignore
+        if is_v2_offer(offer):
+            return await _expire_offer_v2(offer, miss_threshold)
     try:
         from ...repositories.driver_repo import update_acceptance_rate
         from ...utils.driver_presence import (
@@ -1952,14 +2136,14 @@ async def _batch_offer_timeout_handler(
         pending = await _deps.db_supabase.run_sync(
             lambda: (
                 _deps.db_supabase.supabase.table("ride_offers")
-                .select("driver_id")
+                .select("driver_id,id,claim_id,online_epoch")
                 .eq("ride_id", ride_id)
                 .eq("status", "pending")
                 .execute()
             )
         )
-        pending_ids = [r["driver_id"] for r in (pending.data or [])]
-        if not pending_ids:
+        pending_rows = [r for r in (pending.data or []) if r.get("driver_id")]
+        if not pending_rows:
             return
 
         try:
@@ -1970,7 +2154,9 @@ async def _batch_offer_timeout_handler(
 
         # Each driver's offer is expired + released independently and idempotently
         # (process_expired_offer's atomic claim is the gate), so run concurrently.
-        await asyncio.gather(*(process_expired_offer(ride_id, did, miss_threshold) for did in pending_ids))
+        await asyncio.gather(
+            *(process_expired_offer(ride_id, r["driver_id"], miss_threshold, offer=r) for r in pending_rows)
+        )
 
         if rider_id:
             await _deps.manager.send_personal_message(

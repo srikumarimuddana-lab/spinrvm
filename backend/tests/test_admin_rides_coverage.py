@@ -1827,3 +1827,90 @@ class TestAdminGetRidesNeedsReviewFilter:
             resp = client.get("/api/admin/rides", params={"status": "needs_review", "pre_launch": "false"})
         assert resp.status_code == 200, resp.text
         assert captured["filters"]["id"] == {"$in": ["ride-1"]}
+
+
+@pytest.mark.parametrize(
+    "result,http_status",
+    [
+        ({"code": "OK", "results": [{"driver_id": "drv-1", "claimed": False, "reason_code": "DRIVER_OFFLINE"}]}, 409),
+        ({"code": "OK", "results": [{"driver_id": "drv-1", "claimed": True}]}, 200),
+        (RuntimeError("claim response unavailable"), 503),
+        ({"code": "AVAILABILITY_V2_DISABLED"}, 503),
+        ({"code": "RIDE_STATE_CONFLICT", "results": []}, 409),
+        ({"code": "OK", "results": [{"driver_id": "another-driver", "claimed": True}]}, 409),
+        ({"code": "OK", "results": 17}, 503),
+        ({"code": {}, "results": []}, 503),
+        (None, 503),
+    ],
+)
+def test_admin_v2_creation_waits_for_requested_claim(client, as_super_admin, result, http_status):
+    captured = {}
+
+    async def insert(table, doc):
+        captured.update(dict(doc))
+
+    claim = AsyncMock(side_effect=result) if isinstance(result, Exception) else AsyncMock(return_value=result)
+    with (
+        patch("db_supabase.insert_one", AsyncMock(side_effect=insert)),
+        patch("routes.admin.rides.log_admin_action", AsyncMock()),
+        patch(
+            "routes.promotions.apply_promo_for_admin",
+            AsyncMock(
+                return_value={
+                    "application_id": "promo-1",
+                    "code": "SAVE",
+                    "discount_amount": Decimal("1.00"),
+                }
+            ),
+        ) as promo,
+        patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"driver_availability_v2_enabled": True})),
+        patch("repositories.driver_offer_repo.claim_offers", claim),
+        patch("db_supabase.set_driver_available", AsyncMock()) as legacy_claim,
+        patch("routes.admin.rides.record_period_transition", AsyncMock()) as legacy_period,
+        patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+        patch("db_supabase.get_user_by_id", AsyncMock(return_value={"id": "usr-1"})),
+        patch("socket_manager.manager.send_personal_message", AsyncMock()) as ws,
+        patch("socket_manager.manager.broadcast_ride_status", AsyncMock()) as broadcast,
+        patch("routes.admin.rides.send_push_notification", AsyncMock()) as push,
+        patch("routes.admin.rides._spawn", side_effect=lambda coroutine: coroutine.close()) as spawn,
+        patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
+    ):
+        response = client.post(
+            "/api/admin/rides/create", json={**_CREATE_BODY, "driver_id": "drv-1", "promo_code": "SAVE"}
+        )
+    assert response.status_code == http_status
+    assert captured["status"] == "searching"
+    assert captured["driver_id"] is None
+    assert captured["promo_application_id"] == "promo-1"
+    promo.assert_awaited_once()
+    claim.assert_awaited_once()
+    assert claim.await_args.kwargs["mode"] == "admin_direct"
+    legacy_claim.assert_not_awaited()
+    legacy_period.assert_not_awaited()
+    if http_status == 200:
+        assert response.json()["status"] == "driver_assigned"
+        ws.assert_awaited_once()
+        assert push.await_count == 2
+        spawn.assert_called_once()
+        assert broadcast.await_args.args[1] == "driver_assigned"
+    else:
+        details = response.json()["detail"] if http_status == 409 else response.json()["error"]["details"]
+        assert details["ride_id"] == captured["id"]
+        ws.assert_not_awaited()
+        push.assert_not_awaited()
+        broadcast.assert_not_awaited()
+        spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("settings", [RuntimeError("settings down"), None, []])
+def test_admin_v2_settings_error_creates_nothing(client, as_super_admin, settings):
+    with (
+        patch(
+            "routes.admin.rides.get_app_settings",
+            AsyncMock(side_effect=settings) if isinstance(settings, Exception) else AsyncMock(return_value=settings),
+        ),
+        patch("db_supabase.insert_one", AsyncMock()) as insert,
+    ):
+        response = client.post("/api/admin/rides/create", json={**_CREATE_BODY, "driver_id": "drv-1"})
+    assert response.status_code == 503
+    insert.assert_not_awaited()

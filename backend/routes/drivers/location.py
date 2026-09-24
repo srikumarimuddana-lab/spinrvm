@@ -43,15 +43,15 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...utils import metrics
-    from ...utils.driver_presence import renew_driver_presence as renew_scoped_presence
     from ...utils.driver_presence import availability_aware_present_driver_ids_checked
+    from ...utils.driver_presence import renew_driver_presence as renew_scoped_presence
     from ...utils.error_handling import DatabaseError
     from ...utils.gps_filtering import point_epoch_seconds
     from ...utils.location_write_gate import should_write_marker
 except ImportError:  # pragma: no cover - top-level execution fallback
     from utils import metrics  # type: ignore
-    from utils.driver_presence import renew_driver_presence as renew_scoped_presence  # type: ignore
     from utils.driver_presence import availability_aware_present_driver_ids_checked  # type: ignore
+    from utils.driver_presence import renew_driver_presence as renew_scoped_presence  # type: ignore
     from utils.error_handling import DatabaseError  # type: ignore
     from utils.gps_filtering import point_epoch_seconds
     from utils.location_write_gate import should_write_marker  # type: ignore
@@ -95,9 +95,7 @@ async def _require_current_token_session(user_id: str, token_session_id: str | N
     if not token_session_id:
         raise HTTPException(status_code=409, detail={"code": "SESSION_RECONCILE_REQUIRED"})
     try:
-        rows = await db_supabase.get_rows(
-            "users", {"id": user_id}, limit=1, columns="current_session_id"
-        )
+        rows = await db_supabase.get_rows("users", {"id": user_id}, limit=1, columns="current_session_id")
     except Exception as exc:
         logger.error("could not verify current token session for trip batch", exc_info=True)
         raise HTTPException(status_code=503, detail={"code": "SESSION_AUTHORITY_UNAVAILABLE"}) from exc
@@ -147,12 +145,14 @@ async def _require_presence_epoch(
 def _presence_conflict(result: dict) -> HTTPException | None:
     """Build the shared v2 REST conflict shape without exposing session IDs."""
     code = result.get("code")
-    if code == "ONLINE_EPOCH_STALE" or code == "CONTACT_GAP":
+    # F2-6: READINESS_EXPIRED is treated like CONTACT_GAP — both signal an
+    # epoch-stale condition with a specific reason the app can act on.
+    if code in {"ONLINE_EPOCH_STALE", "CONTACT_GAP", "READINESS_EXPIRED"}:
         return HTTPException(
             status_code=409,
             detail={
                 "code": "ONLINE_EPOCH_STALE",
-                "reason_code": code,
+                "reason_code": result.get("reason_code") or code,
                 "online_epoch": result.get("online_epoch"),
             },
         )
@@ -478,9 +478,7 @@ async def _persist_v2_idle_batch(
     driver = driver_rows[0]
     availability_v2 = await _availability_v2_enabled()
     presence_epoch = (
-        await _require_presence_epoch(
-            current_user["id"], token_session_id, request.online_epoch, availability_v2=True
-        )
+        await _require_presence_epoch(current_user["id"], token_session_id, request.online_epoch, availability_v2=True)
         if availability_v2
         else None
     )
@@ -497,6 +495,12 @@ async def _persist_v2_idle_batch(
     if not settings.get("idle_location_v2_enabled", False):
         raise HTTPException(status_code=409, detail="Idle location recording is not enabled")
     if not driver.get("is_online"):
+        # F5: under v2, structured conflict so the app can classify it.
+        if availability_v2:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "DRIVER_OFFLINE", "online_epoch": str(driver.get("online_epoch", 0))},
+            )
         raise HTTPException(status_code=409, detail="Driver is not online")
 
     if availability_v2:
@@ -615,6 +619,12 @@ async def _persist_v2_location_batch(
         if not _completed_batch_is_within_retention(request, ride):
             raise HTTPException(status_code=422, detail="Points fall outside completed ride retention window")
     elif ride.get("status") not in _V2_ACTIVE_RIDE_STATUSES:
+        # F5: under v2, structured conflict so the app can classify it.
+        if availability_v2:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "RIDE_STATE_CONFLICT", "ride_status": ride.get("status")},
+            )
         raise HTTPException(status_code=409, detail="Ride cannot accept location points in its current state")
 
     try:

@@ -15,13 +15,25 @@ from loguru import logger
 try:
     from ..core.config import settings
     from ..db_supabase import run_sync
-    from ..features import _is_expo_token, _send_expo_push
+    from ..features import (
+        _is_expo_token,
+        _record_offer_push_skipped,
+        _send_expo_push,
+        _v2_offer_push_expired,
+        _v2_offer_push_ttl,
+    )
     from ..supabase_client import supabase
     from .redis_client import try_acquire_leader_lock
 except ImportError:
     from core.config import settings  # type: ignore
     from db_supabase import run_sync  # type: ignore
-    from features import _is_expo_token, _send_expo_push  # type: ignore
+    from features import (  # type: ignore
+        _is_expo_token,
+        _record_offer_push_skipped,
+        _send_expo_push,
+        _v2_offer_push_expired,
+        _v2_offer_push_ttl,
+    )
     from supabase_client import supabase  # type: ignore
     from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
@@ -140,6 +152,13 @@ async def _process_row(row: dict) -> None:
     attempts: int = row["attempts"]
     target_app: str | None = row.get("target_app")
 
+    # T6: a v2 dispatch offer past its deadline is dropped, never sent late.
+    if _v2_offer_push_expired(data):
+        logger.info(f"push_retry: v2 offer push expired, dropping row {row_id}")
+        _record_offer_push_skipped("expired")
+        await _delete_row(row_id)
+        return
+
     # The join produces a nested dict under the "users" key. Prefer the
     # app-specific token for queued pushes so a dual-role user's driver ride
     # offer does not get sent to their rider app token (or vice versa).
@@ -242,11 +261,18 @@ async def _send_fcm_push(
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
     android_channel = "ride-updates" if target_app == "rider" else "ride-offers"
 
+    # Same deadline as features._build_fcm_message: v2 offers expire in transit.
+    offer_ttl = _v2_offer_push_ttl(data) if is_dispatch else None
+    apns_headers = {"apns-priority": "10", "apns-push-type": "alert"}
+    if offer_ttl:
+        apns_headers["apns-expiration"] = offer_ttl[1]
+
     try:
         # Android: data-only for dispatch (Notifee renders). For everything
         # else, keep the default notification block so the OS handles it.
         android_cfg = messaging.AndroidConfig(
             priority="high",
+            ttl=offer_ttl[0] if offer_ttl else None,
             notification=None
             if is_dispatch
             else messaging.AndroidNotification(
@@ -260,10 +286,7 @@ async def _send_fcm_push(
             token=token,
             android=android_cfg,
             apns=messaging.APNSConfig(
-                headers={
-                    "apns-priority": "10",
-                    "apns-push-type": "alert",
-                },
+                headers=apns_headers,
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(
                         alert=messaging.ApsAlert(title=title, body=body),

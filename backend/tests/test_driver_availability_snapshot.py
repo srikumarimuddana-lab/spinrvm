@@ -211,7 +211,9 @@ async def test_snapshot_blocks_online_unverified_driver_with_specific_reason():
         ready_until=(NOW + timedelta(minutes=60)).isoformat(),
     )
     with patch.object(
-        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw(driver=driver))
+        service.driver_availability_repo,
+        "get_driver_availability_snapshot",
+        AsyncMock(return_value=_raw(driver=driver)),
     ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["availability_state"] == "blocked"
@@ -225,7 +227,7 @@ async def test_policy_pause_rechecks_blocking_state_before_one_epoch_retry():
     second = _raw(driver=_driver(status="suspended", online_epoch=5, accepting_requests=True))
     with (
         patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, second])),
-        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
+        patch.object(service.db_supabase, "get_rows", AsyncMock()) as get_rows,
         patch.object(
             service.driver_availability_repo,
             "transition_driver_availability",
@@ -238,9 +240,11 @@ async def test_policy_pause_rechecks_blocking_state_before_one_epoch_retry():
     assert result["code"] == "OK"
     assert transition.await_count == 2
     first_call, retry_call = transition.await_args_list
-    assert first_call.args[:4] == ("drv-1", 4, "current", "pause_policy")
-    assert retry_call.args[:4] == ("drv-1", 5, "current", "pause_policy")
+    # The pause runs as the trusted system actor; it never borrows a user session.
+    assert first_call.args[:4] == ("drv-1", 4, "system:policy", "pause_policy")
+    assert retry_call.args[:4] == ("drv-1", 5, "system:policy", "pause_policy")
     assert retry_call.args[4] != "admin-pause"
+    get_rows.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -249,7 +253,6 @@ async def test_policy_pause_does_not_adopt_epoch_after_policy_cleared():
     retry = _raw(driver=_driver(status="active", online_epoch=5, accepting_requests=True))
     with (
         patch.object(service, "_read_snapshot", AsyncMock(side_effect=[first, retry])),
-        patch.object(service.db_supabase, "get_rows", AsyncMock(return_value=[{"current_session_id": "current"}])),
         patch.object(
             service.driver_availability_repo,
             "transition_driver_availability",
@@ -263,6 +266,31 @@ async def test_policy_pause_does_not_adopt_epoch_after_policy_cleared():
     transition.assert_awaited_once()
 
 
+def test_system_actor_only_builds_known_sources():
+    from backend.repositories import driver_availability_repo as repo
+
+    assert repo.system_actor("policy") == "system:policy"
+    assert repo.system_actor("logout") == "system:logout"
+    with pytest.raises(ValueError):
+        repo.system_actor("admin")
+
+
+@pytest.mark.anyio
+async def test_token_session_cannot_act_as_a_system_actor():
+    with (
+        patch.object(service, "_read_snapshot", AsyncMock()) as read,
+        patch.object(service.driver_availability_repo, "transition_driver_availability", AsyncMock()) as transition,
+    ):
+        result = await service.change_driver_availability(
+            "user-1",
+            {"action": "stop_requests", "online_epoch": "3", "request_id": "stop-1"},
+            "system:policy",
+        )
+    assert result == {"code": "SESSION_RECONCILE_REQUIRED"}
+    read.assert_not_awaited()
+    transition.assert_not_awaited()
+
+
 @pytest.mark.anyio
 async def test_status_snapshot_lookup_failure_maps_to_503_contract():
     from backend.routes.drivers import status
@@ -274,7 +302,7 @@ async def test_status_snapshot_lookup_failure_maps_to_503_contract():
         with pytest.raises(HTTPException) as error:
             await status.get_my_availability(current_user={"id": "user-1"}, token_session_id="session-1")
     assert error.value.status_code == 503
-    assert error.value.detail["code"] == "ELIGIBILITY_UNAVAILABLE"
+    assert error.value.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
 
 
 @pytest.mark.anyio
@@ -288,7 +316,40 @@ async def test_status_snapshot_timeout_maps_to_503_contract():
         with pytest.raises(HTTPException) as error:
             await status.get_my_availability(current_user={"id": "user-1"}, token_session_id="session-1")
     assert error.value.status_code == 503
-    assert error.value.detail["code"] == "ELIGIBILITY_UNAVAILABLE"
+    assert error.value.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
+
+
+@pytest.mark.anyio
+async def test_status_503_details_survive_the_5xx_sanitiser():
+    """Every availability 503 must be an allow-listed code dict; a message key
+    would make the error handler replace it with the generic sentence."""
+    from backend.routes.drivers import status
+    from backend.utils.error_handling import _should_sanitize_5xx_detail
+
+    raised = []
+    with patch.object(status.db_supabase, "get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        with pytest.raises(HTTPException) as error:
+            await status._availability_v2_enabled()
+    raised.append(error.value)
+    with patch(
+        "backend.services.driver_availability_service.change_driver_availability",
+        AsyncMock(side_effect=service.AvailabilityLookupError("db down")),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await status._change_availability_status("user-1", {"action": "go_offline"}, "session-1")
+    raised.append(error.value)
+    unparseable = {"online_epoch": "x", "state_version": "1", "is_online": True}
+    with pytest.raises(HTTPException) as error:
+        await status._finish_v2_status(
+            {"code": "OK", **unparseable, "transition": {**unparseable, "availability_reason": "go_online"}},
+            "drv-1",
+            "session-1",
+        )
+    raised.append(error.value)
+    for exc in raised:
+        assert exc.status_code == 503
+        assert exc.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
+        assert _should_sanitize_5xx_detail(exc.detail) is False
 
 
 @pytest.mark.anyio

@@ -82,7 +82,7 @@ async def test_settings_fetch_exception_falls_back_to_default_threshold():
         patch.object(reaper, "match_driver_to_ride", AsyncMock()),
     ):
         await reaper._reap_tick()
-    proc.assert_awaited_once_with("r1", "d1", 3)
+    proc.assert_awaited_once_with("r1", "d1", 3, offer={"ride_id": "r1", "driver_id": "d1"})
 
 
 async def test_redispatch_lookup_exception_does_not_abort_batch():

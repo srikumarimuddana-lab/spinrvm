@@ -844,11 +844,21 @@ async def websocket_endpoint(
                     availability_rows and availability_rows[0].get("driver_availability_v2_enabled")
                 )
                 if conn_state["availability_v2"] and ws_session_id and requested_online_epoch is not None:
+                    # F7: bind using the lightweight snapshot RPC instead of the
+                    # full eligibility snapshot (which reads service areas, driver
+                    # documents and Redis on every connect).
                     try:
-                        from ..services.driver_availability_service import get_driver_availability
+                        from ..repositories.driver_availability_repo import get_driver_availability_snapshot
                     except ImportError:  # pragma: no cover
-                        from services.driver_availability_service import get_driver_availability  # type: ignore
-                    availability = await get_driver_availability(user["id"], ws_session_id)
+                        from repositories.driver_availability_repo import (
+                            get_driver_availability_snapshot,  # type: ignore
+                        )
+                    raw_snapshot = await get_driver_availability_snapshot(user["id"])
+                    driver_data = raw_snapshot.get("driver") or {}
+                    availability = {
+                        "is_online": driver_data.get("is_online"),
+                        "online_epoch": str(driver_data.get("online_epoch", 0)),
+                    }
                     bind_ws_presence_epoch(
                         conn_state,
                         ws_session_id,

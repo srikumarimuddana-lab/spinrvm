@@ -28,6 +28,7 @@ from ._deps import (  # noqa: F401
     fare_share,
     flush_driver_breadcrumbs,
     get_current_user,
+    get_token_session_id,
     json,
     logger,
     parse_iso_utc,
@@ -370,11 +371,35 @@ def _fire_driver_activated(driver: dict, user: dict, ride: dict) -> None:
         logger.error("meta: failed to queue DriverActivated for driver %s", driver.get("id"), exc_info=True)
 
 
+async def _refresh_readiness_after_trip(driver: dict, token_session_id: Any, ride_id: str) -> None:
+    """T12-9: a v2 driver's own completion refreshes ``ready_until``.
+
+    Best-effort and fire-and-forget: ``trip_completed`` needs no epoch, and a
+    driver who stopped requests (finalized offline) simply gets
+    DRIVER_OFFLINE / REQUESTS_PAUSED back, which is not an error.
+    """
+    try:
+        from ...repositories import driver_availability_repo
+    except ImportError:  # pragma: no cover
+        from repositories import driver_availability_repo  # type: ignore
+    try:
+        result = await driver_availability_repo.confirm_driver_ready(
+            str(driver["id"]), None, token_session_id, f"trip-completed:{ride_id}", reason="trip_completed"
+        )
+        if result.get("code") not in ("OK", "DRIVER_OFFLINE", "REQUESTS_PAUSED", "AVAILABILITY_V2_DISABLED"):
+            logger.warning(
+                "complete_ride: readiness refresh for driver=%s returned %s", driver["id"], result.get("code")
+            )
+    except Exception:
+        logger.error("complete_ride: readiness refresh failed for driver=%s", driver.get("id"), exc_info=True)
+
+
 @router.post("/rides/{ride_id}/complete")
 async def complete_ride(
     ride_id: str,
     completion_request: RideCompletionRequest | None = Body(default=None),
     current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
 ):
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -863,6 +888,11 @@ async def complete_ride(
     # clamped is_available=False and must close to Period 0, not Period 1.
     # No ride_id on the 0/1 row.
     await _deps.close_period_after_release(driver["id"], _complete_released, reason="ride_completed", ride_id=ride_id)
+
+    # T12-9: only the driver's own completion refreshes readiness (rider or
+    # admin completions do not). v2 drivers carry a string controller.
+    if isinstance(driver.get("controller_session_id"), str) and isinstance(token_session_id, str) and token_session_id:
+        spawn(_refresh_readiness_after_trip(driver, token_session_id, ride_id))
 
     # Meta DriverActivated — the driver's first completed trip. The count check
     # is only a cheap filter to avoid a DB round-trip on every subsequent ride;

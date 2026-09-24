@@ -716,6 +716,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import offer expiry reaper: {e}")
 
+    # Driver availability v2 readiness/contact-gap reconciler (T12). Inert
+    # while driver_availability_v2_enabled is false; every pause is fenced
+    # by the online epoch under SKIP LOCKED, so replicas may overlap safely.
+    try:
+        from utils.driver_readiness_reconciler import driver_readiness_reconciler_loop
+
+        _spawn("driver_readiness_reconciler (20s)", driver_readiness_reconciler_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import driver readiness reconciler: {e}")
+
     # Auto-reactivation of expired temporary rider suspensions — flips status
     # back to active once suspended_until passes so the admin list isn't stale.
     # Atomic conditional update keeps it replay-safe across replicas.

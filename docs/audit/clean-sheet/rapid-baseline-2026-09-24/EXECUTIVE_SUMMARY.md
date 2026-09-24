@@ -45,3 +45,8 @@ No load test, dynamic test, lint run or test suite was executed. No live Sentry,
 ## Decisions needed from you
 
 See `ESCALATIONS.md`. The two that cannot wait: send the PST question to an accountant with a deadline (E1), and decide how to restore an automated review gate for money/auth/dispatch changes (E12).
+
+## Errata recorded by W0 (2026-09-24, later the same day)
+
+- Finding 2 said the Codex reviewer "went silent on 2026-07-30". The W0 Historian found Codex resumed reviewing on 2026-09-16 (PRs #5480 → #5748). The stale part is CLAUDE.md and ACTION_ITEMS C9, not the reviewer. The rest of finding 2 (Claude review off, stale required-checks list, the 47-second merge) stands.
+- The background-loop count is 44 loops today (45 registry entries including the watchdog), confirmed by both W0 lanes.

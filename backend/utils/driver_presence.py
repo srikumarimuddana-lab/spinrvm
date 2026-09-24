@@ -402,7 +402,8 @@ async def scoped_driver_presence_evidence(candidate_ids: List[str]) -> tuple[dic
         logger.error("scoped presence durable controller lookup failed: %s", exc, exc_info=True)
         return {}, False
     scoped_rows = [
-        row for row in rows
+        row
+        for row in rows
         if row.get("is_online") is True
         and isinstance(row.get("controller_session_id"), str)
         and type(row.get("online_epoch")) is int
@@ -426,7 +427,9 @@ async def scoped_driver_presence_evidence(candidate_ids: List[str]) -> tuple[dic
     result = {}
     for row, raw_fields in zip(scoped_rows, values, strict=False):
         fields = {
-            (key.decode() if isinstance(key, bytes) else str(key)): (value.decode() if isinstance(value, bytes) else str(value))
+            (key.decode() if isinstance(key, bytes) else str(key)): (
+                value.decode() if isinstance(value, bytes) else str(value)
+            )
             for key, value in (raw_fields or {}).items()
         }
         try:
@@ -459,9 +462,7 @@ async def availability_aware_present_driver_ids_checked(candidate_ids: List[str]
             from ..repositories._base import get_rows
         except ImportError:  # pragma: no cover
             from repositories._base import get_rows  # type: ignore
-        rows = await get_rows(
-            "settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled"
-        )
+        rows = await get_rows("settings", {"id": "app_settings"}, limit=1, columns="driver_availability_v2_enabled")
     except Exception as exc:
         logger.error("driver availability presence mode lookup failed: %s", exc, exc_info=True)
         return set(), False

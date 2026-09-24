@@ -102,9 +102,13 @@ async def _eligibility_reason(driver: dict[str, Any], server_time: datetime) -> 
             areas = await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
             area = areas[0] if areas else None
             requirements = [r for r in (area or {}).get("required_documents") or [] if r.get("required", True)]
-            docs = await db_supabase.get_rows(
-                "driver_documents", {"driver_id": driver["id"], "status": "approved"}, limit=200
-            ) if requirements else []
+            docs = (
+                await db_supabase.get_rows(
+                    "driver_documents", {"driver_id": driver["id"], "status": "approved"}, limit=200
+                )
+                if requirements
+                else []
+            )
         except Exception as exc:
             raise AvailabilityLookupError("eligibility lookup unavailable") from exc
 
@@ -165,9 +169,7 @@ async def _read_snapshot(user_id: str) -> dict[str, Any]:
         raise AvailabilityLookupError("availability snapshot unavailable") from exc
 
 
-async def get_driver_availability(
-    user_id: str, authenticated_session_id: str | None = None
-) -> dict[str, Any]:
+async def get_driver_availability(user_id: str, authenticated_session_id: str | None = None) -> dict[str, Any]:
     """Return an eligibility-aware snapshot ordered by the database clock."""
     raw = await _read_snapshot(user_id)
     driver = raw["driver"]
@@ -208,7 +210,9 @@ async def get_driver_availability(
         last_contact = _as_utc(driver.get("last_contact_at"))
         if raw.get("protocol_enabled") and (ready_until is None or ready_until <= server_time):
             availability_state, reason = "paused", "READY_TIMEOUT"
-        elif raw.get("protocol_enabled") and (last_contact is None or (server_time - last_contact).total_seconds() > 90):
+        elif raw.get("protocol_enabled") and (
+            last_contact is None or (server_time - last_contact).total_seconds() > 90
+        ):
             availability_state, reason = "reconnecting", "PRESENCE_UNAVAILABLE"
         elif raw.get("protocol_enabled"):
             evidence_ready, evidence_reason = await _scoped_dispatch_evidence_fresh(driver, server_time)
@@ -333,9 +337,7 @@ async def pause_driver_for_policy(
         if driver.get("status") not in blocking_statuses:
             return {"code": "POLICY_STATE_CHANGED"}
         try:
-            users = await db_supabase.get_rows(
-                "users", {"id": user_id}, limit=1, columns="current_session_id"
-            )
+            users = await db_supabase.get_rows("users", {"id": user_id}, limit=1, columns="current_session_id")
             session_id = users[0].get("current_session_id") if users else None
             if not session_id:
                 return {"code": "SESSION_RECONCILE_REQUIRED"}

@@ -59,7 +59,9 @@ try:
         redis_set,
     )
     from ..utils.refresh_tokens import (
+        classify_committed_replay,
         is_new_device,
+        is_valid_proposed_refresh_token,
         issue_refresh_token,
         lookup_refresh_token,
         refresh_token_generation_matches,
@@ -119,7 +121,9 @@ except ImportError:
         redis_set,
     )
     from utils.refresh_tokens import (
+        classify_committed_replay,
         is_new_device,
+        is_valid_proposed_refresh_token,
         issue_refresh_token,
         lookup_refresh_token,
         refresh_token_generation_matches,
@@ -1857,6 +1861,10 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+    # X8 (default off): client-committed successor for lost-rotation recovery.
+    # Ignored unless it matches ^[A-Za-z0-9_-]{64}$ AND
+    # settings.refresh_successor_commitment_enabled is true.
+    proposed_refresh_token: Optional[str] = None
 
 
 class RefreshResponse(BaseModel):
@@ -1907,6 +1915,38 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
             message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
             action_hint="Sign in again",
         )
+
+    # X8 (default off): classify a committed replay BEFORE lookup, so a lost
+    # rotation response is recovered instead of cascading. See
+    # docs/known-forks.md; admin refresh has no twin by design.
+    proposed = await _accepted_refresh_proposal(body)
+    if proposed:
+        verdict, successor = await classify_committed_replay(refresh_token_from_cookie, proposed)
+        if verdict == "recover" and successor:
+            try:
+                user = await db.find_one("users", {"id": successor["user_id"]})
+            except Exception as exc:
+                logger.error("refresh: recover user lookup failed", exc_info=True)
+                raise SpinrException(
+                    message="Service temporarily unavailable, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from exc
+            if not user:
+                raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
+            _enforce_account_active(user)
+            refresh_expires_at = _parse_refresh_expiry(successor.get("expires_at"))
+            if refresh_expires_at is None:
+                raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
+            _metric_inc("spinr_auth_refresh_recovered_total", {"audience": str(successor.get("audience"))})
+            return _build_refresh_response(response, user, proposed, refresh_expires_at)
+        if verdict == "dead":
+            raise TokenExpiredException(
+                message="Invalid refresh token",
+                message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+                action_hint="Sign in again",
+            )
 
     row = await lookup_refresh_token(refresh_token_from_cookie)
     if not row:
@@ -1963,7 +2003,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # The access token reflects the current user generation after the legacy
     # watermark check, while a NULL-generation parent stays NULL on rotation.
     # That prevents an old writer's credential from being upgraded by refresh.
-    token_version = int(user.get("token_version") or 0)
+    # (_build_refresh_response reads user.token_version for the access token.)
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_real_client_ip(request)
@@ -1978,6 +2018,8 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         ip=client_ip,
         replaces=row.get("id"),
         token_version=row.get("token_version"),
+        # Flag off: the call is exactly today's (no ``raw`` kwarg at all).
+        **({"raw": proposed} if proposed else {}),
     )
 
     # A driver login can win while the rotation is writing its child row.
@@ -2006,10 +2048,47 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # instead was considered and rejected: refresh is not a session-establishing
     # operation, and two devices refreshing concurrently would fight over
     # current_session_id and start kicking each other off.
+    return _build_refresh_response(response, user, new_raw, refresh_expires_at)
+
+
+async def _accepted_refresh_proposal(body: Optional[RefreshRequest]) -> Optional[str]:
+    """The proposed successor, or None when malformed or the X8 flag is off.
+
+    An unreadable flag counts as off: the request then takes today's path.
+    """
+    proposed = getattr(body, "proposed_refresh_token", None)
+    if not is_valid_proposed_refresh_token(proposed):
+        return None
+    try:
+        app_settings = await get_app_settings()
+    except Exception:
+        logger.warning("refresh: successor-commitment flag unreadable; treating as off", exc_info=True)
+        return None
+    return proposed if (app_settings or {}).get("refresh_successor_commitment_enabled") is True else None
+
+
+def _parse_refresh_expiry(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _build_refresh_response(
+    response: Response, user: dict, refresh_raw: str, refresh_expires_at: datetime
+) -> RefreshResponse:
+    """Mint the access token, CSRF and cookies shared by rotate and recover."""
+    # NOT `or row.get("user_agent")` -- see the note at the rotate call site.
     session_id = user.get("current_session_id") or ""
+    token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
-        user_id,
+        user["id"],
         user.get("phone", ""),
         session_id=session_id if session_id else None,
         token_version=token_version,
@@ -2029,14 +2108,14 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     except ImportError:
         from utils.cookie_manager import CookieManager
     CookieManager.set_auth_cookie(response, token, ttl_minutes=15)
-    CookieManager.set_refresh_cookie(response, new_raw, ttl_days=30)
+    CookieManager.set_refresh_cookie(response, refresh_raw, ttl_days=30)
 
     # Return tokens in BOTH the JSON body AND cookies.
     # Web clients use the HTTP-only cookies; mobile clients (React Native)
     # read the JSON body because RN's fetch has no browser cookie jar.
     return RefreshResponse(
         token=token,
-        refresh_token=new_raw,
+        refresh_token=refresh_raw,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,

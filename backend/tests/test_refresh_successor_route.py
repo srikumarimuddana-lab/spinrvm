@@ -89,13 +89,20 @@ async def test_malformed_proposal_is_ignored_without_reading_flag(proposed):
     m["classify"].assert_not_awaited()
 
 
-async def test_no_match_rotates_with_proposed_raw():
+async def test_no_match_rotates_without_the_client_proposed_raw():
+    """A "no_match" verdict is the normal case for every first-time refresh
+    (the parent hasn't been committed-replayed before). The client's proposed
+    bytes must NOT reach issue_refresh_token's `raw` kwarg here -- only the
+    recover branch (a server-committed successor) may ever populate it.
+    Passing it through on this path would let an attacker who can shape the
+    refresh request body (but not read the HttpOnly cookie) plant a known
+    plaintext as the next refresh token's secret."""
     from backend.routes import auth
 
     _result, m = await _call(auth, _patches(auth), _body())
     m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
     m["lookup"].assert_awaited_once()
-    assert m["issue"].await_args.kwargs["raw"] == PROPOSED
+    assert "raw" not in m["issue"].await_args.kwargs
 
 
 async def test_recover_returns_proposed_without_new_row_or_lookup():

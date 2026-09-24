@@ -240,3 +240,136 @@ surface even though the epic sits under W2):
 | Fraud detection | 1 | No detection signal for collusion, cancellation-fee farming, chargeback velocity, or SIM-swap-specific ATO | Documented fraud-detection systems, cross-platform deactivation sharing | RED | VERIFIED (Spinr) / VERIFIED (competitor, existence only — internal detection logic itself is proprietary/ASSUMED) | `TSF-002`, `TSF-003`, `TSF-004`, `TSF-005` | [Uber/Lyft Industry Sharing Safety Program](https://www.uber.com/us/en/newsroom/background-checks/) |
 | Dispute/appeal handling | 2 | Driver has no in-app explanation when suspended/banned | Uber: in-app Review Center with stated appeal path and reasons | RED | VERIFIED (Spinr) / VERIFIED (competitor) | `DRIVER-001` | [Uber deactivation review](https://www.uber.com/us/en/drive/driver-app/deactivation-review/) |
 
+
+**AI Assistant** (2 features: Rider AI assistant, AI admin console/guardrails):
+
+| L3 Feature | Spinr | Uber | Lyft | Gap | Evid. | Spinr cite | Competitor cite |
+|---|---|---|---|---|---|---|---|
+| Rider AI assistant | 3 | Uber's 2026 "GO-GET" push: OpenAI-powered voice booking, Travel Mode concierge (airport guidance, OpenTable-powered recommendations), driver-facing AI guidance | No comparable public AI-assistant launch found this pass (UNKNOWN, not ASSUMED absent) | YELLOW | VERIFIED (Spinr exists, thin footprint — 2 mapped units, `routes/ai.py`/`rider-app/app/ai-assistant.tsx`) / VERIFIED (Uber) | traceability S-ai-01; `01-inventory/epics.md` §9 (AI surface undercounted — `backend/ai/**` not separately walked) | [Uber GO-GET 2026](https://www.uber.com/us/en/newsroom/go-get-2026/); [Uber OpenAI driver assistant](https://thetechnologyexpress.com/uber-launches-openai-assistant-for-drivers-and-voice-ride-booking/) |
+| AI admin console/guardrails | N/A | N/A — internal tooling | N/A | N/A | VERIFIED | traceability S-ai-02 (10 mapped units); `spinr-ai-guardrail-reviewer` agent exists | — |
+
+**Engineering Gates & CI/CD**, **Shared Frontend Foundation & Design System**, **Platform
+Foundation & Schema**, **Legacy Import & Data Migration** (23 features combined across these four
+epics) — all rows: **Uber/Lyft = N/A — internal engineering surface**, **Local taxi = N/A**, **Gap
+= N/A**. These are not rider/driver/corporate-facing competitive dimensions; Dimension 24 exists to
+assess competitive/economic positioning of the *product*, and per `01-inventory/epics.md` §0 these
+four epics were added by the Cartographer specifically to give internal code a home in the
+traceability tree, not because they compete with anything Uber or Lyft publish. The one item worth
+flagging here for the record: **Shared UI components/hooks** (part of Shared Frontend Foundation)
+is the traced root cause of three live cross-app rider/driver-visible bugs (CarMarker, notifications,
+referral-link forks — `CARTO-002`, `docs/known-forks.md`) — an *internal* quality problem with
+*external*, customer-visible symptoms. It is scored under the rider/driver-facing rows above
+(Real-time location, In-app notifications, Referral codes) where the symptom actually lands, not
+duplicated as its own competitive row.
+
+---
+
+## §3 Missing table stakes
+
+What riders/drivers/corporate buyers expect by default from a 2026 ride-share app, that Spinr
+lacks or has only partially built. Each is a §7.1-format finding card.
+
+### BENCH-001 — No trip verification PIN (rider-verifies-driver-or-vice-versa)
+- Hierarchy: L2 Ride Fulfillment › L3 Pickup confirmation › L4 S-fulfil-03 › L5 rider gets into the wrong vehicle
+- Severity: HIGH   Priority score: S×B×L = high × high × medium (every trip, every rider, low-but-nonzero base rate of wrong-car incidents)
+- Status: VERIFIED   Existing item: `TSF-010` (new this audit wave)
+- Adversary: an impersonating driver (or a rider getting into the wrong car with a similar-looking vehicle), plaintiff's lawyer
+- Evidence: `TSF-010` — full pickup-confirmation code path re-read, no PIN mechanism found anywhere in rider-app/driver-app or backend
+- What happens (plain language): nothing today stops a rider from getting into a car that only looks like their match, or confirms to the driver that the person getting in is the rider who booked the trip.
+- Root cause: never built — not a regression, a gap from day one.
+- Recommendation: rider-set 4-digit PIN shown in-app, driver enters it (or the reverse — driver reads a PIN the rider confirms) before `driver_arrived → in_progress`.   Alternative considered: rely on rider photo + car photo only (already exists per traceability) — rejected: Uber/Lyft both layer a PIN on top of photo ID precisely because photo confirmation is passive and easy to skip under time pressure.
+- Blast radius: `routes/rides/lifecycle.py` (state transition gate), both mobile apps' pickup screens. New, additive field — no existing consumer.
+- Rollout: additive column + feature flag, opt-in rollout by service area.   Rollback: flag off.
+- Verification to close: a test asserting `in_progress` cannot be reached without PIN match when the flag is on; manual QA of both apps.
+
+### BENCH-002 — No rider self-serve dispute/refund path
+- Hierarchy: L2 Ride Completion & Payments › L3 Refunds/disputes on fares › L4 S-pay-08 › L5 rider was overcharged or route-disputes a fare
+- Severity: HIGH   Priority score: S×B×L = high × high × medium
+- Status: VERIFIED   Existing item: `RIDERJ-003`
+- Adversary: any rider with a legitimate billing dispute, forced into a slower support-ticket path; plaintiff's lawyer (undisclosed-fee optics)
+- Evidence: `RIDERJ-003`
+- What happens (plain language): a rider who thinks they were overcharged cannot resolve it themselves in the app — they wait on support, while Uber resolves the same class of dispute in-app in 24-48h.
+- Root cause: dispute/refund tooling was built admin-first and driver-first; rider-facing self-serve was never added.
+- Recommendation: expose a rider-facing subset of the existing admin dispute/refund flow (fare amount, route, cleanliness/damage-fee dispute categories) gated to the rider's own completed trips.   Alternative considered: keep support-ticket-only — rejected: this is the single most-cited table-stakes gap in this benchmark and the direct driver of "surprise charge"/"dispute rate" being unmeasured (greenfield-extensions.md §8's proposed KPIs).
+- Blast radius: `routes/rides/*` refund endpoints (admin-only today), `services/fare_service.py` read paths, `admin-dashboard`'s existing dispute-resolution logic (53 mapped units) as the pattern to reuse, not rebuild.
+- Rollout: additive rider-facing endpoint + screen, flagged.   Rollback: flag off, admin-only path remains.
+- Verification to close: a rider can file and see resolution status for a fare dispute without contacting support, in a staging test.
+
+### BENCH-003 — Multi-stop routing is built server-side but has no client UI
+- Hierarchy: L2 Ride Booking & Matching › L3 Multi-stop routing › L4 S-book-09 › L5 rider wants to add a stop mid-trip
+- Severity: MEDIUM   Priority score: S×B×L = medium × medium × high (cheap to fix — it's already built)
+- Status: VERIFIED   Existing item: `RIDERJ-001`
+- Adversary: none (a capability gap, not an attack surface) — but a competitor advantage: any rider who wants this today has no reason to prefer Spinr over Uber/Lyft on this specific feature.
+- Evidence: `RIDERJ-001`
+- What happens (plain language): the backend can already handle adding/removing a stop mid-trip; nobody can reach it from either app.
+- Root cause: server-side work shipped without its paired client screen — an unusually clean, low-risk backlog item (this is the *cheapest* gap in this report to close).
+- Recommendation: build the rider-app UI for the existing server capability.   Alternative considered: none — this is a straightforward finish-the-feature item, not a design decision.
+- Blast radius: rider-app booking/in-trip screens only; backend already handles it, so no backend change.
+- Rollout: additive UI behind a flag.   Rollback: flag off.
+- Verification to close: a rider can add/remove a stop mid-trip in a manual test on both platforms.
+
+### BENCH-004 — Driver instant cash-out exists in the backend but has no driver-app UI
+- Hierarchy: L2 Driver Earnings & Payouts › L3 Batch cash-out › L4 S-earn-05 › L5 a driver wants same-day access to earnings
+- Severity: MEDIUM-HIGH   Priority score: S×B×L = high × high × medium (driver-retention-relevant; Uber/Lyft treat Instant Pay as a headline driver-facing benefit)
+- Status: VERIFIED (this lane, direct code read)   Existing item: new — not previously filed as its own finding; `strategy.md` U5 notes the fee mechanics but not the missing UI
+- Adversary: none directly, but a real retention/competitive-disadvantage risk — CLAUDE.md's own "Weekly active driver retention" KPI is below target territory territory and Uber/Lyft's own driver-facing marketing leans on Instant Pay/Express Pay as a differentiator
+- Evidence: `backend/routes/drivers/payouts.py:829-887` (instant-payout endpoint, fee schema, and its own code comment: "don't advertise instant payout while the driver app has no instant-payout UI to tap"); `driver-app/app/driver/payout.tsx` and `payout-history.tsx` (grepped for "instant" — zero hits, confirming the comment)
+- What happens (plain language): the fee-bearing instant cash-out that would match Uber Instant Pay / Lyft Express Pay already works on the server; a driver has no way to trigger it from the app they actually use.
+- Root cause: same "server built, client orphaned" pattern as `RIDERJ-001` — a second, independently-discovered instance of it in this audit.
+- Recommendation: build the driver-app instant-payout screen against the existing endpoint.   Alternative considered: leave weekly-only and market 0% commission instead of instant pay as the retention lever — plausible, but should be a deliberate product decision (see §9), not a silent gap.
+- Blast radius: driver-app payout screens only; backend endpoint already exists and is presumably tested (`backend/tests/test_instant_payout.py` exists per this pass's grep).
+- Rollout: additive UI, flag per service area (the endpoint already checks `instant_payout_enabled` per service area).   Rollback: flag off.
+- Verification to close: a driver can request and receive an instant payout from the app in a staging test; `test_instant_payout.py` re-run and extended to cover the new UI's contract if one is added.
+
+### BENCH-005 — No continuous/annual driver eligibility re-check; the built recheck logic is flag-gated off by default
+- Hierarchy: L2 Safety, Trust & Fraud › L3 License/ID/background checks › L4 S-safety-03 › L5 a driver's licence class, DIP points, or criminal record changes after onboarding
+- Severity: HIGH   Priority score: S×B×L = high × high × medium (regulatory + insurance liability, per CLAUDE.md's own "Driver eligibility... renewed annually" line)
+- Status: VERIFIED   Existing item: `COMP-002`, `DRIVER-003`
+- Adversary: regulator/SGI auditor, plaintiff's lawyer after an incident involving a driver whose eligibility lapsed post-onboarding
+- Evidence: `COMP-002` — "Every SK eligibility rule beyond document expiry is dark (flag default `false`)"; `DRIVER-003` — the 3-year licensed-experience check is wired but a no-op for the existing fleet and dark for everyone regardless
+- What happens (plain language): CLAUDE.md promises annual renewal of Criminal Record Check + Vulnerable Sector Check; in production, only document-expiry is actually enforced at `go_online` — everything else is built but switched off.
+- Root cause: `enforce_driver_eligibility_recheck` flag defaults false; nobody has flipped it on, likely because the existing fleet was never backfilled with the data the recheck needs (`DRIVER-003`'s "no-op for the existing driver fleet").
+- Recommendation: a backfill pass for the existing fleet's licence/experience data, then flip the flag in staging → canary → production, per gate 3.   Alternative considered: leave as-is and rely on document-expiry alone — rejected: this is a named CLAUDE.md regulatory commitment, not optional polish.
+- Blast radius: `routes/drivers/status.py` go_online path (already named in COMP-002's own evidence); every currently-online driver whose eligibility has never been re-verified.
+- Rollout: flag flip, staged by service area, after a data backfill.   Rollback: flag off (reverts to document-expiry-only, today's actual state).
+- Verification to close: `COMP-002`'s own verification step (a human confirms the flag is live and the backfill is complete) plus a metric showing recheck denials are occurring where expected.
+
+### BENCH-006 — No fraud-signal detection for collusion, cancellation-fee farming, or chargeback velocity
+- Hierarchy: L2 Safety, Trust & Fraud › L3 Fraud detection › L4 S-safety-05 › L5 a driver and rider collude on a fake trip, or a rider disputes charges repeatedly
+- Severity: HIGH   Priority score: S×B×L = high × high × medium
+- Status: VERIFIED   Existing item: `TSF-002`, `TSF-003`, `TSF-004`
+- Adversary: colluding driver-rider pair; cancellation-fee farmer; repeat chargeback abuser
+- Evidence: `TSF-002`, `TSF-003`, `TSF-004`
+- What happens (plain language): three of the most common ride-share fraud patterns have no detection signal at all in Spinr today — a fraud ring could run undetected until a human notices, if ever.
+- Root cause: `spinr-fraud-auditor` exists and covers promo/referral/GPS fraud, but collusion/cancellation-farming/chargeback-velocity detection was never built as a distinct capability.
+- Recommendation: scope a minimal detection pass (repeat driver-rider pairing frequency, cancellation-fee-eligible-cancel rate per driver, chargeback count per rider) as a background job feeding an admin review queue — not an auto-ban, per the adversary-mandate's "controlled automation over autonomous" tie-breaker.   Alternative considered: buy a third-party fraud-detection vendor — plausible for scale, but Spinr's current volume likely doesn't justify the cost yet; a home-built heuristic pass is the smaller, reversible first step.
+- Blast radius: new background loop + admin queue; no existing consumer of this data today (net-new).
+- Rollout: additive, dark-launched (log-only) before any action is taken on its output.   Rollback: disable the loop.
+- Verification to close: a synthetic collusion/farming/chargeback scenario in a test fixture triggers a flagged row.
+
+### BENCH-007 — No driver-facing explanation when suspended or banned
+- Hierarchy: L2 Safety, Trust & Fraud › L3 Dispute/appeal handling › L4 S-safety-06 › L5 a driver is deactivated
+- Severity: HIGH   Priority score: S×B×L = high × high × high (every deactivation, direct income impact, misclassification/wrongful-termination optics for a contractor model)
+- Status: VERIFIED   Existing item: `DRIVER-001`
+- Adversary: plaintiff's lawyer (a contractor deactivated with no stated reason and no appeal path is a stronger claim than one who received both); regulator
+- Evidence: `DRIVER-001`
+- What happens (plain language): a driver who is suspended or banned gets no in-app reason and no appeal mechanism — Uber's own published policy explicitly states the opposite ("if there are steps to take to regain access, they'll include them in the message sent to the driver").
+- Root cause: admin-side suspend/ban tooling was built without a corresponding driver-facing notice/appeal flow.
+- Recommendation: a minimum-viable in-app notice (reason category, not full investigative detail) plus a support-ticket-backed appeal path.   Alternative considered: keep reasons internal-only to avoid tipping off fraud actors — a real tension; Uber's own model resolves it by giving a reason category without full detail, which is the recommended middle ground here too.
+- Blast radius: `routes/admin/drivers.py` suspend/ban endpoints, driver-app account-status screen (net-new).
+- Rollout: additive.   Rollback: hide the new screen behind a flag.
+- Verification to close: a suspended test driver sees a reason category and an appeal CTA in-app.
+
+### BENCH-008 — WAV (wheelchair-accessible vehicle) dispatch is a greyed toggle, not a working feature
+- Hierarchy: L2 Ride Booking & Matching › L3 Accessibility/WAV dispatch › L4 S-book-07 › L5 a rider who uses a wheelchair requests a ride
+- Severity: HIGH   Priority score: S×B×L = high × high × medium (Saskatchewan regulatory requirement per CLAUDE.md; ADA/accessibility-equivalent legal exposure)
+- Status: VERIFIED   Existing item: `COMP-010`
+- Adversary: regulator, plaintiff's lawyer (disability-discrimination angle), competitor with a working WAV product
+- Evidence: `COMP-010` — "next WAV availability + standard alternative" promised in `regulatory-sk.md` is not built; rider sees a greyed toggle
+- What happens (plain language): a wheelchair-using rider opens the app, sees a WAV option that doesn't actually do anything useful, and has no fallback path the app offers them.
+- Root cause: the promised fallback UX (show next WAV ETA, or offer a standard-vehicle alternative with an explanation) was never built; only the toggle shipped.
+- Recommendation: build the documented fallback — even a simple "no WAV driver online, next available in ~X min" message is a large improvement over a dead toggle.   Alternative considered: hide the toggle entirely until WAV supply exists — worse: CLAUDE.md's own accessibility rule requires WAV support *if a WAV driver is online in the service area*, so an honest toggle with real state beats hiding the option.
+- Blast radius: `routes/rides/booking.py` WAV branch, rider-app booking screen's WAV toggle.
+- Rollout: additive (fixes existing broken UX, no new surface).   Rollback: revert to the greyed toggle (not a regression from today).
+- Verification to close: a WAV request in a service area with zero WAV drivers online shows the documented fallback message, not a silent dead toggle.
+

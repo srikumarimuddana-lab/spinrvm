@@ -358,3 +358,62 @@ def test_go_online_cannot_take_over_a_current_controller_or_an_active_trip(avail
     )
     cur.execute("SELECT controller_session_id,online_epoch FROM drivers WHERE id='avail-driver'")
     assert cur.fetchone() == ("sess-A", 0)
+
+
+_SEAMS = ("driver_ready_window()", "driver_readiness_prompt_lead()", "driver_readiness_enforced()")
+
+
+def test_readiness_seams_default_off_and_are_private(availability_db):
+    cur = availability_db
+    cur.execute(
+        "SELECT public.driver_ready_window() = interval '62 minutes', "
+        "public.driver_readiness_prompt_lead() = interval '2 minutes', public.driver_readiness_enforced()"
+    )
+    assert cur.fetchone() == (True, True, False)
+    for seam in _SEAMS:
+        for role in ("anon", "authenticated", "service_role"):
+            cur.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (role, seam))
+            assert cur.fetchone()[0] is False, (role, seam)
+
+
+def test_go_online_ready_window_comes_from_the_seam(availability_db):
+    cur = availability_db
+    _enable_v2(cur)
+    assert _transition(cur, 0, "go_online", "window-default")["code"] == "OK"
+    cur.execute(
+        "SELECT abs(extract(epoch FROM ready_until - (clock_timestamp() + interval '62 minutes'))) < 5 "
+        "FROM drivers WHERE id='avail-driver'"
+    )
+    assert cur.fetchone()[0] is True
+
+    cur.execute(
+        "CREATE OR REPLACE FUNCTION public.driver_ready_window() RETURNS interval LANGUAGE sql AS $$ SELECT interval '10 minutes' $$"
+    )
+    try:
+        assert _transition(cur, 1, "go_online", "window-seam")["code"] == "OK"
+        cur.execute(
+            "SELECT abs(extract(epoch FROM ready_until - (clock_timestamp() + interval '10 minutes'))) < 5 "
+            "FROM drivers WHERE id='avail-driver'"
+        )
+        assert cur.fetchone()[0] is True
+    finally:
+        cur.execute(
+            "CREATE OR REPLACE FUNCTION public.driver_ready_window() RETURNS interval LANGUAGE sql STABLE "
+            "SECURITY INVOKER SET search_path = pg_catalog, public AS $$ SELECT interval '62 minutes' $$"
+        )
+
+
+def test_snapshot_reports_readiness_policy_and_prompt_time(availability_db):
+    cur = availability_db
+    _enable_v2(cur)
+    assert _transition(cur, 0, "go_online", "prompt-go")["code"] == "OK"
+    snapshot = _snapshot(cur)
+    assert snapshot["readiness_enforced"] is False
+    cur.execute(
+        "SELECT %s::timestamptz = ready_until - interval '2 minutes' FROM drivers WHERE id='avail-driver'",
+        (snapshot["readiness_prompt_at"],),
+    )
+    assert cur.fetchone()[0] is True
+
+    assert _transition(cur, 1, "go_offline", "prompt-off")["code"] == "OK"
+    assert _snapshot(cur)["readiness_prompt_at"] is None

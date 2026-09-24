@@ -1,6 +1,7 @@
 -- Rollback: keep the dark flag false, drain all users of the RPC, then drop
--- transition_driver_availability(), driver_availability_requests, the seven
--- driver availability columns, settings.driver_availability_v2_enabled, and indexes.
+-- transition_driver_availability(), the three readiness seam functions,
+-- driver_availability_requests, the seven driver availability columns,
+-- settings.driver_availability_v2_enabled, and indexes.
 -- Do not change driver session generation here; availability is bound to the
 -- already-authenticated session supplied by the backend.
 BEGIN;
@@ -44,6 +45,37 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.driver_availability_requests TO s
 
 CREATE INDEX IF NOT EXISTS driver_availability_requests_driver_created_idx
     ON public.driver_availability_requests (driver_id, created_at DESC);
+
+-- Readiness seams: private helpers the availability functions read instead
+-- of hard-coding the ready window. The readiness-policy migration replaces
+-- these bodies; until then readiness is never enforced. Created first because
+-- the SQL-language snapshot below is validated against them.
+CREATE OR REPLACE FUNCTION public.driver_ready_window()
+RETURNS interval
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT interval '62 minutes' $$;
+REVOKE ALL ON FUNCTION public.driver_ready_window() FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.driver_readiness_prompt_lead()
+RETURNS interval
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT interval '2 minutes' $$;
+REVOKE ALL ON FUNCTION public.driver_readiness_prompt_lead() FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.driver_readiness_enforced()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT false $$;
+REVOKE ALL ON FUNCTION public.driver_readiness_enforced() FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.transition_driver_availability(
     p_driver_id text,
@@ -235,7 +267,7 @@ BEGIN
            -- Device contact only: a system actor never proves the phone is there.
            last_contact_at = CASE WHEN p_action IN ('go_online','go_offline','stop_requests','displace_controller')
                                        AND NOT v_system THEN clock_timestamp() ELSE last_contact_at END,
-           ready_until = CASE WHEN p_action = 'go_online' THEN clock_timestamp() + interval '62 minutes'
+           ready_until = CASE WHEN p_action = 'go_online' THEN clock_timestamp() + public.driver_ready_window()
                               WHEN NOT v_next_accepting THEN NULL ELSE ready_until END,
            availability_reason = v_reason
      WHERE id = p_driver_id
@@ -454,6 +486,8 @@ AS $$
         'protocol_enabled', COALESCE((SELECT s.driver_availability_v2_enabled
                                       FROM public.settings s WHERE s.id='app_settings'), false),
         'server_time', c.server_time,
+        'readiness_enforced', public.driver_readiness_enforced(),
+        'readiness_prompt_at', (SELECT d.ready_until - public.driver_readiness_prompt_lead() FROM driver_row d),
         'driver_count', (SELECT count(*) FROM public.drivers d WHERE d.user_id = p_user_id),
         'driver', (SELECT to_jsonb(d) FROM driver_row d),
         'active_ride', (SELECT to_jsonb(a) FROM active_trip a),

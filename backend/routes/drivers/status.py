@@ -210,6 +210,58 @@ async def get_my_availability(
         ) from exc
 
 
+_READINESS_STATUS_BY_CODE = {
+    "INVALID_AVAILABILITY_COMMAND": 422,
+    "DRIVER_NOT_FOUND": 404,
+    "SESSION_SUPERSEDED": 409,
+    "DRIVER_OFFLINE": 409,
+    "REQUESTS_PAUSED": 409,
+    "ONLINE_EPOCH_STALE": 409,
+    "READINESS_EXPIRED": 409,
+    "IDEMPOTENCY_KEY_CONFLICT": 409,
+    "AVAILABILITY_V2_DISABLED": 409,
+}
+
+
+@router.post("/me/availability")
+async def post_my_availability(
+    body: Dict[str, Any] = Body(...),
+    current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
+):
+    """Readiness command (C4): ``{"action":"confirm_ready","online_epoch","request_id"}``.
+
+    Returns the fresh availability snapshot plus ``"code": "OK"``. Go, Stop
+    and Offline stay on ``PUT /drivers/{id}/status`` (eligibility gates).
+    """
+    try:
+        from ...services.driver_availability_service import (
+            AvailabilityLookupError,
+            confirm_driver_ready,
+        )
+    except ImportError:  # pragma: no cover - top-level backend import mode
+        from services.driver_availability_service import (  # type: ignore
+            AvailabilityLookupError,
+            confirm_driver_ready,
+        )
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail={"code": "INVALID_AVAILABILITY_COMMAND"})
+    session = token_session_id if isinstance(token_session_id, str) else None
+    try:
+        result = await asyncio.wait_for(confirm_driver_ready(current_user["id"], body, session), timeout=10)
+    except (AvailabilityLookupError, TimeoutError) as exc:
+        logger.error("driver readiness confirmation unavailable", exc_info=True)
+        raise HTTPException(status_code=503, detail=_availability_unavailable()) from exc
+    code = result.get("code")
+    if code == "OK":
+        return {"success": True, **result}
+    detail = {"code": code or "AVAILABILITY_UNAVAILABLE"}
+    for key in ("reason_code", "online_epoch", "state_version"):
+        if result.get(key) is not None:
+            detail[key] = result[key]
+    raise HTTPException(status_code=_READINESS_STATUS_BY_CODE.get(code, 503), detail=detail)
+
+
 # ─── Catch-all driver ID routes MUST be last to avoid shadowing named routes ───
 
 

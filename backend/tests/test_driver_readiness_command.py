@@ -132,3 +132,69 @@ async def test_service_rpc_exception_is_lookup_error():
     ):
         with pytest.raises(service.AvailabilityLookupError):
             await service.confirm_driver_ready("user-1", command, "sess-1")
+
+
+async def _post(body, result=None, side_effect=None, session="sess-1"):
+    from backend.routes.drivers import status
+
+    mock = AsyncMock(return_value=result, side_effect=side_effect)
+    with patch("backend.services.driver_availability_service.confirm_driver_ready", mock):
+        response = await status.post_my_availability(body=body, current_user={"id": "user-1"}, token_session_id=session)
+    return response, mock
+
+
+async def test_route_ok_returns_snapshot_and_code():
+    response, mock = await _post(
+        {"action": "confirm_ready", "online_epoch": "5", "request_id": "r"},
+        result={"code": "OK", "online_epoch": "5", "ready_until": "later"},
+    )
+    assert response == {"success": True, "code": "OK", "online_epoch": "5", "ready_until": "later"}
+    assert mock.await_args.args == (
+        "user-1",
+        {"action": "confirm_ready", "online_epoch": "5", "request_id": "r"},
+        "sess-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "status_code"),
+    [
+        ({"code": "INVALID_AVAILABILITY_COMMAND"}, 422),
+        ({"code": "READINESS_EXPIRED", "reason_code": "READINESS_EXPIRED", "online_epoch": "6"}, 409),
+        ({"code": "REQUESTS_PAUSED", "reason_code": "CONTROLLER_SESSION_MISMATCH"}, 409),
+        ({"code": "ONLINE_EPOCH_STALE", "online_epoch": "7", "state_version": "3"}, 409),
+        ({"code": "SESSION_SUPERSEDED"}, 409),
+        ({"code": "DRIVER_OFFLINE"}, 409),
+        ({"code": "READINESS_RECONCILIATION_FAILED"}, 503),
+    ],
+)
+async def test_route_maps_codes(result, status_code):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _post({"action": "confirm_ready", "online_epoch": "5", "request_id": "r"}, result=result)
+    assert exc.value.status_code == status_code
+    assert exc.value.detail == {
+        k: v for k, v in result.items() if k in {"code", "reason_code", "online_epoch", "state_version"}
+    }
+
+
+async def test_route_lookup_error_is_structured_503():
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _post(
+            {"action": "confirm_ready", "online_epoch": "5", "request_id": "r"},
+            side_effect=service.AvailabilityLookupError("down"),
+        )
+    assert exc.value.status_code == 503
+    assert exc.value.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
+
+
+def test_post_route_is_before_catch_all():
+    from backend.routes.drivers import status
+
+    paths = [(r.path, sorted(r.methods or [])) for r in status.router.routes]
+    post = ("/me/availability", ["POST"])
+    assert post in paths
+    assert paths.index(post) < min(i for i, (p, _m) in enumerate(paths) if p.startswith("/{driver_id}"))

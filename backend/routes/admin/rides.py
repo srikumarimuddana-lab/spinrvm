@@ -1285,14 +1285,66 @@ async def admin_create_ride(
             )
 
     if body.driver_id:
-        try:
-            await db_supabase.set_driver_available(body.driver_id, False)
-            await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
-        except Exception as e:
-            logger.error(
-                f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
-                exc_info=True,
-            )
+        # Read settings early to check the v2 flag
+        _admin_claim_settings = await get_app_settings()
+        _admin_v2 = bool(_admin_claim_settings.get("driver_availability_v2_enabled"))
+
+        if _admin_v2:
+            # v2: use the atomic v3 claim RPC in admin_direct mode
+            try:
+                try:
+                    from ...repositories import driver_offer_repo as _admin_offer_repo  # type: ignore
+                except ImportError:
+                    from repositories import driver_offer_repo as _admin_offer_repo  # type: ignore
+
+                _admin_timeout = int(_admin_claim_settings.get("ride_offer_timeout_seconds", 15))
+                _v3_admin_result = await _admin_offer_repo.claim_offers(
+                    ride_doc["id"],
+                    [{"driver_id": body.driver_id}],
+                    max_offers=1,
+                    offer_ttl_seconds=_admin_timeout + 15,
+                    mode="admin_direct",
+                )
+                _v3_admin_code = _v3_admin_result.get("code", "")
+                if _v3_admin_code == "AVAILABILITY_V2_DISABLED":
+                    _admin_v2 = False  # fall through to legacy below
+                elif _v3_admin_code == "OK":
+                    _admin_claimed = any(
+                        e.get("claimed") for e in (_v3_admin_result.get("results") or [])
+                        if isinstance(e, dict)
+                    )
+                    if not _admin_claimed:
+                        # Not claimed — revert the ride and re-dispatch
+                        _reject_reason = "UNKNOWN"
+                        for e in (_v3_admin_result.get("results") or []):
+                            if isinstance(e, dict) and not e.get("claimed"):
+                                _reject_reason = e.get("reason_code", "UNKNOWN")
+                                break
+                        logger.warning(
+                            f"admin_create_ride: v3 claim rejected driver={body.driver_id} "
+                            f"reason={_reject_reason} for ride={ride_doc['id']}"
+                        )
+                else:
+                    logger.warning(
+                        f"admin_create_ride: v3 claim code={_v3_admin_code} for "
+                        f"ride={ride_doc['id']} driver={body.driver_id}"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"admin_create_ride: v3 driver claim failed driver_id={body.driver_id}: {e}",
+                    exc_info=True,
+                )
+
+        if not _admin_v2:
+            # Legacy claim path
+            try:
+                await db_supabase.set_driver_available(body.driver_id, False)
+                await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
+            except Exception as e:
+                logger.error(
+                    f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
+                    exc_info=True,
+                )
 
         driver = await db_supabase.get_driver_by_id(body.driver_id)
         if driver and driver.get("user_id"):

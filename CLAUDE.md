@@ -45,6 +45,17 @@ Adapted from Karpathy-style LLM coding guidance (https://github.com/multica-ai/a
 ### Batch size rule
 - Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
 
+### Model routing (cost-aware)
+Per-token cost differs a lot by model (Fable 5.1 is ~2.5× Opus, ~10× Haiku, on both input and output) and every sub-agent dispatch is a *second* full context load on top of the orchestrator's own turn — so blanket "always delegate" or "always use the biggest model" rules burn usage/budget faster, not slower.
+- Default to doing small, local work directly (single-file edits, a quick lookup, a ≤2-tool-call check). Delegating these adds a second context-load for no parallelism benefit — it costs more, not less.
+- Dispatch a sub-agent when the work is genuinely parallelizable (independent multi-file/multi-domain review, the `spinr-*` reviewer fleet) or context-isolation is the point (a broad read-heavy search that would otherwise bloat the orchestrator's own context).
+- Route by task weight, not by habit:
+  - Haiku 4.5 — lookups, summaries, simple mechanical edits
+  - Sonnet 5 / Opus 5.5 — everyday implementation, tests, docs, moderate refactors
+  - Fable 5.1 — architecture calls, hard bugs, adversarial/security review (this repo's `spinr-*` agents already default appropriately per their own definitions — don't override their model on a whim)
+- Pass `model` explicitly only when you're deliberately deviating from an agent's own default.
+- Read a sub-agent's final report, not its raw intermediate files — re-reading what it already read defeats the point of delegating.
+
 ### Change Impact & Risk Log (mandatory — product is in live app testing)
 
 Spinr is currently going through live app testing with real users. Any commit or PR that fixes a bug, closes a gap, or changes existing behavior **must** include a Change Impact & Risk entry — do not just describe the fix, describe what it risks breaking. Use the template at `docs/templates/CHANGE_IMPACT_LOG.md` and either paste the filled-in table into the PR description or add it to `docs/change-log/` as `YYYY-MM-DD-<short-slug>.md` for anything touching a live-tested surface (rides, dispatch, payments, auth, corporate, safety).

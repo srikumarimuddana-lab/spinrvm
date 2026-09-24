@@ -115,3 +115,12 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # email-shaped string, regardless of proximity.
 e08bb1c2886b9f17304d8870c257fa092e1216e8:backend/tests/test_admin_rides_read_endpoints_coverage.py:spinr-driver-export-pii:802
 e08bb1c2886b9f17304d8870c257fa092e1216e8:backend/tests/test_admin_rides_read_endpoints_coverage.py:spinr-driver-export-pii:843
+
+# PR #5759: audit report docs/audit/clean-sheet/02-findings/security.md trips
+# spinr-driver-export-pii. The file names DB columns such as license_number
+# (the rule's keyword pre-filter) and the email-shaped regex then spans line
+# breaks from a quote to an `@` inside a package name (`@logrocket/react-native`,
+# match starting line 75) and a Docker image digest (`python:3.12.13-slim@sha256`,
+# match starting line 234). No personal data: verified by reading both matches.
+3469b95e0cf4f8713caa4249efde98bd387934ba:docs/audit/clean-sheet/02-findings/security.md:spinr-driver-export-pii:75
+3469b95e0cf4f8713caa4249efde98bd387934ba:docs/audit/clean-sheet/02-findings/security.md:spinr-driver-export-pii:234

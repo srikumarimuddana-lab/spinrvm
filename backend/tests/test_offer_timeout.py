@@ -728,7 +728,7 @@ async def test_batch_offer_timeout_settings_fetch_failure_falls_back_to_default_
         mock_mgr.send_personal_message = AsyncMock()
         await m._batch_offer_timeout_handler("ride_i", rider_id=None, timeout_seconds=0)
     # Falls back to the hardcoded default (3) rather than raising.
-    mock_process.assert_awaited_once_with("ride_i", "d1", 3)
+    mock_process.assert_awaited_once_with("ride_i", "d1", 3, offer={"driver_id": "d1"})
 
 
 @pytest.mark.asyncio

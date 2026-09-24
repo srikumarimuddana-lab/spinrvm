@@ -1914,7 +1914,27 @@ async def _offer_timeout_handler(
         )
 
 
-async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: int) -> bool:
+async def _expire_offer_v2(offer: dict, miss_threshold: int) -> bool:
+    """Expire a v3-created offer through resolve_driver_offer (T5).
+
+    The RPC decides the outcome, the streak and any pause under driver ->
+    ride -> offer locks; the shared request id ``expire:{offer_id}`` makes the
+    batch handler and the reaper replay each other instead of double-counting.
+    """
+    try:
+        from ...services import driver_offer_service
+    except ImportError:
+        from services import driver_offer_service  # type: ignore
+    try:
+        return await driver_offer_service.expire_offer_v2(offer, miss_threshold)
+    except Exception as e:
+        logger.opt(exception=True).error(f"[DISPATCH] v2 offer expiry failed offer={offer.get('id')}: {e}")
+        return False
+
+
+async def process_expired_offer(
+    ride_id: str, driver_id: str, miss_threshold: int, *, offer: dict | None = None
+) -> bool:
     """Atomically expire ONE pending ride_offer and run its release side-effects.
 
     Idempotent: the pending->expired claim is the single gate. If another actor
@@ -1927,7 +1947,18 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
     auto-offline (Period 0) at the miss threshold, else a committed-state-guarded
     Period 1 (mirrors the single-offer guard), an offer-skip key, and a WS notice
     to the driver. Ride-level concerns (rider WS, re-dispatch) are the caller's.
+
+    ``offer`` is the offer row when the caller has it. A v3-created offer
+    (``online_epoch`` set) is decided by resolve_driver_offer instead; the
+    protocol follows the offer, so no settings read is needed here.
     """
+    if offer is not None:
+        try:
+            from ...services.driver_offer_service import is_v2_offer
+        except ImportError:
+            from services.driver_offer_service import is_v2_offer  # type: ignore
+        if is_v2_offer(offer):
+            return await _expire_offer_v2(offer, miss_threshold)
     try:
         from ...repositories.driver_repo import update_acceptance_rate
         from ...utils.driver_presence import (
@@ -2095,14 +2126,14 @@ async def _batch_offer_timeout_handler(
         pending = await _deps.db_supabase.run_sync(
             lambda: (
                 _deps.db_supabase.supabase.table("ride_offers")
-                .select("driver_id")
+                .select("driver_id,id,claim_id,online_epoch")
                 .eq("ride_id", ride_id)
                 .eq("status", "pending")
                 .execute()
             )
         )
-        pending_ids = [r["driver_id"] for r in (pending.data or [])]
-        if not pending_ids:
+        pending_rows = [r for r in (pending.data or []) if r.get("driver_id")]
+        if not pending_rows:
             return
 
         try:
@@ -2113,7 +2144,9 @@ async def _batch_offer_timeout_handler(
 
         # Each driver's offer is expired + released independently and idempotently
         # (process_expired_offer's atomic claim is the gate), so run concurrently.
-        await asyncio.gather(*(process_expired_offer(ride_id, did, miss_threshold) for did in pending_ids))
+        await asyncio.gather(
+            *(process_expired_offer(ride_id, r["driver_id"], miss_threshold, offer=r) for r in pending_rows)
+        )
 
         if rider_id:
             await _deps.manager.send_personal_message(

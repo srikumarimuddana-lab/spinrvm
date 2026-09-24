@@ -10,6 +10,27 @@ Report-only. No code, config, or data was changed to produce this file.
 - **Verdicts.** CONFIRMED (every material claim holds); PARTIALLY CONFIRMED (the core claim holds but a material detail is wrong); REFUTED (the core claim is false); UNVERIFIABLE (needs live data, a database, or a vendor console). Citation drift (right claim, wrong line number) is recorded separately and does not count as a refutation.
 - **Limits.** A sample of 16 gives a rough error rate, not a precise one. Claims about live state (production DB contents, vendor dashboards) are marked unverifiable rather than guessed at.
 
+## §1 Results
+
+| Finding | Report | Card label | Verdict | Label OK? | Reason (path:line) |
+|---|---|---|---|---|---|
+| ADMIN-OPS-001 | admin-ops.md | VERIFIED | CONFIRMED | Yes | No second approver or cumulative cap in `routes/admin/wallet.py:128-337` or `routes/disputes.py:207-227`; `support` and `finance` presets reach these routes (`staff.py:113-114`, `admin/__init__.py:332,339`) |
+| COMP-018 | compliance.md | VERIFIED | PARTIALLY CONFIRMED | Narrow claim yes, headline no | Checker agent is not in CI and the checkboxes are advisory (`pr-checks.yml:606-660`), but the cited compliance tests already gate PRs through the full pytest step (`ci.yml:237`) |
+| CORP-002 | corporate.md | VERIFIED | CONFIRMED (drift) | Yes | Guard added in 258, dropped in 277, restored in 297 and carried in 319 (`319_late_tip_debit_types.sql:292-293`); test path is really `tests/rls/money/` |
+| DISPATCH-001 | dispatch.md | VERIFIED | CONFIRMED | Yes | Offer sent only to `driver_*` (`matching.py:1621`); only 3 `rider_*` sends, none at offer time |
+| DRIVER-004 | driver-journey.md | VERIFIED | CONFIRMED (call sites mis-described) | Yes | `dispatch_service.py:76-91` divides ETA by acceptance rate; decline lowers the rate (`ride_flow.py:798`); no disclosure in the FAQ or driver-app; `matching.py:2074` is the timeout path, not a decline |
+| INT-003 | integrations.md | VERIFIED | PARTIALLY CONFIRMED | No (Render half) | Fly.io missing and topology inverted (`vendor-inventory.md:33-35`) is true; "Render appears nowhere in deploy config" is false: `render.yaml` is at the repo root |
+| MONEY-011 | money-cra.md | VERIFIED / ASSUMED | CONFIRMED | Yes | No registration number in any receipt, statement or invoice renderer, including ones the card did not name; `drivers.gst_bn` is never rendered |
+| QUAL-006 | quality.md | VERIFIED | CONFIRMED | Yes | Re-collected: 17,392 total, 4,162 unit, 5 integration, 554 slow, 12,671 unmarked (72.9%) |
+| REL-005 | reliability.md | VERIFIED | CONFIRMED | Yes | `socket_manager.py:371-376` labels both cases `path=local`; no pubsub-unavailable metric |
+| RIDERJ-003 | rider-journey.md | VERIFIED | CONFIRMED | Yes | No rider-app, shared or AI-tool dispute call; driver-app calls `/disputes` (`ride-detail.tsx:504`) |
+| SEC-R10-012 | security.md | VERIFIED / VERIFIED-LIVE | CONFIRMED (repo); row count UNVERIFIABLE | Yes | `settings.json:29` allows `git push origin main`; the 4 auditor agents have Bash; `agent_action_logger` has no non-test caller |
+| STRAT-008 | strategy.md | VERIFIED (per ACTION_ITEMS) / INFERRED | CONFIRMED vs record; live UNVERIFIABLE | Yes | `ACTION_ITEMS.md:5685-5692` values; `min_fare` 0 passes through (`fare_service.py:138`) |
+| SKB-007 | support-kb.md | VERIFIED | PARTIALLY CONFIRMED | No | Push is a dead end (`ride_cancel.py:808-814`), but the email already has "Think this is wrong? Contact ..." (`rider_emails.py:316`) |
+| TSF-004 | trust-safety-fraud.md | VERIFIED | CONFIRMED | Yes | Prior-dispute count exists only inside the evidence pack (`dispute_evidence_pack.py:145-188`); no velocity logic anywhere |
+| UXA11Y-002 | ux-a11y.md | VERIFIED (arithmetic) | CONFIRMED | Yes | All 13 contrast ratios reproduce exactly; call sites match; counts 657/22 against 644/25 |
+| BENCH-006 | 03-benchmark.md | VERIFIED | CONFIRMED (derivative) | Borderline | No competitor citation to check; restates TSF-002/003/004, whose absence claims hold |
+
 ## §2 Per-finding notes
 
 (Written as each check finished. The §1 table and §3/§4 follow at the end of the file.)
@@ -100,3 +121,34 @@ Report-only. No code, config, or data was changed to produce this file.
 - Detail the card and TSF-002 omit, not a refutation: `backend/routes/rides/matching.py:191` `_exclude_rider_owned_candidates` *prevents* the degenerate case of a driver being dispatched their own ride request. That is prevention of same-account self-dealing, not detection of a colluding pair of separate accounts.
 - **Labelling:** VERIFIED is acceptable for the absence. A benchmark card with no external citation is really an INFERRED cross-reference, and the synthesizer should not count it as independent corroboration of TSF-002, TSF-003 and TSF-004.
 
+### QUAL-006 (quality.md), card label VERIFIED (`pytest --collect-only`), MEDIUM — **CONFIRMED**
+- I re-ran collection in `backend/` (`pytest --collect-only -q --no-cov`, 2026-09-24): full suite **17,392**, `-m unit` **4,162**, `-m integration` **5**, `-m slow` **554**, and `-m "not unit and not integration and not slow"` **12,671** (72.9%). Each count is within one test of the card's (17,391 and 12,670). The one-test difference is new churn, not an error.
+- `backend/tests/conftest.py:711-727` `pytest_collection_modifyitems` only auto-skips stale classes and applies no tier marker, so the card's recommendation of a new hook does not collide with an existing one. Only two test files have "integration" in their name.
+- The VERIFIED label is appropriate. The card's line that most Supabase-touching tests are "presumably" unmarked is correctly hedged.
+
+## §3 Error rate
+
+| Measure | Count | Fraction | Rate |
+|---|---|---|---|
+| Sample cards checked | 16 | — | — |
+| UNVERIFIABLE (whole card) | 0 | — | — (live sub-claims in SEC-R10-012 and STRAT-008 are unverifiable, but each card's repo claims were checkable) |
+| REFUTED | 0 | 0/16 | 0% |
+| PARTIALLY CONFIRMED | 3 (COMP-018, INT-003, SKB-007) | 3/16 | 18.8% |
+| **Any material error (REFUTED + PARTIAL)** | 3 | **3/16** | **18.8%** |
+| Combined with the orchestrator's 10 prior hand checks (9 correct, 1 wrong: QUAL-003) | 3 + 1 | **4/26** | **15.4%** |
+| Combined, core-claim-false only (QUAL-003 refuted; no refutations in this sample) | 1 | 1/26 | 3.8% |
+
+The combined figure mixes two units: this pass checked whole cards, while the orchestrator checked individual claims. Read it as a rough rate, not a precise one.
+
+**What this means for trusting the rest of the reports.** The core findings hold up well. No card in this sample had a false headline problem, and every cited mechanism was real, usually at or near the cited line. The errors cluster in one place: **absence and scope claims that were stated more broadly than the search behind them supports.** INT-003's grep missed a committed `render.yaml`. SKB-007 said "both channels" without reading the email body. COMP-018 said "no compliance gate" when compliance-relevant tests already gate every PR through the full suite. The orchestrator's one miss (QUAL-003, a test file under a name nobody searched for) is the same kind of error. Roughly one card in six probably contains an overstated "nothing exists" or "everywhere" detail. The synthesizer should therefore (1) treat any unverified absence or "all channels" claim that carries HIGH severity or drives a recommendation as INFERRED until it has been re-grepped, and (2) not downgrade the underlying findings, because in every partial case the core problem was still real. Citation drift was minor and did not change any conclusion: a wrong directory (CORP-002), two mis-described call sites (DRIVER-004), and line numbers off by 2 to 3 lines (REL-005, SEC-R10-012).
+
+## §4 Corrections the synthesizer must apply
+
+1. **INT-003**: remove "phantom vendor" and "appears nowhere in the actual deploy config". Replace with: "a Render Blueprint (`render.yaml`, US region) is committed at the repo root and documented in `DEPLOYMENT.md`; whether a Render service is live is unverified (needs the Render console)." Change the recommendation from "delete the Render row" to "confirm Render status. If none, delete both the row and `render.yaml`. If live, keep the row and add Fly.io." Keep the Fly.io omission and the inverted primary/standby as the core finding. Change the label from VERIFIED to VERIFIED (Fly/Railway) / INFERRED (Render).
+2. **SKB-007**: narrow the finding to the **push** only. The no-show **email** (`backend/utils/rider_emails.py:316`) already says "Think this is wrong? Contact support and we'll review it." Remove "in both channels". Consider lowering severity to LOW, since a written record with a dispute path exists.
+3. **COMP-018**: reword the headline from "No compliance gate runs in CI" to something like "No compliance-labelled gate: the regulatory checker agent never runs in CI and the PIPEDA/SK checkboxes are advisory only". Acknowledge that the cited tax, WAV, CRC, insurance-period, DSAR and purge tests already run in the blocking full pytest step (`.github/workflows/ci.yml:237`). Re-score severity on that narrower gap.
+4. **CORP-002**: fix the path. `test_money_rpc_races.py` is at `backend/tests/rls/money/test_money_rpc_races.py`. Also note that `backend/tests/test_corporate_rpc_ride_idempotency.py:325` already statically checks for the cap guard, pinned to migration 297 and not the latest (319). The recommendation still stands.
+5. **DRIVER-004**: fix the call-site descriptions. `matching.py:2074` is the offer-**expiry** path (timeout), and `matching.py:2092` is the post-auto-offline reset. The explicit-decline sites are `routes/drivers/ride_flow.py:798,804` only. Add that the acceptance-rate penalty applies on the ETA-ranking branch (`matching.py:1022-1039`, `use_eta_ranking` on by default), not on the haversine fallback. Optionally, flag the stale docstring at `backend/routes/admin/drivers.py:2489` ("acceptance_rate is not a column"), which migration 100 contradicts, as a separate doc-drift item.
+6. **SEC-R10-012**: the deny list (`.claude/settings.json:81-95`) also blocks `rm -rf`, `git reset --hard`, key and pem writes, and some workflow writes, not just `--force` and `.env`. Keep the finding. Mark the `agent_action_log` row count as live and not re-verified here.
+7. **BENCH-006**: do not count it as independent evidence. It cites only TSF-002, TSF-003 and TSF-004 and no competitor source. Consider re-labelling it INFERRED (cross-reference) or folding it into the TSF cards. Optionally note the existing self-dispatch *prevention* guard (`backend/routes/rides/matching.py:191`).
+8. **UXA11Y-002, QUAL-006, REL-005, ADMIN-OPS-001**: count refreshes and line-number tweaks only (primary/primaryDark 657/22 against 644/25; tests 17,392 and 12,671; `socket_manager.py:371`; the 10/minute rate limit on admin wallet credit, `utils/rate_limiter.py:636`). No change to verdict or severity.

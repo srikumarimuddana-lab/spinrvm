@@ -9,6 +9,7 @@ A replayed decision (``replayed: true``) never repeats a side effect.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 try:
@@ -102,11 +103,39 @@ def _decision_inputs(row: dict, body: dict | None, action: str, session_id: str)
     return str(offer_id), str(claim_id), epoch, request_id
 
 
+def _decision_mismatch(row: dict, body: dict | None) -> str | None:
+    """Reject client decision identifiers that do not name the loaded offer."""
+    body = body or {}
+    for key, row_key, code in (
+        ("offer_id", "id", "OFFER_MISMATCH"),
+        ("claim_id", "claim_id", "CLAIM_MISMATCH"),
+    ):
+        supplied = body.get(key)
+        if supplied is None:
+            continue
+        try:
+            if uuid.UUID(str(supplied)) != uuid.UUID(str(row[row_key])):
+                return code
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return code
+    supplied_epoch = body.get("online_epoch")
+    if supplied_epoch is not None:
+        try:
+            if int(supplied_epoch) != int(row["online_epoch"]):
+                return "ONLINE_EPOCH_STALE"
+        except (KeyError, TypeError, ValueError):
+            return "ONLINE_EPOCH_STALE"
+    return None
+
+
 async def accept_offer_v2(ride_id: str, driver: dict, session_id: str | None, body: dict | None = None) -> dict | None:
     """Accept a v2 offer. None means legacy offer (caller keeps the legacy CAS)."""
     row = await _load_offer(ride_id, driver["id"])
     if not is_v2_offer(row) or not session_id:
         return None
+    mismatch = _decision_mismatch(row, body)
+    if mismatch:
+        return {"code": mismatch, "offer_id": row["id"]}
     offer_id, claim_id, epoch, request_id = _decision_inputs(row, body, "accept", session_id)
     result = await driver_offer_repo.resolve_offer(
         offer_id, claim_id, action="accept", request_id=request_id, expected_epoch=epoch, actor_session_id=session_id
@@ -126,6 +155,9 @@ async def decline_offer_v2(
     row = await _load_offer(ride_id, driver["id"])
     if not is_v2_offer(row) or not session_id:
         return None
+    mismatch = _decision_mismatch(row, body)
+    if mismatch:
+        return {"code": mismatch, "offer_id": row["id"]}
     offer_id, claim_id, epoch, request_id = _decision_inputs(row, body, "decline", session_id)
     result = await driver_offer_repo.resolve_offer(
         offer_id, claim_id, action="decline", request_id=request_id, expected_epoch=epoch, actor_session_id=session_id

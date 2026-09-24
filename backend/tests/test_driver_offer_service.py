@@ -68,10 +68,48 @@ async def test_accept_defaults_to_row_values_and_default_request_id(fx):
 
 async def test_accept_uses_client_values(fx):
     fx["resolve"].return_value = {"code": "OK"}
-    body = {"offer_id": OFFER, "claim_id": CLAIM, "online_epoch": "9", "request_id": "client-1"}
+    body = {"offer_id": OFFER, "claim_id": CLAIM, "online_epoch": "7", "request_id": "client-1"}
     await svc.accept_offer_v2("r1", DRIVER, "s", body)
-    assert fx["resolve"].await_args.kwargs["expected_epoch"] == 9
+    assert fx["resolve"].await_args.kwargs["expected_epoch"] == 7
     assert fx["resolve"].await_args.kwargs["request_id"] == "client-1"
+
+
+@pytest.mark.parametrize(
+    "body,code",
+    [
+        ({"offer_id": "33333333-3333-4333-8333-333333333333"}, "OFFER_MISMATCH"),
+        ({"claim_id": "33333333-3333-4333-8333-333333333333"}, "CLAIM_MISMATCH"),
+        ({"online_epoch": "8"}, "ONLINE_EPOCH_STALE"),
+    ],
+)
+async def test_accept_rejects_mismatched_decision_identity_before_rpc(fx, body, code):
+    result = await svc.accept_offer_v2("r1", DRIVER, "s", body)
+    assert result == {"code": code, "offer_id": OFFER}
+    fx["resolve"].assert_not_awaited()
+
+
+async def test_matching_uuid_is_case_insensitive(fx):
+    lower_offer = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+    lower_claim = "fedcbafe-dcba-4fed-8cba-fedcbafedcba"
+    fx["rows"].return_value = [{**ROW, "id": lower_offer, "claim_id": lower_claim}]
+    fx["resolve"].return_value = {"code": "OK"}
+    body = {"offer_id": lower_offer.upper(), "claim_id": lower_claim.upper(), "online_epoch": "7"}
+    await svc.accept_offer_v2("r1", DRIVER, "s", body)
+    fx["resolve"].assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "body,code",
+    [
+        ({"offer_id": "33333333-3333-4333-8333-333333333333"}, "OFFER_MISMATCH"),
+        ({"claim_id": "33333333-3333-4333-8333-333333333333"}, "CLAIM_MISMATCH"),
+        ({"online_epoch": "8"}, "ONLINE_EPOCH_STALE"),
+    ],
+)
+async def test_decline_rejects_mismatched_decision_identity_before_rpc(fx, body, code):
+    result = await svc.decline_offer_v2("r1", DRIVER, "s", body)
+    assert result == {"code": code, "offer_id": OFFER}
+    fx["resolve"].assert_not_awaited()
 
 
 async def test_accept_replay_and_flag_off(fx):

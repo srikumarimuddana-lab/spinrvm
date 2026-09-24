@@ -1,4 +1,4 @@
-"""accept_ride v2 branch (T5-5): atomic RPC accept vs the legacy CAS."""
+"""accept_ride / decline_ride v2 branches (T5-5, T5-6): atomic RPC vs legacy paths."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +18,7 @@ def env():
         "get_rows": AsyncMock(return_value=[DRIVER_V2]),
         "get_ride": AsyncMock(return_value=RIDE),
         "accept": AsyncMock(),
+        "decline": AsyncMock(),
         "losers": AsyncMock(),
         "update_one": AsyncMock(return_value={"id": "r1"}),
         "find_one": AsyncMock(return_value={**RIDE, "status": "driver_accepted", "driver_id": "d1"}),
@@ -30,6 +31,7 @@ def env():
         patch.object(ride_flow.db_supabase, "get_rows", m["get_rows"]),
         patch.object(ride_flow.db_supabase, "get_ride", m["get_ride"]),
         patch.object(ride_flow.driver_offer_service, "accept_offer_v2", m["accept"]),
+        patch.object(ride_flow.driver_offer_service, "decline_offer_v2", m["decline"]),
         patch.object(ride_flow.driver_offer_service, "release_preempted_losers", m["losers"]),
         patch.object(ride_flow._deps.db, "update_one", m["update_one"]),
         patch.object(ride_flow._deps.db, "find_one", m["find_one"]),
@@ -103,3 +105,47 @@ async def test_v2_offline_driver_gets_structured_409(env):
         await _accept()
     assert exc.value.status_code == 409
     assert exc.value.detail == {"code": "DRIVER_OFFLINE", "online_epoch": "4"}
+
+
+async def _decline():
+    return await ride_flow.decline_ride("r1", request=None, current_user={"id": "u1"}, token_session_id="sess")
+
+
+async def test_v2_decline_returns_outcome(env):
+    env["decline"].return_value = {"code": "OK", "outcome": "declined"}
+    assert await _decline() == {"success": True, "outcome": "declined", "already_resolved": False}
+    env["decline"].assert_awaited_once_with("r1", DRIVER_V2, "sess", {}, reason=None)
+
+
+async def test_v2_decline_already_declined_is_200(env):
+    env["decline"].return_value = {"code": "OFFER_ALREADY_RESOLVED", "outcome": "declined"}
+    assert await _decline() == {"success": True, "outcome": "declined", "already_resolved": True}
+
+
+async def test_v2_decline_of_preempted_offer_is_ride_taken(env):
+    env["decline"].return_value = {"code": "OFFER_ALREADY_RESOLVED", "outcome": "preempted"}
+    with pytest.raises(HTTPException) as exc:
+        await _decline()
+    assert exc.value.status_code == 409
+    assert (exc.value.detail["code"], exc.value.detail["reason_code"]) == ("RIDE_STATE_CONFLICT", "RIDE_TAKEN")
+
+
+async def test_v2_decline_on_cancelled_ride_is_structured(env):
+    env["get_ride"].return_value = {**RIDE, "status": "cancelled"}
+    with pytest.raises(HTTPException) as exc:
+        await _decline()
+    assert exc.value.detail == {
+        "code": "RIDE_STATE_CONFLICT",
+        "reason_code": "RIDE_CANCELLED",
+        "ride_status": "cancelled",
+    }
+    env["decline"].assert_not_awaited()
+
+
+async def test_legacy_decline_offer_falls_through(env):
+    env["decline"].return_value = None
+    with patch.object(ride_flow.db_supabase, "run_sync", AsyncMock(side_effect=RuntimeError("legacy path"))):
+        with pytest.raises(HTTPException) as exc:
+            await _decline()
+    # Legacy path ran (its offer update failed, so the ownership guard answers 403).
+    assert exc.value.status_code == 403

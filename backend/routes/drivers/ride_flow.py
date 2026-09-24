@@ -46,7 +46,7 @@ from ._shared import (  # noqa: F401
     pickup_otp_locked_exc,
     record_pickup_otp_failure,
 )
-from .offer_decisions import decision_http_exception, is_v2_driver, parse_decision_body
+from .offer_decisions import decision_http_exception, decline_is_success, is_v2_driver, parse_decision_body
 
 try:
     from ...services import driver_offer_service
@@ -655,17 +655,22 @@ async def decline_ride(
     ride_id: str,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
+    token_session_id: str | None = Depends(get_token_session_id),
 ):
+    if not isinstance(token_session_id, str):
+        token_session_id = None
     # Optional decline reason (e.g. "service_animal", flagged from the offer
     # card's long-press option). Body-only — never a query param — so a
     # driver's flag can't ride along in a proxy/access log line. Absent for
     # the default fast decline (single tap, auto-decline-on-timeout), which
     # keeps posting no body at all, so this stays fully backward compatible.
     reason = None
+    _raw_body: dict = {}
     if request is not None:
         try:
             _body = await request.json()
             if isinstance(_body, dict):
+                _raw_body = _body
                 _r = _body.get("reason")
                 reason = str(_r).strip() or None if _r else None
         except Exception:
@@ -681,6 +686,15 @@ async def decline_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("status") not in ("searching", "driver_assigned"):
+        if is_v2_driver(driver):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RIDE_STATE_CONFLICT",
+                    "reason_code": "RIDE_CANCELLED" if ride.get("status") == "cancelled" else "RIDE_NOT_SEARCHING",
+                    "ride_status": ride.get("status"),
+                },
+            )
         raise HTTPException(
             status_code=409,
             detail=(
@@ -730,6 +744,28 @@ async def decline_ride(
     # driver could call decline for any ride_id and trigger acceptance-rate
     # degradation, insurance-period churn, and audit-log pollution.
     is_assigned = ride.get("driver_id") == driver["id"]
+
+    # v2 offers are declined atomically (claim release, readiness, one
+    # insurance transition). Legacy offers return None and fall through.
+    if not is_assigned and is_v2_driver(driver):
+        _decision_body = await parse_decision_body(request) if _raw_body else {}
+        try:
+            v2_result = await driver_offer_service.decline_offer_v2(
+                ride_id, driver, token_session_id, _decision_body, reason=reason
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.error("decline_ride: v2 decline failed ride=%s driver=%s", ride_id, driver["id"], exc_info=True)
+            raise HTTPException(status_code=503, detail={"code": "ELIGIBILITY_UNAVAILABLE"}) from None
+        if v2_result is not None:
+            if not decline_is_success(v2_result):
+                await _raise_decision(v2_result, current_user["id"], token_session_id)
+            return {
+                "success": True,
+                "outcome": v2_result.get("outcome"),
+                "already_resolved": v2_result.get("code") != "OK" or bool(v2_result.get("replayed")),
+            }
 
     # ── Batch dispatch: update this driver's offer row ───────────
     try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 try:
@@ -80,4 +81,104 @@ async def claim_offers(
         except Exception:  # noqa: S110 — best-effort cache invalidation
             pass
 
+    return value
+
+
+RESOLVE_ACTIONS = frozenset({"accept", "decline", "expire", "cancel_unaccepted"})
+_USER_ACTIONS = frozenset({"accept", "decline"})
+
+
+def _require_uuid(value: str, name: str) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(f"{name} must be a UUID") from None
+
+
+async def _call_rpc(name: str, params: dict[str, Any]) -> dict[str, Any]:
+    if not supabase:
+        raise RuntimeError(f"Supabase client unavailable for {name}")
+
+    def _call():
+        response = supabase.rpc(name, params).execute()
+        return getattr(response, "data", None)
+
+    value = await run_sync(_call, retry_policy="idempotent_write")
+    if not isinstance(value, dict):
+        raise TypeError(f"{name} returned non-dict JSON")
+    return value
+
+
+async def _invalidate(driver_id: Any, user_id: Any) -> None:
+    if not driver_id:
+        return
+    try:
+        await invalidate_driver_cache(driver_id=driver_id, user_id=user_id)
+    except Exception:  # noqa: S110 — best-effort cache invalidation
+        pass
+
+
+async def resolve_offer(
+    offer_id: str,
+    claim_id: str,
+    *,
+    action: str,
+    request_id: str,
+    expected_epoch: int | None = None,
+    actor_session_id: str | None = None,
+    miss_threshold: int = 3,
+) -> dict[str, Any]:
+    """Call ``resolve_driver_offer`` for one v2 offer decision.
+
+    Safe to retry: the RPC stores every mutating result under
+    ``(offer_id, request_id)`` and replays it with ``replayed: true``.
+    accept/decline need the caller's epoch and user session; expire and
+    cancel_unaccepted are system decisions and take neither.
+    """
+    if action not in RESOLVE_ACTIONS:
+        raise ValueError(f"unsupported offer action: {action}")
+    offer_id = _require_uuid(offer_id, "offer_id")
+    claim_id = _require_uuid(claim_id, "claim_id")
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+        raise ValueError("request_id must be 1..128 characters")
+    if type(miss_threshold) is not int or not 1 <= miss_threshold <= 20:
+        raise ValueError("miss_threshold must be 1..20")
+    if action in _USER_ACTIONS:
+        if type(expected_epoch) is not int or expected_epoch < 0:
+            raise ValueError(f"{action} needs a non-negative integer expected_epoch")
+        if not isinstance(actor_session_id, str) or not actor_session_id.strip():
+            raise ValueError(f"{action} needs the caller's session id")
+        if actor_session_id.startswith("system:"):
+            raise ValueError(f"{action} cannot run as a system actor")
+    elif expected_epoch is not None or actor_session_id is not None:
+        raise ValueError(f"{action} takes no expected_epoch or actor_session_id")
+
+    value = await _call_rpc(
+        "resolve_driver_offer",
+        {
+            "p_offer_id": offer_id,
+            "p_claim_id": claim_id,
+            "p_expected_epoch": expected_epoch,
+            "p_actor_session_id": actor_session_id,
+            "p_action": action,
+            "p_request_id": request_id,
+            "p_miss_threshold": miss_threshold,
+        },
+    )
+    await _invalidate(value.get("driver_id"), value.get("driver_user_id"))
+    return value
+
+
+async def finalize_deferred_availability(driver_id: str, *, request_id: str) -> dict[str, Any]:
+    """Finish a deferred stop/pause once the driver has no obligation left."""
+    if not driver_id:
+        raise ValueError("driver_id is required")
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+        raise ValueError("request_id must be 1..128 characters")
+    value = await _call_rpc(
+        "finalize_deferred_driver_availability",
+        {"p_driver_id": driver_id, "p_request_id": request_id},
+    )
+    if value.get("finalized"):
+        await _invalidate(driver_id, None)
     return value

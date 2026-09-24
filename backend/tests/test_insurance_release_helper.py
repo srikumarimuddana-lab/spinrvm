@@ -222,7 +222,7 @@ class TestDeferredAvailabilityFinalize:
         "result",
         [{"code": "OK", "finalized": False}, {"code": "AVAILABILITY_V2_DISABLED"}, RuntimeError("down")],
     )
-    async def test_noop_or_error_falls_back_to_legacy_period(self, result):
+    async def test_unresolved_finalize_does_not_guess_legacy_period(self, result):
         record = AsyncMock()
         finalize = AsyncMock(side_effect=result) if isinstance(result, Exception) else AsyncMock(return_value=result)
         with (
@@ -230,8 +230,8 @@ class TestDeferredAvailabilityFinalize:
             patch("backend.repositories.driver_offer_repo.finalize_deferred_availability", finalize),
         ):
             period = await mod.close_period_after_release(DRIVER, self._v2(), reason="ride_completed")
-        assert period == 1
-        record.assert_awaited_once_with(DRIVER, 1)
+        assert period is None
+        record.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "row",

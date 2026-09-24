@@ -405,6 +405,55 @@ async def change_driver_availability(
     return {**snapshot, "code": "OK", "transition": result}
 
 
+async def confirm_driver_ready(
+    user_id: str, command: dict[str, Any], authenticated_session_id: str | None
+) -> dict[str, Any]:
+    """Validate a ``confirm_ready`` command, run it, return a fresh snapshot + code.
+
+    Only ``{"action": "confirm_ready", "online_epoch": "<decimal>",
+    "request_id": "<=128"}`` is accepted; Go, Stop and Offline stay on the
+    status route that runs the eligibility gates.
+    """
+    if command.get("action") != "confirm_ready":
+        return {"code": "INVALID_AVAILABILITY_COMMAND"}
+    raw_epoch = command.get("online_epoch")
+    request_id = command.get("request_id")
+    if (
+        not isinstance(raw_epoch, str)
+        or not raw_epoch.isascii()
+        or not raw_epoch.isdecimal()
+        or len(raw_epoch) > 19
+        or int(raw_epoch) > 9_223_372_036_854_775_807
+        or not isinstance(request_id, str)
+        or not request_id.strip()
+        or len(request_id) > 128
+    ):
+        return {"code": "INVALID_AVAILABILITY_COMMAND"}
+    # A token session can never act as a trusted system actor.
+    if not authenticated_session_id or str(authenticated_session_id).startswith(
+        driver_availability_repo.SYSTEM_ACTOR_PREFIX
+    ):
+        return {"code": "SESSION_SUPERSEDED"}
+
+    raw = await _read_snapshot(user_id)
+    if not raw.get("protocol_enabled"):
+        return {"code": "AVAILABILITY_V2_DISABLED"}
+    try:
+        result = await driver_availability_repo.confirm_driver_ready(
+            str(raw["driver"]["id"]),
+            int(raw_epoch),
+            authenticated_session_id,
+            request_id.strip(),
+            reason="still_ready",
+        )
+    except Exception as exc:
+        raise AvailabilityLookupError("readiness confirmation unavailable") from exc
+    if result.get("code") != "OK":
+        return result
+    snapshot = await get_driver_availability(user_id, authenticated_session_id)
+    return {**snapshot, "code": "OK"}
+
+
 async def pause_driver_for_policy(
     user_id: str,
     *,

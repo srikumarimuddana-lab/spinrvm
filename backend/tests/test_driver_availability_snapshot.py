@@ -211,7 +211,9 @@ async def test_snapshot_blocks_online_unverified_driver_with_specific_reason():
         ready_until=(NOW + timedelta(minutes=60)).isoformat(),
     )
     with patch.object(
-        service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=_raw(driver=driver))
+        service.driver_availability_repo,
+        "get_driver_availability_snapshot",
+        AsyncMock(return_value=_raw(driver=driver)),
     ):
         snapshot = await service.get_driver_availability("user-1", "session-1")
     assert snapshot["availability_state"] == "blocked"
@@ -274,7 +276,7 @@ async def test_status_snapshot_lookup_failure_maps_to_503_contract():
         with pytest.raises(HTTPException) as error:
             await status.get_my_availability(current_user={"id": "user-1"}, token_session_id="session-1")
     assert error.value.status_code == 503
-    assert error.value.detail["code"] == "ELIGIBILITY_UNAVAILABLE"
+    assert error.value.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
 
 
 @pytest.mark.anyio
@@ -288,7 +290,40 @@ async def test_status_snapshot_timeout_maps_to_503_contract():
         with pytest.raises(HTTPException) as error:
             await status.get_my_availability(current_user={"id": "user-1"}, token_session_id="session-1")
     assert error.value.status_code == 503
-    assert error.value.detail["code"] == "ELIGIBILITY_UNAVAILABLE"
+    assert error.value.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
+
+
+@pytest.mark.anyio
+async def test_status_503_details_survive_the_5xx_sanitiser():
+    """Every availability 503 must be an allow-listed code dict; a message key
+    would make the error handler replace it with the generic sentence."""
+    from backend.routes.drivers import status
+    from backend.utils.error_handling import _should_sanitize_5xx_detail
+
+    raised = []
+    with patch.object(status.db_supabase, "get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        with pytest.raises(HTTPException) as error:
+            await status._availability_v2_enabled()
+    raised.append(error.value)
+    with patch(
+        "backend.services.driver_availability_service.change_driver_availability",
+        AsyncMock(side_effect=service.AvailabilityLookupError("db down")),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await status._change_availability_status("user-1", {"action": "go_offline"}, "session-1")
+    raised.append(error.value)
+    unparseable = {"online_epoch": "x", "state_version": "1", "is_online": True}
+    with pytest.raises(HTTPException) as error:
+        await status._finish_v2_status(
+            {"code": "OK", **unparseable, "transition": {**unparseable, "availability_reason": "go_online"}},
+            "drv-1",
+            "session-1",
+        )
+    raised.append(error.value)
+    for exc in raised:
+        assert exc.status_code == 503
+        assert exc.detail == {"code": "ELIGIBILITY_UNAVAILABLE"}
+        assert _should_sanitize_5xx_detail(exc.detail) is False
 
 
 @pytest.mark.anyio

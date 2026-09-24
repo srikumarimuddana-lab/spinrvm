@@ -49,6 +49,13 @@ def _availability_error(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+# 5xx details reach the client only as allow-listed code dicts (see
+# utils/error_handling.py); a "message" key would get the whole detail
+# replaced by the generic sanitised sentence.
+def _availability_unavailable() -> dict[str, str]:
+    return {"code": "ELIGIBILITY_UNAVAILABLE"}
+
+
 async def _availability_v2_enabled() -> bool:
     """Read the rollout gate directly; settings_loader's cache is not an authz gate."""
     try:
@@ -57,7 +64,7 @@ async def _availability_v2_enabled() -> bool:
         logger.error("driver availability rollout flag lookup failed", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to verify availability protocol."),
+            detail=_availability_unavailable(),
         ) from exc
     return bool(rows and rows[0].get("driver_availability_v2_enabled", False))
 
@@ -79,7 +86,7 @@ async def _change_availability_status(user_id: str, command: dict, token_session
         logger.error("driver availability command unavailable", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to update availability right now."),
+            detail=_availability_unavailable(),
         ) from exc
 
 
@@ -132,7 +139,7 @@ async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str 
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=503,
-                detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to refresh driver availability."),
+                detail=_availability_unavailable(),
             ) from None
         presence = await renew_driver_presence(driver_id, token_session_id, epoch)
         if presence.get("status") in {"stale_epoch", "offline"}:
@@ -188,7 +195,7 @@ async def get_my_availability(
         logger.error("driver availability snapshot unavailable", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=_availability_error("ELIGIBILITY_UNAVAILABLE", "Unable to check your availability right now."),
+            detail=_availability_unavailable(),
         ) from exc
 
 

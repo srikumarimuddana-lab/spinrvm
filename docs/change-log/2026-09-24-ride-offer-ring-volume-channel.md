@@ -42,7 +42,8 @@ Vibration doesn't depend on any volume slider, which is why it was unaffected. T
   - If the native code throws, or `res/raw/ride_offer` is missing, it logs `Log.e` and skips v4. JS falls back to v3, which gives today's behaviour, never silence.
   - If `getChannel` rejects, the error is logged with `console.error` and v3 is used.
   - If the MainApplication injection anchor is missing, **the build fails** rather than shipping a binary that silently stays quiet.
-- **Behavioural difference of `USAGE_NOTIFICATION_RINGTONE`:** the tone follows the ring volume. If the driver puts the phone on vibrate or silent, it doesn't sound, same as today. DND behaviour is still governed by the channel's `bypassDnd` and the driver's DND exceptions, as before.
+- **Behavioural difference of `USAGE_NOTIFICATION_RINGTONE`:** the tone follows the ring volume (`STREAM_RING`) instead of the notification volume. On stock Android both streams are ringer-mode-affected, so a phone on vibrate or silent was already silent for v3 and stays silent for v4. This was reasoned from AOSP behaviour, not observed: an OEM build that decouples notification sound from ringer mode could make v4 quieter than v3 for a driver who keeps the ringer on vibrate. The device test in §10 must cover that case. DND behaviour is still governed by the channel's `bypassDnd` and the driver's DND exceptions, as before.
+- **v3 deletion cancels a v3 notification still on screen:** `deleteChannel('ride-offers-v3')` runs on the first `ensureNotifeeReady()` of the new binary. If a v3 offer card was somehow still showing at that moment (the update landed mid-offer), it's dismissed. Offer windows are ~15 s and the backend offer timeout re-dispatches, so the impact is at most one missed offer.
 - **Per-channel customisations reset:** a driver who customised the old "Ride Offers" channel (e.g. picked another sound) loses that on first launch of the new binary, because v3 is deleted and v4 is new.
 - No state machine, money, insurance-period or backend changes.
 
@@ -92,14 +93,15 @@ Scenario: a driver is online on the new build with the app minimised, Notificati
 - [x] Plugin logic: a Node harness with a stubbed `@expo/config-plugins` ran both mods against a MainApplication.kt shaped like the Expo SDK 57 template. The call lands right after `super.onCreate()`, injection is idempotent, it throws on a missing anchor or a Java MainApplication, and `RideOfferRingChannel.kt` is written under `com/spinr/driver/` with `USAGE_NOTIFICATION_RINGTONE`.
 - [x] Syntax check of `notifeeService.ts` and its test via Node's TypeScript type-stripping parser. This is a parse check only, **not** `tsc`.
 - [x] Blast-radius grep: `ride-offers-v3`, `NOTIFEE_RIDE_OFFER_CHANNEL_ID`, `createChannel` mocks across `__tests__`, `__mocks__`, `jest.setup.js`, and backend `channel_id`.
-- [ ] `spinr-notification-ux-reviewer` agent review of the diff — in progress at commit time; findings addressed in follow-up commits.
+- [x] `spinr-notification-ux-reviewer` agent reviewed the diff: no blocking defects (Kotlin property/function usage, the MainApplication anchor, headless ordering, and backend channel_id all checked). Two findings are recorded in §4: ringer-mode behaviour on OEM builds, and v3 deletion cancelling an in-flight card.
 - [ ] Jest **not run**: driver-app dependencies couldn't be installed in this session (npm registry returned 403).
 - [ ] Not feature-flagged; see section 8 for why and for the OTA kill switch.
 
 ## 10. What was NOT verified
 
 - **The Kotlin was not compiled** (no `kotlinc` or Android SDK in this session). The first EAS Android build is the compile check.
-- **No device test.** Loudness at ring volume, FLAG_INSISTENT looping on the native channel, and OEM behaviour (Samsung/Xiaomi volume and DND handling) were reasoned about, not observed. Verify on a real device: install the build, minimise the app, set Notifications volume low and Ring volume high, trigger an offer, and confirm it's loud. Also check Settings → Apps → Spinr Driver → Notifications shows a single "Ride Offers" channel.
+- **No device test.** Must include: ringer on **Vibrate** with Notifications volume up, minimised offer. Confirm it's no quieter than on the previous build.
+- Also untested on a device: loudness at ring volume, FLAG_INSISTENT looping on the native channel, and OEM behaviour (Samsung/Xiaomi volume and DND handling) were reasoned about, not observed. Verify on a real device: install the build, minimise the app, set Notifications volume low and Ring volume high, trigger an offer, and confirm it's loud. Also check Settings → Apps → Spinr Driver → Notifications shows a single "Ride Offers" channel.
 - The Expo SDK 57 `MainApplication.kt` shape was taken from the template, not from a real `expo prebuild` in this session.
 - driver-app has no visual or snapshot regression tooling. The notification card itself is unchanged; only the channel and its audio routing changed.
 - `npm run build` / EAS build not run.

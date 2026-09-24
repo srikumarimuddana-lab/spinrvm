@@ -93,11 +93,20 @@ async def _change_availability_status(user_id: str, command: dict, token_session
 async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str | None = None) -> dict:
     code = result.get("code")
     if code != "OK":
+        # F3: map internal T1 session codes to the wire contract.
+        # UNAUTHORIZED_SESSION → SESSION_SUPERSEDED;
+        # CONTROLLER_SESSION_MISMATCH → ONLINE_EPOCH_STALE with reason_code.
+        wire_code = code
+        extra_reason = None
+        if code == "UNAUTHORIZED_SESSION":
+            wire_code = "SESSION_SUPERSEDED"
+        elif code == "CONTROLLER_SESSION_MISMATCH":
+            wire_code = "ONLINE_EPOCH_STALE"
+            extra_reason = "CONTROLLER_SESSION_MISMATCH"
         status_by_code = {
             "DRIVER_NOT_FOUND": 404,
-            "UNAUTHORIZED_SESSION": 409,
+            "SESSION_SUPERSEDED": 409,
             "SESSION_RECONCILE_REQUIRED": 409,
-            "CONTROLLER_SESSION_MISMATCH": 409,
             "ONLINE_EPOCH_STALE": 409,
             "IDEMPOTENCY_KEY_CONFLICT": 409,
             "OBLIGATION_ACTIVE": 409,
@@ -106,11 +115,13 @@ async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str 
             "ELIGIBILITY_BLOCKED": 409,
             "INVALID_AVAILABILITY_COMMAND": 422,
         }
-        safe_detail = {"code": code or "AVAILABILITY_UNAVAILABLE"}
+        safe_detail = {"code": wire_code or "AVAILABILITY_UNAVAILABLE"}
+        if extra_reason:
+            safe_detail["reason_code"] = extra_reason
         for key in ("online_epoch", "state_version", "reason_code", "has_trip", "has_pending_offer"):
-            if key in result:
+            if key in result and key not in safe_detail:
                 safe_detail[key] = result[key]
-        raise HTTPException(status_code=status_by_code.get(code, 503), detail=safe_detail)
+        raise HTTPException(status_code=status_by_code.get(wire_code, 503), detail=safe_detail)
 
     transition = result.get("transition") or {}
     action = transition.get("availability_reason")

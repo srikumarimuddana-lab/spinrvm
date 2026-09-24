@@ -1,4 +1,36 @@
 -- F2 fixes for driver availability v2 (457 has been applied to prod).
+-- Also creates the three readiness seam functions that 457's earlier
+-- branch edits added but which were reverted when 457 was restored to
+-- its merged state.  These seams must exist before the rewritten
+-- renew_driver_presence and snapshot below reference them.
+
+-- ── Readiness seams (stubs until 462 replaces the bodies) ──────────
+CREATE OR REPLACE FUNCTION public.driver_ready_window()
+RETURNS interval
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT interval '62 minutes' $$;
+REVOKE ALL ON FUNCTION public.driver_ready_window() FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.driver_readiness_prompt_lead()
+RETURNS interval
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT interval '2 minutes' $$;
+REVOKE ALL ON FUNCTION public.driver_readiness_prompt_lead() FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.driver_readiness_enforced()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$ SELECT false $$;
+REVOKE ALL ON FUNCTION public.driver_readiness_enforced() FROM PUBLIC, anon, authenticated, service_role;
 -- F2-7: reorder renew_driver_presence checks to fix the F2(e) new-login loop.
 -- F2-5: add readiness-expired branch to renew_driver_presence.
 -- F2-7: add current_session_id to the snapshot for server-side session logic.

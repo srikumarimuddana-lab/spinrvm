@@ -607,7 +607,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     elif _present_ids_set:
                         before_presence = len(all_drivers)
                         all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
-                        logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
+                        logger.info(
+                            f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable"
+                        )
                     elif await _rc_get_redis() is not None:
                         logger.info(
                             f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
@@ -626,19 +628,25 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 if bool(app_settings.get("dispatch_admission_shadow_enabled")):
                     try:
                         _shadow_ids = {d["id"] for d in all_drivers}
-                        _shadow_admitted, _shadow_outcome = await _admit_v2(
-                            [d for d in all_drivers]
-                        )
+                        _shadow_admitted, _shadow_outcome = await _admit_v2([d for d in all_drivers])
                         _shadow_v2_ids = {d["id"] for d in _shadow_admitted}
                         _same = _shadow_ids & _shadow_v2_ids
                         _legacy_only = _shadow_ids - _shadow_v2_ids
                         _v2_only = _shadow_v2_ids - _shadow_ids
                         if _same:
-                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "same"}, by=len(_same))
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total", labels={"result": "same"}, by=len(_same)
+                            )
                         if _legacy_only:
-                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "legacy_only"}, by=len(_legacy_only))
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total",
+                                labels={"result": "legacy_only"},
+                                by=len(_legacy_only),
+                            )
                         if _v2_only:
-                            _metric_inc("spinr_dispatch_admission_shadow_total", labels={"result": "v2_only"}, by=len(_v2_only))
+                            _metric_inc(
+                                "spinr_dispatch_admission_shadow_total", labels={"result": "v2_only"}, by=len(_v2_only)
+                            )
                     except Exception:
                         logger.warning("[DISPATCH] shadow admission comparison failed")
 
@@ -922,7 +930,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 _casc_skip_vals = await _casc_mget(_casc_skip_keys)
                                 _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
                             except Exception as _casc_redis_exc:
-                                logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc)
+                                logger.warning(
+                                    "[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc
+                                )
                         # Fix 2: apply subscription filter to cascade pool when the service area
                         # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                         if _sub_required and _casc_pool:
@@ -1081,14 +1091,16 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 _v3_eta_by_id: dict[str, int] = {}
                 for d, eta_sec, _dist in ranked:
                     admission = d.get("_admission", {})
-                    _v3_candidates.append({
-                        "driver_id": d["id"],
-                        "session_id": admission.get("session_id"),
-                        "online_epoch": admission.get("online_epoch"),
-                        "contact_valid_until": admission.get("contact_valid_until"),
-                        "location_valid_until": admission.get("location_valid_until"),
-                        "eta_seconds": eta_sec,
-                    })
+                    _v3_candidates.append(
+                        {
+                            "driver_id": d["id"],
+                            "session_id": admission.get("session_id"),
+                            "online_epoch": admission.get("online_epoch"),
+                            "contact_valid_until": admission.get("contact_valid_until"),
+                            "location_valid_until": admission.get("location_valid_until"),
+                            "eta_seconds": eta_sec,
+                        }
+                    )
                     _v3_eta_by_id[d["id"]] = eta_sec
 
                 _sub_required_for_claim = bool(_sub_required) if "_sub_required" in dir() else False
@@ -1145,9 +1157,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     )
                     return
                 else:
-                    raise RuntimeError(
-                        f"dispatch_claim_offers_v3 unexpected code={_v3_code} for ride {ride_id}"
-                    )
+                    raise RuntimeError(f"dispatch_claim_offers_v3 unexpected code={_v3_code} for ride {ride_id}")
 
             if not _v3_claimed and _direct_pool_enabled:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
@@ -1590,14 +1600,20 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 if _v3_claimed:
                     # Find the matching result entry for this driver
                     _v3_entry = None
-                    for _re in (_v3_result.get("results") or []):
+                    for _re in _v3_result.get("results") or []:
                         if isinstance(_re, dict) and _re.get("driver_id") == driver.get("id"):
                             _v3_entry = _re
                             break
                     dispatch_payload["offer_protocol"] = "v2"
-                    dispatch_payload["offer_id"] = str(_v3_entry["offer_id"]) if _v3_entry and _v3_entry.get("offer_id") else None
-                    dispatch_payload["claim_id"] = str(_v3_entry["claim_id"]) if _v3_entry and _v3_entry.get("claim_id") else None
-                    dispatch_payload["online_epoch"] = str(_v3_entry["online_epoch"]) if _v3_entry and _v3_entry.get("online_epoch") else None
+                    dispatch_payload["offer_id"] = (
+                        str(_v3_entry["offer_id"]) if _v3_entry and _v3_entry.get("offer_id") else None
+                    )
+                    dispatch_payload["claim_id"] = (
+                        str(_v3_entry["claim_id"]) if _v3_entry and _v3_entry.get("claim_id") else None
+                    )
+                    dispatch_payload["online_epoch"] = (
+                        str(_v3_entry["online_epoch"]) if _v3_entry and _v3_entry.get("online_epoch") else None
+                    )
                     dispatch_payload["server_time"] = str(_v3_result.get("server_time", ""))
                     dispatch_payload["expires_at"] = str(_v3_result.get("expires_at", ""))
 

@@ -1,0 +1,13 @@
+# Provisioned into the self-hosted Grafana on this machine (see README
+# "Logs & Grafana"). Loki runs on the same machine, bound to 127.0.0.1.
+apiVersion: 1
+datasources:
+  - name: Fly logs (Loki, 7 days)
+    uid: fly-logs-loki
+    type: loki
+    access: proxy
+    url: http://127.0.0.1:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      maxLines: 5000

@@ -25,22 +25,41 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
         if (await SecureStore.getItemAsync('bg_rejected_refresh') === fingerprint) return null;
 
         const controller = new AbortController();
-        let timeout: ReturnType<typeof setTimeout>;
-        const deadline = new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => {
-            controller.abort();
-            reject(new Error('Background authentication deadline exceeded'));
-          }, 10_000);
-        });
+        // CRIMSON-SMOKE-7445-121: a single 10s deadline shared across all three
+        // sequential steps (App Check, fetch, json parse) let one slow step
+        // starve the others -- e.g. an 8s App Check left only 2s for the POST,
+        // not enough for real network latency. Each step now gets its own
+        // independent deadline sized for that step's own realistic worst case,
+        // not a slice of the old shared total -- otherwise a step that used to
+        // fit inside the shared budget could still starve the next one. Worst
+        // case sums to 18s (App Check 8s + POST 8s + json() parsing 2s).
+        // Stacked with nativeSessionLock.ts's own independent 10s lock-wait
+        // deadline (already acquired by this point), true worst case is
+        // ~27-28s against iOS's ~30s background-execution ceiling -- a thin
+        // but deliberate margin (this is the residual risk the investigator's
+        // un-chosen "start one shared clock before the lock" alternative
+        // would have bounded more tightly by never stacking two independent
+        // ceilings; the per-step approach was chosen instead per an explicit
+        // user decision).
+        const withStepDeadline = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+          let timeout: ReturnType<typeof setTimeout>;
+          const deadline = new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(new Error('Background authentication deadline exceeded'));
+            }, ms);
+          });
+          return Promise.race([promise, deadline]).finally(() => clearTimeout(timeout));
+        };
         try {
           // A hung native App Check promise must release the session lock too.
           // Late preparation may finish, but cannot continue to the POST.
-          const appCheck = await Promise.race([initFirebaseServices().then(() => getAppCheckToken()), deadline]);
-          const response = await Promise.race([fetch(`${SpinrConfig.backendUrl}/api/v1/auth/refresh`, {
+          const appCheck = await withStepDeadline(initFirebaseServices().then(() => getAppCheckToken()), 8_000);
+          const response = await withStepDeadline(fetch(`${SpinrConfig.backendUrl}/api/v1/auth/refresh`, {
             method: 'POST', signal: controller.signal, credentials: 'omit',
             headers: { 'Content-Type': 'application/json', ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}) },
             body: JSON.stringify({ refresh_token: candidate }),
-          }), deadline]);
+          }), 8_000);
           if (!response.ok) {
             // A rejected credential must not be replayed on every GPS callback.
             // Foreground auth owns definitive sign-out and account recovery.
@@ -50,7 +69,7 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
             }
             throw new Error(`Background token refresh HTTP ${response.status}`);
           }
-          const data = await Promise.race([response.json(), deadline]);
+          const data = await withStepDeadline(response.json(), 2_000);
           const accessExpiresAtMs = typeof data.access_expires_at === 'string' ? Date.parse(data.access_expires_at) : NaN;
           const serverNowMs = Date.parse(response.headers?.get('date') ?? '');
           let expiresIn = typeof data.expires_in === 'number' && Number.isFinite(data.expires_in) && data.expires_in > 0
@@ -82,7 +101,7 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           failedCandidate = candidate;
           if (retryAfter !== Infinity) retryAfter = Date.now() + 30_000;
           throw error;
-        } finally { clearTimeout(timeout!); }
+        }
       });
     } catch (error) {
       // Never include tokens, response bodies, or coordinates in diagnostics.

@@ -320,18 +320,11 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             # Unknown mode must never authorize the legacy raw offline write.
             _availability_v2_for_review = True
             logger.error("[DRIVER] availability flag unavailable during profile review", exc_info=True)
-        _obligated = await _deps.has_active_ride_obligation(driver["id"])
-        if _obligated is False and not _availability_v2_for_review:
-            updates["is_online"] = False
-            updates["is_available"] = False
-            _forced_offline_for_review = True
-            logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
-        else:
-            logger.info(
-                f"[DRIVER] Driver {driver['id']} updated vehicle info while on an obligated ride "
-                f"(or obligation check failed, obligated={_obligated}) → status set to needs_review; "
-                "offline/period change deferred until the ride ends"
-            )
+        # #5747: the obligation check itself moved to right before the write
+        # below (past the PII-encryption await) — checking it here left a gap
+        # where dispatch could assign this driver a new ride between the
+        # check and the actual UPDATE, and this path would force them offline
+        # / record Period 0 over a live obligation it never saw.
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     write_filter: dict = {"id": driver["id"]}
@@ -344,7 +337,24 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         # ride-acceptance {'status': 'searching'} guard: the losing request
         # matches 0 rows and is told so, instead of winning by being last.
         write_filter["sin"] = None
-    result = await db_supabase.update_one("drivers", write_filter, await _shared._encrypt_driver_pii(updates))
+    encrypted_updates = await _shared._encrypt_driver_pii(updates)
+    if changed_vehicle and driver.get("status") == "active":
+        # Re-check right before the write (see comment above) — the closest
+        # this can get to the actual UPDATE without a DB-level CAS. `None`
+        # (lookup failed) is still treated as an obligation.
+        _obligated = await _deps.has_active_ride_obligation(driver["id"])
+        if _obligated is False and not _availability_v2_for_review:
+            encrypted_updates["is_online"] = False
+            encrypted_updates["is_available"] = False
+            _forced_offline_for_review = True
+            logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
+        else:
+            logger.info(
+                f"[DRIVER] Driver {driver['id']} updated vehicle info while on an obligated ride "
+                f"(or obligation check failed, obligated={_obligated}) → status set to needs_review; "
+                "offline/period change deferred until the ride ends"
+            )
+    result = await db_supabase.update_one("drivers", write_filter, encrypted_updates)
     if "sin" in updates and result is None:
         raise HTTPException(
             status_code=409,

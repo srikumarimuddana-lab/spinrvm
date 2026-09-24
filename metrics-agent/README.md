@@ -142,3 +142,144 @@ Railway is explicitly out of scope for this MVP (ADR-010 §4 / §5, and
 `ACTION_ITEMS.md` C5 — Railway is currently drifting from `main` with
 blocked deploys; standing up monitoring against a known-stale build would
 just be noise to suppress later).
+
+## Logs & Grafana (7-day Fly log store on this machine)
+
+Added 2026-09-24. This machine also stores the last **7 days of Fly logs**
+(every app in the org — the same feed `fly logs` shows) and runs a
+**private Grafana** for searching those logs and viewing the Grafana Cloud
+metrics. Nothing here is public: there is still no `[http_service]`, and
+Grafana is reached only through `fly proxy`.
+
+```
+Fly log stream (NATS, 6PN) ─► Vector ─► Loki (127.0.0.1:3100, /data volume, 168h retention)
+                                             ▲
+Grafana Cloud Prometheus ◄── (metrics:read) ─ Grafana :3000 ◄── fly proxy ◄── you
+Backend /metrics ─► Alloy ─► Grafana Cloud        (unchanged)
+```
+
+| Process | Runs as | Listens on | Data |
+|---|---|---|---|
+| Alloy (metrics, PID 1) | `alloy` | `0.0.0.0:12345` (pre-existing) | rootfs, **not** `/data` |
+| Loki | `alloy` | `127.0.0.1:3100` only | `/data/loki` |
+| Vector | `alloy` | nothing inbound | `/data/vector` |
+| Grafana | `grafana` | `:3000` (6PN only — no public service) | `/data/grafana` |
+
+Metrics come first: `entrypoint.sh` starts each log-stack process in its
+own restart loop and **never** lets a log-stack failure stop Alloy. A
+missing volume or secret skips that component with an `ERROR` line in
+`fly logs -a spinr-metrics-agent-yyz` instead of crashing the machine.
+
+### One-time setup (in this order — before this config is deployed)
+
+`deploy-metrics-agent.yml` auto-deploys on every push to `main` touching
+`metrics-agent/**`, and `fly.toml` now declares a `[mounts]` volume, so
+steps 1–3 must be done **before** the change is merged.
+
+1. **Create the volume** (Toronto, same region as the machine):
+   ```bash
+   fly volumes create fly_logs --region yyz --size 5 -a spinr-metrics-agent-yyz
+   ```
+2. **Set the new secrets**, staged so nothing restarts yet:
+   ```bash
+   pw=$(openssl rand -base64 24); echo "$pw"   # save this in the password manager
+   fly secrets set --stage -a spinr-metrics-agent-yyz \
+     LOG_STREAM_ACCESS_TOKEN="$(fly tokens create readonly spinr_backend)" \
+     GRAFANA_ADMIN_PASSWORD=$pw \
+     GRAFANA_CLOUD_METRICS_READ_TOKEN='<Grafana Cloud access policy token with metrics:read>'
+   ```
+   - `spinr_backend` is the org slug from `infra/burst_controller/fly.toml`
+     and `fly.toml`'s `LOG_STREAM_ORG`; confirm with `fly orgs list`.
+   - `GRAFANA_ADMIN_PASSWORD` must be ≥16 characters or Grafana is not
+     started. It only applies the **first** time Grafana starts (see
+     "Rotate the Grafana password" below).
+   - `GRAFANA_CLOUD_METRICS_READ_TOKEN` is optional — without it Grafana
+     shows logs only. The existing `GRAFANA_REMOTE_WRITE_API_KEY` is
+     `metrics:write` only and cannot be used for reading. The query URL is
+     derived from `GRAFANA_REMOTE_WRITE_URL` (`…/api/prom/push` →
+     `…/api/prom`); override with `GRAFANA_CLOUD_PROM_QUERY_URL` if needed.
+3. **Replace the existing machine** so the new one can attach the volume
+   (a Fly volume can't be attached to an already-created machine). This
+   causes a metrics gap of a few minutes, until step 4 finishes:
+   ```bash
+   fly machine list -a spinr-metrics-agent-yyz
+   fly machine destroy <machine-id> --force -a spinr-metrics-agent-yyz
+   ```
+4. **Deploy**: merge the change (auto-deploy), or run the
+   "Deploy metrics-agent to Fly.io" workflow, or `fly deploy` from
+   `metrics-agent/`.
+5. **Verify**:
+   ```bash
+   fly logs -a spinr-metrics-agent-yyz          # expect "starting loki/vector/grafana", no ERROR lines
+   fly ssh console -a spinr-metrics-agent-yyz -C "df -h /data"
+   ```
+
+### Open Grafana
+
+```bash
+fly proxy 3000 -a spinr-metrics-agent-yyz
+```
+
+Then open <http://localhost:3000> and log in as `admin`. Logs are under
+**Explore → "Fly logs (Loki, 7 days)"**, for example:
+
+```logql
+{app="spinr-backend-yyz"} |= "error"
+{app="spinr-backend-yyz", level="error"}
+{app="spinr-backend-yyz"} |= "<request_id or ride_id>"
+```
+
+Labels available: `app`, `region`, `instance` (Fly machine ID), `level`.
+Metrics are under the "Spinr metrics (Grafana Cloud)" data source.
+
+### Operate
+
+- **Turn the log stack off** (metrics keep running, no code revert):
+  `fly secrets set LOGS_STACK_ENABLED=false -a spinr-metrics-agent-yyz`
+  (a secret overrides the `[env]` value of the same name). Unset it to
+  turn the log stack back on.
+- **Disk full**: `fly volumes extend <volume-id> --size 20 -a spinr-metrics-agent-yyz`
+  (no data loss). Loki can't write while the disk is full, but Alloy doesn't
+  use `/data`, so metrics are unaffected.
+- **Rotate the Grafana password**: `GRAFANA_ADMIN_PASSWORD` is only read
+  when Grafana's database is first created. Change it afterwards in the
+  Grafana UI (Profile → Change password), or:
+  ```bash
+  fly ssh console -a spinr-metrics-agent-yyz -C \
+    "setpriv --reuid=grafana --regid=grafana --init-groups env GF_PATHS_DATA=/data/grafana /usr/share/grafana/bin/grafana cli --homepath /usr/share/grafana admin reset-admin-password '<new>'"
+  ```
+
+### Known gaps (read before relying on this for an incident)
+
+- **No replay.** Fly's log stream is fire-and-forget: lines emitted while
+  Vector or this machine is down (including during step 3/4 above and every
+  deploy of this app) are **not** backfilled.
+- **Single copy.** The volume lives on one host's disk. If the host fails,
+  recovery is from Fly's daily volume snapshots (kept 5 days by default),
+  so up to a day of logs can be lost.
+- **Sizing is a guess.** The 1 GB VM (with 512 MB swap and per-process
+  `GOMEMLIMIT` caps in `entrypoint.sh`) and the 5 GB volume have not been
+  measured against real log
+  volume from up to 8 backend machines — check `df -h /data` after the
+  first few days.
+- **Images are pinned by tag, not digest** (`Dockerfile` explains why).
+  The Loki/Vector/Grafana versions were the newest the authoring session
+  could confirm without registry access; bump them and add digest pins.
+- **Not validated against the real binaries.** The Loki config, Vector
+  config/VRL and Grafana provisioning were written without being able to
+  run Loki/Vector/Grafana (no registry or module-proxy access in that
+  session). `entrypoint.sh`'s control flow was tested with stub binaries.
+  The first deploy is the real test — watch `fly logs` for config errors.
+- **Private network reachability.** Grafana (password-protected) and the
+  pre-existing Alloy UI on `:12345` (no auth) are reachable from any app on
+  the org's private 6PN network, not only via `fly proxy`.
+- **Secrets briefly visible as process arguments.** `entrypoint.sh` passes
+  each process's secrets through `env -i KEY=VALUE …` so no process inherits
+  another's secrets; for the instant before `env` execs, those values are in
+  its argv (`/proc/<pid>/cmdline`). Only root, `alloy` and `grafana` exist on
+  this machine, so this was accepted as low risk.
+- **PII retention.** Anything the backend already logs is now kept and
+  searchable for 7 days. Logs stay in Fly's Toronto region (`yyz`), but
+  CLAUDE.md forbids GPS, phone numbers, emails and names in logs — any leak
+  there is now a 7-day leak, not a transient one.
+- **Railway is not covered** — only apps on Fly.

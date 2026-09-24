@@ -160,29 +160,57 @@ it('never returns a token whose rotated credential failed to persist', async () 
 });
 
 it('aborts a stalled request and retains the recording session credentials', async () => {
+  // CRIMSON-SMOKE-7445-121: the refresh POST now has its own 8s deadline
+  // (previously part of one shared 10s budget across all three steps).
   jest.useFakeTimers();
   (fetch as jest.Mock).mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener('abort', () => reject(new Error('aborted')));
   }));
   try {
     const result = renewBackgroundAuthToken();
-    await jest.advanceTimersByTimeAsync(10_100);
+    await jest.advanceTimersByTimeAsync(8_100);
     expect(await result).toBeNull();
     expect(mockStorage.refresh_token).toBe('refresh-old');
   } finally { jest.useRealTimers(); }
 });
 
 it('releases the lock if App Check hangs and never sends a late refresh', async () => {
+  // CRIMSON-SMOKE-7445-121: App Check now has its own 8s deadline.
   jest.useFakeTimers();
   let finish!: (token: string) => void;
   (getAppCheckToken as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   try {
     const result = renewBackgroundAuthToken();
-    await jest.advanceTimersByTimeAsync(10_100);
+    await jest.advanceTimersByTimeAsync(8_100);
     expect(await result).toBeNull();
     finish('late-app-check');
     await jest.advanceTimersByTimeAsync(100);
     expect(fetch).not.toHaveBeenCalled();
+  } finally { jest.useRealTimers(); }
+});
+
+it('gives the refresh POST its own full deadline instead of inheriting whatever App Check left behind', async () => {
+  // CRIMSON-SMOKE-7445-121: before this fix, App Check and the refresh POST
+  // shared one 10s deadline -- an App Check that took 7s left only 3s for
+  // the POST, not enough for a legitimate 5s network round trip, so the
+  // whole refresh failed even though neither step individually was
+  // unreasonably slow. Each step now gets its own independent 8s budget, so
+  // a 7s App Check (well within its own budget) must not shrink the POST's
+  // window at all -- the POST gets a fresh 8s starting when it begins, not
+  // whatever was left of a shared clock that started at t=0.
+  jest.useFakeTimers();
+  (getAppCheckToken as jest.Mock).mockImplementationOnce(
+    () => new Promise(resolve => setTimeout(() => resolve('app-check'), 7_000)),
+  );
+  (fetch as jest.Mock).mockImplementationOnce(
+    () => new Promise(resolve => setTimeout(() => resolve({
+      ok: true, status: 200, json: async () => ({ token: 'access-new', refresh_token: 'refresh-new', access_expires_at: futureIso(900) }),
+    }), 5_000)),
+  );
+  try {
+    const result = renewBackgroundAuthToken();
+    await jest.advanceTimersByTimeAsync(7_000 + 5_000 + 10);
+    expect(await result).toBe('access-new');
   } finally { jest.useRealTimers(); }
 });
 

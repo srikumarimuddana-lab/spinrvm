@@ -495,6 +495,12 @@ async def _persist_v2_idle_batch(
     if not settings.get("idle_location_v2_enabled", False):
         raise HTTPException(status_code=409, detail="Idle location recording is not enabled")
     if not driver.get("is_online"):
+        # F5: under v2, structured conflict so the app can classify it.
+        if availability_v2:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "DRIVER_OFFLINE", "online_epoch": str(driver.get("online_epoch", 0))},
+            )
         raise HTTPException(status_code=409, detail="Driver is not online")
 
     if availability_v2:
@@ -613,6 +619,12 @@ async def _persist_v2_location_batch(
         if not _completed_batch_is_within_retention(request, ride):
             raise HTTPException(status_code=422, detail="Points fall outside completed ride retention window")
     elif ride.get("status") not in _V2_ACTIVE_RIDE_STATUSES:
+        # F5: under v2, structured conflict so the app can classify it.
+        if availability_v2:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "RIDE_STATE_CONFLICT", "ride_status": ride.get("status")},
+            )
         raise HTTPException(status_code=409, detail="Ride cannot accept location points in its current state")
 
     try:

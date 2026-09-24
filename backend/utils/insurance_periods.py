@@ -340,6 +340,64 @@ async def release_driver_and_close_period(
     return await close_period_after_release(driver_id, released, reason=reason, ride_id=ride_id)
 
 
+async def _finalize_deferred_availability(driver_id: str, released: dict) -> bool:
+    """True when a v2 deferred stop/pause was finalized (T1 wrote Period 0).
+
+    Applies only to a v2 row -- a string ``controller_session_id``, online,
+    and ``accepting_requests is False``. Anything else, a NOOP, or an error
+    returns False so the caller keeps the legacy period write.
+    """
+    if not (
+        isinstance(released.get("controller_session_id"), str)
+        and released.get("is_online") is True
+        and released.get("accepting_requests") is False
+    ):
+        return False
+    epoch = released.get("online_epoch")
+    try:
+        try:
+            from ..repositories import driver_offer_repo
+        except ImportError:  # pragma: no cover - top-level backend import mode
+            from repositories import driver_offer_repo  # type: ignore
+        result = await driver_offer_repo.finalize_deferred_availability(
+            driver_id, request_id=f"finalize:{driver_id}:{epoch}"
+        )
+    except Exception:
+        logger.error("insurance_periods: deferred finalize failed driver_id=%s", driver_id, exc_info=True)
+        return False
+    if not (isinstance(result, dict) and result.get("finalized")):
+        return False
+    availability = result.get("availability") or {}
+    user_id = released.get("user_id")
+    if user_id and not availability.get("replayed"):
+        # Addendum X9: every successful system transition emits this signal.
+        reason_code = {
+            "stop_requests": "REQUESTS_STOPPED",
+            "pause_policy": "POLICY_BLOCKED",
+            "pause_unreachable": "PRESENCE_UNAVAILABLE",
+            "pause_idle": "READY_TIMEOUT",
+            "pause_misses": "MISSED_OFFERS",
+        }.get(availability.get("availability_reason"), "OFFLINE_INTENT")
+        try:
+            try:
+                from ..socket_manager import manager
+            except ImportError:  # pragma: no cover
+                from socket_manager import manager  # type: ignore
+            await manager.send_personal_message(
+                {
+                    "type": "availability_changed",
+                    "online_epoch": availability.get("online_epoch"),
+                    "state_version": availability.get("state_version"),
+                    "reason_code": reason_code,
+                    "server_time": availability.get("server_time"),
+                },
+                f"driver_{user_id}",
+            )
+        except Exception:
+            logger.warning("insurance_periods: finalize notify failed driver_id=%s", driver_id, exc_info=True)
+    return True
+
+
 async def close_period_after_release(
     driver_id: str,
     released: object,
@@ -378,6 +436,18 @@ async def close_period_after_release(
             {"reason": reason},
         )
         return None
+
+    # Availability v2 (T12-8): a driver who stopped requests (or was paused)
+    # during this obligation is online but not accepting. Now that the
+    # obligation is gone, finish that deferred stop through T1, which writes
+    # Period 0 itself -- so no Period 1 is recorded here. NOOP or error falls
+    # through to the legacy period write below.
+    if await _finalize_deferred_availability(driver_id, released):
+        _metric_inc(
+            "spinr_insurance_period_release_total",
+            {"reason": reason, "period": "0"},
+        )
+        return 0
 
     # `is_online` is the driver's own toggle and is what the Period table keys
     # on. Fall back to the clamped `is_available`, which can only be truthy if

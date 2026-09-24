@@ -251,3 +251,110 @@ def test_failed_insurance_result_rolls_back_availability_transition(availability
             (migrations / "421_insurance_period_ride_identity.sql").read_text(encoding="utf-8")
         ):
             cur.execute(statement)
+
+
+def _enable_v2(cur):
+    cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
+
+
+@pytest.mark.parametrize("current_session", [None, "sess-new"], ids=["no-current-session", "current-not-controller"])
+def test_system_actor_pauses_without_current_session_or_controller(availability_db, current_session):
+    cur = availability_db
+    _enable_v2(cur)
+    cur.execute("UPDATE users SET current_session_id=%s WHERE id='avail-user'", (current_session,))
+    cur.execute(
+        "UPDATE drivers SET status='suspended',controller_session_id='sess-old',accepting_requests=true "
+        "WHERE id='avail-driver'"
+    )
+
+    result = _transition(cur, 0, "pause_policy", "policy-pause", session="system:policy")
+
+    assert result["code"] == "OK"
+    assert (result["is_online"], result["accepting_requests"], result["online_epoch"]) == (False, False, "1")
+    assert result["controller_session_id"] == "sess-old"
+    assert _transition(cur, 0, "pause_policy", "policy-pause", session="system:policy") == result
+
+
+@pytest.mark.parametrize(
+    "session,action",
+    [
+        ("system:policy", "go_online"),
+        ("system:logout", "go_offline"),
+        ("system:finalize", "displace_controller"),
+        ("system:bogus", "stop_requests"),
+    ],
+)
+def test_system_actor_is_limited_to_known_sources_and_pause_actions(availability_db, session, action):
+    import psycopg2
+
+    cur = availability_db
+    _enable_v2(cur)
+    with pytest.raises(psycopg2.Error) as error:
+        _transition(cur, 0, action, "system-misuse", session=session)
+    assert error.value.pgcode == "22023"
+    cur.execute("SELECT online_epoch,controller_session_id FROM drivers WHERE id='avail-driver'")
+    assert cur.fetchone() == (0, None)
+
+
+def test_system_stop_is_not_device_contact(availability_db):
+    cur = availability_db
+    _enable_v2(cur)
+    cur.execute(
+        "UPDATE drivers SET controller_session_id='sess-A',accepting_requests=true,"
+        "last_contact_at=clock_timestamp() - interval '10 minutes' WHERE id='avail-driver'"
+    )
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='avail-driver'")
+    before = cur.fetchone()[0]
+
+    assert _transition(cur, 0, "stop_requests", "logout-stop", session="system:logout")["code"] == "OK"
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='avail-driver'")
+    assert cur.fetchone()[0] == before
+
+    assert _transition(cur, 1, "stop_requests", "device-stop")["code"] == "OK"
+    cur.execute("SELECT last_contact_at FROM drivers WHERE id='avail-driver'")
+    assert cur.fetchone()[0] > before
+
+
+@pytest.mark.parametrize(
+    "is_online,controller",
+    [(True, None), (False, "sess-old"), (True, "sess-old")],
+    ids=["no-controller", "offline-old-controller", "online-superseded-controller"],
+)
+def test_go_online_from_current_session_rebinds_controller(availability_db, is_online, controller):
+    cur = availability_db
+    _enable_v2(cur)
+    cur.execute(
+        "UPDATE drivers SET is_online=%s,is_available=%s,accepting_requests=%s,controller_session_id=%s "
+        "WHERE id='avail-driver'",
+        (is_online, is_online, is_online, controller),
+    )
+
+    result = _transition(cur, 0, "go_online", "rebind-go")
+
+    assert result["code"] == "OK"
+    assert result["controller_session_id"] == "sess-A"
+    assert result["online_epoch"] == "1"
+    assert (result["is_online"], result["accepting_requests"]) == (True, True)
+
+
+def test_go_online_cannot_take_over_a_current_controller_or_an_active_trip(availability_db):
+    cur = availability_db
+    _enable_v2(cur)
+    cur.execute("UPDATE drivers SET controller_session_id='sess-A',accepting_requests=true WHERE id='avail-driver'")
+
+    # The controller is still the current, online session: nobody else can act.
+    assert _transition(cur, 0, "go_online", "takeover", session="sess-B")["code"] == "UNAUTHORIZED_SESSION"
+
+    # Once superseded, assigned work still blocks the takeover (no active-trip
+    # displacement here), and non-Go commands stay fenced to the controller.
+    cur.execute("UPDATE users SET current_session_id='sess-B' WHERE id='avail-user'")
+    cur.execute(
+        "INSERT INTO rides (id,driver_id,pickup_address,pickup_lat,pickup_lng,dropoff_address,dropoff_lat,dropoff_lng,status) "
+        "VALUES ('rebind-trip','avail-driver','a',0,0,'b',0,0,'in_progress')"
+    )
+    assert _transition(cur, 0, "go_online", "trip-takeover", session="sess-B")["code"] == "OBLIGATION_ACTIVE"
+    assert (
+        _transition(cur, 0, "stop_requests", "foreign-stop", session="sess-B")["code"] == "CONTROLLER_SESSION_MISMATCH"
+    )
+    cur.execute("SELECT controller_session_id,online_epoch FROM drivers WHERE id='avail-driver'")
+    assert cur.fetchone() == ("sess-A", 0)

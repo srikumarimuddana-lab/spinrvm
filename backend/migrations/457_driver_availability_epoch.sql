@@ -67,6 +67,9 @@ DECLARE
     v_reason text;
     v_result jsonb;
     v_period_result jsonb;
+    v_system boolean;
+    v_current_session_id text;
+    v_rebind boolean;
 BEGIN
     IF p_request_id IS NULL OR length(btrim(p_request_id)) = 0
        OR p_authenticated_session_id IS NULL OR length(btrim(p_authenticated_session_id)) = 0
@@ -76,6 +79,17 @@ BEGIN
     IF p_action IS NULL OR p_action NOT IN ('go_online','go_offline','stop_requests','pause_policy','pause_unreachable',
                         'pause_idle','pause_misses','displace_controller') THEN
         RAISE EXCEPTION 'unsupported availability action: %', p_action USING ERRCODE = '22023';
+    END IF;
+    -- Trusted backend actors ('system:<source>') may only stop or pause, never
+    -- go online or take control, and need no user session or controller.
+    v_system := p_authenticated_session_id LIKE 'system:%';
+    IF v_system AND p_authenticated_session_id NOT IN (
+           'system:policy','system:contact_gap','system:readiness','system:missed_offers',
+           'system:finalize','system:stale_intent','system:logout') THEN
+        RAISE EXCEPTION 'unsupported system availability actor: %', p_authenticated_session_id USING ERRCODE = '22023';
+    END IF;
+    IF v_system AND p_action NOT IN ('stop_requests','pause_policy','pause_unreachable','pause_idle','pause_misses') THEN
+        RAISE EXCEPTION 'system availability actor cannot run action: %', p_action USING ERRCODE = '22023';
     END IF;
 
     -- Global order: driver -> assigned ride rows -> offer rows -> insurance period.
@@ -98,9 +112,12 @@ BEGIN
         RETURN jsonb_build_object('code','AVAILABILITY_V2_DISABLED');
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = v_driver.user_id
-                   AND u.current_session_id = p_authenticated_session_id) THEN
-        RETURN jsonb_build_object('code','UNAUTHORIZED_SESSION');
+    IF NOT v_system THEN
+        SELECT u.current_session_id INTO v_current_session_id
+          FROM public.users u WHERE u.id = v_driver.user_id;
+        IF v_current_session_id IS DISTINCT FROM p_authenticated_session_id THEN
+            RETURN jsonb_build_object('code','UNAUTHORIZED_SESSION');
+        END IF;
     END IF;
     -- Eligibility is checked by the API before this RPC too, but a trusted
     -- policy status update can race that read. Recheck under the driver lock
@@ -116,7 +133,15 @@ BEGIN
                                   'online_epoch',v_driver.online_epoch::text,
                                   'state_version',v_driver.state_version::text);
     END IF;
-    IF v_driver.controller_session_id IS NOT NULL
+    -- Go from the caller's current session takes over when there is no
+    -- controller, the driver is offline, or the controller was superseded by a
+    -- newer login. The epoch bump below fences the old controller's leases.
+    -- Taking over from a controller that is still current stays refused.
+    v_rebind := p_action = 'go_online' AND (
+        v_driver.controller_session_id IS NULL OR NOT v_driver.is_online
+        OR v_driver.controller_session_id IS DISTINCT FROM v_current_session_id);
+    IF NOT v_system AND NOT v_rebind
+       AND v_driver.controller_session_id IS NOT NULL
        AND v_driver.controller_session_id <> p_authenticated_session_id
        AND p_action NOT IN ('displace_controller','pause_policy') THEN
         RETURN jsonb_build_object('code','CONTROLLER_SESSION_MISMATCH',
@@ -170,7 +195,7 @@ BEGIN
         v_reason := 'controller_displaced';
     END IF;
 
-    IF p_action = 'go_online' AND v_driver.controller_session_id IS NULL THEN
+    IF v_rebind THEN
         v_driver.controller_session_id := p_authenticated_session_id;
     ELSIF p_action = 'displace_controller' THEN
         v_driver.controller_session_id := p_authenticated_session_id;
@@ -207,7 +232,9 @@ BEGIN
            last_status_changed_at = CASE WHEN is_online IS DISTINCT FROM v_next_online THEN now() ELSE last_status_changed_at END,
            went_online_at = CASE WHEN is_online IS DISTINCT FROM v_next_online AND v_next_online THEN now() ELSE went_online_at END,
            went_offline_at = CASE WHEN is_online IS DISTINCT FROM v_next_online AND NOT v_next_online THEN now() ELSE went_offline_at END,
-           last_contact_at = CASE WHEN p_action IN ('go_online','go_offline','stop_requests','displace_controller') THEN clock_timestamp() ELSE last_contact_at END,
+           -- Device contact only: a system actor never proves the phone is there.
+           last_contact_at = CASE WHEN p_action IN ('go_online','go_offline','stop_requests','displace_controller')
+                                       AND NOT v_system THEN clock_timestamp() ELSE last_contact_at END,
            ready_until = CASE WHEN p_action = 'go_online' THEN clock_timestamp() + interval '62 minutes'
                               WHEN NOT v_next_accepting THEN NULL ELSE ready_until END,
            availability_reason = v_reason

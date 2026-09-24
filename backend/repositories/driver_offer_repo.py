@@ -1,4 +1,4 @@
-"""Repository wrapper for the v3 dispatch claim RPC."""
+"""Repository wrappers for the v3 dispatch claim and offer receipt RPCs."""
 
 from __future__ import annotations
 
@@ -181,4 +181,63 @@ async def finalize_deferred_availability(driver_id: str, *, request_id: str) -> 
     )
     if value.get("finalized"):
         await _invalidate(driver_id, None)
+    return value
+
+
+RECEIPT_EVENTS = frozenset({"received", "presented"})
+RECEIPT_CHANNELS = frozenset({"ws", "push", "stored", "android_auto"})
+RECEIPT_APP_STATES = frozenset({"active", "background", "inactive", "unknown"})
+RECEIPT_MAX_REMAINING_MS = 3_600_000
+
+
+async def record_offer_receipt(
+    offer_id: str,
+    claim_id: str,
+    *,
+    user_id: str,
+    session_id: str,
+    event: str,
+    channel: str,
+    app_state: str,
+    remaining_ms: int | None,
+) -> dict[str, Any]:
+    """Call ``record_offer_receipt`` (migration 461); lock-free and idempotent.
+
+    Returns the RPC's JSON object: ``{"code": "OK", "recorded", "offer_status",
+    "expires_at", "server_time", "late"}`` or an error ``code``.
+    """
+    if not offer_id or not claim_id or not user_id or not session_id:
+        raise ValueError("offer_id, claim_id, user_id and session_id are required")
+    if event not in RECEIPT_EVENTS:
+        raise ValueError(f"unsupported receipt event: {event}")
+    if channel not in RECEIPT_CHANNELS:
+        raise ValueError(f"unsupported receipt channel: {channel}")
+    if app_state not in RECEIPT_APP_STATES:
+        raise ValueError(f"unsupported receipt app_state: {app_state}")
+    if remaining_ms is not None and (type(remaining_ms) is not int or abs(remaining_ms) > RECEIPT_MAX_REMAINING_MS):
+        raise ValueError("remaining_ms must be an int within +/-3,600,000")
+    if not supabase:
+        raise RuntimeError("Supabase client unavailable for offer receipt")
+
+    params = {
+        "p_offer_id": offer_id,
+        "p_claim_id": claim_id,
+        "p_user_id": user_id,
+        "p_session_id": session_id,
+        "p_event": event,
+        "p_channel": channel,
+        "p_app_state": app_state,
+        "p_remaining_ms": remaining_ms,
+    }
+
+    def _call():
+        response = supabase.rpc("record_offer_receipt", params).execute()
+        return getattr(response, "data", None)
+
+    # ON CONFLICT DO NOTHING makes a replay safe.
+    value = await run_sync(_call, retry_policy="idempotent_write")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if not isinstance(value, dict):
+        raise TypeError("record_offer_receipt returned non-object JSON")
     return value

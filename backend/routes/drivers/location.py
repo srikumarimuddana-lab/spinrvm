@@ -145,12 +145,14 @@ async def _require_presence_epoch(
 def _presence_conflict(result: dict) -> HTTPException | None:
     """Build the shared v2 REST conflict shape without exposing session IDs."""
     code = result.get("code")
-    if code == "ONLINE_EPOCH_STALE" or code == "CONTACT_GAP":
+    # F2-6: READINESS_EXPIRED is treated like CONTACT_GAP — both signal an
+    # epoch-stale condition with a specific reason the app can act on.
+    if code in {"ONLINE_EPOCH_STALE", "CONTACT_GAP", "READINESS_EXPIRED"}:
         return HTTPException(
             status_code=409,
             detail={
                 "code": "ONLINE_EPOCH_STALE",
-                "reason_code": code,
+                "reason_code": result.get("reason_code") or code,
                 "online_epoch": result.get("online_epoch"),
             },
         )

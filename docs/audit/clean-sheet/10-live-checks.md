@@ -34,6 +34,10 @@
 | Route deviation alerts | On. | Safety: route deviation alerting is live. |
 | Notification throttling | Off. | SKB lane: quiet hours and daily caps ship dark, as reported. |
 | Is an SOS paging target set? | **No.** `settings.sos_paging_webhook_url` is empty (only emptiness was checked, not the value). | **TSF-001 is now VERIFIED-LIVE:** `backend/utils/safety_paging.py` pages only through this webhook, so a real SOS pages no one in production today. This is the first item in `research/session-3-trust-safety-fraud.md` §Now. |
+| Are `rides` money columns float in production? | **Yes.** Live `information_schema` shows `base_fare`, `distance_fare`, `time_fare`, `surge_multiplier`, `total_fare`, `tip_amount`, `driver_earnings`, `cancellation_fee_admin` and `cancellation_fee_driver` are `double precision`; only `grand_total` is `numeric`. | MONEY-006 is VERIFIED-LIVE. This corrects `04-blueprint.md` H2 and `08-hostile-review.md` correction 19: `total_fare`, `tip_amount` and `driver_earnings` are float live, so they go back from INFERRED to VERIFIED. |
+| Fare lock on? | Yes (`fare_lock_enabled = true`). | Money lane: quote locking is live. |
+| Double-entry ledger writing on? | **Off (strong inference).** `settings` has no `ledger_double_entry_enabled` column, and `backend/services/ledger_service.py:426-431` reads it with a default of False. | Blueprint H2: the double-entry legs are dark in production. |
+| Forced app upgrade floor set? | **No.** `min_rider_app_version` and `min_driver_app_version` are empty strings. | Research Session 4 MR-10: `ForcedUpgradeMiddleware` is built but has no floor configured, so no old app version is blocked today. |
 
 ## §2 New finding: the migration tracking table does not match the schema
 

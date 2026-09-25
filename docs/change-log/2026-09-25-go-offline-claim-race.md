@@ -45,6 +45,11 @@ The row-level compare-and-set reuses the claim's own guard column and needs no s
   - (c) Rare false positive: some other writer changed `is_available` in the milliseconds between the pre-read and the write, for example a release. The driver taps again and it succeeds.
 - Driver app: the toggle already maps 409 to "Cannot go offline — Decline the offer or finish the trip first" using the server's reason, and #5775's forced-offline reports it to Sentry and retries on the next resume.
 - Stuck-online risk: a driver with `is_available=false` and a fresh unreleased claim stamp but no offer is blocked for up to 30 s. After that the stamp counts as an orphan.
+- The 30 s window is a heuristic, not a bound on dispatch latency (insurance-period audit).
+  - If a batch dispatch attempt takes more than 30 s from this driver's claim to its `ride_offers` insert and Period 2 write, a go-offline landing in that gap still succeeds.
+  - The late Period 2 row is then opened for an offline driver.
+  - It self-heals when the offer is declined or expires: `release_driver_and_close_period` re-derives the period from the current `is_online`, within the ~15 s offer window.
+  - Matching the claim reaper's 90 s threshold (`RECLAIM_THRESHOLD_SECONDS`) would close that gap. The cost is that a genuinely orphaned claim would keep the driver stuck online for up to about 2½ minutes, counting the reaper's 60 s tick.
 - Insurance periods: both 409 paths return before `record_period_transition`, so there is no Period 0 row for an obligated driver. The normal go-offline path records Period 0 as before.
 - Readers of the same columns: the claim reaper (`utils/driver_claim_reaper.py`), dispatch candidate queries, and `set_driver_available`. None changed.
 

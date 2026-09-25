@@ -103,6 +103,18 @@ variable.
 - **Background loops.** The 10 s dispatch retry chain and the stuck-ride
   sweeper are unchanged. The expansion is only a per-attempt read.
 
+- **Review (spinr-dispatch-reviewer, 2026-09-25): safe to merge, no blockers.**
+  Two warnings, handled as follows:
+  - Scheduled rides can search up to ~35 min (dispatch lead + 5 min grace),
+    longer than the 300 s Redis offer-skip key, so a wider box made it more
+    likely that a driver already offered the ride re-enters the pool. Covered
+    by the durable already-offered filter in the same PR
+    (`docs/change-log/2026-09-25-dispatch-already-offered-db-filter.md`).
+  - Config trap: `dispatch_expanded_radius_after_seconds` must be below
+    `ride_search_timeout_seconds`, or the wider pass never fires for on-demand
+    rides (nothing enforces this across the two settings). Launch values:
+    search 180 s, expand after 45 s.
+
 ## 5. User-experience effect
 
 - **Flag off (default): nobody sees a change.**

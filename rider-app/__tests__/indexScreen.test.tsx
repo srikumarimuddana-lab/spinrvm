@@ -72,7 +72,7 @@ async function renderScreen() {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useAuthStore.setState({ isInitialized: false, token: null, user: null });
+  useAuthStore.setState({ isInitialized: false, token: null, user: null, sessionRecoverable: false, initialize: jest.fn() });
   mockHydrateActiveRide.mockResolvedValue(undefined);
   mockFetchActiveRide.mockResolvedValue({ active: false });
   mockApiGet.mockResolvedValue({ data: { needs_notice: false } });
@@ -95,6 +95,63 @@ describe('Index (rider-app cold start routing)', () => {
     useAuthStore.setState({ isInitialized: true, token: null, user: null });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not route to /login while a failed refresh can still be retried', async () => {
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    useAuthStore.setState({
+      isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize,
+    } as any);
+    await renderScreen();
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(initialize).toHaveBeenCalled();
+  });
+
+  it('reports a rejected recovery attempt instead of leaking the rejection', async () => {
+    const initialize = jest.fn().mockRejectedValue(new Error('cache cleanup failed'));
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      useAuthStore.setState({
+        isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize,
+      } as any);
+      await renderScreen();
+      expect(initialize).toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledWith('[Index] Session recovery attempt failed:', expect.any(Error));
+      expect(mockReplace).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('offers "Sign in instead" after repeated failed retries', async () => {
+    jest.useFakeTimers();
+    try {
+      const initialize = jest.fn().mockResolvedValue(undefined);
+      const logout = jest.fn().mockResolvedValue(undefined);
+      useAuthStore.setState({
+        isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize, logout,
+      } as any);
+      const r = await renderScreen();
+      const escape = () => r.root.findAll((n) => n.props.accessibilityLabel === 'Sign in instead');
+      expect(escape()).toHaveLength(0);
+
+      for (let i = 0; i < 2; i++) {
+        await act(async () => {
+          jest.advanceTimersByTime(5000);
+          await flush();
+        });
+      }
+      expect(initialize).toHaveBeenCalledTimes(3);
+      expect(escape().length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await escape()[0].props.onPress();
+      });
+      expect(logout).toHaveBeenCalled();
+      expect(mockReplace).toHaveBeenCalledWith('/login');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('routes to /profile-setup when the profile is incomplete', async () => {

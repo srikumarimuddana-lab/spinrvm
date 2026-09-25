@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
+import { isAppCheckRejection, rejectionBody } from '../auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
 import { captureMessage } from '../services/errorReporting';
@@ -452,6 +453,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? (isApiError(e) ? e.message : String(e)));
             return false;
           }
+          if (isAppCheckRejection(await rejectionBody(e))) {
+            // App Check 401 is raised before the refresh token is checked.
+            // The 30-day login is still valid; wiping it is what sent people
+            // back to the phone screen after the app sat in the background.
+            console.log('[Auth] App Check rejected refresh — keeping session');
+            return false;
+          }
           // 401: the token we sent was rejected. Before tearing down the
           // session, check whether another context (the background task) has
           // rotated the shared refresh token forward in secure storage. If so,
@@ -605,6 +613,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               token: newToken,
               isInitialized: true,
               isLoading: false,
+              // Credentials rotated; leaving recovery set would keep the
+              // reconnect screen up and rotate them again every retry.
+              sessionRecoverable: false,
             });
             return;
           }

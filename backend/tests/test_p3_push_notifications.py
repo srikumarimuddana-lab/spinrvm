@@ -1325,10 +1325,11 @@ class TestDebugRideOffer:
     Code under test: backend/routes/notifications.py::admin_debug_ride_offer.
     """
 
-    async def _run(self, user_row, send_result=True):
+    async def _run(self, user_row, send_result=True, settings=None, ring_mode=None):
         from backend.routes.notifications import DebugRideOfferRequest, admin_debug_ride_offer
 
         captured: dict = {}
+        get_settings = AsyncMock(return_value=settings or {})
 
         async def _send(user_id, title, body, data=None, priority="normal", target_app=None):
             captured.update(
@@ -1344,12 +1345,14 @@ class TestDebugRideOffer:
         with (
             patch("backend.routes.notifications.db.find_one", AsyncMock(return_value=user_row)),
             patch("backend.routes.notifications.send_push_notification", AsyncMock(side_effect=_send)),
+            patch("backend.settings_loader.get_app_settings", get_settings),
         ):
             result = await admin_debug_ride_offer(
-                body=DebugRideOfferRequest(user_id=USER_ID),
+                body=DebugRideOfferRequest(user_id=USER_ID, ring_mode=ring_mode),
                 admin={"id": "admin-1"},
             )
 
+        self.settings_reads = get_settings.await_count
         return result, captured
 
     async def test_uses_driver_token_column_and_dispatch_path(self):
@@ -1432,6 +1435,27 @@ class TestDebugRideOffer:
         assert data["type"] == "new_ride_assignment"
         assert "pickup_address" in data
         assert "dropoff_address" in data
+
+    async def test_ring_mode_follows_alarm_flag(self):
+        """Migration 466: the debug offer carries the same ring_mode as a live
+        offer — notification by default, alarm when the flag is on."""
+        user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token-1234567890"}
+
+        _, off = await self._run(user_row, settings={})
+        _, on = await self._run(user_row, settings={"ride_offer_alarm_channel_enabled": True})
+
+        assert off["data"]["ring_mode"] == "notification"
+        assert on["data"]["ring_mode"] == "alarm"
+
+    async def test_ring_mode_override_skips_the_flag(self):
+        """An explicit ring_mode tests one channel on one device without
+        flipping the global flag."""
+        user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token-1234567890"}
+
+        _, captured = await self._run(user_row, settings={}, ring_mode="alarm")
+
+        assert captured["data"]["ring_mode"] == "alarm"
+        assert self.settings_reads == 0
 
     async def test_user_not_found_raises_404(self):
         from fastapi import HTTPException

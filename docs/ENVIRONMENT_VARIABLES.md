@@ -38,9 +38,10 @@ Variables are loaded by `pydantic-settings` from a `.env` file in the `backend/`
 | `DISPATCH_POOL_MIN_SIZE` | Optional | `1` | **C50 Phase 1 — future Phase-2 wiring point, unused until T12/T13 land.** Minimum connections for the direct dispatch pool (`psycopg_pool.AsyncConnectionPool(min_size=...)`). Plain env config, not a secret. No effect while `DISPATCH_POOL_DSN` is unset or `app_settings.dispatch_direct_pool_enabled` is off. | Hard-code per deployment |
 | `DISPATCH_POOL_MAX_SIZE` | Optional | `8` | **C50 Phase 1 — future Phase-2 wiring point, unused until T12/T13 land.** Maximum connections for the direct dispatch pool (`max_size=...`). Plain env config, not a secret. Must fit within Supavisor's per-compute-tier client-connection budget alongside PostgREST's own connections (see plan doc G5, unverified). No effect while `DISPATCH_POOL_DSN` is unset or the flag is off. | Hard-code per deployment |
 
-### Backend — Secrets stored in `app_settings` (Supabase table, not env vars)
+### Backend — Secrets stored in `settings` row `app_settings` (Supabase, not env vars)
 
-The following values are stored in the `app_settings` table in Supabase and managed via the
+The following values are stored in the Supabase `settings` table, in its single row `id = 'app_settings'`
+(there is no table named `app_settings`), and managed via the
 admin dashboard (Settings page). They are **not** set as environment variables.
 
 | Setting key | Description | How to obtain |

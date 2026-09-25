@@ -93,7 +93,7 @@ See CLAUDE.md for the auto-mode tier table. Additional payment rules:
      `routes/rides/payments.py`; zero rows means another request owns the settlement.
 - **Async:** the Stripe SDK is synchronous — every call is wrapped in `asyncio.to_thread()`.
   The settlement charge is awaited inline in the handler, not queued.
-- **Keys:** live keys are in the `app_settings` Supabase table, not `.env`. Fetch via `get_setting('stripe_secret_key')` — cached for 5 min.
+- **Keys:** live keys are in the Supabase `settings` table (single row `id = 'app_settings'`; there is no `app_settings` table), not `.env`. Read via `(await get_app_settings()).get('stripe_secret_key')` from `settings_loader.py` — cached in-process for 60 s.
 - **3DS flow:** differs by session. *On-session* (booking, add-card, payment sheet) returns
   `200` + `client_secret` so the app can run the challenge. *Off-session* (end-of-ride
   settlement) has no challenge path — `requires_action` returns **402

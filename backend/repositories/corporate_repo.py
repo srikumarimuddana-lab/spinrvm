@@ -213,9 +213,25 @@ async def list_corporate_accounts_filtered(
     return await run_sync(_fn)
 
 
-async def update_corporate_account_status(company_id: str, status: str) -> Optional[Dict[str, Any]]:
+async def update_corporate_account_status(
+    company_id: str, status: str, *, expected_status: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Set a company's status.
+
+    ``expected_status``, when given, makes this a compare-and-set: the UPDATE
+    also filters on the status the caller read, so a concurrent request that
+    already moved the row (e.g. a second "Close account" click) matches zero
+    rows and gets ``None`` back instead of re-applying the transition
+    (clean-sheet audit CORP-001). ``None`` is therefore ambiguous between
+    "row gone" and "status changed underneath you" -- callers that pass
+    ``expected_status`` must re-read to tell the two apart.
+    """
+
     def _fn():
-        res = supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id).execute()
+        query = supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id)
+        if expected_status is not None:
+            query = query.eq("status", expected_status)
+        res = query.execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
@@ -598,8 +614,33 @@ async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int 
     return _rows_from_res(res)
 
 
+# Clean-sheet audit CORP-003: the only corporate_wallets columns this generic
+# patch helper may write. `balance` in particular must only ever move through
+# the corporate_wallet_apply_delta RPC (row lock + ledger row + idempotency),
+# never through a plain UPDATE here.
+_WALLET_CONFIG_PATCHABLE_COLUMNS = frozenset(
+    {
+        "auto_topup_enabled",
+        "auto_topup_threshold",
+        "auto_topup_amount",
+        "auto_topup_daily_cap",
+    }
+)
+
+
 async def update_corporate_wallet_config(*, wallet_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Patch one or more configuration columns on a corporate_wallets row."""
+    """Patch one or more configuration columns on a corporate_wallets row.
+
+    Raises ``ValueError`` if ``patch`` names any column outside
+    ``_WALLET_CONFIG_PATCHABLE_COLUMNS`` -- safe by construction rather than
+    by each caller's own schema discipline.
+    """
+    disallowed = set(patch) - _WALLET_CONFIG_PATCHABLE_COLUMNS
+    if disallowed:
+        raise ValueError(
+            f"update_corporate_wallet_config: column(s) {sorted(disallowed)} are not wallet config; "
+            "balance changes must go through corporate_wallet_apply_delta"
+        )
 
     def _fn():
         res = supabase.table("corporate_wallets").update(patch).eq("id", wallet_id).execute()

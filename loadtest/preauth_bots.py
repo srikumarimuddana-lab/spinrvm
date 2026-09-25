@@ -125,8 +125,9 @@ def main() -> int:
         try:
             record = _login_one(args.base_url, session, phone)
         except requests.HTTPError as exc:
+            last4 = phone[-4:]
             print(
-                f"  [{idx + 1}/{total}] FAILED login for {kind} {phone}: {exc}",
+                f"  [{idx + 1}/{total}] FAILED login for {kind} ending in ***{last4}: {exc}",
                 file=sys.stderr,
             )
             raise

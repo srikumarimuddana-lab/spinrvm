@@ -39,7 +39,8 @@ async def check_user(phone):
         
         print(f"User Found:")
         print(f"  ID: {user.get('id')}")
-        print(f"  Phone: {user.get('phone')}")
+        found_last4 = str(user.get("phone") or "")[-4:]
+        print(f"  Number ending in: ***{found_last4}")
         print(f"  Role: {user.get('role')}")
         print(f"  Is Admin? {'YES' if user.get('role') == 'admin' else 'NO'}")
     except Exception as e:

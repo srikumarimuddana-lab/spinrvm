@@ -19,7 +19,8 @@ const DIRS = [
   path.join(APP_ROOT, 'lib'),
   path.resolve(APP_ROOT, '..', 'shared', 'components'),
 ];
-const LOCK = /allowFontScaling\s*=\s*\{\s*false\s*\}/;
+// allowFontScaling={false}, or a multiplier of 1, which locks text the same way.
+const LOCK = /allowFontScaling\s*=\s*\{\s*false\s*\}|maxFontSizeMultiplier\s*=\s*\{\s*1(\.0*)?\s*\}/;
 const JUSTIFICATION = 'font-scale-lock:';
 
 function listTsx(dir: string): string[] {

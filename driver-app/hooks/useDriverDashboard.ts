@@ -25,6 +25,7 @@ import { API_URL } from '@shared/config';
 import SpinrConfig from '@shared/config/spinr.config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import {
+  requireAlwaysLocationPermission,
   startBackgroundLocation,
   stopBackgroundLocation,
   startGeofenceRecovery,
@@ -661,7 +662,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const permission = await Location.getBackgroundPermissionsAsync();
         if (!canStart()) return;
         if (permission.status !== 'granted') {
-          setWsError('Allow background location in Settings to keep your ride location updated.');
+          // Android drivers cannot stay online on "while using the app".
+          // A closed app then has no heartbeat and never receives offers.
+          // Don't pull a driver offline mid-trip.
+          if (Platform.OS === 'android' && useDriverStore.getState().rideState === 'idle') {
+            setIsOnline(false);
+            void updateDriverStatus(false).catch(() => undefined);
+            showAlert(
+              'Allow all the time',
+              'Location must be set to Allow all the time to stay online. While using the app is not enough — ride offers stop when Spinr is closed.',
+              [
+                { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => undefined); } },
+                { text: 'Not now', style: 'cancel' },
+              ],
+            );
+          } else {
+            setWsError('Allow background location in Settings to keep your ride location updated.');
+          }
           return;
         }
         const cadence = TRACKED_TRIP_PHASES.includes(useDriverStore.getState().rideState) ? TRIP_CADENCE : IDLE_CADENCE;
@@ -1842,6 +1859,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
 
       const next = !isOnline;
+      if (next && Platform.OS === 'android') {
+        const always = await requireAlwaysLocationPermission();
+        if (!always) {
+          showAlert(
+            'Allow all the time',
+            'To go online, set location to Allow all the time. While using the app is not enough — you will not receive ride offers when Spinr is closed.',
+            [
+              { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => undefined); } },
+              { text: 'Cancel', style: 'cancel' },
+            ],
+          );
+          return;
+        }
+      }
       setIsOnline(next);
       try {
         // Pass the last known GPS so the backend persists it in the same
@@ -1937,7 +1968,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setIsOnline(false);
           try { await updateDriverStatus(false); } catch {}
           stopSensorMonitoring();
-          showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to go online and receive ride offers.");
+          showAlert(
+            'Allow all the time',
+            'Location must be set to Allow all the time to go online and receive ride offers when the app is closed.',
+            [
+              { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => undefined); } },
+              { text: 'Cancel', style: 'cancel' },
+            ],
+          );
         } else {
           if (Platform.OS === 'android') {
             const prompted = await AsyncStorage.getItem('@spinr:battery_prompted');

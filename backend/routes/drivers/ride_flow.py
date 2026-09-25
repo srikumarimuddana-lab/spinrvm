@@ -650,6 +650,23 @@ async def _after_accept_notify(ride_id: str, ride: dict | None, driver: dict) ->
         spawn(send_live_activity_update(ride, EVENT_START))
 
 
+async def _offer_expired_as_miss_enabled() -> bool:
+    """settings.offer_expired_decline_as_miss_enabled (migration 466), default off.
+
+    A settings read failure is logged and treated as off, which is today's
+    behaviour (the auto-decline is handled as a decline).
+    """
+    try:
+        from ...settings_loader import get_app_settings as _get_settings
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from settings_loader import get_app_settings as _get_settings  # type: ignore
+    try:
+        return bool((await _get_settings()).get("offer_expired_decline_as_miss_enabled"))
+    except Exception:
+        logger.error("decline_ride: settings read failed — offer_expired handled as a decline", exc_info=True)
+        return False
+
+
 @router.post("/rides/{ride_id}/decline")
 async def decline_ride(
     ride_id: str,
@@ -662,8 +679,10 @@ async def decline_ride(
     # Optional decline reason (e.g. "service_animal", flagged from the offer
     # card's long-press option). Body-only — never a query param — so a
     # driver's flag can't ride along in a proxy/access log line. Absent for
-    # the default fast decline (single tap, auto-decline-on-timeout), which
-    # keeps posting no body at all, so this stays fully backward compatible.
+    # the default fast decline (single tap), which keeps posting no body at
+    # all, so this stays fully backward compatible. Driver-app builds from
+    # 2026-09-25 send "offer_expired" on the countdown auto-decline; older
+    # builds send no body for it.
     reason = None
     _raw_body: dict = {}
     if request is not None:
@@ -745,6 +764,29 @@ async def decline_ride(
     # degradation, insurance-period churn, and audit-log pollution.
     is_assigned = ride.get("driver_id") == driver["id"]
 
+    # Countdown auto-decline: the driver app posts reason "offer_expired" when
+    # the offer card's timer reaches 0 with no tap. That is a missed offer, not
+    # a decline. The decline path below resets the miss streak, which kept a
+    # foregrounded, unattended app from ever reaching auto_offline_miss_threshold.
+    # So leave this driver's offer pending: the server-side expiry (batch
+    # timeout handler, offer-expiry reaper, v2 resolve_driver_offer 'expire')
+    # processes it at expires_at as a miss, sets the skip key and re-dispatches.
+    # The pending-row check is the same ownership guard as WS-18 below. With no
+    # pending row (already expired or resolved) this falls through unchanged.
+    if reason == "offer_expired" and not is_assigned and await _offer_expired_as_miss_enabled():
+        pending_offer = await db_supabase.get_rows(
+            "ride_offers",
+            {"ride_id": ride_id, "driver_id": driver["id"], "status": "pending"},
+            columns="id",
+            limit=1,
+        )
+        if pending_offer:
+            logger.info(
+                f"[DECLINE] countdown auto-decline for ride {ride_id} driver {driver['id']} — "
+                "left pending for server expiry (counted as a missed offer)"
+            )
+            return {"success": True, "outcome": "left_to_expire", "already_resolved": False}
+
     # v2 offers are declined atomically (claim release, readiness, one
     # insurance transition). Legacy offers return None and fall through.
     if not is_assigned and is_v2_driver(driver):
@@ -805,8 +847,9 @@ async def decline_ride(
 
     # Record the decline in audit_logs so daily stats can count it. `reason`
     # is None for the ordinary fast decline (no UI to enter free text today —
-    # the only non-null value currently reachable is the fixed code
-    # "service_animal" from the offer card's long-press flag), so this never
+    # the non-null values the apps send are the fixed codes "service_animal"
+    # from the offer card's long-press flag and "offer_expired" from the
+    # countdown auto-decline when the flag above is off), so this never
     # carries rider/driver PII.
     try:
         import uuid as _uuid

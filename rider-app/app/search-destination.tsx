@@ -23,7 +23,17 @@ import { showToast } from '../store/toastStore';
 import api from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction } from '@shared/api/places';
-import { savedPlaceConfig } from '../utils/savedPlaceIcon';
+import { savedPlaceConfig, savedPlaceType, isHomePlace, isWorkPlace } from '../utils/savedPlaceIcon';
+
+// What a saved-place tap hands to handleSelectLocation. place_id rides along
+// (when the row has one) so the tap re-resolves fresh coordinates instead of
+// replaying the stored pair.
+const savedPlaceLocation = (a: { address: string; lat: number; lng: number; place_id?: string | null }) => ({
+  address: a.address,
+  lat: a.lat,
+  lng: a.lng,
+  ...(a.place_id ? { place_id: a.place_id } : {}),
+});
 
 export default function SearchDestinationScreen() {
   const router = useRouter();
@@ -692,13 +702,13 @@ export default function SearchDestinationScreen() {
                   {/* Home & Work Quick Buttons */}
                   <View style={styles.quickChips}>
                     {(() => {
-                      const homeAddr = savedAddresses.find(a => a.name?.toLowerCase() === 'home');
+                      const homeAddr = savedAddresses.find(isHomePlace);
                       return (
                         <TouchableOpacity
                           style={styles.quickChip}
                           onPress={() => {
                             if (homeAddr) {
-                              handleSelectLocation({ address: homeAddr.address, lat: homeAddr.lat, lng: homeAddr.lng });
+                              handleSelectLocation(savedPlaceLocation(homeAddr));
                             } else {
                               showToast('No Home Address', 'Set your home address in Account > Saved Places', 'info');
                             }
@@ -714,13 +724,13 @@ export default function SearchDestinationScreen() {
                       );
                     })()}
                     {(() => {
-                      const workAddr = savedAddresses.find(a => a.name?.toLowerCase() === 'work');
+                      const workAddr = savedAddresses.find(isWorkPlace);
                       return (
                         <TouchableOpacity
                           style={styles.quickChip}
                           onPress={() => {
                             if (workAddr) {
-                              handleSelectLocation({ address: workAddr.address, lat: workAddr.lat, lng: workAddr.lng });
+                              handleSelectLocation(savedPlaceLocation(workAddr));
                             } else {
                               showToast('No Work Address', 'Set your work address in Account > Saved Places', 'info');
                             }
@@ -738,11 +748,11 @@ export default function SearchDestinationScreen() {
                   </View>
 
                   {/* Favourites */}
-                  {savedAddresses.filter(a => a.name?.toLowerCase() !== 'home' && a.name?.toLowerCase() !== 'work').length > 0 && (
+                  {savedAddresses.filter(a => !savedPlaceType(a)).length > 0 && (
                     <View>
                       <Text style={styles.sectionTitle}>Favourites</Text>
                       {savedAddresses
-                        .filter(a => a.name?.toLowerCase() !== 'home' && a.name?.toLowerCase() !== 'work')
+                        .filter(a => !savedPlaceType(a))
                         .map((addr, index) => {
                           // Use the address's own saved type (Gym/School/Other/…)
                           // instead of a hardcoded star for every favourite —
@@ -753,7 +763,7 @@ export default function SearchDestinationScreen() {
                           key={`fav-${index}`}
                           style={styles.predictionRow}
                           onPress={() => {
-                            handleSelectLocation({ address: addr.address, lat: addr.lat, lng: addr.lng });
+                            handleSelectLocation(savedPlaceLocation(addr));
                           }}
                           accessibilityRole="button"
                           accessibilityLabel={`${addr.name || 'Saved'} — ${addr.address}`}
@@ -773,29 +783,29 @@ export default function SearchDestinationScreen() {
                   )}
 
                   {/* Home & Work (if set, show as list items too) */}
-                  {savedAddresses.filter(a => a.name?.toLowerCase() === 'home' || a.name?.toLowerCase() === 'work').length > 0 && (
+                  {savedAddresses.filter(a => savedPlaceType(a)).length > 0 && (
                     <View>
                       <Text style={styles.sectionTitle}>Saved Places</Text>
                       {savedAddresses
-                        .filter(a => a.name?.toLowerCase() === 'home' || a.name?.toLowerCase() === 'work')
+                        .filter(a => savedPlaceType(a))
                         .map((addr, index) => (
                         <TouchableOpacity
                           key={`saved-${index}`}
                           style={styles.predictionRow}
                           onPress={() => {
-                            handleSelectLocation({ address: addr.address, lat: addr.lat, lng: addr.lng });
+                            handleSelectLocation(savedPlaceLocation(addr));
                           }}
                           accessibilityRole="button"
                           accessibilityLabel={`${addr.name} — ${addr.address}`}
                           accessibilityHint="Double-tap to select this saved place"
                         >
                           <View style={[styles.predictionIcon, {
-                            backgroundColor: addr.name?.toLowerCase() === 'home' ? '#FEE2E2' : '#DBEAFE',
+                            backgroundColor: isHomePlace(addr) ? '#FEE2E2' : '#DBEAFE',
                           }]}>
                             <Ionicons
-                              name={addr.name?.toLowerCase() === 'home' ? 'home' : 'briefcase'}
+                              name={isHomePlace(addr) ? 'home' : 'briefcase'}
                               size={20}
-                              color={addr.name?.toLowerCase() === 'home' ? colors.primary : colors.info}
+                              color={isHomePlace(addr) ? colors.primary : colors.info}
                             />
                           </View>
                           <View style={styles.predictionContent}>

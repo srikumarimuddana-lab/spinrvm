@@ -2115,8 +2115,9 @@ def _is_native_refresh_request(request: Request) -> bool:
 
     Cookie absence alone is not enough: the refresh cookies are SameSite=Strict,
     so a signed-in victim's browser omits them on a cross-site forged POST.
-    Browsers always send ``Origin`` on a POST (``null`` under no-referrer) and
-    ``Sec-Fetch-Site`` on modern engines; native fetch sends neither. A
+    Browsers always send ``Origin`` on a POST, same-origin included (``null``
+    under no-referrer), so this also rules out same-origin XSS; they send
+    ``Sec-Fetch-Site`` on modern engines. Native fetch sends neither. A
     cross-site form cannot send ``application/json``, and a cross-site script
     cannot without passing a CORS preflight.
     """

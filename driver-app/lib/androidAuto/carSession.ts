@@ -45,6 +45,7 @@ import { pushDebug, setDebugFact } from './carDebug';
 import { startCarLocationService } from './carLocationTask';
 import { consumeFixCount, consumeTaskFixCount } from './carFixChannel';
 import { recordNonFatal } from '../../utils/crashlytics';
+import { setCarOfferToneEnabled } from './carOfferRing';
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[car-session]', ...args);
@@ -68,6 +69,13 @@ const logError = (...args: unknown[]) => {
  * part of this change.
  */
 const REFRESH_INTERVAL_MS = 60_000;
+
+/**
+ * Re-read /drivers/config every Nth refresh tick (~5 min), so turning
+ * android_auto_offer_tone_enabled off reaches a car that stays plugged in
+ * for hours without waiting for the next connect.
+ */
+const CONFIG_REFRESH_TICKS = 5;
 
 /** How long to wait for an initialize() already in flight before giving up. */
 const AUTH_WAIT_MS = 8_000;
@@ -152,6 +160,7 @@ const RATE_GRACE_TICKS = 2;
 
 let rateTicks = 0;
 let rateReported = false;
+let configTicks = 0;
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let appStateSub: { remove: () => void } | null = null;
@@ -318,7 +327,13 @@ async function loadDriverConfig(): Promise<void> {
   if (!(await canCallApi())) return;
   try {
     const res = await api.get('/drivers/config');
-    if (res?.data) useDriverStore.getState().applyDriverConfig(res.data);
+    if (res?.data) {
+      useDriverStore.getState().applyDriverConfig(res.data);
+      // Migration 487 kill switch; absent (older backend) means off.
+      setCarOfferToneEnabled(
+        (res.data as { android_auto_offer_tone_enabled?: unknown }).android_auto_offer_tone_enabled === true,
+      );
+    }
   } catch (e) {
     // Falls back to FALLBACK_COUNTDOWN in the store — degraded, not broken.
     logError('driver config fetch failed:', e);
@@ -369,6 +384,8 @@ export async function startCarSession(): Promise<void> {
       .then((result) => setDebugFact('carLocation', result))
       .catch(() => {});
     reportFixRate();
+    configTicks += 1;
+    if (configTicks % CONFIG_REFRESH_TICKS === 0) loadDriverConfig().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 
   // Subscribed before the awaits below: an offer can land during the bootstrap,
@@ -430,6 +447,7 @@ export function stopCarSession(): void {
   started = false;
   rateTicks = 0;
   rateReported = false;
+  configTicks = 0;
   consumeFixCount();
   if (refreshTimer !== null) {
     clearInterval(refreshTimer);

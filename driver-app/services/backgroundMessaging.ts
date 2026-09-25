@@ -333,7 +333,19 @@ export function registerBackgroundMessageHandlers(): void {
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           const { useAlertPrefsStore } = require('../store/alertPrefsStore');
           await useAlertPrefsStore.getState().loadAlertPrefs();
-          const muted = !useAlertPrefsStore.getState().soundEffects;
+          // While Android Auto rings the offer through the car speakers
+          // (lib/androidAuto/carOfferRing.ts, same JS context as register.ts)
+          // the card is muted too, so only one tone sounds. Lazy for the same
+          // reason as the require above; a failed check means "not the car",
+          // i.e. the card rings exactly as before.
+          let carOwner = false;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            carOwner = require('../lib/androidAuto/carOfferRing').isCarRingOwner() === true;
+          } catch (e) {
+            console.warn('[Notifee] car ring-owner check failed, ringing the card:', e);
+          }
+          const muted = !useAlertPrefsStore.getState().soundEffects || carOwner;
           await displayRideOfferNotification(offer, muted ? { muted } : undefined);
         }
       } catch (e) {

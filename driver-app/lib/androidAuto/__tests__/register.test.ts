@@ -75,6 +75,15 @@ jest.mock('../carSession', () => ({
   stopCarSession: (...a: unknown[]) => mockStopCarSession(...a),
 }));
 
+// Its own suite covers the ring-owner logic; here we only care that register
+// feeds it the connection and every store change.
+const mockSetCarConnected = jest.fn((_c: boolean) => undefined);
+const mockSyncCarOfferRing = jest.fn((_s: unknown) => undefined);
+jest.mock('../carOfferRing', () => ({
+  setCarConnected: (c: boolean) => mockSetCarConnected(c),
+  syncCarOfferRing: (s: unknown) => mockSyncCarOfferRing(s),
+}));
+
 jest.mock('../carMapCamera', () => ({
   useCarMapCamera: {
     getState: () => ({
@@ -162,6 +171,8 @@ beforeEach(() => {
   mockStopCarLocation.mockClear();
   mockStartCarSession.mockClear();
   mockStopCarSession.mockClear();
+  mockSetCarConnected.mockClear();
+  mockSyncCarOfferRing.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
   useCarEarningsPrivacy.getState().reset();
@@ -359,6 +370,77 @@ it('dismisses the offer alert once the offer state is left', () => {
   mockState.activeRide = navRide();
   apply();
   expect(t.dismissAlert).toHaveBeenCalled();
+});
+
+describe('offer tone through the car (carOfferRing)', () => {
+  it('marks the car connected, then hands it a live offer on connect', () => {
+    const offer = { ride_id: 'r1', pickup_address: 'x', fare: '9.00' };
+    mockState.rideState = 'ride_offered';
+    mockState.incomingRide = offer;
+    registerAutoPlay();
+    mockListeners.didConnect();
+
+    expect(mockSetCarConnected).toHaveBeenCalledWith(true);
+    expect(mockSyncCarOfferRing).toHaveBeenCalledWith({
+      rideState: 'ride_offered',
+      incomingRide: offer,
+      countdownSeconds: 15,
+    });
+    // Connected first, so the car can own the ring for the offer it is shown.
+    expect(mockSetCarConnected.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSyncCarOfferRing.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('syncs every store change, so an accept stops the tone', () => {
+    mockState.rideState = 'ride_offered';
+    mockState.incomingRide = { ride_id: 'r1', pickup_address: 'x', fare: '9.00' };
+    registerAutoPlay();
+    mockListeners.didConnect();
+    const apply = mockSubscribe.mock.calls[0][0] as () => void;
+
+    mockState.rideState = 'navigating_to_pickup';
+    mockState.incomingRide = null;
+    mockState.activeRide = navRide();
+    apply();
+
+    expect(mockSyncCarOfferRing).toHaveBeenLastCalledWith({
+      rideState: 'navigating_to_pickup',
+      incomingRide: null,
+      countdownSeconds: 15,
+    });
+  });
+
+  it('marks the car disconnected before the session is torn down', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    mockListeners.didDisconnect();
+
+    expect(mockSetCarConnected).toHaveBeenLastCalledWith(false);
+    expect(mockSetCarConnected.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mockStopCarSession.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('never marks a head unit that is not actually connected', () => {
+    mockConnected = false;
+    registerAutoPlay();
+    mockListeners.didConnect?.();
+    expect(mockSetCarConnected).not.toHaveBeenCalled();
+  });
+
+  it('a throwing sync cannot take the car chrome down', () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockSyncCarOfferRing.mockImplementationOnce(() => {
+      throw new Error('ring owner blew up');
+    });
+    registerAutoPlay();
+    expect(() => mockListeners.didConnect()).not.toThrow();
+    expect(lastTpl().setHeaderActions).toHaveBeenCalled();
+    // apply() threw nothing out, so onConnect still subscribed to the store.
+    expect(mockSubscribe).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
 });
 
 it('does not rebuild chrome when the state + ride are unchanged', () => {

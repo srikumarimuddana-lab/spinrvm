@@ -841,6 +841,7 @@ class TestGetDriverConfigSettingsFailure:
         assert result["pickup_radius_meters"] == 100
         assert result["ride_offer_sound_url"] is None
         assert result["always_location_required"] is False
+        assert result["android_auto_offer_tone_enabled"] is False
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -855,6 +856,20 @@ class TestGetDriverConfigSettingsFailure:
             result = await profile_mod.get_driver_config(current_user={"id": "u1"})
 
         assert result["always_location_required"] is expected
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(True, True), (False, False), (None, False), ("true", False)],
+    )
+    async def test_android_auto_offer_tone_follows_the_flag(self, value, expected):
+        """Migration 487: only an exact True turns the car offer tone on."""
+        from backend.routes.drivers import profile as profile_mod
+
+        settings = {"android_auto_offer_tone_enabled": value}
+        with patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)):
+            result = await profile_mod.get_driver_config(current_user={"id": "u1"})
+
+        assert result["android_auto_offer_tone_enabled"] is expected
 
 
 class TestUpdateMyDriverAutoCreateAndReview:

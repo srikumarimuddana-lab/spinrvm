@@ -45,6 +45,7 @@ import { bumpCarSurfaceGeneration, isCarSurfaceMapReady, resetCarSurfaceMapReady
 // module on Android, so iOS never loads it.
 import { startCarLocationService, stopCarLocationService } from './carLocationTask';
 import { startCarSession, stopCarSession } from './carSession';
+import { setCarConnected, syncCarOfferRing } from './carOfferRing';
 import { setCarColorScheme, type CarColorScheme } from './carColorScheme';
 import { useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
@@ -576,7 +577,7 @@ export default function registerAutoPlay(): void {
   const apply = () => {
     if (!template || !HybridAutoPlay.isConnected?.()) return;
 
-    const { rideState, activeRide, incomingRide } = useDriverStore.getState();
+    const { rideState, activeRide, incomingRide, countdownSeconds } = useDriverStore.getState();
     const route = selectCarRoute(rideState, activeRide);
 
     // Header + map buttons only change on a state / leg / ride transition.
@@ -622,6 +623,15 @@ export default function registerAutoPlay(): void {
     }
 
     syncOfferAlert(rideState, offerOf(incomingRide, activeRide));
+
+    // The offer tone through the car speakers (carOfferRing.ts). Runs on every
+    // store change so it also stops the moment the offer is accepted, declined,
+    // expired or cancelled. Contained: a throw here must not cost the chrome.
+    try {
+      syncCarOfferRing({ rideState, incomingRide, countdownSeconds });
+    } catch (e) {
+      logError('offer ring sync failed:', e);
+    }
   };
 
   let unsubscribe: (() => void) | null = null;
@@ -769,6 +779,9 @@ export default function registerAutoPlay(): void {
     }
 
     stopColdStartPoll(); // whatever got us here, the poll has done its job
+    // After the template exists (a failed build returned above): the car may
+    // only take the offer ring when it can also show the offer.
+    setCarConnected(true);
     apply();
     if (!unsubscribe) {
       unsubscribe = useDriverStore.subscribe(apply);
@@ -780,6 +793,9 @@ export default function registerAutoPlay(): void {
     HybridAutoPlay.addListener('didDisconnect', () => {
       unsubscribe?.();
       unsubscribe = null;
+      // First, before the session teardown: stops the car tone and hands a
+      // live offer's ring back to the phone.
+      setCarConnected(false);
       clearOfferAlert();
       template = null;
       lastKey = null;

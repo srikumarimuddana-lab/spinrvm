@@ -30,6 +30,7 @@ import {
     type AudioPlayer,
 } from 'expo-audio';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
+import { isCarRingOwner, subscribeCarRingOwner } from '../lib/androidAuto/carOfferRing';
 
 const REPLAY_INTERVAL_MS = 2500;
 
@@ -116,6 +117,10 @@ export function useRideOfferSound(): RideOfferSoundControls {
         // Settings → Sound & Haptics → Sound Effects. Checked per replay (not
         // just at play()) so muting mid-offer silences the loop immediately.
         if (!useAlertPrefsStore.getState().soundEffects) return;
+        // Android Auto is ringing this offer through the car speakers
+        // (lib/androidAuto/carOfferRing.ts). Checked per replay too: if the car
+        // hands the ring back mid-offer, the next tick rings here again.
+        if (isCarRingOwner()) return;
         const player = _getOrCreatePlayer();
         if (!player) return;
         try {
@@ -151,6 +156,15 @@ export function useRideOfferSound(): RideOfferSoundControls {
             // pause on a never-loaded player throws; ignore.
         }
     }, []);
+
+    // The car taking the ring mid-offer (car connected, flag turned on) must
+    // silence a tone that is already sounding, not just the next replay. A
+    // full stop, not a pause: a replay interval left installed would make the
+    // hand-back's play() a no-op (idempotent guard) and leave the phone silent
+    // until the next tick.
+    useEffect(() => subscribeCarRingOwner((owner) => {
+        if (owner) stop();
+    }), [stop]);
 
     useEffect(() => {
         return () => {

@@ -88,6 +88,17 @@ jest.mock('../../store/alertPrefsStore', () => ({
   },
 }));
 
+// Android Auto ring owner (lib/androidAuto/carOfferRing.ts), required lazily
+// by the handler. Default: no car, so every existing case is unchanged.
+let mockCarOwner = false;
+let mockCarOwnerThrows = false;
+jest.mock('../../lib/androidAuto/carOfferRing', () => ({
+  isCarRingOwner: () => {
+    if (mockCarOwnerThrows) throw new Error('car ring owner unavailable');
+    return mockCarOwner;
+  },
+}));
+
 const mockFetch = jest.fn();
 (global as any).fetch = mockFetch;
 
@@ -110,6 +121,8 @@ describe('backgroundMessaging (Android)', () => {
     jest.clearAllMocks();
     mockPlatform.OS = 'android';
     mockSoundEffects = true;
+    mockCarOwner = false;
+    mockCarOwnerThrows = false;
     mockFetch.mockReset();
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -184,6 +197,34 @@ describe('backgroundMessaging (Android)', () => {
       expect(mockDisplayRideOfferNotification).toHaveBeenCalledWith(
         expect.objectContaining({ ride_id: 'r1' }),
         { muted: true },
+      );
+    });
+
+    it('mutes the card while Android Auto rings the offer through the car', async () => {
+      mockCarOwner = true;
+      const { registerBackgroundMessageHandlers } = loadModule();
+      registerBackgroundMessageHandlers();
+      const handler = mockSetBackgroundMessageHandler.mock.calls[0][0];
+
+      await handler({ data: OFFER });
+
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ ride_id: 'r1' }),
+        { muted: true },
+      );
+    });
+
+    it('still rings the card when the car ring-owner check fails', async () => {
+      mockCarOwnerThrows = true;
+      const { registerBackgroundMessageHandlers } = loadModule();
+      registerBackgroundMessageHandlers();
+      const handler = mockSetBackgroundMessageHandler.mock.calls[0][0];
+
+      await handler({ data: OFFER });
+
+      expect(mockDisplayRideOfferNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ ride_id: 'r1' }),
+        undefined,
       );
     });
 

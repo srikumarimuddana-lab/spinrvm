@@ -424,7 +424,7 @@ Asynchronous post-ride receipt render + send via configured SMTP/ESP.
 
 ### `utils/cloudinary.py`
 
-Signed upload URLs for user-uploaded images (profile, vehicle photos, dispute evidence).
+Signed upload URLs for user-uploaded images (profile, vehicle photos).
 
 ### `routes/loyalty.py`
 
@@ -456,14 +456,16 @@ Quest types: `ride_count`, `earnings_target`, `online_hours`, `peak_rides`, `con
 
 10 validation rules documented in `WALLET_AND_PAYMENTS.md` §6.
 
-### `routes/disputes.py`
+### `routes/disputes.py` (retired)
+
+In-app disputes are disabled (owner decision 2026-09-25) — see `WALLET_AND_PAYMENTS.md` §7.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /disputes` | Open dispute on a completed ride. |
-| `GET /disputes/{id}` | Thread. |
-| `GET /disputes` | Mine. |
-| `POST /disputes/{id}/message` | Add thread message. |
+| `POST /disputes` | Always 410. |
+| `PUT /admin/disputes/{id}/resolve` | Always 410 (admin). |
+
+Read-only historical `GET /admin/disputes` (list), `/stats`, `/{id}`, plus Stripe chargebacks (`GET /admin/disputes/chargebacks`), are served by `routes/admin/support.py`, not this file.
 
 ### `routes/notifications.py`
 

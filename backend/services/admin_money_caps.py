@@ -5,6 +5,13 @@ ROADMAP N23 / finding ADMIN-OPS-001: admins could credit/debit wallets
 no amount limit and no alert. This is the interim control until a real
 second-approver queue exists.
 
+In-app disputes (and the refunds admins issued through them) were disabled
+2026-09-25 (see docs/change-log/2026-09-25-disable-in-app-disputes.md);
+``routes/disputes.py``'s resolve endpoint is now a 410 stub that writes
+nothing. The ``dispute_resolved``/``dispute_refund`` handling below is dead
+going forward and kept only so the daily-cap sum still counts any
+historical ``dispute_resolved`` audit_logs rows written before that date.
+
 Call :func:`enforce_admin_money_action_cap` immediately before the money moves.
 
 - ``admin_money_daily_cap_per_admin`` (settings, migration 479): if set and
@@ -20,7 +27,8 @@ behaviour is unchanged.
 
 "Already moved today" is summed from ``audit_logs``, which every covered
 endpoint already writes with ``actor_id`` = the admin: ``wallet_credit`` /
-``wallet_debit`` rows carry ``details.amount``; ``dispute_resolved`` rows carry
+``wallet_debit`` rows carry ``details.amount``; historical ``dispute_resolved``
+rows (none written since in-app disputes were disabled 2026-09-25) carry
 ``details.refund_amount`` and count only when ``details.refund_issued`` is
 True (a Stripe refund was actually created — not a rejected dispute, not one
 resolved while admin_dispute_refunds_enabled was off, not manual_required).
@@ -85,7 +93,9 @@ def _row_amount(row: Dict[str, Any]) -> Decimal:
     """Absolute money moved by one audit_logs row (0 if it moved none)."""
     details = row.get("details") or {}
     if row.get("action") == "dispute_resolved":
-        # Only rows where routes/disputes.py actually issued a refund count.
+        # Historical rows only (routes/disputes.py's resolve endpoint is a
+        # 410 stub since 2026-09-25 and writes none of these anymore).
+        # Only rows where it actually issued a refund count.
         if details.get("refund_issued") is not True:
             return Decimal("0")
         raw = details.get("refund_amount")
@@ -144,8 +154,10 @@ async def enforce_admin_money_action_cap(
     """Raise 403 if this action would take the admin over today's cap, 503 if
     the check itself cannot run; alert (but allow) at/above the threshold.
 
-    ``action`` is a short label for logs (``wallet_credit``, ``wallet_debit``,
-    ``dispute_refund``). Logs carry IDs and amounts only — no PII.
+    ``action`` is a short label for logs (``wallet_credit``, ``wallet_debit``;
+    ``dispute_refund`` is a retired label, no longer passed by any caller
+    since in-app dispute refunds were disabled 2026-09-25). Logs carry IDs
+    and amounts only — no PII.
     """
     admin_id = admin["id"]
     this_amount = abs(_round(_d(amount)))

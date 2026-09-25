@@ -50,7 +50,6 @@ export {
     getLostAndFoundItems,
     updateLostItem,
     deleteLostItem,
-    deleteDispute,
     getComplaints,
     deleteComplaint,
 } from "./api/rides";

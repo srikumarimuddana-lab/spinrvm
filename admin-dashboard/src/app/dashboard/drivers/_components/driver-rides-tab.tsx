@@ -207,6 +207,7 @@ export function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate
                     <Input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
+                        aria-label="Search this driver's rides"
                         placeholder="Search rider, ride id, address"
                         className="h-8 text-xs w-[260px]"
                     />

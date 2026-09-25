@@ -56,7 +56,8 @@ jest.mock('../../../utils/crashlytics', () => ({
 
 jest.mock('../carDebug', () => ({ pushDebug: jest.fn(), setDebugFact: jest.fn() }));
 
-jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
+const mockAppState = { currentState: 'active' };
+jest.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: mockAppState }));
 
 type Ring = typeof import('../carOfferRing');
 let ring: Ring;
@@ -101,6 +102,7 @@ beforeEach(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {});
   mockSupported.mockReturnValue(true);
   mockStart.mockImplementation(() => Promise.resolve('playing'));
+  mockAppState.currentState = 'active';
   mockDriver.rideState = 'idle';
   mockDriver.incomingRide = null;
   mockDriver.countdownSeconds = 0;
@@ -454,12 +456,34 @@ describe('car-only offer expiry', () => {
     expect(mockSetCountdown).toHaveBeenCalledWith(0);
   });
 
-  it('never races the phone screen countdown', () => {
+  it('never races a foreground phone screen countdown', () => {
+    mockAppState.currentState = 'active';
+    ring.registerPhoneRingHandler(jest.fn());
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(FIRE_AT + 10_000);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+
+  it('expires the offer when the phone screen is mounted but backgrounded', () => {
+    mockAppState.currentState = 'background';
+    ring.registerPhoneRingHandler(jest.fn());
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
+  });
+
+  it('keeps watching after deferring to the foreground phone, then fires once it backgrounds', () => {
+    mockAppState.currentState = 'active';
     ring.registerPhoneRingHandler(jest.fn());
     ring.setCarConnected(true);
     offerLive(offer('r1'), 10);
     jest.advanceTimersByTime(FIRE_AT);
     expect(mockSetCountdown).not.toHaveBeenCalled();
+    mockAppState.currentState = 'background';
+    jest.advanceTimersByTime(2_000);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
   });
 
   it('does nothing once the offer was answered', () => {

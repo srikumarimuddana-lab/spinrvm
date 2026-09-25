@@ -28,9 +28,10 @@
  * 'offer_expired'). On a car-only launch that screen never mounts, so an
  * unanswered offer never expired and setIncomingRide (idle-only) then refused
  * every later offer. This module arms the same setCountdown(0) at the offer
- * deadline + 1.5 s, and only fires it when no phone UI is mounted.
+ * deadline + 1.5 s, and fires it unless a foreground phone screen is running
+ * its own countdown (a backgrounded one may never tick).
  */
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 import { recordNonFatal } from '../../utils/crashlytics';
@@ -222,7 +223,8 @@ function clearExpiryTimer(): void {
 }
 
 /**
- * Expire an unanswered offer when no phone UI is mounted (see the header).
+ * Expire an unanswered offer unless a foreground phone screen owns it (see
+ * the header).
  * Armed only while a car is connected; left armed across a disconnect, since
  * it re-validates the store before acting and the stuck state it prevents is
  * the same with or without the car.
@@ -232,10 +234,17 @@ function armExpiry(rideId: string): void {
   if (!carConnected) return;
   const fire = () => {
     expiryTimer = null;
-    // The phone screen runs its own countdown; never race it.
-    if (phoneRingHandler) return;
     const st = useDriverStore.getState();
     if (st.rideState !== 'ride_offered' || st.incomingRide?.ride_id !== rideId) return;
+    // A foreground phone screen runs its own countdown; don't race it, but
+    // keep watching. A mounted-but-backgrounded screen (the usual Android Auto
+    // case) may never tick, and a stuck ride_offered blocks every later offer.
+    // A duplicate decline is harmless: the backend rejects it and declineRide
+    // resets to idle regardless.
+    if (phoneRingHandler && AppState.currentState === 'active') {
+      expiryTimer = setTimeout(fire, EXPIRY_HOLD_RETRY_MS);
+      return;
+    }
     if (st.acceptNetworkHold) {
       // An accept is in flight; the store settles the offer when it returns.
       expiryTimer = setTimeout(fire, EXPIRY_HOLD_RETRY_MS);

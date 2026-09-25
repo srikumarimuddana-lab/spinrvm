@@ -1,7 +1,13 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { DriverIdlePanel } from '../../components/dashboard/DriverIdlePanel';
+import {
+  DriverIdlePanel,
+  hudHeightsFor,
+  HUD_EXPANDED_HEIGHT_DP,
+  HUD_COLLAPSED_HEIGHT_DP,
+} from '../../components/dashboard/DriverIdlePanel';
+import { MAX_FONT_SCALE } from '@shared/utils/responsive';
 
 // react-native-safe-area-context's `useSafeAreaInsets` throws if no provider is
 // in the tree. Wrap every render with a deterministic SafeAreaProvider.
@@ -110,5 +116,33 @@ describe('DriverIdlePanel — collapsible hud (round 7)', () => {
 
     act(() => { jest.advanceTimersByTime(2500); });
     expect(onExpandedChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+// The idle hud's height follows the OS text size (capped at MAX_FONT_SCALE);
+// the driver map reserves the same space via this helper.
+describe('hudHeightsFor', () => {
+  it('equals the original constants at the default text size', () => {
+    expect(hudHeightsFor(1)).toEqual({
+      expanded: HUD_EXPANDED_HEIGHT_DP,
+      collapsed: HUD_COLLAPSED_HEIGHT_DP,
+    });
+  });
+
+  it('never shrinks below the constants for smaller text', () => {
+    expect(hudHeightsFor(0.85)).toEqual({
+      expanded: HUD_EXPANDED_HEIGHT_DP,
+      collapsed: HUD_COLLAPSED_HEIGHT_DP,
+    });
+  });
+
+  it('grows with larger text', () => {
+    const { expanded, collapsed } = hudHeightsFor(1.3);
+    expect(expanded).toBeGreaterThan(HUD_EXPANDED_HEIGHT_DP);
+    expect(collapsed).toBeGreaterThan(HUD_COLLAPSED_HEIGHT_DP);
+  });
+
+  it('stops growing at MAX_FONT_SCALE', () => {
+    expect(hudHeightsFor(3)).toEqual(hudHeightsFor(MAX_FONT_SCALE));
   });
 });

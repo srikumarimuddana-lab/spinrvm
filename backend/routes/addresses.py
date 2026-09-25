@@ -47,8 +47,14 @@ def _singleton_type(name: Optional[str], icon: Optional[str]) -> Optional[str]:
 
 
 async def _drop_other_singletons(user_id: str, place_type: str, keep_id: str) -> None:
-    # One filtered delete scoped to this rider — no read-then-write. Also
-    # collapses any pre-existing duplicate Home/Work rows onto keep_id.
+    # One filtered delete scoped to this rider. Also collapses any
+    # pre-existing duplicate Home/Work rows onto keep_id.
+    #
+    # Callers run this BEFORE writing their own row, never after: with the
+    # delete first, the last request to clean up still writes its row
+    # afterwards, so no interleaving of concurrent saves leaves the rider with
+    # zero Homes (worst case is a temporary duplicate the next save collapses).
+    # Clean-after-write let two devices each delete the other's new Home.
     await db_supabase.delete_many(
         "saved_addresses",
         {"user_id": user_id, "icon": place_type, "id": {"$ne": keep_id}},
@@ -64,7 +70,10 @@ async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("")
-async def create_saved_address(request: SavedAddressCreate, current_user: dict = Depends(get_current_user)):
+async def create_saved_address(
+    request: SavedAddressCreate,
+    current_user: dict = Depends(get_current_user),
+):
     user_id = current_user["id"]
     _, sanitized_address = sanitize_string(request.address)
 
@@ -97,11 +106,22 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
     if place_type:
         # Owner decision 2026-09-25: a rider keeps exactly one Home and one
         # Work — saving a second one replaces the first, in place (same id).
-        fields = {k: doc[k] for k in ("name", "address", "lat", "lng", "icon", "place_id")}
-        updated = await db_supabase.update_one("saved_addresses", {"user_id": user_id, "icon": place_type}, fields)
-        if updated:
-            await _drop_other_singletons(user_id, place_type, updated["id"])
-            return updated
+        # The oldest row is the one kept, so concurrent saves agree on it;
+        # the others are dropped before the write (see _drop_other_singletons).
+        current = await db_supabase.get_rows(
+            "saved_addresses", {"user_id": user_id, "icon": place_type}, order="created_at", limit=1
+        )
+        if current:
+            keep_id = current[0]["id"]
+            await _drop_other_singletons(user_id, place_type, keep_id)
+            fields = {k: doc[k] for k in ("name", "address", "lat", "lng", "icon", "place_id")}
+            updated = await db_supabase.update_one(
+                "saved_addresses", {"id": keep_id, "user_id": user_id, "icon": place_type}, fields
+            )
+            if updated:
+                return updated
+            # The kept row was removed or re-typed by a concurrent request
+            # between the read and the write: save this one as a new row.
 
     await db_supabase.insert_one("saved_addresses", doc)
     return doc
@@ -109,7 +129,9 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
 
 @api_router.patch("/{address_id}")
 async def update_saved_address(
-    address_id: str, request: SavedAddressUpdate, current_user: dict = Depends(get_current_user)
+    address_id: str,
+    request: SavedAddressUpdate,
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     existing = await db_supabase.find_one("saved_addresses", {"id": address_id, "user_id": user_id})
@@ -149,12 +171,16 @@ async def update_saved_address(
     place_type = _singleton_type(update.get("name", existing.get("name")), update.get("icon", existing.get("icon")))
     if place_type:
         update["icon"] = place_type
+        # Only a row becoming this type drops the others — cleanup first,
+        # then the promote (see _drop_other_singletons). A row that already
+        # is the Home/Work (a rename) deletes nothing: were it to, two such
+        # PATCHes on pre-existing duplicates could each delete the other.
+        if (existing.get("icon") or "").strip().lower() != place_type:
+            await _drop_other_singletons(user_id, place_type, address_id)
 
     row = await db_supabase.update_one("saved_addresses", {"id": address_id, "user_id": user_id}, update)
     if not row:
         raise HTTPException(status_code=404, detail="Address not found")
-    if place_type:
-        await _drop_other_singletons(user_id, place_type, address_id)
     return row
 
 

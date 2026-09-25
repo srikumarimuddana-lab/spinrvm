@@ -10,6 +10,10 @@ Fixture values are synthetic (no real addresses or coordinates).
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import importlib
+import itertools
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -88,31 +92,53 @@ def verify_ok():
         p.stop()
 
 
+def _op_order(table):
+    """The write ops the route issued, in order."""
+    ops = ("update", "delete", "insert")
+    return [c[0] for c in table.mock_calls if c[0] in ops]
+
+
 class TestSecondHomeReplacesFirst:
     def test_second_home_updates_existing_row_in_place(self, client, table):
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
         table.responses["update"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
         r = client.post("/api/v1/addresses", json=PAYLOAD)
         assert r.status_code == 200
         assert r.json()["id"] == "old_home"  # id kept
         table.update.assert_called_once()
         table.insert.assert_not_called()
-        # Update scoped to this rider's Home rows only.
+        # Scoped to this rider's Home rows; the oldest one is kept.
         assert call("user_id", "user_1") in table.eq.call_args_list
         assert call("icon", "home") in table.eq.call_args_list
-        # Any leftover duplicate Home is removed, never the kept row.
+        table.order.assert_called_with("created_at", desc=False)
+        assert call("id", "old_home") in table.eq.call_args_list
+        # Any leftover duplicate Home is removed, never the kept row --
+        # and BEFORE the kept row is written (see TestConcurrentSaves).
         table.delete.assert_called_once()
         table.neq.assert_called_with("id", "old_home")
+        assert _op_order(table) == ["delete", "update"]
 
     def test_first_home_inserts(self, client, table):
+        table.responses["select"] = []
+        r = client.post("/api/v1/addresses", json=PAYLOAD)
+        assert r.status_code == 200
+        table.insert.assert_called_once()
+        table.update.assert_not_called()
+        table.delete.assert_not_called()
+
+    def test_kept_home_gone_before_the_write_inserts(self, client, table):
+        # The read found a Home, but a concurrent request removed it before
+        # our update landed (0 rows): the save must still produce a Home.
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
         table.responses["update"] = []
         r = client.post("/api/v1/addresses", json=PAYLOAD)
         assert r.status_code == 200
         table.insert.assert_called_once()
-        table.delete.assert_not_called()
 
     def test_home_detected_by_label_when_untyped(self, client, table):
         # Legacy/untyped icon ("location") falls back to the label, and the
         # stored icon is normalised to the type so the next save finds it.
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
         r = client.post("/api/v1/addresses", json={**PAYLOAD, "name": "home", "icon": "location"})
         assert r.status_code == 200
         table.update.assert_called_once()
@@ -121,6 +147,7 @@ class TestSecondHomeReplacesFirst:
 
     def test_typed_icon_wins_over_label(self, client, table):
         # "My house" typed as Home -> Home. "Home" typed as Gym -> not Home.
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
         client.post("/api/v1/addresses", json={**PAYLOAD, "name": "My house", "icon": "home"})
         table.update.assert_called_once()
         table.update.reset_mock()
@@ -226,6 +253,16 @@ class TestPatch:
         assert r.status_code == 200
         table.delete.assert_called_once()
         table.neq.assert_called_with("id", "a1")
+        # Cleanup strictly before the promote (see TestConcurrentSaves).
+        assert _op_order(table) == ["delete", "update"]
+
+    def test_patch_renaming_the_existing_home_deletes_nothing(self, client, table):
+        row = {"id": "h1", "user_id": "user_1", "name": "Home", "icon": "home"}
+        table.responses["select"] = [row]
+        table.responses["update"] = [{**row, "name": "My house"}]
+        r = client.patch("/api/v1/addresses/h1", json={"name": "My house"})
+        assert r.status_code == 200
+        table.delete.assert_not_called()
 
     def test_patch_location_requires_all_three(self, client, table):
         table.responses["select"] = [{"id": "a1", "user_id": "user_1", "name": "Cafe", "icon": "other"}]
@@ -254,3 +291,180 @@ class TestPatch:
         table.responses["select"] = [{"id": "a1", "user_id": "user_1", "name": "Cafe", "icon": "other"}]
         r = client.patch("/api/v1/addresses/a1", json={})
         assert r.status_code == 422
+
+
+# -- Concurrent saves (edge-case review 2026-09-25) ------------------------
+#
+# Two devices saving at once. The route handlers run against an in-memory
+# fake of db_supabase whose every call waits for its turn in a schedule, so
+# each test replays EVERY interleaving of the two requests' DB calls. The
+# invariant: no interleaving leaves the rider with zero Homes. Before the
+# fix (clean-up after the write) the PATCH/PATCH case lost both rows under
+# A-promote, B-promote, A-clean, B-clean while both requests returned 200.
+
+_turn_owner: contextvars.ContextVar[str] = contextvars.ContextVar("_turn_owner")
+
+
+def _matches(row, filters):
+    for k, v in (filters or {}).items():
+        if isinstance(v, dict) and "$ne" in v:
+            if row.get(k) == v["$ne"]:
+                return False
+        elif row.get(k) != v:
+            return False
+    return True
+
+
+class _InterleavedDB:
+    """Just the db_supabase calls routes/addresses.py makes, one turn each."""
+
+    def __init__(self, rows, schedule):
+        self.rows = [dict(r) for r in rows]
+        self.schedule = list(schedule)
+        self.cond = asyncio.Condition()
+
+    async def _turn(self):
+        me = _turn_owner.get()
+        async with self.cond:
+            await self.cond.wait_for(lambda: not self.schedule or self.schedule[0] == me)
+            if self.schedule:
+                self.schedule.pop(0)
+            self.cond.notify_all()
+        # Each op body below runs with no further await, so it is atomic.
+
+    async def finished(self, name):
+        async with self.cond:
+            self.schedule = [n for n in self.schedule if n != name]
+            self.cond.notify_all()
+
+    async def get_rows(self, table, filters=None, order=None, desc=False, limit=None, **_kw):
+        await self._turn()
+        out = [dict(r) for r in self.rows if _matches(r, filters)]
+        if order:
+            out.sort(key=lambda r: str(r.get(order)), reverse=desc)
+        return out[:limit] if limit else out
+
+    async def find_one(self, table, filters=None):
+        rows = await self.get_rows(table, filters, limit=1)
+        return rows[0] if rows else None
+
+    async def update_one(self, table, filters, update, **_kw):
+        await self._turn()
+        hit = [r for r in self.rows if _matches(r, filters)]
+        for r in hit:
+            r.update(update)
+        return dict(hit[0]) if hit else None
+
+    async def delete_many(self, table, filters):
+        await self._turn()
+        gone = [r for r in self.rows if _matches(r, filters)]
+        self.rows = [r for r in self.rows if not _matches(r, filters)]
+        return gone
+
+    async def insert_one(self, table, doc):
+        await self._turn()
+        self.rows.append(dict(doc))
+        return dict(doc)
+
+
+def _addresses_module():
+    for mod_path in ("routes.addresses", "backend.routes.addresses"):
+        try:
+            return importlib.import_module(mod_path)
+        except ImportError:
+            continue
+    raise ImportError("routes.addresses")
+
+
+def _schedules(turns_each=4):
+    """Every interleaving of A's and B's DB calls (each makes at most 4)."""
+    for a_slots in itertools.combinations(range(2 * turns_each), turns_each):
+        yield ["A" if i in a_slots else "B" for i in range(2 * turns_each)]
+
+
+def _run_interleaved(rows, schedule, req_a, req_b):
+    from fastapi import HTTPException
+
+    mod = _addresses_module()
+    db = _InterleavedDB(rows, schedule)
+
+    async def _one(name, make):
+        _turn_owner.set(name)
+        try:
+            return await make(mod)
+        except HTTPException as e:
+            return e
+        finally:
+            await db.finished(name)
+
+    async def _both():
+        return await asyncio.gather(_one("A", req_a), _one("B", req_b))
+
+    with patch.object(mod, "db_supabase", db):
+        results = asyncio.run(_both())
+    return db.rows, results
+
+
+def _patch_req(address_id, **fields):
+    return lambda mod: mod.update_saved_address(address_id, mod.SavedAddressUpdate(**fields), current_user=RIDER)
+
+
+def _post_req(**fields):
+    return lambda mod: mod.create_saved_address(mod.SavedAddressCreate(**{**PAYLOAD, **fields}), current_user=RIDER)
+
+
+def _row(row_id, icon, created_at, name="Place"):
+    return {
+        "id": row_id,
+        "user_id": "user_1",
+        "name": name,
+        "address": "1 Test Street",
+        "lat": 50.0,
+        "lng": -100.0,
+        "icon": icon,
+        "created_at": created_at,
+    }
+
+
+def _homes(rows):
+    return [r for r in rows if r["user_id"] == "user_1" and r["icon"] == "home"]
+
+
+class TestConcurrentSaves:
+    def test_two_devices_promoting_different_rows_to_home_never_lose_both(self):
+        rows = [_row("A", "other", "2026-01-01"), _row("B", "gym", "2026-01-02")]
+        for schedule in _schedules():
+            final, results = _run_interleaved(
+                rows, schedule, _patch_req("A", icon="home"), _patch_req("B", icon="home")
+            )
+            assert _homes(final), f"no Home left under schedule {schedule}"
+            assert all(isinstance(r, dict) for r in results), schedule
+
+    def test_promote_racing_a_new_home_post_never_loses_home(self):
+        rows = [_row("H", "home", "2026-01-01"), _row("X", "other", "2026-01-02")]
+        for schedule in _schedules():
+            final, _ = _run_interleaved(rows, schedule, _patch_req("X", icon="home"), _post_req())
+            assert _homes(final), f"no Home left under schedule {schedule}"
+
+    def test_two_home_posts_over_existing_duplicates_never_lose_home(self):
+        rows = [_row("H1", "home", "2026-01-01"), _row("H2", "home", "2026-01-02")]
+        for schedule in _schedules():
+            final, results = _run_interleaved(rows, schedule, _post_req(), _post_req(name="My house"))
+            assert _homes(final), f"no Home left under schedule {schedule}"
+            assert all(isinstance(r, dict) for r in results), schedule
+
+    def test_two_renames_of_duplicate_homes_delete_nothing(self):
+        rows = [_row("H1", "home", "2026-01-01"), _row("H2", "home", "2026-01-02")]
+        for schedule in _schedules():
+            final, _ = _run_interleaved(
+                rows, schedule, _patch_req("H1", name="Home A"), _patch_req("H2", name="Home B")
+            )
+            assert len(_homes(final)) == 2, schedule
+
+    def test_sequential_saves_still_end_with_exactly_one_home(self):
+        # Same fake, no overlap: A runs to completion, then B.
+        rows = [_row("A", "other", "2026-01-01"), _row("B", "gym", "2026-01-02")]
+        final, _ = _run_interleaved(
+            rows, ["A"] * 4 + ["B"] * 4, _patch_req("A", icon="home"), _patch_req("B", icon="home")
+        )
+        assert [r["id"] for r in _homes(final)] == ["B"]

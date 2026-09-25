@@ -47,3 +47,275 @@ Only what is **new or changed** relative to `02-findings/trust-safety-fraud.md` 
 | CS-14 | Passkeys / step-up | No passkey or WebAuthn code in `backend/`, `rider-app/app`, `driver-app/app` or `admin-dashboard/src`. | VERIFIED (absence) | Consistent with TSF-005. |
 | CS-15 | Meta Conversions API | `backend/utils/meta_capi.py` sends server-side events with SHA-256-hashed email, phone and user id (Meta "Advanced Matching"). Live: token + dataset set, so per-ride events are very likely sent (`10-live-checks.md` §1). | VERIFIED (code) + VERIFIED-LIVE (config) | Guardrail tension, not a fraud tool — see card G-1. |
 
+---
+
+## §2 Techniques radar (Lanes R + A)
+
+Every card follows §1's format, plus two fields the §4 guardrails require: **False-positive cost** (who is hurt, and how, when the signal is wrong) and **Appeal path** (what the affected person can do). Existing appeal surfaces this section relies on: the driver appeal flow (`backend/routes/drivers/appeals.py`, `backend/routes/admin/driver_appeals.py`, reachable from the go-online error in `driver-app/hooks/useDriverDashboard.ts:1915`) and, for riders, Support (a rider self-serve dispute screen does not exist yet — BENCH-002 / ROADMAP X2). A rule used throughout: **a fraud signal may queue a human review, hold a payout, or withhold a reward; it may not deactivate an account without a human decision and a stated reason** (the driver-facing reason is BENCH-007 / X3).
+
+### 2.1 GPS spoofing
+
+### Server-side position-derived plausibility, aggregated per driver — ADOPT
+- What it is (plain language): keep the server's own speed check (distance between two real fixes divided by time), and add a per-driver daily count of rejected points by reason, so repeated spoofing shows up as a pattern instead of vanishing point by point.
+- Who uses it / source: server-side plausibility is the check OWASP MAS says to prefer: gather data on the device, decide in the backend ([OWASP MASVS-RESILIENCE-1](https://mas.owasp.org/MASVS/controls/MASVS-RESILIENCE-1/), snippet, read 2026-09-25, INFERRED). Grab publicly reports banning and removing incentives from drivers who spoof location to jump queues ([Malay Mail, 2019](https://www.malaymail.com/news/money---international/2019/05/17/drivers-use-gps-spoofing-fake-apps-to-defraud-grab-says-ride-sharing-firm/1754081), [Grab PH driver security guide](https://www.grab.com/ph/security/security-guide-dax/), snippets, read 2026-09-25, INFERRED).
+- Spinr today: the check exists and is sound (`backend/utils/location_integrity.py:41-175`, VERIFIED). Rejections are dropped per point; nothing counts them per driver (CS-5, VERIFIED).
+- Benefit for Spinr at our scale: turns an existing, already-paid-for check into a reviewable signal with no new data collection. Cost/effort: **S** (a counter keyed by driver and reason, written into the signal table in 2.2). Risk: low.
+- How it fails or gets gamed: a spoofer who moves the fake point at a plausible speed passes every check; a single static point is never compared with anything (TSF (b)#34). Genuine GPS glitches (tunnels, urban canyons, cold start) create rejections too.
+- False-positive cost: none directly — the signal only feeds review. Cost appears only if a reviewer acts on a count without looking at the trips.
+- Appeal path: any action taken from it goes through the driver appeal flow with the stated reason.
+- First step behind a flag: `trust_signal_gps_rejections_enabled` (log-only), writing one row per driver per day above a threshold. Measure success by: share of flagged drivers a reviewer confirms (precision), target over 50% before any action is attached.
+
+### Mock-location flag — ADOPT (keep as is; signal only)
+- What it is: Android marks a location that came from a "mock location" app; the client forwards it and the server drops the point.
+- Who uses it / source: standard Android behaviour (ASSUMED — the Android developer page was not reachable).
+- Spinr today: checked client-side (`driver-app/utils/locationIntegrity.ts:58-61`) and server-side (`location_integrity.py:84,136`; batch path `breadcrumbs.py:532-533`), VERIFIED.
+- Benefit: catches casual spoofing for free. Cost/effort: none (built). Risk: over-trust — the flag is set by the client, so a modified client clears it (the module's own docstring says so).
+- How it fails: rooted or modified clients; iOS has no equivalent flag.
+- False-positive cost: a driver with a leftover developer setting loses points; low, and the driver sees nothing today.
+- Appeal path: n/a while it only drops points. Add a driver-visible hint ("location services look modified") before any account action is ever tied to it.
+- First step: none; keep. Measure success by: count of mocked points per day (should stay near zero once drivers are told).
+
+### Server-verified platform attestation (Play Integrity standard request + App Attest) on go-online — TRIAL
+- What it is: the phone's OS vendor signs a statement ("this is our real app, unmodified, on a genuine device"); **our server** decrypts and checks it, including that it answers a challenge we issued and remembered.
+- Who uses it / source: Google documents the verdicts `MEETS_DEVICE_INTEGRITY` / `MEETS_BASIC_INTEGRITY` / `MEETS_STRONG_INTEGRITY`, app recognition (`PLAY_RECOGNIZED`), licensing, and optional recent-activity and app-access-risk verdicts; the verdict must be decrypted and verified server-side, checking package name, request hash and timestamp freshness; Google's remediation guidance favours dialogs (e.g. `GET_LICENSED`, close-risky-apps) over hard blocks ([Play Integrity verdicts](https://developer.android.com/google/play/integrity/verdicts), fetched in full, read 2026-09-25, VERIFIED). Firebase App Check wraps Play Integrity, DeviceCheck and App Attest and offers limited-use (replay-protected) tokens for custom backends ([Firebase App Check](https://firebase.google.com/docs/app-check), snippet, read 2026-09-25, INFERRED); a Play Integrity standard-tier daily quota of 10,000 calls is reported (same search, INFERRED — ample for Spinr's driver count). Apple's App Attest documentation could not be fetched (ASSUMED: App Attest proves app authenticity on genuine Apple hardware but is not a jailbreak detector).
+- Spinr today: a scaffold that looks like attestation but verifies nothing (CS-1, CS-2, CS-3, VERIFIED). App Check is the only real attestation, and it uses DeviceCheck rather than App Attest on iOS (CS-4).
+- Benefit for Spinr at our scale: moderate. It raises the cost of running a modified driver app, which is the precondition for most GPS-spoofing and fake-trip schemes. Cost/effort: **M** (two native modules via Expo config plugins, a server verifier, a stored single-use nonce, Google Cloud / Apple setup). Risk: false positives on older or uncertified Android devices; drivers supply their own phones.
+- How it fails or gets gamed: attestation-bypass tooling exists for rooted devices (ASSUMED); a genuine, stock phone running a separate spoofing device in the car passes; quota or Google outage turns into a mass failure if it blocks.
+- False-positive cost: high if used as a gate (a legitimate contractor cannot earn); low if used as a signal. **Use it as a signal only** (A2 SEC-A2-005 reached the same conclusion).
+- Appeal path: driver sees "we couldn't verify this phone — you can keep driving; contact support if this repeats"; review via the driver appeal flow; never an automatic block.
+- First step behind a flag: `device_attestation_v2_enabled` (default off). Step 0, before any native work: **stop presenting the heuristic as attestation** — rename the stored tier to `device_heuristic_tier`, store and expire the nonce, and log attestation-store failures at `error`, not `warning` (CS-3). Measure success by: share of go-online events with a server-verified verdict (target over 90% of Android within 30 days); count of `MEETS_DEVICE_INTEGRITY` failures reviewed and their confirmed-fraud rate.
+
+### App Check replay protection on money endpoints — ASSESS
+- What it is: switch the few money-moving driver calls (instant payout, trip completion) to single-use App Check tokens that the server consumes on verification.
+- Who uses it / source: Firebase "limited-use tokens" / replay protection for custom backends ([Firebase App Check](https://firebase.google.com/docs/app-check), snippet, INFERRED; the custom-backend page was blocked).
+- Spinr today: `verify_token` without consumption (`backend/core/middleware.py:470-480`, VERIFIED). Enforcement in production UNKNOWN.
+- Benefit: small until production enforcement is confirmed (ACTION_ITEMS C3). Cost/effort: S–M. Risk: extra latency and a hard dependency on Firebase on the payout path.
+- How it fails: a real device with a malicious user still mints valid tokens; it stops scripted replay only.
+- False-positive cost: a failed payout request (retryable). Appeal path: retry; support.
+- First step: confirm C3 enforcement first. Not before.
+
+### Zero-jitter / repeated-identical-coordinate heuristic for static spoofing — ASSESS
+- What it is: real GPS wobbles by a few metres between fixes; a location that repeats to the last decimal across many fixes is unusual. Useful for the one gap the speed check cannot see: a fake point that never moves (surge-zone or service-area eligibility, TSF (b)#34).
+- Who uses it / source: described in industry writing on fleet spoofing (vendor blog, [Airpinpoint](https://airpinpoint.com/blog/fake-gps-spoofing-fleet-detection), snippet, read 2026-09-25, INFERRED; not a primary source).
+- Spinr today: not present (VERIFIED absence in `location_integrity.py`).
+- Benefit: closes a documented residual gap. Cost/effort: S–M. Risk: phones parked on a dashboard mount with good sky view, or OS-level location caching, can also repeat coordinates.
+- How it fails: a spoofer adds random wobble.
+- False-positive cost: a legitimately idle driver flagged; low if signal-only.
+- Appeal path: signal only; review.
+- First step: measure first — count how often real idle drivers repeat identical fixes in existing location history before choosing a threshold. No flag until the base rate is known.
+
+### Accelerometer-vs-GPS sensor fusion — HOLD (as enforcement)
+- What it is: compare phone motion with claimed GPS speed.
+- Spinr today: `driver-app/utils/sensorIntegrity.ts` exists (thresholds widened already to tolerate mounts and smooth roads), VERIFIED; client-side only.
+- Why HOLD: the decision is made on the client that an attacker controls, the thresholds have already needed loosening, and it needs background sensor access. Keep it as it is; do not expand or tie actions to it. Revisit only as a server-received signal if attestation (above) ships.
+
+### 2.2 Collusion and fake trips (what a two-person team can operate)
+
+### One `trust_signals` table + weekly rules + one review queue — ADOPT
+- What it is: a single append-only table (`subject_type`, `subject_id`, `signal_type`, `value`, `window`, `created_at`, `reviewed_by`, `outcome`) that every detector writes to, one Prometheus counter `spinr_trust_signal_flagged_total{signal_type}`, and one admin page listing open signals. First rules, all computable in SQL from tables that already exist:
+  1. **Same-pair frequency** — completed rides between one driver and one rider in a rolling 30 days, above a threshold, weighted by incentive/quest claims on those rides (TSF-002).
+  2. **Cancellation-fee share** — fee-bearing cancellations per 100 accepted rides per driver, and fee income as a share of earnings (TSF-003).
+  3. **Chargeback count per rider** — already computed as `rider_prior_dispute_count` (`backend/utils/dispute_evidence_pack.py:113-188`) (TSF-004).
+  4. **GPS rejection count per driver** (2.1).
+  5. **Short-trip / low-distance cluster** — completed rides under a minimum distance that still triggered an incentive or quest.
+- Who uses it / source: Uber runs a rules engine ("Mastermind") in front of ML and uses human-in-the-loop review for early fraud detection ([Uber Mastermind](https://eng.uber.com/mastermind/), [Uber Project RADAR](https://www.uber.com/blog/project-radar-intelligent-early-fraud-detection/), snippets, read 2026-09-25, INFERRED). Stripe lists referral graphs, device/network clustering and redemption velocity as promo-abuse signals ([Stripe: account and promo abuse](https://stripe.com/resources/more/account-and-promotion-abuse), snippet, INFERRED).
+- Spinr today: no detector exists (TSF-002/003/004 VERIFIED). A working template does: `ride_distance_integrity_events` + `backend/utils/distance_integrity.py` (CS-6, VERIFIED) — detection-only, never blocks, fixed `kind` enum, append-only.
+- Benefit for Spinr at our scale: high relative to cost. Five SQL rules and one page are within a two-person team's weekly review capacity, and they give the first real numbers for the founder's "is fraud exposure big enough?" question (TSF (d)). Cost/effort: **M**. Risk: low (additive, read-only on source tables).
+- How it fails or gets gamed: thresholds are learnable, so rings spread across more accounts; a small market makes genuine regulars look like colluders (a commuter who books the same nearby driver every morning is normal in Regina); nobody reviews the queue.
+- False-positive cost: reviewer time, and — if a reviewer acts wrongly — a withheld incentive or held payout for an honest driver. Mitigation: signal-only; actions limited to "hold incentive payout pending review" (reversible, money released on clearance) and "ask for explanation"; no deactivation from a signal alone.
+- Appeal path: the driver is told which payout is held and why (category, not rule detail), and can respond through the appeal flow; a reviewer must record an outcome (`cleared` / `confirmed`) on every signal, which also measures precision.
+- PIPEDA: a fraud score attached to a person is personal information; state the purpose in the privacy policy, give it a retention class and a purge step from day one (blueprint card, COMP-007 — ASSUMED legal reading, escalated in §4).
+- First step behind a flag: `trust_signals_enabled` (log-only), pilot rule = same-pair frequency (blueprint step 5), then TSF-004's count. Measure success by: review-queue precision (confirmed / reviewed), median time-to-review under 7 days, and dollars held vs. dollars later released.
+
+### Shared-instrument graph signals (same card, same payout account, same device across accounts) — TRIAL
+- What it is: link accounts that share a payment card, a payout bank account or (if E10 allows) a device identifier, and flag clusters where a rider and "their" driver share one.
+- Who uses it / source: Uber models the rider–driver graph to find collusion such as fake trips on stolen cards ([Uber: relational graph learning](https://www.uber.com/blog/fraud-detection/), snippet, INFERRED). Stripe exposes a card `fingerprint` per payment method (ASSUMED from general Stripe API knowledge; not re-read).
+- Spinr today: no card fingerprint is stored (grep of `backend/` for card/payment-method fingerprint: zero hits, VERIFIED absence); no device id (E10).
+- Benefit at our scale: the strongest collusion signal available without new personal-data collection **if** it uses data Stripe already holds. Plain SQL joins are enough at Spinr's volume — no graph database. Cost/effort: **M** (store the Stripe fingerprint on save; a nightly join). Risk: families and couples legitimately share a card.
+- How it fails: rings use distinct stolen cards.
+- False-positive cost: a household flagged; low if signal-only.
+- Appeal path: same queue and appeal flow as above.
+- First step behind a flag: store fingerprint only (additive column), no rule; measure how many legitimate multi-account households exist before writing a rule. Measure success by: confirmed-fraud rate among flagged clusters.
+
+### Graph machine learning (RGCN-style collusion models) — HOLD
+- What it is: train a neural network over the rider–driver graph.
+- Source: Uber's published approach (same URL as above, INFERRED).
+- Why HOLD: needs large labelled fraud data Spinr does not have, an ML owner Spinr does not have, and is unexplainable to a driver who appeals. Revisit only if rules-based precision falls and volume grows by an order of magnitude.
+
+### Instant-payout velocity cap and clearing rule — ADOPT (Now)
+- What it is: a per-driver daily cap on instant-payout amount/count, and a short clearing rule (e.g. earnings from a rider's first rides, or from rides with an open dispute, are not instantly withdrawable).
+- Who uses it / source: on Stripe Connect, the platform is responsible for uncovered negative balances from refunds and disputes depending on integration ([Stripe Connect risk management](https://docs.stripe.com/connect/risk-management), snippet, read 2026-09-25, INFERRED).
+- Spinr today: no cap (CS-8, VERIFIED); the endpoint is live in 6/6 service areas (VERIFIED-LIVE) although the driver UI is gone. On a 0%-commission platform there is no fare margin to absorb a chargeback (08-hostile-review §1.4).
+- Benefit: closes the cash-out step that makes stolen-card collusion pay. Cost/effort: **S**. Risk: honest drivers who rely on same-day cash hit the cap.
+- How it fails: splitting across accounts (bounded by the per-account cap and onboarding checks).
+- False-positive cost: a delay, not a loss — scheduled payouts still pay the money. State this on screen.
+- Appeal path: "request a higher limit" through support; the reviewer can raise the cap per driver.
+- First step behind a flag: ROADMAP N22 — new `app_settings` cap with a conservative default; also close the no-service-area bypass (`payouts.py:829-846`). Rollback: raise or clear the cap. Measure success by: count of capped requests per week, and chargeback dollars that reached a driver's bank before the dispute.
+
+### Enforce incentive windows and budgets — ADOPT (Now, driver-visible)
+- What it is: turn on the existing `incentive_eligibility_enforced` so ended or over-budget campaigns stop paying.
+- Spinr today: built, dark; live value false (CS-7, VERIFIED + VERIFIED-LIVE).
+- Benefit: caps the maximum loss from any incentive-farming ring at the campaign budget. Cost/effort: **S** (config). Risk: drivers who expected a bonus from a campaign that has technically ended stop receiving it — a driver-visible pay change.
+- False-positive cost: an honest driver loses an expected bonus from a stale campaign. Mitigation: audit active campaigns first, announce the change, end stale campaigns explicitly.
+- Appeal path: driver support ticket for a disputed bonus; admin can extend a campaign.
+- First step: list campaigns whose window or budget would change outcome if enforced; announce; flip in one service area. Rollback: flag off. Measure success by: incentive dollars paid outside a campaign window (target zero).
+
+### 2.3 Account takeover
+
+### New-device notice for every audience, plus push — ADOPT
+- What it is: the existing "new sign-in" email (rider only) extended to drivers, sent also as an in-app push to the *previous* device, with a one-tap "this wasn't me" that revokes all sessions (`token_version` bump, already tested on the SOS path — TSF (b)#35c).
+- Who uses it / source: NIST SP 800-63B-4 says verifiers SHOULD consider device swap, SIM change and number porting before sending an SMS code, and classes SMS/PSTN codes as a *restricted* authenticator ([NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html), [final publication record](https://csrc.nist.gov/pubs/sp/800/63/b/4/final), snippets, read 2026-09-25, INFERRED).
+- Spinr today: rider-only, email-only, post-hoc (CS-10, VERIFIED). The user-agent string is the only device signal.
+- Benefit: the victim of a SIM swap still holds their old phone; a push there is the fastest warning Spinr can give without any carrier integration. Cost/effort: **S**. Risk: noise on app updates if the user-agent string changes per version.
+- How it fails: the attacker also controls the old device; the victim ignores it.
+- False-positive cost: an unnecessary notice (annoyance). Appeal path: n/a (informational); "this wasn't me" leads to support.
+- First step behind a flag: `new_device_notice_driver_enabled`; normalise the user-agent to app + platform (not version) before comparing. Measure success by: "this wasn't me" taps per month and their confirmed-ATO rate.
+
+### Risk-based step-up on sensitive actions — TRIAL
+- What it is: after a new-device login, require a second check before the few actions that move money or identity: changing the payout bank account, instant payout, changing the phone number, adding or removing emergency contacts. The second check can be a code to the verified email, a short cooling-off period (e.g. 24 h), or a support call-back for drivers.
+- Who uses it / source: NIST 800-63B-4's rule that changing the registered phone number is binding a new authenticator (same URL, INFERRED); Stripe's platform-liability guidance above for why the payout destination matters.
+- Spinr today: none found (VERIFIED absence of step-up in `backend/routes/auth.py`; payout bank-account change endpoint `backend/routes/drivers/payouts.py:712`).
+- Benefit at our scale: high for drivers (a takeover redirects earnings), low for riders. Cost/effort: **M**. Risk: locks out a driver who genuinely changed phones the same day they need a payout.
+- How it fails: an attacker who also holds the email.
+- False-positive cost: a 24-hour payout delay for an honest driver with a new phone — money delayed, not lost.
+- Appeal path: support call-back to lift the cooling-off early after identity questions.
+- First step behind a flag: `payout_destination_cooloff_enabled`, driver bank-account change only. Measure success by: number of cool-offs triggered and number the driver reports as "not me".
+
+### Carrier SIM-swap lookup before sending an OTP — ASSESS
+- What it is: ask a carrier-data API when the number's SIM last changed, and step up (or delay) if it changed in the last few days.
+- Who uses it / source: Twilio Lookup offers a SIM Swap package using carrier data; Canadian coverage needs special configuration and was beta-limited ([Twilio Lookup SIM Swap](https://www.twilio.com/docs/lookup/v2-api/sim-swap), [Line Type Intelligence](https://www.twilio.com/docs/lookup/v2-api/line-type-intelligence), snippets, read 2026-09-25, INFERRED).
+- Spinr today: nothing (TSF-005, VERIFIED). Twilio is already the SMS vendor.
+- Benefit: the only direct SIM-swap signal. Cost/effort: S to wire, per-lookup cost, and coverage for Saskatchewan carriers is **unknown**. Risk: sends phone numbers to another vendor purpose (PIPEDA purpose statement needed).
+- How it fails: incomplete carrier coverage; a port without a SIM change.
+- False-positive cost: a person who genuinely got a new SIM is asked for a second check.
+- Appeal path: the second check itself.
+- First step: ask Twilio for Canadian carrier coverage in writing before any build. Line-type lookup (to spot non-mobile numbers at signup) is a cheaper sibling worth the same question.
+
+### Passkeys for riders and drivers — HOLD (admin passkeys belong to Session 5)
+- What it is: phone-bound, phishing-resistant sign-in credentials replacing SMS codes.
+- Who uses it / source: FIDO Alliance guidance says consumer services usually cannot remove fallback methods and must harden recovery ([FIDO passkeys](https://fidoalliance.org/passkeys/), [FIDO: Passkeys, the journey to prevent phishing](https://fidoalliance.org/wp-content/uploads/2025/03/Passkeys-The-Journey-to-Prevent-Phishing-Pt3.pdf), snippets, read 2026-09-25, INFERRED).
+- Spinr today: none (CS-14, VERIFIED absence).
+- Why HOLD: SIM swap is a *recovery* problem; as long as SMS stays the fallback (and for a phone-number-first ride app it will), a passkey adds a second front door rather than closing the first. The step-up and new-device cards above buy more protection per hour of effort. Revisit after step-up ships, starting with drivers (money at stake).
+
+### 2.4 Promotion and referral abuse
+
+### Keep per-account gates and referral milestones; add a signup-time velocity view — ADOPT
+- What it is: keep what works (per-user promo caps, first-ride check by real ride count, self-referral block, referral payout after a ride target, per-referrer cap of 5/day), and add a daily report of new accounts per referral code and per promo redemption burst.
+- Who uses it / source: Stripe recommends tying referral payouts to a later purchase, not the first, and rolling-window velocity limits ([Stripe: promo abuse](https://stripe.com/en-br/resources/more/promo-abuse), snippet, INFERRED).
+- Spinr today: per-account controls VERIFIED (CS-9); referral cap VERIFIED-LIVE at 5/day.
+- Benefit: cheap visibility over the one surface that is live and dollar-shaped. Cost/effort: **S** (a query into `trust_signals`). Risk: none.
+- How it fails: many accounts on many numbers (the E10 gap).
+- False-positive cost: none (report only). Appeal path: n/a until an action is attached; then the referral reward is held, not cancelled, pending review.
+- First step: add rule "referral code with more than N new accounts in 7 days" to the signal table. Measure success by: held-then-confirmed referral dollars.
+
+### Purpose-limited device signal for promo eligibility — ASSESS (blocked on E10)
+- What it is: a per-install identifier (or a Play Integrity / App Attest app-scoped identifier), hashed, stored only to answer "has this device already claimed a first-ride promo?", deleted after a fixed period.
+- Who uses it / source: the OPC's legitimacy test for intrusive processing asks for a legitimate need, effectiveness, minimal intrusiveness and proportionality (as summarised in coverage of the OPC's August 2025 biometrics guidance, [DLA Piper summary](https://www.dlapiper.com/en-fr/insights/publications/2025/09/navigating-biometrics-under-pipeda), snippet, INFERRED — the OPC page itself was blocked). The OPC treats device fingerprinting in advertising as tracking that needs meaningful consent ([OPC online behavioural advertising guidelines](https://www.priv.gc.ca/en/privacy-topics/technology/online-privacy-tracking-cookies/tracking-and-ads/gl_ba_1112/), snippet, INFERRED).
+- Spinr today: no device identifier (E10, VERIFIED). `spinr-fraud-auditor` forbids recommending new device collection without a purpose/consent/retention review.
+- Benefit: the only control against multi-account promo farming. Cost/effort: M plus a privacy impact assessment. Risk: scope creep into tracking; breaks "not a data-harvesting product" if ever reused.
+- Guardrail: **no third-party fingerprinting SDK**, no cross-app identifier, no advertising ID, no reuse for analytics or marketing. Store a salted hash, not the raw value.
+- False-positive cost: shared or second-hand phones deny a genuine new rider a first-ride promo (a lost discount, not a lost ride).
+- Appeal path: "promo not applied? contact support" with a manual override.
+- First step: E10 decision and PIA; no code before that.
+
+### 2.5 Safety
+
+### SOS paging for a small operator — ADOPT (Now): PagerDuty free tier first, Twilio voice as the in-house fallback
+This is the most important card in this file. Today an SOS reaches the admin dashboard (if open), a mailbox and a log line; the page to a person is dark (TSF-001), and the now-**live** route-deviation alerts and check-in escalations never page at all (CS-11).
+
+**Options a small operator can actually staff:**
+
+| Option | What it gives | Cost | Fits the code today? | Verdict |
+|---|---|---|---|---|
+| **A. PagerDuty (free tier)** | Phone/SMS/push to whoever is on call, one schedule, one escalation policy, acknowledgement tracking, re-page on no-ack. Free for up to 5 users with 100 phone/SMS notifications a month ([PagerDuty pricing](https://www.pagerduty.com/pricing/incident-management/), snippet, read 2026-09-25, INFERRED). | $0 to start | **Yes** — `safety_paging.py` already emits the Events API v2 shape ([PagerDuty Events API v2](https://developer.pagerduty.com/docs/events-api-v2/trigger-events/), snippet, INFERRED). Config only. | **ADOPT now** |
+| B. Twilio voice call + SMS to an on-call rota, built in-house | Uses the vendor Spinr already pays; no new processor for incident data | Per-call cost; **M** effort, because acknowledgement, re-page and rota must be built | Partly (Twilio client exists) | TRIAL as a fallback channel if A is down or declined |
+| C. Jira Service Management (Opsgenie successor) | Same class as A | Paid | Payload adapter needed | ASSESS only if Atlassian is already used. Opsgenie itself is end-of-sale (2025-06-04) and end-of-support 2027-04-05 (CS-11) — **correct `domain-safety.md`, which still names Opsgenie as a drop-in** |
+| D. Safety-response vendor (e.g. Noonlight dispatch API; RapidSOS) | 24/7 trained operators who can relay trip data to 911 on the user's request | Contract; per-user or per-event pricing (UNKNOWN) | New integration (**L**) | ASSESS. Noonlight advertises dispatch support in Canada ([Noonlight Dispatch API](https://www.noonlight.com/products/dispatch-api), snippet, INFERRED); RapidSOS partners with TELUS on Canadian NG911 ([RapidSOS–TELUS](https://rapidsos.com/blog/telus-modernize-canada-911/), snippet, INFERRED); Uber uses RapidSOS for in-app 911 data ([RapidSOS–Uber](https://rapidsos.com/case-study/uber/), snippet, INFERRED); Lyft uses ADT for Emergency Help ([Lyft Emergency Help](https://www.lyft.com/blog/posts/lyft-launches-emergency-help), snippet, INFERRED). Must keep "offer 911, never auto-dial" |
+| E. In-house 24/7 safety centre | Human monitoring | Several full-time staff | — | **HOLD** — not staffable at Spinr's scale |
+
+- Spinr today: see CS-11 and TSF-001 (VERIFIED). Live paging URL state UNKNOWN (not in `10-live-checks.md`).
+- Benefit: turns "someone may be watching" into "a named person's phone rings". Cost/effort: **S** (account, rota, paste routing key; super-admin-only setting already exists). Risk: alert fatigue if route-deviation alerts are paged at the same urgency as SOS.
+- How it fails: one person on call and asleep; free-tier SMS quota exhausted by noisy alerts; the webhook fails silently (it is best-effort by design).
+- False-positive cost: a responder woken by an accidental SOS (bounded by the 1.2 s hold and the 60 s false-alarm window).
+- Appeal path: n/a (not an enforcement action).
+- First step behind a flag: set `sos_paging_webhook_url` + routing key; two severities — SOS and check-in-no-response = high urgency (phone call), route-deviation = low urgency (push/SMS) until its false-positive rate is known. Add a synthetic weekly test page. Rewrite `docs/runbooks/sos-incident.md` to the real table and channels (TSF-001). Rollback: clear the setting. Measure success by: time from SOS to acknowledgement (target P95 under 2 minutes, the runbook's own SLA), and weekly test-page ack rate 100%.
+
+### SOS triage protocol (acknowledge, classify, act, close) — ADOPT
+- What it is: a written, short protocol the on-call person follows: **acknowledge** in the pager within the SLA → open the incident in admin → **classify** (P0 active danger / P1 unsafe but not in danger / P2 after the fact / false alarm) → **act** (P0: call the reporter; if no answer and there is a live-danger indicator, the platform may itself call police with location — policy decision, see §4; P1: call/message within 15 minutes; P2: safety queue within 4 h per `domain-safety.md`) → **close** with an outcome code and `resolved_at`.
+- Who uses it / source: Uber and Lyft both surface a check-in with "I'm OK / get help / call 911" choices and route to a safety line (RideCheck, [MobileSyrup: RideCheck in Canada](https://mobilesyrup.com/2020/02/12/uber-ridecheck-safety-feature-canada/), [Daily Hive](https://dailyhive.com/vancouver/uber-ridecheck-canada), snippets, read 2026-09-25, INFERRED).
+- Spinr today: incident `status` and `assigned_to_admin_id` exist; no acknowledgement timestamp, no severity-driven SLA, no re-page (CS-11, VERIFIED). Incident rows lack ride status at trigger (TSF-007).
+- Benefit: makes response measurable and defensible (regulator / plaintiff persona). Cost/effort: **S** (runbook) + **S** (`acknowledged_at`, `ride_status_at_trigger` additive columns). Risk: low.
+- How it fails: protocol not rehearsed; P0 criteria too vague.
+- False-positive cost: none. Appeal path: n/a.
+- First step: runbook + a monthly tabletop drill; additive columns behind no flag (admin-only). Measure success by: share of incidents with an acknowledgement under SLA; share closed with an outcome code.
+
+### Rider-verifies-driver at pickup (plate-match prompt + "trip started" confirmation) — ADOPT (copy-level, ROADMAP X4)
+- What it is: the pickup code already proves to the **driver** that the right rider is in the car (VERIFIED, §0). The rider-side check is: (1) an arrival prompt that puts the driver photo, car colour/make/model and **plate** first, with a one-line reminder to match the plate before getting in; (2) an unmistakable "Your trip has started with <first name>, <plate>" push/screen the moment the code is accepted, so a rider in the wrong car knows immediately that no Spinr trip started; (3) copy that explains the code is a safety check ("only your matched driver can start your trip with this code").
+- Who uses it / source: Uber's opt-in PIN ("Verify your ride", with a night-time-only option) exists so that only the matched driver can start the trip ([Uber: PIN verification](https://www.uber.com/pl/en/blog/pin-number/), [Uber help: Verify my Ride](https://help.uber.com/riders/article/whats-verify-my-ride/?nodeId=2ddbb5e8-0dd3-4048-b9ee-f6b5e5311e25), snippets, read 2026-09-25, INFERRED). Lyft shows driver photo, car photo and plate in a pop-up on arrival with a reminder to match the plate ([TechCrunch 2019](https://techcrunch.com/2019/05/21/lyft-adds-more-safety-features-including-in-app-emergency-assistance-reminders-to-check-the-plate), snippet, INFERRED).
+- Spinr today: photo, vehicle and plate are shown (`rider-app/app/driver-arriving.tsx:743-775`) and the code label reads "SHARE THIS PIN WITH YOUR DRIVER" (`:781`) with no safety explanation and no plate-match reminder (VERIFIED). Spinr's code is on for every ride, stronger than Uber's opt-in default. The missing-code path returns 409 "contact support to start it" (`ride_flow.py:1188-1201`).
+- Benefit: closes the residual of withdrawn TSF-010/BENCH-001 at copy cost. Cost/effort: **S**. Risk: copy is a live rider-visible change (gate 5); rider-app has no visual regression tooling, so it is reasoned about, not screenshotted.
+- How it fails: riders do not read prompts; the rider reads the code aloud to whoever is closest.
+- False-positive cost: none. Appeal path: n/a.
+- First step behind a flag: X4 copy under one `app_settings` flag; document the missing-code support path (who can start a ride with no code, and how it is audited). Measure success by: count of pickup-code lockouts and "wrong car" support contacts per 10k rides.
+
+### Route-deviation alert (live) + rider/driver-facing check-in — TRIAL
+- What it is: keep the now-live ops alert, and add the RideCheck pattern — when a trip stops unexpectedly or deviates, ask **both** parties "Is everything OK?" with "I'm OK / get help / call 911" (never auto-dial).
+- Source: RideCheck in Canada since 2020-02, sends notification to rider and driver on an unexpected long stop or possible crash (links above, INFERRED).
+- Spinr today: `route_deviation_alerter.py` live (VERIFIED-LIVE); alert-only, admin-facing; the 20-minute silent check-in exists for every trip (`safety_checkin_loop.py`); BENCH-009 covers the dead-driver-phone case.
+- Benefit: reaches the person in the car, not only an admin. Cost/effort: **M**. Risk: prompts during legitimate detours (road closures, winter routing) annoy riders; a prompt to a driver mid-drive must not require interaction while moving.
+- False-positive cost: an unnecessary prompt; and if "no response" escalates, a needless page. Measure the alert's false-positive rate for 4 weeks before paging on it.
+- Appeal path: n/a (no enforcement). If a deviation is later treated as a fare issue, it goes through the fare-dispute path (BENCH-002), never an automatic penalty.
+- First step behind a flag: `route_deviation_rider_checkin_enabled` (off); first log how many live alerts per 1,000 trips fire and how many a reviewer calls genuine. Measure success by: genuine-alert share, and rider response rate to the prompt.
+
+### Phone-sensor crash detection — HOLD
+- What it is: detect a collision from accelerometer/gyroscope/GPS spikes.
+- Source: vendor and research material stresses false positives from drops, door slams and speed bumps and uses speed and G-force gates ([Damoov](https://dev.to/damoov/crash-detection-algorithms-on-smartphones-how-to-minimize-false-positives-in-telematics-apps-4ilh), [WreckWatch](https://www.dre.vanderbilt.edu/~schmidt/PDF/wreckwatch.pdf), snippets, INFERRED).
+- Why HOLD: high false-positive tuning cost, battery cost on both apps, and the usual shortcut is a third-party telematics SDK that would ship motion data to another processor (guardrail). The unexpected-stop check-in above catches much of the same harm with data Spinr already has. Revisit only if a first-party phone OS API becomes available to apps.
+
+### Trusted contacts: relationship in SOS context; opt-in confirmation at add time — ADOPT / ASSESS
+- ADOPT (**S**): thread the stored `relationship` into the dispatcher view (SAFETY-002) — additive, admin-only.
+- ASSESS: a confirmation text to the contact when added (today contacts are notified by default and can only STOP afterwards). Benefit: fewer surprise SOS texts to wrong numbers; Cost: a new SMS flow and copy; FP cost: a contact who never replies is unusable in an emergency, so do **not** make confirmation a precondition for alerting.
+
+### Repeated false-SOS tracking — HOLD any penalty; ASSESS a reviewer-only count
+- The runbook promises "3 false SOS in 7 days → compliance review" but nothing implements it (edge-case matrix Flow 6 RED, VERIFIED). A penalty on SOS use risks deterring a real emergency press, which is worse than the abuse. If built, it is a count visible to the safety reviewer only, never a block or warning to the user. Fix the runbook so it does not promise an unbuilt policy.
+
+### 2.6 Driver fatigue without control-of-work
+
+### Online-time counter, advisory break prompts, and a legally reviewed safety cap — ASSESS (cap) / TRIAL (advisory)
+- What it is: count each driver's time in driver mode. Show an advisory "you've been driving N hours — take a break" prompt (TRIAL). Separately decide, with counsel, whether to add a hard safety cap of the kind Uber and Lyft use (ASSESS).
+- Who uses it / source: Uber in Canada since February 2018: after 12 hours of driving the app blocks new trips until a 6-hour offline break ([CBC News](https://www.cbc.ca/news/business/uber-safety-driver-break-1.4544816), [CTV News](https://www.ctvnews.ca/business/article/new-uber-feature-to-force-drivers-to-take-a-break-after-12-straight-hours/), snippets, read 2026-09-25, INFERRED). Lyft: a full uninterrupted 6-hour break for every 12 hours in driver mode ([Lyft Help](https://help.lyft.com/hc/en-us/all/articles/115012926787-Taking-breaks-and-time-limits-in-driver-mode), snippet, INFERRED). No Saskatchewan hours-of-service rule for TNC drivers was found; the Vehicles for Hire Act framework covers licensing and insurance ([Vehicles for Hire Act PDF](https://pubsaskdev.blob.core.windows.net/pubsask-prod/109623/V3-2.pdf), [Regulations on CanLII](https://www.canlii.org/en/sk/laws/regu/rrs-c-v-3.2-reg-1/latest/rrs-c-v-3.2-reg-1.html), snippets — the absence of an hours rule is **ASSUMED**, escalated in §4).
+- Spinr today: nothing (CS-13, VERIFIED absence). Note the dormant driver-pass "daily ride quota / force offline" mechanic the blueprint wants removed (Promotions card, X18) — a quota sold for money is control-of-work; a safety cap is a different thing and must not be implemented through that code.
+- Benefit: safety and liability; a plaintiff's lawyer will ask whether a 16-hour shift was visible to the platform. Cost/effort: advisory **S–M**; cap **M**. Risk: the classification question — "What Spinr Is NOT" forbids dictating shifts and penalising offline time. An advisory prompt carries no control; a hard cap arguably limits work for safety rather than directing it (Uber and Lyft run one while treating drivers as contractors — INFERRED), but this is a legal call.
+- How it fails or gets gamed: drivers run two platforms (Spinr cannot see time on others); toggling offline briefly — so count time in driver mode with a pause, not a reset, as Uber's snippet describes.
+- False-positive cost: for a cap, lost earnings for a rested driver who took breaks the counter could not see. For advisory, none.
+- Appeal path: for a cap — support can review a mis-counted session; never a penalty or rating effect for taking or not taking a break.
+- First step behind a flag: `driver_break_advisory_enabled` (off) — advisory only, no dispatch effect; count sessions to learn the real distribution of long shifts first. Measure success by: share of driver sessions over 12 h in driver mode (baseline first); zero complaints of pressure to log off (classification check).
+
+### 2.7 Law-enforcement data requests
+
+### A written Canadian request process + scoped legal-hold export + disclosure log — ADOPT (process now, tooling next)
+- What it is: one inbox and owner for police/government requests; a register row per request; a checklist before any disclosure; the smallest disclosure that satisfies the request; a logged export; and, later, an annual statistical transparency report.
+- Who uses it / source (all INFERRED from search snippets; statute text unreachable, so the legal content is **ASSUMED** and in §4):
+  - PIPEDA s.7(3)(c.1)(ii) lets an organization disclose without consent to a government institution that has **identified its lawful authority** and says the request is for law enforcement; after *R v. Spencer* (SCC 2014) "lawful authority" is not satisfied by a bare request for subscriber information where there is a reasonable expectation of privacy; organizations may refuse and ask for a production order; other PIPEDA duties (limit disclosure, safeguard, reasonableness) still apply ([OPC: Spencer factum](https://www.priv.gc.ca/en/privacy-topics/privacy-laws-in-canada/the-personal-information-protection-and-electronic-documents-act-pipeda/pipeda-complaints-and-enforcement-process/court_p/factum/02_spencer/), [OPC: case for reforming PIPEDA](https://www.priv.gc.ca/en/privacy-topics/privacy-laws-in-canada/the-personal-information-protection-and-electronic-documents-act-pipeda/pipeda_r/pipeda_r_201305/), snippets).
+  - A court order, warrant or subpoena falls under s.7(3)(c); an emergency threatening life, health or security under s.7(3)(e), with a duty to inform the individual afterwards (ASSUMED — section text not read).
+  - Government transparency-reporting guidelines exist for private organizations disclosing to government ([ISED Transparency Reporting Guidelines](https://www.ic.gc.ca/eic/site/smt-gst.nsf/eng/sf11057.html), [OPC research: transparency reporting](https://www.priv.gc.ca/en/opc-actions-and-decisions/research/explore-privacy-research/2015/transp_index/), snippets).
+- Spinr today: a runbook section with no tooling; `reports/legal-hold/` does not exist (TSF-009, VERIFIED). `dual_approval_exports_enabled` exists but is **off** live (VERIFIED-LIVE). Admin reads of an incident are not audit-logged (CS-12).
+- The process (PROPOSED, for counsel to confirm):
+  1. **Intake**: one address; verify the requester (call back the agency's public number, never the number on the request).
+  2. **Classify**: (a) court order / warrant / production order → comply with its exact scope; (b) request citing lawful authority without an order → default to asking for an order unless counsel approves; (c) **emergency** (imminent risk to life) → the on-call safety lead can release the minimum needed (current location, vehicle, driver identity) immediately, record why, and notify the individual afterwards when safe; (d) civil subpoena / lawyer's letter → counsel.
+  3. **Minimise**: disclose only the named ride(s) and fields; pickup/drop-off GPS is retained 3 years and trip records 7 years (CLAUDE.md), so say what exists rather than exporting everything.
+  4. **Export** with the legal-hold tool (TSF-009): super-admin only, second approver (turn on `dual_approval_exports_enabled` for this export type), checksummed snapshot, one audit row per export recording requester, legal basis, fields and recipient.
+  5. **Preserve** on a preservation demand even before an order (freeze retention purge for the named records).
+  6. **Report**: count requests by type yearly; publish a short transparency note once volume is non-trivial (Later).
+- Benefit: accountability when the first real request arrives (a collision or missing-person case is foreseeable). Cost/effort: process **S**; tooling **M**. Risk: over-disclosure is itself a privacy breach.
+- How it fails: requests arrive at a random staff member; an urgent phone request bypasses the log.
+- False-positive cost: n/a. Appeal path: the individual's PIPEDA access right to learn of disclosures, subject to the government-notice rules (ASSUMED — s.9(2.1)–(2.4) not read).
+- First step: write the process doc and name the owner (no code); then TSF-009's export behind the dual-approval flag. Measure success by: every request has a register row with legal basis and fields released.
+
+### 2.8 Guardrail check
+
+### G-1 Meta Conversions API per-ride events vs. "no ad or behavioural-profiling SDKs" — HOLD any expansion; escalate
+- What it is: server-to-server events to Meta with hashed email/phone/user id for ad measurement (CS-15).
+- Why it is on this radar: this session's guardrail forbids ad or behavioural-profiling SDKs, and CLAUDE.md forbids "behavioral retargeting". CAPI is not an SDK, and the module is careful (hashing, no raw PII). But hashing does not make an email address non-personal (ASSUMED legal reading), and per-ride purchase events tied to a matched identity are exactly the input that ad retargeting uses. This is STRAT-004's question; it is live now (VERIFIED-LIVE config).
+- Recommendation for this lane: (1) no fraud or safety tool may read from or write to the Meta channel; (2) no new events; (3) founder + privacy decision on whether per-ride events stay on, with the privacy-policy wording checked (§4). Not a build item.
+

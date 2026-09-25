@@ -424,3 +424,139 @@ Card order follows `01-inventory/epics.md` §2. Cards 1–5 are the live-tested 
 - Cites: HIST-006/-009/-011, SEC-R10-002/-008/-010, REL-003/-004, COMP-007/-018 (corrected), CARTO-005, C43, C108, ADR-001/-004/-007.
 
 ---
+
+## §5 Sequencing on a live product
+
+**Principles (from the master prompt tie-breakers and CLAUDE.md gates).** Every step is additive or flagged; nothing mutates a column's meaning without a dual-read window; anything touching rides/payments/auth/corporate/safety gets a gate-4 dry run against `mock_supabase_client` and a before/after scenario; each step is ≤ 3 files and one logical change; a step whose last mile is an infra action no session can take (secrets, branch protection, Fly config, `DATABASE_URL`) is labelled **human** and scheduled first, because W0 showed that is where programmes stall.
+
+### 5.1 Tracks that can run in parallel (disjoint files)
+
+| Track | Owns (files no other track touches) | Now | Next | Later |
+|---|---|---|---|---|
+| **A · Money boundary & ledger** (cards 3, 4, 5, 11) | `repositories/_base.py` write helpers, `services/ledger_service.py`, `services/payment_service.py`, `services/corporate_wallet_service.py`, `utils/referral_payout.py`, `routes/drivers/earnings.py`, `.semgrep/`, a CI registry script | CORP-001 key · MONEY-008 · DRIVER-002/MONEY-001 · registry + `money_write_guard` (dark) · legs flag on in staging · absorption meter | wrapper keys mandatory + static test · atomic header RPC per settlement type · MONEY-007/-009/-013 · `stripe_fee` column · RPC migration linter (CORP-002) | `driver_payable` view dual-read · FLOAT8 `_d` dual-write (5-step plan, §3.6 of `money-cra.md`) |
+| **B · Ride state & insurance** (cards 1, 2, 8) | `routes/rides/matching.py`, `routes/rides/transitions.py` (new), `utils/scheduled_rides.py`, `routes/drivers/ride_flow.py`, `repositories/driver_repo.py`, `utils/insurance_periods.py`, `rider-app/hooks/useRiderSocket.ts` | DISPATCH-001 emit · DISPATCH-002 pre-filter · DISPATCH-003 atomic UPDATE · rider `last_seq` · SOS runbook rewrite · TSF-007 | `ride_status_events` + helper in shadow on `scheduled→searching` · one write site per PR · finish v2 insurance, delete v1 sites · rider recovery copy + admin queue · `trust_signals` + first detector | trip PIN (touches trip start) · remaining sites through the helper · CAS into RPCs · damage-fee flow |
+| **C · Shared mobile & a11y** (cards 9 client half, 17) | `docs/known-forks.md`, `.claude/hooks/pre-commit`, `shared/components/*`, `shared/utils/money.ts`, `rider-app/app/ride-options.tsx`, `rider-app/app/notifications.tsx`, `driver-app/components/CarMarker.tsx` | registry row + check 11 blocking · `Text`/`Money`/`Button` primitives (no consumers) · RIDERJ-004 · owner agent | money-figure sites · lint · CarMarker single implementation (needs a device — human) · inbox on the shared hook | opportunistic sweep |
+| **D · Platform, background work, ops** (cards 12, 13, 18) | `.github/workflows/*` (deploy/migration/status), `backend/fly.toml`, `core/background_loop_registry.py` thresholds, `utils/vendor_client.py` (new), `utils/twilio*`, `services/outbox*`, `docs/vendor-*.md` | **human:** `ALERT_WEBHOOK_URL`, `DATABASE_URL` read secret, `SPINR_PROCESS_ROLE` on one group, "what is applied" answer · INT-001 timeout · C135 sweep · loop-threshold CI test + 12 fixes · nightly `--status` alert · Cloudinary removal | migrate-on-deploy (dry-run → approval → auto) · drift job · outbox on in staging, `support_ticket.v1` · breaker extraction · C11 metrics agent | envelope encryption dual-read · failover + PITR drill · generated vendor docs |
+| **E · Contracts, flags, gates** (cards 16, H6, H7) | `tests/test_static_*.py` (new), `scripts/docs/*.py` (new), `ci-guardrails.yml`/`ci.yml` summary jobs, `.gitleaks.toml`, `shared/types/api/wsEvents.ts`, `backend/models/ws_events.py` (new) | QUAL-001/-002/-007 · facts generator + doc test · flag registry + annotation test · OpenAPI snapshot-diff job · no-swallow rule (warn) | WS event enum + shared test · tier hook · E2E promoted · generated TS types per touched endpoint · `policy_facts` | branch-protection audit (**human**, C21) |
+| **F · Security & admin controls** (cards 6, 7, 15) | `routes/auth.py`, `routes/admin/auth.py`, `utils/otp.py` (new), `utils/crypto.py`, `dependencies/`, `routes/admin/wallet.py`, `services/admin_approvals.py`, `.claude/settings.json`, `.claude/agents/*` | **human:** service-role key rotation decision (SEC-R10-001) · `OTP_PEPPER` explicit · SEC-R10-012 allowlist + read-only auditors · audit `request_id` + static test · ADMIN-OPS-002 · STRAT-005 removal | `load_ride_for` helper + 55-route refactor · `utils/otp.py` under login OTP · money approvals dark-flagged · editor `version` preconditions · SEC-R10-004 grace-window | asymmetric JWT dual-verify → mint → HS256 off · JWKS |
+
+Tracks A–F share no files by construction; the two places they meet are named below. Within a track, steps are serial (each ≤ 3 files, committed before the next).
+
+### 5.2 Dependencies (what must land before what)
+
+1. **"What is applied in production" (D, human) precedes every migration-dependent step** in A (legs projection, migration 331/297/376 assumptions), B (`ride_status_events`, insurance v2 RPCs 459/464), and 14 (cohort column). CARTO-005 says this is UNKNOWN for every row; SEC-R10-002 says the repo is wrong in both directions.
+2. **Process-role split (D) precedes any outbox topic (D) and precedes Zoho-on-outbox (13)** — 399's own rollback block assumes a worker exists.
+3. **Money registry + guard (A) precedes the FLOAT8 dual-write (A)** and should precede card 11's and card 4's writers being touched, so the guard sees them.
+4. **`ride_status_events` helper (B) precedes deleting the v1 insurance writers (B)** — the v2 RPC is the single place both the status write and the period write commit; do not remove v1 until every site that could open Period 2/3 goes through a transactional path.
+5. **Flag registry (E) precedes flipping any dark flag** (SKB-002, DISPATCH-003's v2, `outbox_receipts_enabled`, eligibility recheck) so each flip has an owner, a failure mode and a sunset recorded.
+6. **OpenAPI snapshot (E) precedes any client-facing contract change** in A (dispute screen), B (rider recovery), 17 (inbox) — additive-only evolution becomes checkable.
+7. **Key rotation decision (F, human) precedes making gitleaks G5a blocking (E)** — `security-gates.yml:10-14` holds it advisory on that basis.
+8. **Track meeting points:** (a) `services/payment_service.py` is A's; B must not touch completion-time settlement — B's completion site migrates last and via A's owner; (b) `routes/rides/matching.py` is B's; the FCM payload consolidation (card 9) touches its `_FCM_EXCLUDE` — do it as one B-track PR that only moves the set into `utils/egress.py`.
+
+### 5.3 Feature-flag and dual-write windows
+
+| Change | Mechanism | Window | Exit criterion | Rollback |
+|---|---|---|---|---|
+| `transition_ride_status` | shadow flag `ride_transition_helper_shadow` → per-site flag | ≥ 7 days shadow per site, then 14 days flagged-on | zero shadow mismatches; `ride_status_events` row count == status writes | flag off; table stays |
+| Money write guard | `money_write_guard` (metric-only in prod first) | 14 days metric-only | zero `float` rejections in prod metric | flag off |
+| Ledger legs | `ledger_double_entry_enabled` in staging only | until `reconciliation.py` leg checks are green 7 days | balanced legs over the historical projection | flag off; legs re-projectable |
+| Atomic settle headers | `ledger_atomic_settle_enabled` extended per type | one settlement type per release, 14 days each | no lost `financial_events` header for that type | flag off per type |
+| FLOAT8 → NUMERIC | `rides_money_decimal_write` then `_read` | ≥ 30 days + one T4A run | nightly `abs(x::text::numeric - x_d) > 0.005` = 0 | read flag off; `_d` inert |
+| Cohort column | dual-read: constant vs column | 14 days | nightly equality assertion passes | keep JSONB, stop reading column |
+| Outbox topics | `outbox_receipts_enabled`, `outbox_support_ticket_enabled` | staging first; prod per topic | dead-letter queue empty 7 days | flag off; drain; table stays |
+| Trip PIN | `trip_pin_enabled` + pilot cohort | 30 days pilot | no increase in failed starts; support tickets flat | flag off |
+| Money approvals | `dual_approval_money_enabled` at threshold "any" | 14 days dark (queue populated, not enforced) | queue latency acceptable to ops | flag off |
+| Asymmetric JWT | `JWT_ASYMMETRIC_MINT` per audience; `JWT_HS256_ACCEPT` | one refresh cycle per audience | zero forced logouts | HS256 accept stays on |
+| CarMarker single implementation | component flag in `shared/` | device pass recorded (human) | C90's checklist | flag back to old component |
+| Migrate-on-deploy | repo variable `MIGRATE_ON_DEPLOY=dry_run|approve|auto` | dry-run 2 weeks → approve 2 weeks | `--status` = 0 pending after every `main` deploy | variable back to `dry_run` |
+
+**What is visible mid-session to a user already in the app** (gate 5): rider recovery copy (B), trip PIN (B), option-card labels (C, invisible except to screen readers), money-figure font scaling (C), booking fee if turned on (strategy card, not scheduled here — founder decision), driver-pass quota off (11). Each needs the "User experience effect" field filled and, for rider/driver, the "no visual tooling — reasoned, not screenshotted" disclosure.
+
+---
+
+## §6 What NOT to rebuild
+
+Steelman first: the audit's own evidence says these are right, and a rewrite's risk exceeds its value.
+
+| Keep as is | Why it is right (evidence) | What a rewrite would risk |
+|---|---|---|
+| The eight-value ride state machine, two guards, CAS-per-site convention | No unguarded status write across ~13 sites (`dispatch.md` §1/§4, VERIFIED); race-on-accept distinguishes own-retry from taken (`ride_flow.py:395-436`) | Reintroducing HIST-011 on a live-tested surface; the external 11-state machine adds states nobody asked for |
+| `calculate_fare` and the attribution invariant | Pure Decimal, `driver_earnings = total − admin`, nightly `_attribution_mismatch` check; `platform_share` does not exist (`money-cra.md` §1) | The one number the brand rests on |
+| Surge cap + pre-booking HMAC token | The clearest durable trust edge (`03-benchmark.md` §4 #3); clamped at every call site | Nothing to gain; anything "smarter" drifts toward what Spinr Is NOT |
+| SOS trigger/notify/idempotency pipeline | Above the codebase's own bar, real end-to-end test (`trust-safety-fraud.md` §f) | The plumbing is not the problem; the on-call target is |
+| `corporate_wallet_apply_delta` / allowance RPC pair | Row-locked, versioned, deduped in three layers — H2's end state already realised for one domain | Replacing the best money code in the repo |
+| Stripe idempotency (three layers) and `payment_retry` | Consistently used; the recurring defect is the unclaim/swallow path, not idempotency (`00-history.md` "not found to recur") | — |
+| `release_driver_and_close_period()` | The one place HIST-015 was actually reconciled (five copies → one) | — |
+| `redis_set_nx` / `_strict` split, in-process fallback (ADR-004) | Callers choose fail-open/closed per correctness need; `CLAUDE.md` documents the asymmetry | A uniform policy would be wrong in one direction for half the loops |
+| `get_app_settings()` store and ADR-011 | Keep-last-known-on-rowless is a real kill-switch property; per-flag failure semantics are decided and amended | A flag vendor adds a sub-processor and a residency question |
+| Watchdog registry with runtime-computed names | The right shape; the thresholds are the defect (REL-001) | — |
+| Admin router default-secure mount, super_admin pattern, `token_version` bump | Consistent across 24 routers (`admin-ops.md` §1) | — |
+| Custom JWT + service-role backend, RLS dormant-but-correct (ADR-005, C108) | Recorded decision; `tests/rls` is cheap and protects a future direct path | Supabase-issued sessions would change every client and reopen HIST-009 |
+| Transactional outbox (399) and the WS replay ring | Correctly built, ids-only payloads, dead-letter redrive; just under-used | A queue product (Kafka HOLD in `03-benchmark.md`) |
+| Change-log + `ACTION_ITEMS.md` self-correction discipline | This audit was only possible because of it (`00-history.md` §6) | — |
+| The coverage-floor scripts with dated provenance; the loguru static scanner | The two mechanisms that have stopped a family recurring | — |
+| Grounded FAQ retrieval + AI tool boundaries (ADR-012) | Right pattern; gaps are locale and config, not design | — |
+| Deployment topology (ADR-007) and Supabase region (ADR-001) | Verified healthy 2026-09-21; region change is a compliance event | — |
+
+**Sounds good, should NOT be built** (screened against "What Spinr Is NOT", scale and complexity — `greenfield-extensions.md` §11): an 11-state ride machine; event-sourced `rides`; a dispatch/payments/safety microservice split; Kafka or any message broker (the outbox + Postgres is enough at this scale); a service mesh or API gateway product; a hosted ledger (records leave `ca-central-1`); a feature-flag vendor; a generated full API client (types and drift checks, yes); distributed tracing before C11 (ADR-014); a monorepo re-tooling; a native rewrite of either app; own routing/maps; an ML fraud model before a `trust_signals` table exists; a percentage platform fee; a driver ride quota sold as a pass; premium rider priority tiers; per-ride purchase events to ad networks (STRAT-004 is a removal, not a build); pooling, FX, multi-country fleets.
+
+---
+
+## §7 Top 5 deltas, ranked
+
+Ranking = how many §1 families and lane findings the delta closes × how cheap and reversible its first step is × how live-tested the surface is (a delta on a hot surface ranks *higher* only if its first step is dark).
+
+1. **One transition path for ride state, with an append-only event log and insurance-period writes inside the same transaction** (H1; cards 1, 2, 8). Closes the shape behind HIST-010 and HIST-011, the DISPATCH-001 class, and gives the regulator persona a queryable trail; it is also the cheapest producer for H3's outbox. First step is one WS send; the second is a table nobody reads. Cost M, risk low with shadow.
+2. **A typed money write boundary now, ledger-as-constraint next, ledger-first only in a rewrite** (H2; cards 3, 4, 5, 11). Closes HIST-001 at the boundary instead of at the grep (five new instances found this wave), makes the 0 %-commission claim provable to a driver, and turns eleven reconciliation checks toward one. First step is a dark guard. Cost S→M→M.
+3. **Enforce parity on the shared package that already exists, and give it an owner** (H5; cards 9, 17). Closes HIST-002/-015 and CARTO-002 (three live cross-app bugs), and is where the two HIGH accessibility findings (UXA11Y-001/-002) are fixed once for both apps. First step is a registry row and a blocking hook. Cost S; the marker reconcile needs a device (human).
+4. **One apply path for schema and one process role per machine** (cards 12, 18; H3's precondition). Closes HIST-006 and the repo↔live divergence SEC-R10-002 found, unblocks the outbox, the legs projection and the RLS enable, and removes the "built but the last step needs access" pattern W0 named. First step is a read-only nightly `--status` alert. Cost S→M; needs three human inputs (§9).
+5. **Static conventions as tests, flags with a lifecycle, contracts diffed in CI** (H6, H7; card 16). Closes the six *process* families (HIST-004/-005/-007/-008/-013/-014 to the extent the repo can) with the one mechanism that has worked here, and stops dark flags accumulating (six "built but off" fixes found this wave). First steps are two CI fixes and two generators. Cost S.
+
+Not in the top five but named because they are the cheapest life-safety and revenue decisions in the programme: the SOS on-call target (TSF-001, doc + a purchase), the service-role key rotation (SEC-R10-001), and the booking-fee/model memo (STRAT-001/-002) — all human decisions, §9.
+
+**If Uber/Lyft rebuilt Spinr tomorrow — structurally**, they would not build a different system than §3; they would build *this* system with the boundaries owned from day one and would spend the first month on §5's Track D (platform) before any feature. **Economically** they could not copy the 0 % fare (`strategy.md` §9); **operationally** they would buy paging and keep everything else; **technically** they would keep Postgres-as-queue and skip the broker; **experientially** they would ship the driver trip receipt (card 4) as the product, because it is the one thing a 30 %-take incumbent structurally cannot.
+
+---
+
+## §8 What was NOT verified
+
+- **Production state, any of it.** Live values of the 37 flags (incl. `ledger_double_entry_enabled`, `ledger_atomic_settle_enabled`, `outbox_receipts_enabled`, `minimal_fcm_offer_payload_enabled`, `driver_availability_v2_enabled`); which of the 553 migration files are applied (CARTO-005; SEC-R10-002 shows the repo is wrong in both directions); Fly/Railway secrets (`ALERT_WEBHOOK_URL`, `SPINR_PROCESS_ROLE`, `OTP_PEPPER`); whether `render.yaml` deploys anything (INT-003 corrected); Stripe, Sentry and Supabase consoles (connectors failed or read-only was not granted).
+- **Counts I did not re-derive.** The ~13 status write sites (`dispatch.md` §4), 59 `EXCLUDE_LEGACY_RIDES` references, 55 of 102 id-scoped routes, 76+ `allowFontScaling` sites, 281 `get_app_settings` call sites (grep count includes comments and tests), 373 mutating route decorators (regex over decorators, may double-count re-exported routers), 112 distinct WS type literals (may include non-WS `"type"` keys), the 234-commit `api.ts` figure (Historian, cannot filter by message).
+- **Absence claims not in the re-verified sample** are INFERRED where they drive a HIGH severity in a card: no rider-app caller for `/stops` (RIDERJ-001), no trip PIN (TSF-010), no damage-fee flow (TSF-008), no driver instant cash-out UI (BENCH-004), no GST number on receipts (MONEY-011 — this one *was* re-verified and stays VERIFIED), no `ride_status_events` table (my own grep, VERIFIED for the repo).
+- **Uber/Lyft claims** — none fetched by this lane; inherited labels kept.
+- **Tax/legal/regulatory** — all ASSUMED here; §9 lists them.
+- **The seven hypothesis verdicts** were reached from repo reads and lane reports, not by prototyping any of them; effort sizes (S/M/L) are judgement, not estimates from a team.
+- **`ux-a11y.md`** was re-read at the end of this pass: 815 lines, identical headings and card set to the version read at the start (mtime 22:43 UTC, 2026-09-24); no card in this file needed revising for it.
+- **No test, build, or command with side effects** was executed by this lane; no file other than this one was written.
+
+---
+
+## §9 Human-only questions and escalations
+
+Money, safety, regulatory and data-residency decisions the blueprint cannot make. Each names who can answer and what it unblocks.
+
+**Money**
+1. Are `ledger_double_entry_enabled`, `ledger_atomic_settle_enabled` and `fare_lock_enabled` on in production, and has the legs projection ever run over history? (payments owner — unblocks A-track Now; decides MONEY-007's live exposure.)
+2. Which migrations are applied in production (`schema_migrations`), specifically 331, 297, 376, 414, 450, 459–464, 379? (whoever holds `DATABASE_URL` — precondition for §5.2 #1.)
+3. Booking fee: which model (documented vs coded — STRAT-001), what amount, which areas, may the copy say "goes to Spinr"? Payout schedule: has the `interval: "manual"` decision been made (STRAT-012)? (founder.)
+4. Money approvals: what dollar threshold requires a second admin, and who are the approvers (ADMIN-OPS-001)? A hard per-admin daily cap as the interim? (founder/finance.)
+5. Merchant of record and Connect model (separate charges & transfers vs destination charges) — affects the supplier-of-record and receipt-number questions and whether a ledger-first rewrite is even the right end state. (founder + accountant.)
+
+**Tax / regulatory (all ASSUMED until a primary source is read)**
+6. SK PST on app-facilitated passenger transport (COMP-003/G9; contrary bulletin evidence in hand). 7. GST registration number on receipts and corporate statements — whose (MONEY-011/COMP-015)? 8. Part XX.1 platform-operator reporting; T4A box mapping and threshold (MONEY-012). 9. Licence class 4 vs 5 for the eligibility gate (COMP-001) and flipping the dark eligibility rules (COMP-002). 10. Municipal TNC licences and the per-trip fee for Regina/Saskatoon; SGI monthly km return schedule (COMP-004/-005). 11. Promo/incentive tax treatment (coupon vs price reduction; bonuses as taxable supply). 12. Retention: confirm the 7-year ride-date purge satisfies "six years from end of tax year" for all record types; approve retention Step O (safety incidents) and phone scrub (COMP-007). (accountant / tax counsel / compliance owner — none assigned today.)
+
+**Safety**
+13. Who is paged at 3 a.m. for an SOS — a named rota or a vendor (TSF-001)? Buy decision. 14. Is the CarMarker's live motion "essential" under WCAG's exception, or must it honour reduce-motion (UXA11Y-004)? 15. ADR-016's three product sign-offs (which distance the driver's daily report, the receipt and the SGI row each show) — precondition for any trail-based completion (card 2 Later). 16. Rider recovery for an abandoned in-progress ride: is an admin-mediated completion with a fare from the last plausible fix acceptable policy (RIDERJ-002/DRIVER-005)?
+
+**Security / data residency**
+17. Was the 2026-07-30 service-role key rotated (SEC-R10-001; two documents disagree)? If yes, G5a can block; if no, this is still P0. 18. Is `render.yaml` (US region) deployed anywhere, and is Resend's processing region known (INT-003 corrected/INT-007)? Both are residency questions before the vendor registry is generated. 19. Are the LLM/Stripe/Twilio/Maps keys plaintext in the `settings` row today (SEC-R10-002)? 20. May the dev-agent allowlist lose `git push origin main` and may the account-level Supabase connector be narrowed on a schedule (SEC-R10-012)? 21. LogRocket in production iOS builds: off, or masked and added to the DPA register (SEC-R10-003)? 22. Is the GitHub purge request for the driver-PII history rewrite submitted (COMP-013)? Has privacy counsel made the RROSH determination?
+
+**Platform / access (each blocks a §5 Track D "Now")**
+23. Is `ALERT_WEBHOOK_URL` set on the Fly app (REL-002)? 24. Will `SPINR_PROCESS_ROLE` be set on one machine group, and who provisions a worker (REL-003)? 25. Will a read-only production connection secret be granted to CI for the nightly `--status` alert, and is the owner comfortable with migrate-on-deploy after the legacy work (HIST-006, §9 Q6 of `00-history.md`)? 26. What is in branch protection for `main` today (C21)? 27. Will any session or person get a real Android/iOS device and an Android Auto head unit (C70/C90/C103) — precondition for the CarMarker reconcile?
+
+**Rule change (process, but only the owner can make it)**
+28. Add to CLAUDE.md, with the same weight as "surgical changes": *a second fix to a registered fork, or a second copy of a shared primitive, is not mergeable without a contract test or a reconciliation* — the Historian's §9 Q12. This file's §1 says nine of seventeen families are architectural and share one shape; this rule is the process half of closing them.
+
+---
+
+*End of file. All nine sections complete; corrections from `07-reverification.md` applied in §0, card 8, card 9, card 13, card 16 and card 18. Written by the R19 Chief Architect lane, 2026-09-24/25.*

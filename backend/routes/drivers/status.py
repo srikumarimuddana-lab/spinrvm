@@ -367,6 +367,20 @@ def _fresh_pending_offers(offers: list | None) -> list:
     return fresh
 
 
+# claim_driver_atomic sets is_available=false and stamps availability_claimed_at
+# before the ride_offers row exists, so for a moment an obligated driver has no
+# offer to find. Releasing clears the stamp; an older unreleased stamp is an
+# orphan for the claim reaper, not a live claim.
+CLAIM_IN_FLIGHT_SECONDS = 30
+
+
+def _claim_in_flight(driver: dict) -> bool:
+    if driver.get("is_available") is not False:
+        return False
+    ts = parse_iso_utc(driver.get("availability_claimed_at"))
+    return ts is not None and ts > datetime.now(timezone.utc) - timedelta(seconds=CLAIM_IN_FLIGHT_SECONDS)
+
+
 @router.put("/{driver_id}/status")
 async def update_driver_status(
     driver_id: str,
@@ -563,6 +577,11 @@ async def update_driver_status(
                 raise HTTPException(
                     status_code=409,
                     detail="You have a pending ride offer. Please accept or decline it before going offline.",
+                )
+            if _claim_in_flight(driver):
+                raise HTTPException(
+                    status_code=409,
+                    detail="A ride offer is arriving. Please accept or decline it before going offline.",
                 )
 
     if is_online:
@@ -1187,8 +1206,17 @@ async def update_driver_status(
             # (it retries with _base only) and the offline flip still lands.
             _intent_payload.update(_DESTINATION_MODE_CLEARED)
     _payload = {**_base, **_intent_payload}
+    # Online -> offline: write only if is_available is still what the checks
+    # above saw. A dispatch claim in between (claim_driver_atomic flips it
+    # true -> false) makes this match zero rows, and the verify below returns
+    # 409 instead of taking an obligated driver offline. A None filter is
+    # IS NULL, so a legacy null row still matches itself.
+    _offline_flip = status_flipped and not is_online
+    _write_filters = {"id": driver_id}
+    if _offline_flip:
+        _write_filters["is_available"] = driver.get("is_available")
     try:
-        await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
+        await db_supabase.update_one("drivers", _write_filters, _payload)
     except Exception as _col_exc:
         # db_supabase.run_sync wraps PostgREST APIErrors in DatabaseError, so
         # str(_col_exc) is the generic "Database operation failed" sentinel —
@@ -1229,7 +1257,7 @@ async def update_driver_status(
             # losing it only on this one retry path is a safe degrade, not
             # a silent behavior change to the happy path.
             _minimal = {k: v for k, v in _base.items() if k != "location_captured_at"}
-            await db_supabase.update_one("drivers", {"id": driver_id}, _minimal)
+            await db_supabase.update_one("drivers", _write_filters, _minimal)
         else:
             raise
 
@@ -1249,6 +1277,15 @@ async def update_driver_status(
     if verify is None:
         logger.error(f"[go-online] driver row disappeared immediately after update: driver_id={driver_id}")
         raise HTTPException(status_code=500, detail="Driver row missing after status update.")
+    if _offline_flip and verify.get("is_online") and verify.get("is_available") != driver.get("is_available"):
+        # The conditional write lost to a concurrent availability change —
+        # almost always a dispatch claim. Not the silent no-op below: the
+        # driver may now hold an offer, so they stay online and decide.
+        logger.info(f"[go-offline] availability changed during go-offline; staying online driver_id={driver_id}")
+        raise HTTPException(
+            status_code=409,
+            detail="A ride offer just arrived. Please accept or decline it before going offline.",
+        )
     if bool(verify.get("is_online")) != bool(is_online):
         logger.error(
             f"[go-online] silent no-op: driver_id={driver_id} "

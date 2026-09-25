@@ -10,56 +10,42 @@ import {
     KeyboardAvoidingView,
     Alert,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { Text } from '@shared/components/Text';
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import api, { getApiErrorMessage } from '@shared/api/client';
+import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
+import type { PlaceBias, PlacePrediction } from '@shared/api/places';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
-import { newPlacesSessionToken } from '@shared/utils/placesSession';
 import { isAddressInputValid, isGeocodeResultValid } from '../../utils/addressGeocodeSchema';
+import {
+    isDestinationActive,
+    isDestinationModeAvailable,
+    type DestinationModeResponse,
+} from '../../utils/destinationModeState';
 
-interface AutocompletePrediction {
-    place_id: string;
-    description: string;
+/** A destination the driver actually picked from the typeahead list. */
+interface PickedPlace {
+    address: string;
+    lat: number;
+    lng: number;
 }
 
-/** Geocode a free-text address into {lat, lng} via the backend Places proxy.
- *  Mirrors addresses.tsx's geocodeAddress — one Places API (New) autocomplete
- *  → details session instead of a direct Geocoding API call. */
-async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
-    const sessionToken = newPlacesSessionToken();
-    try {
-        const acParams = new URLSearchParams({ input: address, session_token: sessionToken });
-        const ac = await api.get<{ predictions: AutocompletePrediction[] }>(
-            `/maps/places/autocomplete?${acParams.toString()}`,
-        );
-        const placeId = ac.data?.predictions?.[0]?.place_id;
-        if (!placeId) return null;
+const EMPTY_STATE: DestinationModeResponse = {
+    destination_mode: false,
+    destination_address: null,
+    destination_lat: null,
+    destination_lng: null,
+};
 
-        const detailsParams = new URLSearchParams({ place_id: placeId, session_token: sessionToken });
-        const details = await api.get<{ lat: number | null; lng: number | null }>(
-            `/maps/places/details?${detailsParams.toString()}`,
-        );
-        const { lat, lng } = details.data || {};
-        if (lat == null || lng == null) return null;
-        return { lat, lng };
-    } catch {
-        // Network, auth, or budget-circuit-breaker error — caller handles null
-    }
-    return null;
-}
-
-interface DestinationState {
-    destination_mode: boolean;
-    destination_address: string | null;
-    destination_lat: number | null;
-    destination_lng: number | null;
-}
+// Same soft-bias radius the rider app uses (search-destination.tsx).
+const BIAS_RADIUS_METERS = 50000;
 
 export default function DestinationModeScreen() {
     const router = useRouter();
@@ -71,13 +57,56 @@ export default function DestinationModeScreen() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [clearing, setClearing] = useState(false);
-    const [state, setState] = useState<DestinationState>({
-        destination_mode: false,
-        destination_address: null,
-        destination_lat: null,
-        destination_lng: null,
-    });
+    const [resolving, setResolving] = useState(false);
+    const [state, setState] = useState<DestinationModeResponse>(EMPTY_STATE);
     const [addressInput, setAddressInput] = useState('');
+    // Set only by choosing a prediction (or from the saved destination on
+    // load). Typing clears it, so Save can never submit an unresolved,
+    // first-result guess — the C136 follow-up to the old geocodeAddress().
+    const [picked, setPicked] = useState<PickedPlace | null>(null);
+    const [bias, setBias] = useState<PlaceBias | null>(null);
+
+    // On/off comes from the server's `active` flag (via the shared helper the
+    // banner and Settings row use), not the raw stored `destination_mode`,
+    // which stays true on an expired row.
+    const isOn = isDestinationActive(state);
+    const available = isDestinationModeAvailable(state);
+
+    const {
+        predictions,
+        loading: searching,
+        error: searchError,
+        searched,
+        clear: clearPredictions,
+        rotateSessionToken,
+        sessionToken,
+    } = usePlacesAutocomplete(picked || !available ? '' : addressInput, bias);
+
+    // Bias the typeahead to the driver's current position (only when location
+    // is already permitted — this screen never prompts). Best-effort: without
+    // it the search is simply unbiased.
+    useEffect(() => {
+        let live = true;
+        (async () => {
+            try {
+                const { granted } = await Location.getForegroundPermissionsAsync();
+                if (!granted) return;
+                const pos = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+                if (live && pos) {
+                    setBias({
+                        lat: pos.coords.latitude,
+                        lng: pos.coords.longitude,
+                        radiusMeters: BIAS_RADIUS_METERS,
+                    });
+                }
+            } catch {
+                // Location is best-effort for search bias only.
+            }
+        })();
+        return () => {
+            live = false;
+        };
+    }, []);
 
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
@@ -89,11 +118,16 @@ export default function DestinationModeScreen() {
     const fetchDestination = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await api.get<DestinationState>('/drivers/destination');
+            const res = await api.get<DestinationModeResponse>('/drivers/destination');
             const data = res.data;
             if (data) {
                 setState(data);
                 setAddressInput(data.destination_address || '');
+                setPicked(
+                    data.destination_address && data.destination_lat != null && data.destination_lng != null
+                        ? { address: data.destination_address, lat: data.destination_lat, lng: data.destination_lng }
+                        : null,
+                );
             }
         } catch (err: any) {
             showToast('error', t('destinationMode.loadFailedTitle'), getApiErrorMessage(err, t('destinationMode.loadFailedMsg')));
@@ -112,32 +146,61 @@ export default function DestinationModeScreen() {
         fetchDestination();
     }, [fetchDestination]);
 
+    const handleChangeText = (text: string) => {
+        setAddressInput(text);
+        if (picked) setPicked(null);
+    };
+
+    const handlePickPrediction = async (prediction: PlacePrediction) => {
+        setResolving(true);
+        try {
+            const params = new URLSearchParams({ place_id: prediction.place_id, session_token: sessionToken });
+            const details = await api.get<{ lat: number | null; lng: number | null }>(
+                `/maps/places/details?${params.toString()}`,
+            );
+            // The details call closes the billing session either way.
+            rotateSessionToken();
+            const { lat, lng } = details.data || {};
+            const coords = lat != null && lng != null ? { lat, lng } : null;
+            if (!isGeocodeResultValid(coords)) {
+                showToast('warning', t('destinationMode.notFoundTitle'), t('destinationMode.notFoundMsg'));
+                return;
+            }
+            clearPredictions();
+            setAddressInput(prediction.description);
+            setPicked({ address: prediction.description, lat: coords!.lat, lng: coords!.lng });
+        } catch {
+            showToast('error', t('destinationMode.notFoundTitle'), t('destinationMode.searchUnavailableMsg'));
+        } finally {
+            setResolving(false);
+        }
+    };
+
     const handleSave = async () => {
-        const trimmed = addressInput.trim();
         if (!isAddressInputValid(addressInput)) {
             showToast('warning', t('destinationMode.missingAddressTitle'), t('destinationMode.missingAddressMsg'));
+            return;
+        }
+        if (!picked) {
+            showToast('warning', t('destinationMode.missingAddressTitle'), t('destinationMode.pickFromListMsg'));
             return;
         }
 
         setSaving(true);
         try {
-            const coords = await geocodeAddress(trimmed);
-            if (!isGeocodeResultValid(coords)) {
-                showToast('warning', t('destinationMode.notFoundTitle'), t('destinationMode.notFoundMsg'));
-                return;
-            }
-
-            // Non-null: isGeocodeResultValid above already confirmed coords resolved.
-            await api.post('/drivers/destination', {
-                address: trimmed,
-                lat: coords!.lat,
-                lng: coords!.lng,
+            const res = await api.post<{ destination_expires_at?: string | null }>('/drivers/destination', {
+                address: picked.address,
+                lat: picked.lat,
+                lng: picked.lng,
             });
             setState({
+                ...state,
                 destination_mode: true,
-                destination_address: trimmed,
-                destination_lat: coords!.lat,
-                destination_lng: coords!.lng,
+                destination_address: picked.address,
+                destination_lat: picked.lat,
+                destination_lng: picked.lng,
+                destination_expires_at: res?.data?.destination_expires_at ?? null,
+                active: true,
             });
             showToast('success', t('destinationMode.savedTitle'), t('destinationMode.savedMsg'));
         } catch (err: any) {
@@ -160,13 +223,9 @@ export default function DestinationModeScreen() {
                         setClearing(true);
                         try {
                             await api.delete('/drivers/destination');
-                            setState({
-                                destination_mode: false,
-                                destination_address: null,
-                                destination_lat: null,
-                                destination_lng: null,
-                            });
+                            setState({ ...EMPTY_STATE, enabled: state.enabled, active: false });
                             setAddressInput('');
+                            setPicked(null);
                             showToast('success', t('destinationMode.clearedTitle'), t('destinationMode.clearedMsg'));
                         } catch (err: any) {
                             showToast('error', t('destinationMode.clearFailedTitle'), getApiErrorMessage(err, t('destinationMode.clearFailedMsg')));
@@ -179,6 +238,12 @@ export default function DestinationModeScreen() {
         );
     };
 
+    const busy = saving || clearing || resolving;
+    const showNoMatch = !picked && !searching && !searchError && searched && predictions.length === 0;
+    // A stored row can always be cleared, even when the feature is switched
+    // off or the destination has expired (raw flag still set).
+    const showClear = isOn || state.destination_mode;
+
     return (
         <View style={styles.container}>
             <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -190,61 +255,115 @@ export default function DestinationModeScreen() {
             </View>
 
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
+                <ScrollView
+                    style={styles.content}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+                >
                     {loading ? (
                         <View style={styles.loadingContainer}>
                             <ActivityIndicator color={colors.primary} size="large" />
                         </View>
                     ) : (
                         <>
-                            <View style={styles.statusCard}>
-                                <View style={[styles.statusIcon, { backgroundColor: state.destination_mode ? `${colors.primary}15` : colors.surfaceLight }]}>
-                                    <Ionicons name="navigate" size={20} color={state.destination_mode ? colors.primary : colors.textDim} />
+                            {available ? (
+                                <>
+                                    <View style={styles.statusCard}>
+                                        <View style={[styles.statusIcon, { backgroundColor: isOn ? `${colors.primary}15` : colors.surfaceLight }]}>
+                                            <Ionicons name="navigate" size={20} color={isOn ? colors.primary : colors.textDim} />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.statusLabel} testID="destination-mode-status">
+                                                {isOn ? t('destinationMode.activeLabel') : t('destinationMode.inactiveLabel')}
+                                            </Text>
+                                            {isOn && state.destination_address && (
+                                                <Text style={styles.statusValue} numberOfLines={2}>{state.destination_address}</Text>
+                                            )}
+                                        </View>
+                                    </View>
+
+                                    <Text style={styles.explainer}>{t('destinationMode.explainer')}</Text>
+
+                                    <View style={styles.inputGroup}>
+                                        <Text style={styles.inputLabel}>{t('destinationMode.addressLabel')}</Text>
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder={t('destinationMode.addressPlaceholder')}
+                                            placeholderTextColor={colors.textDim}
+                                            value={addressInput}
+                                            onChangeText={handleChangeText}
+                                            editable={!busy}
+                                            autoCorrect={false}
+                                        />
+                                        {(searching || resolving) && (
+                                            <ActivityIndicator color={colors.primary} size="small" style={styles.searchSpinner} />
+                                        )}
+                                        {!picked && predictions.length > 0 && (
+                                            <View style={styles.predictionList} testID="destination-predictions">
+                                                {predictions.map((p) => (
+                                                    <TouchableOpacity
+                                                        key={p.place_id}
+                                                        style={styles.predictionRow}
+                                                        onPress={() => handlePickPrediction(p)}
+                                                        disabled={busy}
+                                                        testID={`destination-prediction-${p.place_id}`}
+                                                    >
+                                                        <Ionicons name="location-outline" size={18} color={colors.textDim} />
+                                                        <View style={{ flex: 1 }}>
+                                                            <Text style={styles.predictionMain} numberOfLines={1}>
+                                                                {p.structured_formatting?.main_text || p.description}
+                                                            </Text>
+                                                            {!!p.structured_formatting?.secondary_text && (
+                                                                <Text style={styles.predictionSecondary} numberOfLines={1}>
+                                                                    {p.structured_formatting.secondary_text}
+                                                                </Text>
+                                                            )}
+                                                        </View>
+                                                    </TouchableOpacity>
+                                                ))}
+                                            </View>
+                                        )}
+                                        {!picked && searchError === 'unavailable' && (
+                                            <Text style={styles.searchMessage} testID="destination-search-unavailable">
+                                                {t('destinationMode.searchUnavailableMsg')}
+                                            </Text>
+                                        )}
+                                        {showNoMatch && (
+                                            <Text style={styles.searchMessage} testID="destination-search-no-match">
+                                                {t('destinationMode.noMatchingAddress')}
+                                            </Text>
+                                        )}
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={[styles.saveBtn, busy && styles.btnDisabled]}
+                                        onPress={handleSave}
+                                        disabled={busy}
+                                    >
+                                        {saving ? (
+                                            <ActivityIndicator color="#fff" size="small" />
+                                        ) : (
+                                            <Text style={styles.saveBtnText}>
+                                                {isOn ? t('destinationMode.updateBtn') : t('destinationMode.activateBtn')}
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                <View style={styles.statusCard} testID="destination-mode-unavailable">
+                                    <View style={[styles.statusIcon, { backgroundColor: colors.surfaceLight }]}>
+                                        <Ionicons name="navigate" size={20} color={colors.textDim} />
+                                    </View>
+                                    <Text style={[styles.statusLabel, { flex: 1 }]}>{t('destinationMode.unavailable')}</Text>
                                 </View>
-                                <View style={{ flex: 1 }}>
-                                    <Text style={styles.statusLabel}>
-                                        {state.destination_mode ? t('destinationMode.activeLabel') : t('destinationMode.inactiveLabel')}
-                                    </Text>
-                                    {state.destination_mode && state.destination_address && (
-                                        <Text style={styles.statusValue} numberOfLines={2}>{state.destination_address}</Text>
-                                    )}
-                                </View>
-                            </View>
+                            )}
 
-                            <Text style={styles.explainer}>{t('destinationMode.explainer')}</Text>
-
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>{t('destinationMode.addressLabel')}</Text>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder={t('destinationMode.addressPlaceholder')}
-                                    placeholderTextColor={colors.textDim}
-                                    value={addressInput}
-                                    onChangeText={setAddressInput}
-                                    multiline
-                                    editable={!saving && !clearing}
-                                />
-                            </View>
-
-                            <TouchableOpacity
-                                style={[styles.saveBtn, (saving || clearing) && styles.btnDisabled]}
-                                onPress={handleSave}
-                                disabled={saving || clearing}
-                            >
-                                {saving ? (
-                                    <ActivityIndicator color="#fff" size="small" />
-                                ) : (
-                                    <Text style={styles.saveBtnText}>
-                                        {state.destination_mode ? t('destinationMode.updateBtn') : t('destinationMode.activateBtn')}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-
-                            {state.destination_mode && (
+                            {showClear && (
                                 <TouchableOpacity
-                                    style={[styles.clearBtn, (saving || clearing) && styles.btnDisabled]}
+                                    style={[styles.clearBtn, busy && styles.btnDisabled]}
                                     onPress={handleClear}
-                                    disabled={saving || clearing}
+                                    disabled={busy}
                                 >
                                     {clearing ? (
                                         <ActivityIndicator color={colors.error} size="small" />
@@ -349,6 +468,28 @@ function createStyles(colors: ThemeColors) {
             borderWidth: 1,
             borderColor: 'rgba(255,71,87,0.2)',
         },
+        searchSpinner: { marginTop: SPACING.sm },
+        predictionList: {
+            marginTop: SPACING.sm,
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: colors.border,
+            overflow: 'hidden',
+        },
+        predictionRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+            paddingHorizontal: SPACING.md,
+            paddingVertical: SPACING.sm,
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: colors.border,
+            minHeight: 44,
+        },
+        predictionMain: { fontSize: FONT.bodyMd, color: colors.text },
+        predictionSecondary: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs },
+        searchMessage: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.sm },
         clearBtnText: { color: colors.error, fontSize: 14, fontWeight: '600' },
         saveBtnText: { fontSize: FONT.bodyMd, fontWeight: '600', color: '#fff' },
         btnDisabled: { opacity: 0.6 },

@@ -238,6 +238,7 @@ def filter_and_rank_drivers(
     *,
     allowed_area_ids: Optional[Set[str]] = None,
     allow_unassigned_area: bool = True,
+    destination_mode_enabled: bool = False,
 ) -> List[Tuple[Dict[str, Any], float]]:
     """
     Pure function: filter a candidate pool and attach per-driver distance.
@@ -248,6 +249,13 @@ def filter_and_rank_drivers(
       - Are approved for the ride's service area (when ``allowed_area_ids`` is
         given — see ``utils/service_area_scope``)
       - Are within ``search_radius_km`` of the ride pickup
+
+    ``destination_mode_enabled`` is the ``settings.destination_mode_enabled``
+    switch (migration 482, C136). False (the default, and the production
+    default) skips the destination filter entirely — every driver is treated
+    as not in destination mode, whatever their stored ``destination_*`` row
+    says. Callers pass the setting explicitly; a caller that forgets gets the
+    fail-open behaviour (driver stays eligible), never a hidden hard filter.
 
     ``allowed_area_ids=None`` (the default) disables the area check, keeping
     every existing caller and test byte-compatible. The dispatch paths pass the
@@ -300,8 +308,9 @@ def filter_and_rank_drivers(
         # P2 destination filter: drivers in destination_mode only see offers
         # whose dropoff brings them closer to their preferred destination.
         # No-op when destination_mode is False, coords are missing, or the
-        # destination has expired (C136, DESTINATION_MODE_TTL).
-        if not _ride_brings_driver_closer_to_destination(d, ride):
+        # destination has expired (C136, DESTINATION_MODE_TTL), and skipped
+        # entirely while settings.destination_mode_enabled is off (mig. 482).
+        if destination_mode_enabled and not _ride_brings_driver_closer_to_destination(d, ride):
             exclusion_counts["destination"] += 1
             driver_id = d.get("id")
             if driver_id is not None:

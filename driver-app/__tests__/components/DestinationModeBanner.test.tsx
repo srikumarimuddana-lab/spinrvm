@@ -11,7 +11,7 @@ import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
 
 import { DestinationModeBanner, DESTINATION_BANNER_TICK_MS } from '../../components/DestinationModeBanner';
-import { isDestinationActive, remainingParts } from '../../utils/destinationModeState';
+import { isDestinationActive, isDestinationModeAvailable, remainingParts } from '../../utils/destinationModeState';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
@@ -99,6 +99,15 @@ describe('DestinationModeBanner', () => {
     expect(screen.queryByTestId('destination-mode-banner')).toBeNull();
   });
 
+  it('is hidden when the server reports destination mode disabled (migration 482)', async () => {
+    // Even a row that looks live (stale active flag + future expiry) must not
+    // show: the switch being off means dispatch ignores it.
+    mockApiGet.mockResolvedValue({ data: { ...ACTIVE, enabled: false } });
+    const screen = render(<DestinationModeBanner />);
+    await flush();
+    expect(screen.queryByTestId('destination-mode-banner')).toBeNull();
+  });
+
   it('is hidden when the expiry is already past (even if active flag is stale)', async () => {
     mockApiGet.mockResolvedValue({ data: { ...ACTIVE, destination_expires_at: inMs(-1 * MIN) } });
     const screen = render(<DestinationModeBanner />);
@@ -169,6 +178,17 @@ describe('destinationModeState helpers', () => {
     expect(isDestinationActive({ ...ACTIVE, active: undefined, destination_expires_at: inMs(-MIN) }, NOW)).toBe(false);
     expect(isDestinationActive({ ...ACTIVE, active: undefined, destination_mode: false }, NOW)).toBe(false);
     expect(isDestinationActive({ ...ACTIVE, active: undefined, destination_expires_at: null }, NOW)).toBe(true);
+    // Migration 482 switch off wins over everything else.
+    expect(isDestinationActive({ ...ACTIVE, enabled: false }, NOW)).toBe(false);
+    expect(isDestinationActive({ ...ACTIVE, enabled: true }, NOW)).toBe(true);
+  });
+
+  it('isDestinationModeAvailable: hidden only when the server says enabled=false', () => {
+    expect(isDestinationModeAvailable(null)).toBe(false);
+    expect(isDestinationModeAvailable({ ...ACTIVE, enabled: false })).toBe(false);
+    expect(isDestinationModeAvailable({ ...ACTIVE, enabled: true })).toBe(true);
+    // Older backend without the switch → unchanged behaviour.
+    expect(isDestinationModeAvailable({ ...ACTIVE })).toBe(true);
   });
 
   it('remainingParts rounds up and never shows 0m', () => {

@@ -35,7 +35,11 @@ import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { otaVersionLabel } from '@shared/utils/otaVersion';
 import { isDeleteConfirmationValid } from '../../utils/accountDeletionSchema';
-import { isDestinationActive, type DestinationModeResponse } from '../../utils/destinationModeState';
+import {
+    isDestinationActive,
+    isDestinationModeAvailable,
+    type DestinationModeResponse,
+} from '../../utils/destinationModeState';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -93,12 +97,19 @@ export default function SettingsScreen() {
     // reflects the change. Failures are silent: this is a status hint, the
     // destination-mode screen itself surfaces load errors.
     const [destinationOn, setDestinationOn] = useState<boolean | null>(null);
+    // Migration 482: destination mode is switched off server-side by default.
+    // The row is shown only once the server has said it is available
+    // (`enabled !== false`); unknown (loading / fetch failed) keeps it hidden.
+    const [destinationAvailable, setDestinationAvailable] = useState(false);
     useFocusEffect(
         useCallback(() => {
             let live = true;
             api.get<DestinationModeResponse>('/drivers/destination')
                 .then((res: any) => {
-                    if (live && res?.data) setDestinationOn(isDestinationActive(res.data));
+                    if (live && res?.data) {
+                        setDestinationAvailable(isDestinationModeAvailable(res.data));
+                        setDestinationOn(isDestinationActive(res.data));
+                    }
                 })
                 .catch(() => { /* keep last known / unknown */ });
             return () => { live = false; };
@@ -440,25 +451,29 @@ export default function SettingsScreen() {
                             <Text style={styles.settingLabel}>{t('settings.taxDocuments')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
-                        <View style={styles.cardDivider} />
-                        <TouchableOpacity
-                            style={styles.actionRow}
-                            onPress={() => router.push('/driver/destination-mode' as any)}
-                        >
-                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                <Ionicons name="navigate" size={18} color={colors.primary} />
-                            </View>
-                            <Text style={styles.settingLabel}>{t('settings.destinationModeTitle')}</Text>
-                            <Text
-                                style={[styles.settingValue, destinationOn && { color: colors.primary, fontWeight: '700' }]}
-                                testID="settings-destination-mode-state"
-                            >
-                                {destinationOn === null
-                                    ? t('settings.destinationModeDesc')
-                                    : t(destinationOn ? 'settings.destinationModeOn' : 'settings.destinationModeOff')}
-                            </Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                        </TouchableOpacity>
+                        {destinationAvailable && (
+                            <>
+                                <View style={styles.cardDivider} />
+                                <TouchableOpacity
+                                    style={styles.actionRow}
+                                    onPress={() => router.push('/driver/destination-mode' as any)}
+                                >
+                                    <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                        <Ionicons name="navigate" size={18} color={colors.primary} />
+                                    </View>
+                                    <Text style={styles.settingLabel}>{t('settings.destinationModeTitle')}</Text>
+                                    <Text
+                                        style={[styles.settingValue, destinationOn && { color: colors.primary, fontWeight: '700' }]}
+                                        testID="settings-destination-mode-state"
+                                    >
+                                        {destinationOn === null
+                                            ? t('settings.destinationModeDesc')
+                                            : t(destinationOn ? 'settings.destinationModeOn' : 'settings.destinationModeOff')}
+                                    </Text>
+                                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                                </TouchableOpacity>
+                            </>
+                        )}
                     </View>
                 </View>
 

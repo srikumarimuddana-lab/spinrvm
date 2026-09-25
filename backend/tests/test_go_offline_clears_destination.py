@@ -123,3 +123,71 @@ async def test_go_offline_pre_migration_465_retry_still_goes_offline():
     retried = update_one.await_args_list[1].args[2]
     assert retried["is_online"] is False
     assert "destination_expires_at" not in retried
+
+
+# ── v2 availability path (driver_availability_v2_enabled) ──────────────────
+# Found in Ravi's review of Surya's T1: the v2 go_offline goes through
+# driver_availability_service and returned before the legacy write, so it
+# never cleared destination mode. Default-off flag, but "going offline clears
+# it" must hold on both paths.
+
+
+def _v2_patches(*, update_one: AsyncMock, change: AsyncMock):
+    base = _patches(current_online=True, requested_online=False, update_one=update_one)
+    return (
+        *base,
+        patch.object(status_mod, "_availability_v2_enabled", AsyncMock(return_value=True)),
+        patch.object(status_mod, "_change_availability_status", change),
+        patch.object(status_mod, "_finish_v2_status", AsyncMock(return_value={"ok": True})),
+    )
+
+
+async def _call_v2(action: str):
+    return await status_mod.update_driver_status(
+        driver_id="drv-1",
+        is_online=False,
+        lat=None,
+        lng=None,
+        online_epoch="ep-1",
+        request_id="req-1",
+        availability_action=action,
+        current_user=USER,
+    )
+
+
+@pytest.mark.anyio
+async def test_v2_go_offline_clears_destination_mode():
+    update_one = AsyncMock(return_value={"id": "drv-1"})
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches(update_one=update_one, change=change)
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        assert await _call_v2("go_offline") == {"ok": True}
+
+    change.assert_awaited_once()
+    dest_writes = [c for c in update_one.await_args_list if "destination_mode" in c.args[2]]
+    assert len(dest_writes) == 1
+    table, filt, payload = dest_writes[0].args
+    assert table == "drivers" and filt == {"id": "drv-1"}
+    assert payload["destination_mode"] is False
+    for col in _DEST_COLS:
+        assert payload[col] is None, col
+
+
+@pytest.mark.anyio
+async def test_v2_stop_requests_keeps_destination_mode():
+    update_one = AsyncMock(return_value={"id": "drv-1"})
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches(update_one=update_one, change=change)
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        await _call_v2("stop_requests")
+    assert not [c for c in update_one.await_args_list if "destination_mode" in c.args[2]]
+
+
+@pytest.mark.anyio
+async def test_v2_go_offline_destination_clear_failure_does_not_fail_offline(caplog):
+    update_one = AsyncMock(side_effect=RuntimeError("db down"))
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches(update_one=update_one, change=change)
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        assert await _call_v2("go_offline") == {"ok": True}
+    assert any("failed to clear destination mode" in r.getMessage() for r in caplog.records)

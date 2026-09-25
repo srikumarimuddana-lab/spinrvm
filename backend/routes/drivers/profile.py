@@ -29,6 +29,11 @@ from ._shared import (  # noqa: F401
     serialize_doc,
 )
 
+try:
+    from ...services.dispatch_service import DESTINATION_MODE_TTL, is_destination_mode_active
+except ImportError:
+    from services.dispatch_service import DESTINATION_MODE_TTL, is_destination_mode_active
+
 router = APIRouter()
 
 
@@ -1019,11 +1024,18 @@ class SetDestinationRequest(BaseModel):
 @router.post("/destination")
 async def set_destination_mode(req: SetDestinationRequest, current_user: dict = Depends(get_current_user)):
     """Set driver's preferred destination. Ride matching will prioritize
-    rides heading toward this destination to reduce empty miles."""
+    rides heading toward this destination to reduce empty miles.
+
+    C136: the destination auto-expires ``DESTINATION_MODE_TTL`` (2h) after it
+    is set — dispatch stops filtering once ``destination_expires_at`` passes
+    (see ``dispatch_service.is_destination_mode_active``)."""
     driver = await _deps.db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    now = datetime.now(timezone.utc)
+    set_at = now.isoformat()
+    expires_at = (now + DESTINATION_MODE_TTL).isoformat()
     await _deps.db.update_one(
         "drivers",
         {"id": driver["id"]},
@@ -1032,13 +1044,16 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
             "destination_address": req.address,
             "destination_lat": req.lat,
             "destination_lng": req.lng,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "destination_set_at": set_at,
+            "destination_expires_at": expires_at,
+            "updated_at": set_at,
         },
     )
     return {
         "success": True,
         "destination_mode": True,
         "destination_address": req.address,
+        "destination_expires_at": expires_at,
     }
 
 
@@ -1057,6 +1072,8 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
             "destination_address": None,
             "destination_lat": None,
             "destination_lng": None,
+            "destination_set_at": None,
+            "destination_expires_at": None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -1065,7 +1082,12 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
 
 @router.get("/destination")
 async def get_destination_mode(current_user: dict = Depends(get_current_user)):
-    """Get driver's current destination mode status."""
+    """Get driver's current destination mode status.
+
+    ``active`` is computed server-side by the SAME helper dispatch uses, so the
+    app never shows "heading home" while dispatch has stopped filtering (C136).
+    ``destination_mode`` is the raw stored flag and can be true while
+    ``active`` is false (expired / pre-migration-465 row with no expiry)."""
     driver = await _deps.db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -1075,4 +1097,16 @@ async def get_destination_mode(current_user: dict = Depends(get_current_user)):
         "destination_address": driver.get("destination_address"),
         "destination_lat": driver.get("destination_lat"),
         "destination_lng": driver.get("destination_lng"),
+        "destination_set_at": _iso_or_none(driver.get("destination_set_at")),
+        "destination_expires_at": _iso_or_none(driver.get("destination_expires_at")),
+        "active": is_destination_mode_active(driver),
     }
+
+
+def _iso_or_none(value) -> Optional[str]:
+    """Normalise a timestamptz column to an ISO-8601 string (or None)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)

@@ -546,7 +546,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 # path (up to max_candidate_pool rows every dispatch + retry, every
                 # replica) never needs; the offer payload is built from the post-claim
                 # get_driver_by_id re-read.
-                columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
+                columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,destination_expires_at,vehicle_type_id,service_area_id",
                 limit=max_candidate_pool,
                 ride_id=ride_id,
             )
@@ -888,7 +888,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             search_radius_km=search_radius,
                             app_settings=app_settings,
                             area=None if _area_lookup_failed else _ride_area,
-                            columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
+                            columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,destination_expires_at,vehicle_type_id,service_area_id",
                             limit=max_candidate_pool,
                             ride_id=ride_id,
                         )

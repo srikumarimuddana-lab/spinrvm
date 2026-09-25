@@ -17,10 +17,17 @@ push / asyncio.create_task machinery in the tests.
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# C136: destination ("heading home") mode auto-expires this long after the
+# driver sets it. Single source of truth — imported by
+# routes/drivers/profile.py when stamping destination_expires_at. Deliberately
+# a code constant, NOT an app_settings column: an unapplied settings column
+# 500s the whole admin settings save (PGRST204).
+DESTINATION_MODE_TTL = timedelta(hours=2)
 
 try:
     from ..geo_utils import calculate_distance
@@ -157,6 +164,35 @@ def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     return True
 
 
+def is_destination_mode_active(driver: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
+    """C136: is this driver's destination ("heading home") filter live right now?
+
+    True only when ALL hold: ``destination_mode`` is truthy, both destination
+    coords are present, and ``destination_expires_at`` parses to a moment
+    strictly after ``now``. A NULL / missing / unparseable expiry counts as
+    expired — so rows that pre-date migration 465 (or a candidate select that
+    forgot the column) stop filtering rather than filtering forever.
+
+    Used by both ``GET /drivers/destination`` (the ``active`` flag) and the
+    dispatch filter, so the app and dispatch can never disagree.
+    """
+    if not driver or not driver.get("destination_mode"):
+        return False
+    if driver.get("destination_lat") is None or driver.get("destination_lng") is None:
+        return False
+    raw = driver.get("destination_expires_at")
+    if not isinstance(raw, (str, datetime)):
+        return False
+    expires_at = parse_iso_utc(raw)
+    if expires_at is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return expires_at > now
+
+
 def _ride_brings_driver_closer_to_destination(driver: Dict[str, Any], ride: Dict[str, Any]) -> bool:
     """
     For destination-mode drivers, gate offers so we only forward rides
@@ -171,15 +207,17 @@ def _ride_brings_driver_closer_to_destination(driver: Dict[str, Any], ride: Dict
     than the driver's current position is. The 5% buffer absorbs short
     cross-traffic rides that technically reduce great-circle distance
     by a few meters but don't actually progress the driver home.
+
+    C136: the gate only applies while destination mode is *active* (see
+    ``is_destination_mode_active``) — flag on, coords present, and a
+    ``destination_expires_at`` in the future. Expired / NULL / missing /
+    unparseable expiry, or missing coords, fail open (no filter) so the
+    driver still gets offers rather than going invisible.
     """
-    if not driver.get("destination_mode"):
+    if not is_destination_mode_active(driver):
         return True
     dest_lat = driver.get("destination_lat")
     dest_lng = driver.get("destination_lng")
-    if dest_lat is None or dest_lng is None:
-        # destination_mode flag set but no coords stored — fail open so
-        # the driver still gets offers rather than going invisible.
-        return True
     dropoff_lat = ride.get("dropoff_lat")
     dropoff_lng = ride.get("dropoff_lng")
     if dropoff_lat is None or dropoff_lng is None:
@@ -245,7 +283,8 @@ def filter_and_rank_drivers(
             continue
         # P2 destination filter: drivers in destination_mode only see offers
         # whose dropoff brings them closer to their preferred destination.
-        # No-op when destination_mode is False or coords are missing.
+        # No-op when destination_mode is False, coords are missing, or the
+        # destination has expired (C136, DESTINATION_MODE_TTL).
         if not _ride_brings_driver_closer_to_destination(d, ride):
             continue
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])

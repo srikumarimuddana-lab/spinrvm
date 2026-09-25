@@ -1137,6 +1137,22 @@ async def update_driver_status(
             _intent_payload["went_online_at"] = _now_iso
         else:
             _intent_payload["went_offline_at"] = _now_iso
+            # C136: going offline ends "heading home" — clear destination mode
+            # in this same write so a driver who logs back in hours later isn't
+            # silently filtered by a stale destination. Only on the offline
+            # flip; going online never touches these columns. If migration 465
+            # is not applied yet, the PGRST204 minimal-retry below drops this
+            # (it retries with _base only) and the offline flip still lands.
+            _intent_payload.update(
+                {
+                    "destination_mode": False,
+                    "destination_address": None,
+                    "destination_lat": None,
+                    "destination_lng": None,
+                    "destination_set_at": None,
+                    "destination_expires_at": None,
+                }
+            )
     _payload = {**_base, **_intent_payload}
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
@@ -1154,7 +1170,15 @@ async def update_driver_status(
         _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
         _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
         _missing_intent = any(
-            col in _combined for col in ("last_status_changed_at", "went_online_at", "went_offline_at", "pgrst204")
+            col in _combined
+            for col in (
+                "last_status_changed_at",
+                "went_online_at",
+                "went_offline_at",
+                "destination_set_at",
+                "destination_expires_at",
+                "pgrst204",
+            )
         )
         if _missing_intent:
             logger.warning(

@@ -57,9 +57,12 @@ POSTGIS_RPC = "drivers_nearby_location_geog"
 # RPC LIMIT before eligibility. 500 nearest generic drivers can drop the
 # only WAV/area match; eligibility is applied in Python after this fetch.
 POSTGIS_ID_CAP = 5000
+# destination_expires_at (C136, migration 465) feeds
+# dispatch_service.is_destination_mode_active; without it the destination
+# filter silently reads as expired for every driver.
 _DISPATCH_COLUMNS = (
     "id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,"
-    "destination_lat,destination_lng,vehicle_type_id,service_area_id"
+    "destination_lat,destination_lng,destination_expires_at,vehicle_type_id,service_area_id"
 )
 
 

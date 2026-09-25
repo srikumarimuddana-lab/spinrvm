@@ -2120,6 +2120,115 @@ class TestDestinationMode:
         assert result["destination_mode"] is True
         assert result["destination_address"] == "200 Broadway"
 
+    # ── C136: destination mode auto-expires ──────────────────────────
+
+    def test_set_destination_stamps_set_at_and_expiry_two_hours_ahead(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import drivers as drv
+
+        update = AsyncMock(return_value=_driver())
+        before = datetime.now(timezone.utc)
+        with (
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.update_one", update),
+        ):
+            req = drv.SetDestinationRequest(address="200 Broadway", lat=52.15, lng=-106.65)
+            result = asyncio.run(drv.set_destination_mode(req=req, current_user={"id": USER_ID}))
+        after = datetime.now(timezone.utc)
+
+        payload = update.await_args.args[2]
+        set_at = datetime.fromisoformat(payload["destination_set_at"])
+        expires_at = datetime.fromisoformat(payload["destination_expires_at"])
+        assert set_at.tzinfo is not None and expires_at.tzinfo is not None
+        assert before <= set_at <= after
+        assert expires_at - set_at == timedelta(hours=2)
+        assert payload["destination_mode"] is True
+        # POST contract: {success, destination_mode, destination_address, destination_expires_at}
+        assert set(result) == {"success", "destination_mode", "destination_address", "destination_expires_at"}
+        assert result["destination_expires_at"] == payload["destination_expires_at"]
+
+    def test_clear_destination_nulls_timestamps(self):
+        from backend.routes import drivers as drv
+
+        update = AsyncMock(return_value=_driver())
+        with (
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.update_one", update),
+        ):
+            result = asyncio.run(drv.clear_destination_mode(current_user={"id": USER_ID}))
+
+        payload = update.await_args.args[2]
+        assert payload["destination_mode"] is False
+        for col in (
+            "destination_address",
+            "destination_lat",
+            "destination_lng",
+            "destination_set_at",
+            "destination_expires_at",
+        ):
+            assert col in payload and payload[col] is None, col
+        assert result == {"success": True, "destination_mode": False}
+
+    def _get(self, **fields):
+        from backend.routes import drivers as drv
+
+        driver = _driver(
+            destination_mode=True,
+            destination_address="200 Broadway",
+            destination_lat=52.15,
+            destination_lng=-106.65,
+            **fields,
+        )
+        with patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=driver)):
+            return asyncio.run(drv.get_destination_mode(current_user={"id": USER_ID}))
+
+    def test_get_destination_active_true_when_future_expiry(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        result = self._get(
+            destination_set_at=now.isoformat(),
+            destination_expires_at=(now + timedelta(hours=1)).isoformat(),
+        )
+        assert set(result) == {
+            "destination_mode",
+            "destination_address",
+            "destination_lat",
+            "destination_lng",
+            "destination_set_at",
+            "destination_expires_at",
+            "active",
+        }
+        assert result["active"] is True
+        assert isinstance(result["destination_expires_at"], str)
+
+    def test_get_destination_active_false_when_expired(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        result = self._get(
+            destination_set_at=(now - timedelta(hours=3)).isoformat(),
+            destination_expires_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        assert result["destination_mode"] is True  # raw flag still reported
+        assert result["active"] is False
+
+    def test_get_destination_active_false_when_expiry_null(self):
+        # Pre-migration-465 row: destination_mode=true but no expiry stamped.
+        result = self._get(destination_set_at=None, destination_expires_at=None)
+        assert result["active"] is False
+        assert result["destination_expires_at"] is None
+        assert result["destination_set_at"] is None
+
+    def test_get_destination_active_false_when_mode_off(self):
+        from backend.routes import drivers as drv
+
+        with patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=_driver(destination_mode=False))):
+            result = asyncio.run(drv.get_destination_mode(current_user={"id": USER_ID}))
+        assert result["active"] is False
+        assert result["destination_expires_at"] is None
+
 
 # ---------------------------------------------------------------------------
 # get_bank_account

@@ -137,6 +137,7 @@ describe('backgroundMessaging (Android)', () => {
         distance_km: '3.2',
         rider_rating: '4.9',
         incentives: '[{"id":1},{"id":2}]',
+        ring_mode: 'alarm',
       });
       expect(result).toMatchObject({
         ride_id: 'r1',
@@ -145,6 +146,7 @@ describe('backgroundMessaging (Android)', () => {
         distance_km: 3.2,
         rider_rating: 4.9,
         incentives_count: 2,
+        ring_mode: 'alarm',
       });
     });
 

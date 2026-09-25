@@ -335,6 +335,77 @@ describe('notifeeService', () => {
     });
   });
 
+  // Migration 466: the backend stamps ring_mode; the native plugin creates
+  // ride-offers-alarm-v1 (USAGE_ALARM). Alarm only when both line up.
+  describe('alarm-volume channel', () => {
+    const ALARM = 'ride-offers-alarm-v1';
+    const alarmChannel = { id: ALARM, blocked: false };
+    const postedChannel = (call = 0) => mockDisplayNotification.mock.calls[call][0].android.channelId;
+
+    it('posts on the alarm channel when the offer says alarm and the channel exists', async () => {
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(mockGetChannel).toHaveBeenCalledWith(ALARM);
+      expect(postedChannel()).toBe(ALARM);
+    });
+
+    it('falls back to ride-offers-v3 when this build has no alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce(null);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('falls back to ride-offers-v3 when the driver blocked the alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce({ ...alarmChannel, blocked: true });
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('falls back to ride-offers-v3 when the channel lookup throws', async () => {
+      mockGetChannel.mockRejectedValueOnce(new Error('native'));
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('does not look up the alarm channel when the offer says notification or nothing', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'notification' });
+      await displayRideOfferNotification({ ...BASE_OFFER, ride_id: 'ride-2' });
+      expect(mockGetChannel).not.toHaveBeenCalled();
+      expect(postedChannel(0)).toBe('ride-offers-v3');
+      expect(postedChannel(1)).toBe('ride-offers-v3');
+    });
+
+    it('keeps the silent channel for a foreground post, but a later reclaim rings on the alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      // Foreground WS offer: carries ring_mode, posts silently.
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' }, { silent: true });
+      // App backgrounded: the reclaim offer is rebuilt from app state, no ring_mode.
+      await displayRideOfferNotification(BASE_OFFER, { reclaim: true });
+      expect(postedChannel(0)).toBe('ride-offers-fg-v2');
+      expect(postedChannel(1)).toBe(ALARM);
+    });
+
+    it('a driver who muted sound effects stays on the silent channel', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' }, { muted: true });
+      expect(postedChannel()).toBe('ride-offers-fg-v2');
+      expect(mockGetChannel).not.toHaveBeenCalled();
+    });
+
+    it('never looks up the alarm channel on iOS', async () => {
+      mockPlatform.OS = 'ios';
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(mockGetChannel).not.toHaveBeenCalled();
+    });
+  });
+
   describe('dismissRideOfferNotification', () => {
     it('cancels the fixed notification id', async () => {
       const { dismissRideOfferNotification } = require('../../services/notifeeService');

@@ -12,8 +12,6 @@
 import { EventType } from '@notifee/react-native';
 
 const mockCreateChannel = jest.fn().mockResolvedValue(undefined);
-// Default: no native ride-offers-v4 channel (a binary without
-// plugins/withRideOfferRingChannel), so the Notifee-created v3 is used.
 const mockGetChannel = jest.fn().mockResolvedValue(null);
 const mockDeleteChannel = jest.fn().mockResolvedValue(undefined);
 const mockRequestPermission = jest.fn().mockResolvedValue(undefined);
@@ -88,37 +86,18 @@ describe('notifeeService', () => {
       expect(mockSetNotificationCategories).not.toHaveBeenCalled();
     });
 
-    // The native ring-volume channel (plugins/withRideOfferRingChannel.js)
-    // exists: JS must neither create v3 nor touch v4's settings, and must drop
-    // v3 so the driver doesn't see two "Ride Offers" channels.
-    it('uses the native ride-offers-v4 channel when it exists and drops v3', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    // ride-offers-v4 (USAGE_NOTIFICATION_RINGTONE) hides the minimised offer
+    // on device. Always recreate v3 and delete v4, even if a previous build
+    // left v4 on the phone.
+    it('deletes ride-offers-v4 and keeps posting on v3', async () => {
       const { ensureNotifeeReady } = require('../../services/notifeeService');
       await ensureNotifeeReady();
 
-      expect(mockGetChannel).toHaveBeenCalledWith('ride-offers-v4');
-      expect(mockCreateChannel).toHaveBeenCalledTimes(1);
-      expect(mockCreateChannel).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'ride-offers-fg-v2' }),
-      );
-      expect(mockCreateChannel).not.toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'ride-offers-v4' }),
-      );
-      expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-v3');
-    });
-
-    it('falls back to creating v3 when the v4 lookup rejects', async () => {
-      mockGetChannel.mockRejectedValueOnce(new Error('native bad state'));
-      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-      const { ensureNotifeeReady } = require('../../services/notifeeService');
-      await ensureNotifeeReady();
-
+      expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-v4');
       expect(mockCreateChannel).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'ride-offers-v3' }),
       );
       expect(mockDeleteChannel).not.toHaveBeenCalledWith('ride-offers-v3');
-      expect(errSpy).toHaveBeenCalled();
-      errSpy.mockRestore();
     });
 
     it('registers the iOS category with Accept/Decline instead of creating channels', async () => {
@@ -159,18 +138,16 @@ describe('notifeeService', () => {
       expect(req.id).toBe('ride-offer-current');
     });
 
-    it('posts a loud offer to ride-offers-v4 when the native channel exists', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    it('posts a loud offer to ride-offers-v3, never the ring-volume channel', async () => {
       const { displayRideOfferNotification } = require('../../services/notifeeService');
       await displayRideOfferNotification(BASE_OFFER);
 
       const req = mockDisplayNotification.mock.calls[0][0];
-      expect(req.android.channelId).toBe('ride-offers-v4');
+      expect(req.android.channelId).toBe('ride-offers-v3');
       expect(req.android.loopSound).toBe(true);
     });
 
-    it('keeps a silent (in-app) offer on the silent channel even when v4 exists', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    it('keeps a silent (in-app) offer on the silent channel', async () => {
       const { displayRideOfferNotification } = require('../../services/notifeeService');
       await displayRideOfferNotification(BASE_OFFER, { silent: true });
 

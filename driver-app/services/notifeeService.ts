@@ -48,14 +48,14 @@ const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v3';
 // above), so this needed a new id — editing fg-v1 would have been a silent
 // no-op on every install that already has it.
 const RIDE_OFFER_SILENT_CHANNEL_ID = 'ride-offers-fg-v2';
-// v4: same channel settings as v3, but its sound plays on the RING volume
-// stream instead of the NOTIFICATION stream, so a minimised-app offer rings as
-// loud as an incoming call. Notifee cannot set a channel's audio usage, so v4
-// is created NATIVELY at app start (plugins/withRideOfferRingChannel.js).
-// JS never creates it: if JS created v4 on a binary without that plugin, the
-// quiet notification-stream settings would be locked in for good. So we post
-// to v4 only when the native side already made it, and otherwise fall back to
-// the Notifee-created v3 exactly as before.
+// ride-offers-v4 was created natively with USAGE_NOTIFICATION_RINGTONE so a
+// minimised offer would follow ring volume (plugins/withRideOfferRingChannel.js).
+// On device Android treats that usage as a phone ringtone and does not show a
+// shade or heads-up notification unless the app is a dialer / holds
+// full-screen intent, which this app does not. Foreground offers kept working
+// because that sound is the in-app MP3, not this channel. Never post to v4.
+// Delete it when a previous build left it on the device, and keep v3, which
+// does show the card (at the phone's notification volume).
 const RIDE_OFFER_RING_CHANNEL_ID = 'ride-offers-v4';
 const STALE_CHANNEL_IDS = ['ride-offers-v2', 'ride-offers-fg-v1'];
 const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
@@ -159,36 +159,25 @@ export async function ensureNotifeeReady(): Promise<void> {
     if (channelReadyPromise) return channelReadyPromise;
     channelReadyPromise = (async () => {
         if (Platform.OS === 'android') {
-            // A lookup failure is treated as "no v4" — v3 is the safe fallback.
-            const ringChannel = await notifee
-                .getChannel(RIDE_OFFER_RING_CHANNEL_ID)
-                .catch((e: unknown) => {
-                    console.error('[Notifee] ride-offers-v4 lookup failed — using ride-offers-v3:', e);
-                    return null;
-                });
-            if (ringChannel) {
-                rideOfferChannelId = RIDE_OFFER_RING_CHANNEL_ID;
-                // v3 is superseded on this device; drop it so drivers don't
-                // see two "Ride Offers" rows under Settings → Notifications.
-                await notifee.deleteChannel(RIDE_OFFER_CHANNEL_ID).catch(() => undefined);
-            } else {
-                rideOfferChannelId = RIDE_OFFER_CHANNEL_ID;
-                // High importance + bypass DND so a fare offer interrupts
-                // even when the driver has Do Not Disturb on.
-                await notifee.createChannel({
-                    id: RIDE_OFFER_CHANNEL_ID,
-                    name: 'Ride Offers',
-                    description: 'New ride requests — wakes the screen like an incoming call',
-                    importance: AndroidImportance.HIGH,
-                    sound: 'ride_offer',
-                    vibration: true,
-                    vibrationPattern: [300, 500, 300, 500],
-                    lights: true,
-                    lightColor: AndroidColor.GREEN,
-                    bypassDnd: true,
-                    visibility: AndroidVisibility.PUBLIC,
-                });
-            }
+            // Drop the ring-volume channel from builds that already created it.
+            // Posting to it hides the offer while the app is minimised.
+            rideOfferChannelId = RIDE_OFFER_CHANNEL_ID;
+            await notifee.deleteChannel(RIDE_OFFER_RING_CHANNEL_ID).catch(() => undefined);
+            // High importance + bypass DND so a fare offer interrupts
+            // even when the driver has Do Not Disturb on.
+            await notifee.createChannel({
+                id: RIDE_OFFER_CHANNEL_ID,
+                name: 'Ride Offers',
+                description: 'New ride requests — wakes the screen like an incoming call',
+                importance: AndroidImportance.HIGH,
+                sound: 'ride_offer',
+                vibration: true,
+                vibrationPattern: [300, 500, 300, 500],
+                lights: true,
+                lightColor: AndroidColor.GREEN,
+                bypassDnd: true,
+                visibility: AndroidVisibility.PUBLIC,
+            });
 
             await notifee.createChannel({
                 id: RIDE_OFFER_SILENT_CHANNEL_ID,

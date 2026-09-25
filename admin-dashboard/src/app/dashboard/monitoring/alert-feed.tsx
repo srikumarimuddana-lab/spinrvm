@@ -95,6 +95,9 @@ export function AlertFeed({ events, onClear, onEventClick }: AlertFeedProps) {
                                         // entirely under prefers-reduced-motion.
                                         initial={shouldReduceMotion ? false : { opacity: 0, y: -6 }}
                                         animate={{ opacity: 1, y: 0 }}
+                                        // Rows fade out on removal or "Clear all" instead of
+                                        // vanishing; none under prefers-reduced-motion.
+                                        exit={shouldReduceMotion ? undefined : { opacity: 0 }}
                                         transition={{ duration: 0.15 }}
                                     >
                                         <span className="shrink-0 font-mono text-muted-foreground">

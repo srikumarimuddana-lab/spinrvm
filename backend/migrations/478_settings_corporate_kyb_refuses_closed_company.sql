@@ -1,4 +1,4 @@
--- 477_settings_corporate_kyb_refuses_closed_company.sql
+-- 478_settings_corporate_kyb_refuses_closed_company.sql
 --
 -- Kill switch for the KYB closed-company guard.
 --

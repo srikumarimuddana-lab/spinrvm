@@ -30,7 +30,7 @@
 - **KYB resubmit.**
   - The flip passes `expected_status=<status read>`. If the CAS loses and the re-read shows a different status, the route returns 409. If the status is unchanged, it still returns the existing 503.
   - The closed-company 409 now says the account is closed, instead of "Verification is already complete". The status code is unchanged.
-- **Kill switch.** `corporate_kyb_refuses_closed_company` is added as a settings column by migration 477 and defaults to TRUE. Code reads it with `.get(..., True)`, so the guard is on even before the migration is applied. Setting it to false restores the old unconditional writes on both paths. `domain-corporate.md`'s flag convention requires a default-true kill switch when "the un-flagged behavior was the bug".
+- **Kill switch.** `corporate_kyb_refuses_closed_company` is added as a settings column by migration 478 and defaults to TRUE. Code reads it with `.get(..., True)`, so the guard is on even before the migration is applied. Setting it to false restores the old unconditional writes on both paths. `domain-corporate.md`'s flag convention requires a default-true kill switch when "the un-flagged behavior was the bug".
 - **Decision on the audit trail for a refused closed-company decision: nothing is written.**
   - The "decision row" is the `kyb_reviewed_at`/`kyb_reviewed_by`/`kyb_last_decision`/`kyb_review_note` columns on the `corporate_accounts` row itself; there is no separate decisions table.
   - Stamping those columns on a closed account would overwrite the record of the last real review with a decision that had no effect. It would also leave `kyb_last_decision='rejected'` on a terminal row.
@@ -79,7 +79,7 @@ Blast-radius grep: `record_kyb_decision`, `update_corporate_account_status`, `ky
 | `backend/repositories/corporate_repo.py` | `record_kyb_decision(..., expected_status=None)` filters on status when given | CAS primitive for the route |
 | `backend/routes/corporate_accounts.py` | `kyb_review`: flag read, pre-read, closed → 409, CAS, loser → 409/404 | Core fix |
 | `backend/routes/corporate_company_kyb.py` | Resubmit flip passes `expected_status`; loser → 409; `_not_submittable_detail()` names `closed`; dual-import `get_app_settings` | Race fix + clearer refusal |
-| `backend/migrations/477_settings_corporate_kyb_refuses_closed_company.sql` | New `settings` column, default TRUE, rollback SQL in header | Kill switch without redeploy |
+| `backend/migrations/478_settings_corporate_kyb_refuses_closed_company.sql` | New `settings` column, default TRUE, rollback SQL in header | Kill switch without redeploy |
 | `backend/tests/test_corporate_repo_guards.py` | +3 repo CAS tests | Regression |
 | `backend/tests/test_corporate_kyb.py` | Pre-read mocks; +8 guard tests (closed approve/reject, open statuses, CAS loser 409, row-gone 404, kill switch off) | Regression |
 | `backend/tests/test_corporate_company_kyb.py` | Updated flip-args assertion; +4 tests (closed submit, closed upload-url message, CAS loser 409, kill switch off) | Regression |
@@ -146,7 +146,7 @@ Concrete scenarios:
 ## 10. What was NOT verified
 
 - Not tested against live or staging Supabase; tests used mocked clients only. The CAS relies on PostgREST applying both `.eq()` filters to the UPDATE. #5793 makes the same assumption for `update_corporate_account_status`.
-- Migration 477 was not applied anywhere, including `--dry-run`, because no `DATABASE_URL` was available. Number 477 was taken from the task brief: the highest number on `origin/main` is 473, and 474–476 are presumably held by in-flight PRs. CHECK B will flag a collision if one lands first.
+- Migration 478 was not applied anywhere, including `--dry-run`, because no `DATABASE_URL` was available. It was renumbered from 477, which `claude/fix-admin-money-action-caps` already uses (`477_disputes_resolution_columns.sql`). The highest number on `origin/main` is 473, and 474–477 are held by in-flight PRs. CHECK B will flag a collision if one lands first.
 - The admin-dashboard rendering of the new 409 detail was not exercised. No frontend code changed, and no production build was run because there is no frontend diff.
 - No `spinr-*` reviewer agent was run on the final diff (CLAUDE.md gate 10), because this session had no Agent tool. Recommended before merge: `spinr-corporate-billing-reviewer` and `spinr-migration-reviewer`.
 - Out of scope and still open: a KYB approve on a **staff-suspended** company still reactivates it.

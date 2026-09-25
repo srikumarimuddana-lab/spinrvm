@@ -189,4 +189,4 @@ Session 2 (pricing, payments and tax) matters as much. But its hardest questions
 - **Traceability:** reconciling the 769 orphan rows in `traceability.csv`.
 - **Live checks:** any check against production.
 - **The five research sessions.**
-- **Blueprint corrections:** if its hand-back is still pending, its corrections changelog is incomplete; the roadmap and this report already use the corrected order.
+- **Nothing else from the programme is open.** The blueprint carries all 29 hostile-review corrections (its §10 changelog), and its §7 order matches this report and the roadmap.

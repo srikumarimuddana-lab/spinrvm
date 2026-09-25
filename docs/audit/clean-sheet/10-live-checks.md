@@ -91,4 +91,59 @@
 - **The Supabase backup and PITR tier.**
 - **Branch protection on `main`.**
 - **Whether Meta events were actually sent**, and how many. That needs the Meta Events Manager.
-- **The remaining 24 of the 32 untracked migrations**, and files numbered below 400.
+- ~~The remaining 24 of the 32 untracked migrations, and files numbered below 400.~~ Done in §6.1.
+
+## §6 Follow-up checks (2026-09-25, about 13:00–14:00 UTC)
+
+*Run after PR #5773 merged, to close three items that §5 and `09-final-report.md` §4 listed as not verified. Everything was read-only. The Supabase queries read only catalog metadata (table, column, function, index, trigger and policy names) and the `schema_migrations` file list. Railway reads were limited to service status, the deployment list and CPU/memory metrics; no variables were read.*
+
+### 6.1 Migration tracking: the full comparison
+
+The repo now has 560 migration files (main at `9e27915`); production's `schema_migrations` has 518 rows. A full file-by-file comparison, not a sample, gives:
+
+| Group | Count | What it means |
+|---|---|---|
+| On the runner's `NEVER_APPLY` list (70, 78, 137) | 3 | Expected to be untracked. Correct. |
+| Untracked, below 400 (26, 379) | 2 | **Applied.** Row-level security is on for every table that still exists. The two import tables that 379 also covered no longer exist, so there is nothing to check there. |
+| Untracked, 424–466 and 468–471 | 37 | **Applied.** For each file, every object it creates or changes (tables, columns, functions, indexes, triggers, policies) was looked up in production. 111 objects across 35 files were checked, and 110 are present. The one absent is 429's admin-read policy, which 439 later removes on purpose. The other two files were checked differently. 432's four renamed admin policies are all present. 447 re-creates objects from 444 and 445, and those are all present. |
+| **Untracked and NOT applied: 467** (`driver_always_location_gate_enabled`) | 1 | **Pending.** The column does not exist in production. The file was merged at 05:36 UTC today. The backend reads the flag with `.get(...) is True` (`backend/routes/drivers/profile.py:103`), so the missing column reads as off, the file's intended default. But saving this setting from the admin settings screen (`backend/routes/admin/settings.py:566`) will fail until the column exists. **LIVE-006 (LOW).** |
+| **Tracked, but no such file in the repo**: `415_route_deviation_alert_enabled_setting.sql` | 1 | **LIVE-004 (MEDIUM), new.** Production has the `settings.route_deviation_alert_enabled` column, and the flag is **on** (§1). No file in `backend/migrations/` creates it. The clone is shallow, so git cannot show whether the file was ever committed. **Consequence:** a database rebuilt from the repo (staging, a restore drill, disaster recovery) would lack the column. `backend/utils/route_deviation_alerter.py:133-135` then reads the flag as missing and **silently leaves route-deviation safety alerts off**. **Fix:** add the missing migration (`ADD COLUMN IF NOT EXISTS`, so it is a no-op in production), then include it in N25's back-fill. |
+
+**What this changes in ROADMAP N25.** The back-fill list is **39 files**: 2 below 400, and 37 from 424 up. That is not "about 32". All 39 are confirmed applied at the object level, so inserting their tracking rows is safe. **Separately:**
+- apply 467 through the normal path;
+- add the missing 415 route-deviation file.
+
+**Limits.** This is an object-existence check. It shows the objects exist, but not that each function body or policy text matches the file byte for byte. Files that only change data (`UPDATE`) or permissions (`GRANT`/`REVOKE`) were checked only through the objects they also create. A body-level diff of the replaced functions (for example `purge_pii_retention`, `apply_stripe_refund_cumulative`, `transition_driver_availability`) is still open.
+
+### 6.2 Railway standby (project `cooperative-harmony`, service `spinrvm`)
+
+| Check | Live answer |
+|---|---|
+| Health | Online; 1 of 1 replica running; 0 crashes and 0 failed deployments in 24 h. The Redis service is also online. |
+| Running current code | Yes. The latest successful deployment (12:49 UTC today) followed the push of `main` at `9e27915`. |
+| Load, last 24 h | CPU averages 0.03 vCPU (peak 1.3). Memory averages about 1.0 GB (peak about 2.0 GB). |
+| **Region** | **`us-east4` (Virginia, United States).** |
+| Stale work item | One deployment has been stuck in "removing" since 2026-04-14. It is cosmetic; clear it in the Railway dashboard. |
+
+**LIVE-005 (HIGH, compliance), with an existing escalation now verified live.** `docs/vendor-register.md:24` already says "US (Railway default)". But `docs/runbooks/railway-fly-failover.md:3,25`, `docs/framework/06-operations-deployment.md:10` and CLAUDE.md's Deployment section all say "Railway (Canada)", and those docs are wrong. The standby runs every background loop against the production database (REL-003). So rider and driver personal data is processed in the US **today**, not only during a failover. This moves escalation **E-S5** from "standby (US)" as an inference to VERIFIED-LIVE. The founder's options there (accept and justify, or move to a Canadian region) are unchanged. Correcting the three documents belongs in ROADMAP N16.
+
+### 6.3 Automated tests and Semgrep, run in the audit sandbox
+
+**Semgrep: Spinr's own rules (`.semgrep/spinr-rules.yml`, v1.178.0) over 592 files found 9 findings and 0 errors.**
+- **4 in `backend/`.** These are exactly the 4 "known untriaged" findings listed in `.github/workflows/security-gates.yml` (lifespan idempotency ×2, the ride-state guard at `repositories/driver_repo.py:411`, and the static Stripe idempotency key at `routes/payments.py:486`). They are unchanged since 2026-08-14 and still untriaged after six weeks.
+- **5 `spinr-pii-in-logs` findings in operator scripts.** Four are in `scripts/manage_admin.py:30-52` and one in `loadtest/preauth_bots.py:134`. Each prints a phone number to the operator's own console. The risk is low, since this is local tooling and not production logs, but the rule is right: print the last four digits only.
+- **The money gate (SR-03) is clean**, consistent with CI.
+
+**Semgrep: public rule packs (`p/python`, `p/typescript`, `p/secrets`, `p/owasp-top-ten`) did not run.** The sandbox's network proxy blocks `semgrep.dev`, where the packs are downloaded. This half is still **NOT VERIFIED here**. CI runs it on every PR, so its results are in the GitHub Security tab.
+
+**Backend test suite.** Run once in the sandbox on `main` at `9e27915`, with `pytest -m "not slow"` (24 minutes):
+
+| Result | Count | Reading |
+|---|---|---|
+| Passed | 16,334 | |
+| Skipped / deselected / xfail | 211 / 554 / 1 | `slow`-marked tests excluded on purpose |
+| Errors | 411 | **Environment, not code.** All are in `tests/rls/`, which needs a real Postgres (`TEST_DATABASE_URL`). CLAUDE.md says to run it separately with `-c /dev/null --confcutdir=tests/rls`; run inside the main suite, these tests error instead of self-skipping. Not verified here: the RLS tier itself. |
+| **Failed** | **6** | **QUAL-005 (MEDIUM), new: order-dependent test failures on the login path.** All 6 are in `tests/test_verify_otp_login_flow.py` (existing-user login, new-device check, guest-flag clear, session-update failure, missing consent, and delete-after-verify fallback). **The same file passes 21 of 21 when run alone**, so an earlier test leaks state into it (a module-level patch or a cached settings or driver-session stub). A leak like this can hide a real login regression or invent one. Fix: find the leaking test (bisect with `pytest -p no:randomly` and `--lf`), and make the fixture restore what it patches. |
+| Backend line coverage | 87% (68,354 statements) | Above the 60% gate in `pytest.ini`. |
+
+This replaces the audit's earlier "no test suite run" statement for the backend unit/integration tier. The admin-dashboard, rider-app and driver-app suites were **not** run.

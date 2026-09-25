@@ -148,8 +148,7 @@ jobs:
         # already surfaces a real dependency problem.
         continue-on-error: true
         run: |
-          pip install --require-hashes -r requirements-locked.txt --quiet \
-            || pip install -r requirements-locked.txt --quiet || true
+          pip install --require-hashes -r requirements-locked.txt --quiet
 
       - name: Run full backend test suite with coverage
         working-directory: backend
@@ -401,8 +400,7 @@ jobs:
           # not needed again after this step (PR-branch coverage was already
           # extracted above), so overwriting it here is safe.
           git checkout --quiet ${{ steps.mb.outputs.sha }} || exit 0
-          pip install --require-hashes -r requirements-locked.txt --quiet \
-            || pip install -r requirements-locked.txt --quiet || true
+          pip install --require-hashes -r requirements-locked.txt --quiet
           pytest --cov=. --cov-report=json:../base-coverage.json -q --no-header 2>/dev/null || true
 
           # Validate the JSON before letting the cache step (next) see it.
@@ -566,8 +564,7 @@ jobs:
         # already surfaces a real dependency problem.
         continue-on-error: true
         run: |
-          pip install --require-hashes -r requirements-locked.txt --quiet \
-            || pip install -r requirements-locked.txt --quiet || true
+          pip install --require-hashes -r requirements-locked.txt --quiet
 
       - name: Run corporate test suite with coverage
         working-directory: backend

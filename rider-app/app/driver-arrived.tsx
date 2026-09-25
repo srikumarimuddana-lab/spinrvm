@@ -25,7 +25,7 @@ import { RiderSOS } from '../components/RiderSOS';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useTranslation } from '../i18n';
 import { fetchDirectionsRoute } from '@shared/api/directions';
 import { DirectionsProxyEnabledContext } from './_layout';
@@ -312,7 +312,7 @@ function DriverArrivedScreenContent() {
           </TouchableOpacity>
           <View style={styles.arrivedChip}>
             <View style={styles.pulseGreen} />
-            <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
+            <Text style={styles.arrivedChipText} maxFontSizeMultiplier={MAX_FONT_SCALE}>Driver has arrived</Text>
           </View>
           <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
         </View>
@@ -345,7 +345,7 @@ function DriverArrivedScreenContent() {
               <View style={styles.otpDigits}>
                 {pickupOtp.split('').map((d, i) => (
                   <View key={i} style={styles.otpBox}>
-                    <Text style={styles.otpNum} allowFontScaling={false}>{d}</Text>
+                    <Text style={styles.otpNum} maxFontSizeMultiplier={MAX_FONT_SCALE}>{d}</Text>
                   </View>
                 ))}
               </View>

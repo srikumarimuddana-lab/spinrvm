@@ -18,7 +18,7 @@ import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import { useTranslation } from '../../i18n';
 import type { FareBreakdownLine } from '../../store/walletStore';
@@ -327,7 +327,7 @@ export default function ActivityScreen() {
         </View>
 
         <View style={styles.rideFareContainer}>
-          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} allowFontScaling={false}>
+          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} maxFontSizeMultiplier={MAX_FONT_SCALE}>
             ${total}
           </Text>
           {ride.status !== 'cancelled' && (tip > 0 || discount > 0) && (
@@ -340,7 +340,7 @@ export default function ActivityScreen() {
           )}
           <View style={styles.rideStatusContainer}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
-            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]} allowFontScaling={false}>
+            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>
               {getStatusText(ride.status)}
             </Text>
           </View>
@@ -572,12 +572,12 @@ export default function ActivityScreen() {
                   </Text>
                 </View>
                 <View style={styles.rideFareContainer}>
-                  <Text style={styles.rideFare} allowFontScaling={false}>
+                  <Text style={styles.rideFare} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                     ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
                   </Text>
                   <View style={styles.rideStatusContainer}>
                     <View style={[styles.statusDot, { backgroundColor: colors.info }]} />
-                    <Text style={[styles.rideStatus, { color: colors.info }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
+                    <Text style={[styles.rideStatus, { color: colors.info }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>{t('activity.scheduled')}</Text>
                   </View>
                 </View>
               </TouchableOpacity>

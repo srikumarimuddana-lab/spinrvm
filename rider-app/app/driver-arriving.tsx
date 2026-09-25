@@ -39,7 +39,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
-import { useResponsive, SPACING, FONT } from '@shared/utils/responsive';
+import { useResponsive, SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useTranslation } from '../i18n';
@@ -654,7 +654,7 @@ function DriverArrivingScreenContent() {
         {!isSearching && etaLabel && (
           <View style={styles.etaPill}>
             <View style={styles.greenDot} />
-            <Text style={styles.etaText} allowFontScaling={false}>{etaLabel}</Text>
+            <Text style={styles.etaText} maxFontSizeMultiplier={MAX_FONT_SCALE}>{etaLabel}</Text>
           </View>
         )}
 
@@ -779,7 +779,7 @@ function DriverArrivingScreenContent() {
                     </Text>
                   </View>
                   <View style={styles.plateBox}>
-                    <Text style={styles.plateText} allowFontScaling={false}>{currentDriver?.license_plate || '---'}</Text>
+                    <Text style={styles.plateText} maxFontSizeMultiplier={MAX_FONT_SCALE}>{currentDriver?.license_plate || '---'}</Text>
                   </View>
                 </View>
               </View>
@@ -791,7 +791,7 @@ function DriverArrivingScreenContent() {
                   <View style={styles.pinBoxes}>
                     {[0, 1, 2, 3].map(i => (
                       <View key={i} style={styles.pinBox}>
-                        <Text style={styles.pinDigit} allowFontScaling={false}>
+                        <Text style={styles.pinDigit} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                           {currentRide.pickup_otp?.[i] || '•'}
                         </Text>
                       </View>

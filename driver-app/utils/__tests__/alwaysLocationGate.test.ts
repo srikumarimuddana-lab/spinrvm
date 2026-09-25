@@ -10,16 +10,6 @@ const mockRequireAlways = jest.fn(async () => true);
 const mockCaptureException = jest.fn();
 const mockOpenSettings = jest.fn(() => Promise.resolve());
 
-// Platform too: jest-expo's lazy global fetch loads expo-modules-core, which
-// reads Platform.select at import and crashed this suite before any test ran.
-jest.mock('react-native', () => ({
-  Linking: { openSettings: () => mockOpenSettings() },
-  Platform: {
-    OS: 'android',
-    select: (spec: Record<string, unknown>) => spec.android ?? spec.native ?? spec.default,
-  },
-}));
-
 jest.mock('expo-location', () => ({
   getBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: mockBgPermission })),
 }));
@@ -45,6 +35,7 @@ jest.mock('../../components/AlertDialog', () => {
   };
 });
 
+import { Linking } from 'react-native';
 import { showAlert, hideAlert, useAlertStore } from '../../components/AlertDialog';
 import {
   BACKGROUND_LOCATION_DISCLOSURE,
@@ -65,6 +56,11 @@ function press(text: string) {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// Real react-native, only openSettings stubbed. A hand-written react-native
+// mock crashed the suite: jest-expo's lazy globals load expo's own runtime,
+// which needs the real Platform and StyleSheet.
+jest.spyOn(Linking, 'openSettings').mockImplementation(() => mockOpenSettings());
 
 beforeEach(() => {
   jest.clearAllMocks();

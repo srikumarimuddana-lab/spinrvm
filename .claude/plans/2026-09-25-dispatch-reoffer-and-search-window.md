@@ -1,7 +1,7 @@
 # Dispatch: re-offer decliners, shorter search, honest "no drivers" ending
 
-Status (2026-09-25): Phase 0 built; Phases 2, 3, 4 in progress on PR #5776;
-**Phase 1 blocked** (see below). Written 2026-09-25 for the
+Status (2026-09-25): Phases 0, 2, 3, 4 built on PR #5776, plus a durable
+"already offered" dispatch filter. **Phase 1 deferred past launch** (see below). Written 2026-09-25 for the
 Saskatoon launch, where a ride may have ~10 drivers in range and nobody
 accepts on the first pass.
 
@@ -150,8 +150,10 @@ Rollback: flag off → backend treats `offer_expired` like any other decline
 > `dispatch_claim_offers_v3`, dropping the old constraint, and newest-row
 > ordering in `driver_offer_service._load_offer` and `ride_reads.get_ride_offer`.
 > Once any ride has two rows for one driver the old constraint cannot be
-> restored without deleting rows. Awaiting a founder decision. Migration 467
-> was removed from the PR until then.
+> restored without deleting rows. Migration 467 was removed from the PR.
+>
+> **Decided 2026-09-25 (founder): deferred past launch.** Revisit with real
+> post-launch decline→accept data. Recorded in `.claude/context/memory.md`.
 
 | # | Change | Verify |
 |---|---|---|

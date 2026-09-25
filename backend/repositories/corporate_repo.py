@@ -244,6 +244,7 @@ async def record_kyb_decision(
     approved: bool,
     note: Optional[str],
     expected_status: Optional[str] = None,
+    preserve_status: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Record a KYB approve/reject decision. Approval flips status to active.
 
@@ -256,6 +257,12 @@ async def record_kyb_decision(
     admin mid-review) matches zero rows and gets ``None`` back instead of
     being flipped out of ``closed``. Callers must re-read to tell "row gone"
     from "status changed".
+
+    ``preserve_status`` (staff-suspended company) stamps the review but writes
+    no ``status``, so a KYB approval cannot lift a staff suspension. It also
+    skips stamping ``kyb_last_decision='rejected'``: that value is what marks
+    a suspension as KYB-caused (portal-resubmittable), and a rejection must not
+    relabel a staff suspension into one the company can resubmit its way out of.
     """
     new_status = "active" if approved else "suspended"
     patch = {
@@ -266,6 +273,10 @@ async def record_kyb_decision(
         # KYB-rejected (may resubmit) from staff-suspended (may not).
         "kyb_last_decision": "approved" if approved else "rejected",
     }
+    if preserve_status:
+        del patch["status"]
+        if not approved:
+            del patch["kyb_last_decision"]
     if note:
         patch["kyb_review_note"] = note  # column exists since migration 225
 

@@ -139,6 +139,13 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # without possession of the SMS code.
     "/api/v1/auth/send-otp",
     "/api/v1/auth/verify-otp",
+    # Refresh proves possession of a 384-bit rotating refresh token, a stronger
+    # credential than the SMS code verify-otp accepts without App Check. Both
+    # apps read any 401 here as a dead login and delete the 30-day session, so a
+    # device that can't mint an App Check token on resume was signed out
+    # (production audit_logs + PR #5777, 2026-09-25). Rate limit, rotation and
+    # reuse detection in routes/auth.py still apply.
+    "/api/v1/auth/refresh",
     # Public trip-share tracking page. track.spinr.ca is a browser surface (the
     # Next.js page a rider's chosen contacts open from an SMS/push link), so
     # like the admin dashboard and the company portal it can never attach an

@@ -29,12 +29,15 @@ def test_mobile_auth_stays_appcheck_enforced():
     # exempts so login stays reachable when App Check native modules are
     # unavailable/not-yet-attested (Expo Go/debug builds, newly registered
     # devices). Those two handlers keep their own OTP throttling/lockout
-    # and expose nothing without possession of the SMS code. refresh/logout
-    # and the rest of the API stay enforced.
+    # and expose nothing without possession of the SMS code. refresh is exempt
+    # too: a missing App Check token there was signing users out (see the
+    # comment in core/middleware.py). logout and the rest of the API stay
+    # enforced.
     assert _appcheck_exempt("/api/v1/auth/send-otp")
     assert _appcheck_exempt("/api/v1/auth/verify-otp")
-    assert not _appcheck_exempt("/api/v1/auth/refresh")
+    assert _appcheck_exempt("/api/v1/auth/refresh")
     assert not _appcheck_exempt("/api/v1/auth/logout")
+    assert not _appcheck_exempt("/api/v1/auth/me")
     assert not _appcheck_exempt("/api/v1/rides")
 
 

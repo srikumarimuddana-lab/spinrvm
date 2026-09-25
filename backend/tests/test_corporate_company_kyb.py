@@ -310,7 +310,8 @@ def test_submit_after_rejection_reenters_queue(test_client, rider_override):
         resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc2.pdf"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["resubmitted"] is True
-    m_status.assert_awaited_once_with("c1", "pending_verification")
+    # Compare-and-set on the status read before the flip.
+    m_status.assert_awaited_once_with("c1", "pending_verification", expected_status="suspended")
 
 
 def test_submit_staff_suspended_cannot_self_unsuspend(test_client, rider_override):
@@ -324,3 +325,86 @@ def test_submit_staff_suspended_cannot_self_unsuspend(test_client, rider_overrid
         resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
     assert resp.status_code == 409
     assert "support" in resp.json()["detail"].lower()
+
+
+# ── Closed-company guard: a KYB resubmit must never reopen a closed company ──
+
+
+def test_submit_closed_company_is_refused_without_writes(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch(
+            "routes.corporate_company_kyb.get_corporate_account_by_id",
+            AsyncMock(return_value=_company(status="closed", kyb_last_decision="rejected")),
+        ),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock()) as m_set,
+        patch("routes.corporate_company_kyb.update_corporate_account_status", AsyncMock()) as m_status,
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
+    assert resp.status_code == 409
+    assert "closed" in resp.json()["detail"].lower()
+    m_set.assert_not_awaited()
+    m_status.assert_not_awaited()
+
+
+def test_upload_url_closed_company_409_names_closed(test_client, rider_override):
+    with (
+        _admin_guard(),
+        patch(
+            "routes.corporate_company_kyb.get_corporate_account_by_id",
+            AsyncMock(return_value=_company(status="closed")),
+        ),
+    ):
+        resp = test_client.post("/company/c1/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 409
+    assert "closed" in resp.json()["detail"].lower()
+
+
+def test_submit_resubmit_cas_loser_returns_409_when_closed_mid_flight(test_client, rider_override):
+    """Read suspended/rejected, company closed before the flip: the CAS UPDATE
+    matches zero rows, the re-read shows 'closed' → 409, status untouched."""
+    rejected = _company(status="suspended", kyb_last_decision="rejected")
+    closed = _company(status="closed", kyb_last_decision="rejected")
+    updated = _company(kyb_document_url="kyb/c1/doc2.pdf")
+    with (
+        _admin_guard(),
+        patch(
+            "routes.corporate_company_kyb.get_corporate_account_by_id",
+            AsyncMock(side_effect=[rejected, closed]),
+        ),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock(return_value=updated)),
+        patch(
+            "routes.corporate_company_kyb.update_corporate_account_status",
+            AsyncMock(return_value=None),
+        ) as m_status,
+        patch("routes.corporate_company_kyb.log_admin_action", AsyncMock()) as m_audit,
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc2.pdf"})
+    assert resp.status_code == 409, resp.text
+    assert "'closed'" in resp.json()["detail"]
+    m_status.assert_awaited_once_with("c1", "pending_verification", expected_status="suspended")
+    m_audit.assert_not_awaited()
+
+
+def test_submit_resubmit_kill_switch_off_restores_unconditional_flip(test_client, rider_override):
+    rejected = _company(status="suspended", kyb_last_decision="rejected")
+    updated = _company(kyb_document_url="kyb/c1/doc2.pdf")
+    with (
+        _admin_guard(),
+        patch("routes.corporate_company_kyb.get_corporate_account_by_id", AsyncMock(return_value=rejected)),
+        patch("routes.corporate_company_kyb.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("routes.corporate_company_kyb.set_kyb_document", AsyncMock(return_value=updated)),
+        patch(
+            "routes.corporate_company_kyb.get_app_settings",
+            AsyncMock(return_value={"corporate_kyb_refuses_closed_company": False}),
+        ),
+        patch(
+            "routes.corporate_company_kyb.update_corporate_account_status",
+            AsyncMock(return_value=_company()),
+        ) as m_status,
+        patch("routes.corporate_company_kyb.log_admin_action", AsyncMock()),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc2.pdf"})
+    assert resp.status_code == 200, resp.text
+    m_status.assert_awaited_once_with("c1", "pending_verification", expected_status=None)

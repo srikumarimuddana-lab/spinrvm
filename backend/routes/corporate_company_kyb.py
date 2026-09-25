@@ -40,6 +40,7 @@ try:
         update_corporate_account_status,
     )
     from ..dependencies.company_guard import require_company_admin  # type: ignore
+    from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
@@ -50,6 +51,7 @@ except ImportError:
         update_corporate_account_status,
     )
     from dependencies.company_guard import require_company_admin  # type: ignore
+    from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,14 @@ def _derive_kyb_state(company: dict) -> str:
     if status == "suspended":
         return "rejected" if company.get("kyb_last_decision") == "rejected" else "suspended"
     return "under_review" if company.get("kyb_document_url") else "not_submitted"
+
+
+def _not_submittable_detail(state: str) -> str:
+    if state == "suspended":
+        return "Your account is suspended — contact support."
+    if state == "closed":
+        return "This company account is closed — verification can't be submitted."
+    return "Verification is already complete for this company."
 
 
 async def _get_company_or_404(company_id: str) -> dict:
@@ -123,14 +133,7 @@ async def kyb_upload_url(
     company = await _get_company_or_404(company_id)
     state = _derive_kyb_state(company)
     if state not in _SUBMITTABLE_STATES:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Your account is suspended — contact support."
-                if state == "suspended"
-                else "Verification is already complete for this company."
-            ),
-        )
+        raise HTTPException(status_code=409, detail=_not_submittable_detail(state))
 
     try:
         signed = await create_kyb_upload_url(company_id=company_id, content_type=body.content_type)
@@ -161,14 +164,7 @@ async def kyb_submit(
     company = await _get_company_or_404(company_id)
     state = _derive_kyb_state(company)
     if state not in _SUBMITTABLE_STATES:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Your account is suspended — contact support."
-                if state == "suspended"
-                else "Verification is already complete for this company."
-            ),
-        )
+        raise HTTPException(status_code=409, detail=_not_submittable_detail(state))
 
     try:
         exists = await kyb_object_exists(path=path)
@@ -177,6 +173,16 @@ async def kyb_submit(
         raise HTTPException(status_code=503, detail="Could not verify the upload. Please try again.") from e
     if not exists:
         raise HTTPException(status_code=400, detail="Upload not found — upload the document first.")
+
+    # Compare-and-set the resubmit flip on the status read above: a close (or
+    # staff suspend) landing between that read and the flip must not be
+    # overwritten with 'pending_verification' — 'closed' is terminal. Read the
+    # kill switch before any write so a settings failure leaves nothing behind.
+    expected_status = None
+    if state == "rejected":
+        settings = await get_app_settings()
+        if settings.get("corporate_kyb_refuses_closed_company", True):
+            expected_status = company.get("status")
 
     updated = await set_kyb_document(company_id=company_id, path=path)
     if not updated:
@@ -187,8 +193,26 @@ async def kyb_submit(
     if state == "rejected":
         # New tested transition: suspended(kyb_last_decision=rejected) →
         # pending_verification. Re-enters the staff queue.
-        flipped = await update_corporate_account_status(company_id, "pending_verification")
+        flipped = await update_corporate_account_status(
+            company_id, "pending_verification", expected_status=expected_status
+        )
         if not flipped:
+            if expected_status is not None:
+                latest = await get_corporate_account_by_id(company_id)
+                if latest and latest.get("status") != expected_status:
+                    logger.warning(
+                        "kyb submit lost a concurrent status change: company=%s expected=%s actual=%s",
+                        company_id,
+                        expected_status,
+                        latest.get("status"),
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Your company's account status changed while this submission was in flight "
+                            f"(now '{latest.get('status')}'). Refresh and try again."
+                        ),
+                    )
             logger.error("kyb submit: status flip failed for company %s", company_id)
             raise HTTPException(status_code=503, detail="Could not reopen verification. Please try again.")
         resubmitted = True

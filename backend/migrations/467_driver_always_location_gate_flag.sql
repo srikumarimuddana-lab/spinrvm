@@ -6,7 +6,7 @@
 --   * takes an idle, online driver offline on resume if the grant is missing.
 -- False keeps the previous behaviour (go-online still rolls back when
 -- background tracking cannot start; no forced offline on resume).
--- Operational rollback (no mobile release):
+-- Rollback (operational, no mobile release):
 -- UPDATE public.settings SET driver_always_location_gate_enabled = false
 -- WHERE id = 'app_settings';
 -- Clients pick it up on their next /drivers/config refresh (10 min staleTime,

@@ -14,7 +14,7 @@ Usage:
     cd spinr/backend
     python diagnose_driver_ws.py \
         --base-url https://your-backend.up.railway.app \
-        --phone +13065203307 \
+        --phone +13065550100 \
         --code 1234 \
         --duration 90
 
@@ -49,9 +49,7 @@ async def login(base_url: str, phone: str, code: str) -> dict:
         r = await client.post(f"{api}/auth/send-otp", json={"phone": phone})
         log("LOGIN", f"send-otp {r.status_code} {r.text[:160]}")
 
-        r = await client.post(
-            f"{api}/auth/verify-otp", json={"phone": phone, "code": code}
-        )
+        r = await client.post(f"{api}/auth/verify-otp", json={"phone": phone, "code": code})
         if r.status_code != 200:
             log("LOGIN", f"verify-otp FAILED {r.status_code} {r.text}")
             sys.exit(1)
@@ -63,9 +61,7 @@ async def login(base_url: str, phone: str, code: str) -> dict:
         log("LOGIN", f"ok user_id={user_id} role={role}")
 
         # /auth/me (re-derives driver_onboarding_status server-side)
-        r = await client.get(
-            f"{api}/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        r = await client.get(f"{api}/auth/me", headers={"Authorization": f"Bearer {token}"})
         me = r.json() if r.status_code == 200 else {}
         log(
             "AUTH/ME",
@@ -77,9 +73,7 @@ async def login(base_url: str, phone: str, code: str) -> dict:
 
         # Full driver row dump — shows whether _has_vehicle would pass on backend.
         driver_id = None
-        r = await client.get(
-            f"{api}/drivers/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        r = await client.get(f"{api}/drivers/me", headers={"Authorization": f"Bearer {token}"})
         if r.status_code == 200:
             d = r.json() or {}
             driver_id = d.get("id")
@@ -100,10 +94,7 @@ async def login(base_url: str, phone: str, code: str) -> dict:
             )
             # Mirror backend _has_vehicle() logic
             has_vehicle = bool(
-                d.get("vehicle_make")
-                and d.get("vehicle_model")
-                and d.get("license_plate")
-                and d.get("vehicle_type_id")
+                d.get("vehicle_make") and d.get("vehicle_model") and d.get("license_plate") and d.get("vehicle_type_id")
             )
             log("CHECK", f"_has_vehicle = {has_vehicle}")
         else:
@@ -112,16 +103,12 @@ async def login(base_url: str, phone: str, code: str) -> dict:
         return {"token": token, "user_id": user_id, "role": role, "driver_id": driver_id}
 
 
-async def poll_driver_me(
-    base_url: str, token: str, stop_event: asyncio.Event, interval: int
-) -> None:
+async def poll_driver_me(base_url: str, token: str, stop_event: asyncio.Event, interval: int) -> None:
     api = f"{base_url.rstrip('/')}/api/v1"
     async with httpx.AsyncClient(timeout=20) as client:
         while not stop_event.is_set():
             try:
-                r = await client.get(
-                    f"{api}/drivers/me", headers={"Authorization": f"Bearer {token}"}
-                )
+                r = await client.get(f"{api}/drivers/me", headers={"Authorization": f"Bearer {token}"})
                 row = r.json() if r.status_code == 200 else {}
                 log(
                     "POLL",
@@ -149,26 +136,19 @@ async def go_online(base_url: str, token: str, driver_id: str) -> None:
         log("GO-ONLINE", f"PUT /drivers/{driver_id}/status -> {r.status_code} {r.text[:200]}")
 
 
-async def run_ws_session(
-    base_url: str, token: str, user_id: str, duration: int, driver_id: str | None
-) -> None:
-    ws_url = (
-        base_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
-        + f"/ws/driver/{user_id}"
-    )
+async def run_ws_session(base_url: str, token: str, user_id: str, duration: int, driver_id: str | None) -> None:
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/") + f"/ws/driver/{user_id}"
     log("WS", f"connecting {ws_url}")
 
     start = time.monotonic()
     try:
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=5) as ws:
             elapsed = time.monotonic() - start
-            log("WS", f"connected in {elapsed*1000:.0f}ms; sending auth")
+            log("WS", f"connected in {elapsed * 1000:.0f}ms; sending auth")
             await ws.send(json.dumps({"type": "auth", "token": token}))
 
             stop_event = asyncio.Event()
-            poll_task = asyncio.create_task(
-                poll_driver_me(base_url, token, stop_event, interval=5)
-            )
+            poll_task = asyncio.create_task(poll_driver_me(base_url, token, stop_event, interval=5))
 
             went_online = False
             deadline = time.monotonic() + duration
@@ -206,7 +186,7 @@ async def run_ws_session(
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True, help="e.g. https://api.example.up.railway.app")
-    parser.add_argument("--phone", required=True, help="E.164, e.g. +13065203307")
+    parser.add_argument("--phone", required=True, help="E.164, e.g. +13065550100")
     parser.add_argument("--code", default="1234", help="OTP code (dev bypass=1234)")
     parser.add_argument("--duration", type=int, default=60, help="Seconds to hold the WS open")
     args = parser.parse_args()

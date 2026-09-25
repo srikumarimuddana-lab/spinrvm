@@ -615,7 +615,7 @@ def test_find_orphaned_returns_only_history_users_missing_a_driver_row(monkeypat
                     "id": "u-1",
                     "first_name": "Unnamed",
                     "last_name": "Legacy Driver fe6e",
-                    "phone": "+16393188526",
+                    "phone": "+16395550199",
                     "is_driver": True,
                     "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
                 },
@@ -698,7 +698,7 @@ def test_backfill_dry_run_reports_without_writing(monkeypatch):
                     "id": "u-1",
                     "first_name": "Unnamed",
                     "last_name": "Legacy Driver fe6e",
-                    "phone": "+16393188526",
+                    "phone": "+16395550199",
                     "is_driver": True,
                     "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
                 }
@@ -719,7 +719,7 @@ def test_backfill_apply_writes_driver_row_from_history(monkeypatch):
                     "id": "u-1",
                     "first_name": "Unnamed",
                     "last_name": "Legacy Driver fe6e",
-                    "phone": "+16393188526",
+                    "phone": "+16395550199",
                     "is_driver": True,
                     "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
                 }
@@ -732,7 +732,7 @@ def test_backfill_apply_writes_driver_row_from_history(monkeypatch):
     assert len(fake.store["drivers"]) == 1
     driver = fake.store["drivers"][0]
     assert driver["user_id"] == "u-1"
-    assert driver["phone"] == "+16393188526"
+    assert driver["phone"] == "+16395550199"
     assert driver["name"] == "Unnamed Legacy Driver fe6e"
     assert driver["service_area_id"] == "sa-1"
     # Never promoted past the safety floor, same as a normal import row.

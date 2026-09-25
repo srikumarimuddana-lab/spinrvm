@@ -119,7 +119,14 @@ def test_completed_refund_hold_does_not_itself_qualify_as_cash_paid(refund_cur):
         "VALUES('old-hold','driver',5,'completed','clawback',now()-interval '1 hour')"
     )
     project(refund_cur, 500)
-    assert held(refund_cur) == 0
+    # held() sums every clawback row, so the seeded 5.00 hold is always counted.
+    # The guarantee is that it did not qualify as cash paid: no new hold row was
+    # written for this refund, and the refund itself still projected.
+    assert held(refund_cur) == 5
+    refund_cur.execute("SELECT id FROM payouts WHERE payout_type='clawback' ORDER BY id")
+    assert refund_cur.fetchall() == [("old-hold",)]
+    refund_cur.execute("SELECT refund_amount FROM rides WHERE id='ride'")
+    assert refund_cur.fetchone()[0] == 5
 
 
 def test_future_dated_payout_does_not_qualify_for_refund_hold(refund_cur):

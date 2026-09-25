@@ -87,13 +87,15 @@ def _patch_redis_asyncio_module(monkeypatch, fake_aioredis):
     monkeypatch (unlike the hand-rolled try/finally in test_coverage_boost.py)
     correctly restores an attribute that didn't previously exist.
     """
+    from backend.tests._factories import use_real_redis_package
+
+    # _get_redis also imports redis.asyncio.retry and redis.backoff, which need
+    # the real package even when another module stubbed it at collection time.
+    use_real_redis_package(monkeypatch)
     import redis as redis_pkg  # ensures sys.modules["redis"] exists before we patch its attribute
 
     monkeypatch.setitem(sys.modules, "redis.asyncio", fake_aioredis)
     monkeypatch.setattr(redis_pkg, "asyncio", fake_aioredis, raising=False)
-    # _get_redis also does `from redis.asyncio.retry import Retry`; a MagicMock
-    # is not a package, so that submodule must be stubbed too.
-    monkeypatch.setitem(sys.modules, "redis.asyncio.retry", fake_aioredis.retry)
 
 
 @pytest.mark.anyio

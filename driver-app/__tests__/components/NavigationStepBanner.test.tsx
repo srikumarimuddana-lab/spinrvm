@@ -5,6 +5,8 @@ import {
   NavigationStepBanner,
   formatManeuverDistance,
   iconForManeuver,
+  sosTopOffset,
+  SOS_DEFAULT_OFFSET,
 } from '../../components/dashboard/NavigationStepBanner';
 import type { NavigationStep } from '@shared/utils/navigationSteps';
 
@@ -72,5 +74,47 @@ describe('NavigationStepBanner', () => {
     );
     const banner = UNSAFE_root.findByProps({ accessibilityRole: 'text' });
     expect(banner.props.pointerEvents).toBe('none');
+  });
+});
+
+describe('sosTopOffset (SOS stays visible below the turn banner)', () => {
+  const insetsTop = 44;
+
+  it('uses the default slot when no turn banner is shown', () => {
+    expect(sosTopOffset(insetsTop, false, 60)).toBe(insetsTop + SOS_DEFAULT_OFFSET);
+  });
+
+  it('uses the default slot until the banner has reported its height', () => {
+    expect(sosTopOffset(insetsTop, true, 0)).toBe(insetsTop + SOS_DEFAULT_OFFSET);
+  });
+
+  it('moves just below the banner while a step shows', () => {
+    // banner top 8 + height 54 + gap 8 = 70
+    expect(sosTopOffset(insetsTop, true, 54)).toBe(insetsTop + 70);
+  });
+
+  it('follows a taller (OS-scaled) banner', () => {
+    expect(sosTopOffset(insetsTop, true, 71)).toBe(insetsTop + 87);
+  });
+
+  it('never moves above its default slot', () => {
+    expect(sosTopOffset(insetsTop, true, 20)).toBe(insetsTop + SOS_DEFAULT_OFFSET);
+  });
+});
+
+describe('NavigationStepBanner height reporting', () => {
+  it('reports its rendered height through onHeightChange', () => {
+    const onHeightChange = jest.fn();
+    const { UNSAFE_root } = render(
+      <NavigationStepBanner
+        step={{ instruction: 'Turn left onto Main St', maneuver: 'turn-left' } as any}
+        distanceToManeuverMeters={120}
+        topOffset={52}
+        onHeightChange={onHeightChange}
+      />,
+    );
+    const banner = UNSAFE_root.findByProps({ accessibilityRole: 'text' });
+    banner.props.onLayout({ nativeEvent: { layout: { height: 58 } } });
+    expect(onHeightChange).toHaveBeenCalledWith(58);
   });
 });

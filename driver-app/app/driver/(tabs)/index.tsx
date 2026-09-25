@@ -47,7 +47,7 @@ import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh, effectiveSpeedMps
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
-import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
+import { NavigationStepBanner, sosTopOffset, NAV_BANNER_TOP_OFFSET } from '../../../components/dashboard/NavigationStepBanner';
 import { DestinationModeBanner } from '../../../components/DestinationModeBanner';
 import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import api from '@shared/api/client';
@@ -384,6 +384,11 @@ function DriverDashboard() {
   // needed here.
   const [navSteps, setNavSteps] = useState<NavigationStep[]>([]);
   const [currentNavStep, setCurrentNavStep] = useState<StepProgress | null>(null);
+  // Rendered height of the turn-by-turn banner. While a step shows, the SOS
+  // button sits just below the banner instead of underneath it (the banner is
+  // drawn above SOS and grows with the OS text size).
+  const [navBannerHeight, setNavBannerHeight] = useState(0);
+  const sosTop = sosTopOffset(insets.top, !!currentNavStep, navBannerHeight);
   const navStepIndexRef = useRef<number | null>(null);
 
   // Off-route-triggered refetch — Phase 1 PR D. Bypasses PR A's ride-scoped
@@ -1830,7 +1835,7 @@ function DriverDashboard() {
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
         discreetSosEnabled ? (
           <>
-            <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+            <View style={{ position: 'absolute', top: sosTop, right: 16, zIndex: 50 }}>
               <SafetyShield
                 rideId={activeRide.ride.id}
                 onTrigger={safetyTrigger}
@@ -1845,7 +1850,7 @@ function DriverDashboard() {
             />
           </>
         ) : (
-          <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+          <View style={{ position: 'absolute', top: sosTop, right: 16, zIndex: 50 }}>
             <SOSButton
               rideId={activeRide.ride.id}
               onTrigger={async (rideId, lat, lng, idempotencyKey) => {
@@ -1893,7 +1898,8 @@ function DriverDashboard() {
           <NavigationStepBanner
             step={currentNavStep.step}
             distanceToManeuverMeters={currentNavStep.distanceToManeuverMeters}
-            topOffset={insets.top + 8}
+            topOffset={insets.top + NAV_BANNER_TOP_OFFSET}
+            onHeightChange={setNavBannerHeight}
           />
         )}
 

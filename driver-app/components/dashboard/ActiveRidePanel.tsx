@@ -1005,7 +1005,7 @@ function createStyles(colors: ThemeColors) {
     earningsBox: {
       // Bounded so a large (OS-scaled) earnings figure can't squeeze the
       // status column beside it to nothing.
-      maxWidth: '45%',
+      maxWidth: '50%',
       alignItems: 'center',
       backgroundColor: colors.successBg,
       borderRadius: 14,
@@ -1154,7 +1154,6 @@ function createStyles(colors: ThemeColors) {
       // min, not fixed: labels wrap to two lines at large OS text sizes.
       minHeight: 52,
       paddingVertical: SPACING.sm,
-      paddingHorizontal: SPACING.md,
       borderRadius: 16,
       justifyContent: 'center',
       alignItems: 'center',
@@ -1170,7 +1169,6 @@ function createStyles(colors: ThemeColors) {
       // min, not fixed: labels wrap to two lines at large OS text sizes.
       minHeight: 50,
       paddingVertical: SPACING.sm,
-      paddingHorizontal: SPACING.md,
       borderRadius: 14,
       justifyContent: 'center',
       alignItems: 'center',

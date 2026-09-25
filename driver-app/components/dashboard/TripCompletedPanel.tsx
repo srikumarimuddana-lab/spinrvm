@@ -180,32 +180,32 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             </View>
             <View style={styles.fareRow}>
               <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
-              <Text style={styles.fareItemValue}>${money(completedRide?.base_fare)}</Text>
+              <Text style={styles.fareItemValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(completedRide?.base_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
-              <Text style={styles.fareItemValue}>${money(completedRide?.distance_fare)}</Text>
+              <Text style={styles.fareItemValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(completedRide?.distance_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
-              <Text style={styles.fareItemValue}>${money(completedRide?.time_fare)}</Text>
+              <Text style={styles.fareItemValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(completedRide?.time_fare)}</Text>
             </View>
             {n(completedRide?.booking_fee) > 0 && (
               <View style={styles.fareRow}>
                 <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.bookingFee')}</Text>
-                <Text style={styles.fareItemValue}>${money(completedRide?.booking_fee)}</Text>
+                <Text style={styles.fareItemValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(completedRide?.booking_fee)}</Text>
               </View>
             )}
             {n(completedRide?.tip_amount) > 0 && (
               <View style={styles.fareRow}>
                 <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.tip')}</Text>
-                <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(completedRide?.tip_amount)}</Text>
+                <Text style={[styles.fareItemValue, styles.positiveValue]} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(completedRide?.tip_amount)}</Text>
               </View>
             )}
             {bonus > 0 && (
               <View style={styles.fareRow}>
                 <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.bonus')}</Text>
-                <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(bonus)}</Text>
+                <Text style={[styles.fareItemValue, styles.positiveValue]} maxFontSizeMultiplier={MAX_FONT_SCALE}>${money(bonus)}</Text>
               </View>
             )}
             <View style={styles.fareDivider} />

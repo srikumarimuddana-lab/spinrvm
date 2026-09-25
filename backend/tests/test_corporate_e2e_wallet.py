@@ -27,6 +27,10 @@ def test_wallet_lifecycle(test_client, admin_override):
             AsyncMock(return_value=approved_row),
         ),
         patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
+        patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
             AsyncMock(return_value={"id": "w1", "company_id": "c1", "balance": 0}),
         ),

@@ -93,6 +93,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "company_province",
         "company_website",
         "corporate_billing_enabled",
+        "corporate_kyb_refuses_closed_company",
         "corporate_kyb_reverification_enabled",
         "corporate_kyb_reverify_after_months",
         "corporate_subscription_billing_enabled",

@@ -61,6 +61,11 @@ except ImportError:
     from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore[no-redef]
 
 try:
+    from ..routes.corporate_company_kyb import derive_kyb_state
+except ImportError:
+    from routes.corporate_company_kyb import derive_kyb_state  # type: ignore[no-redef]
+
+try:
     from ..services.corporate_membership_service import bootstrap_owner
 except ImportError:
     from services.corporate_membership_service import bootstrap_owner  # type: ignore[no-redef]
@@ -159,6 +164,10 @@ class KYBReviewResponse(CorporateAccountDetailResponse):
 
     wallet_provisioning_error: bool = False
     stripe_customer_creation_error: bool = False
+    # "staff_suspension" when the decision was recorded but the status was
+    # deliberately left 'suspended': a KYB approval never lifts a staff
+    # suspension (owner decision 2026-09-25). None = normal status write.
+    status_unchanged: Optional[str] = None
 
 
 class CorporateAccountUpdate(BaseModel):
@@ -397,18 +406,66 @@ async def kyb_review(
 
     from db_supabase import record_kyb_decision
 
+    # 'closed' is terminal (domain-corporate.md): the wallet has been wound
+    # down and the Stripe subscription cancelled, so a KYB decision must never
+    # flip it back to active/suspended. Refuse outright — no status write, no
+    # decision stamp, no decision email — and compare-and-set on the status
+    # read here so a close that lands mid-review also loses nothing (same
+    # pattern as change_company_status). Kill switch, default on.
+    expected_status = None
+    staff_suspended = False
+    settings = await get_app_settings()
+    if settings.get("corporate_kyb_refuses_closed_company", True):
+        current = await get_corporate_account_by_id(validated_id=normalized_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Corporate account not found")
+        expected_status = current.get("status")
+        if expected_status == CompanyStatus.CLOSED.value:
+            logger.warning("KYB review refused: company %s is closed", normalized_id)
+            raise HTTPException(
+                status_code=409,
+                detail="Corporate account is closed; a KYB decision cannot change its status.",
+            )
+        # Only a suspension caused by a KYB rejection may be lifted by a KYB
+        # approval (owner decision 2026-09-25). "Staff-suspended" is the
+        # company portal's own rule (derive_kyb_state): suspended AND
+        # kyb_last_decision != 'rejected'. The decision is still recorded;
+        # the status stays 'suspended' until staff reactivate it.
+        staff_suspended = expected_status == CompanyStatus.SUSPENDED.value and derive_kyb_state(current) == "suspended"
+
     row = await record_kyb_decision(
         company_id=normalized_id,
         reviewer_id=current_admin["id"],
         approved=decision.approve,
         note=decision.note,
+        expected_status=expected_status,
+        preserve_status=staff_suspended,
     )
     if not row:
-        raise HTTPException(status_code=404, detail="Corporate account not found")
+        latest = await get_corporate_account_by_id(validated_id=normalized_id) if expected_status else None
+        if not latest:
+            raise HTTPException(status_code=404, detail="Corporate account not found")
+        logger.warning(
+            "KYB review lost a concurrent status change: company=%s expected=%s actual=%s",
+            normalized_id,
+            expected_status,
+            latest.get("status"),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Corporate account status changed while this review was in flight "
+                f"(now '{latest.get('status')}'). No decision was recorded — refresh and try again."
+            ),
+        )
 
     wallet_provisioning_error = False
     stripe_customer_creation_error = False
     if decision.approve:
+        # Runs even when staff_suspended keeps the company 'suspended': only this
+        # path ever creates the wallet row. A suspended company still cannot book
+        # because require_company_bookable (corporate_policy_service) blocks it,
+        # itself behind corporate_inactive_company_blocks_booking.
         try:
             await ensure_corporate_wallet(company_id=normalized_id)
         except Exception:
@@ -441,8 +498,11 @@ async def kyb_review(
 
     # M2.3: notify the company of the decision — best-effort; the portal's
     # verification page (derived state + review note) is the durable signal.
+    # Skipped for a staff-suspended company: both templates would be false
+    # there ("now active" / "sign in and resubmit" — the portal tells a
+    # staff-suspended company to contact support instead).
     notify_to = row.get("contact_email") or row.get("billing_email")
-    if notify_to:
+    if notify_to and not staff_suspended:
         try:
             from utils.email_provider import send_transactional_email
 
@@ -490,6 +550,7 @@ async def kyb_review(
                 "note": decision.note,
                 "wallet_provisioning_error": wallet_provisioning_error,
                 "stripe_customer_creation_error": stripe_customer_creation_error,
+                "status_unchanged": "staff_suspension" if staff_suspended else None,
             },
         )
     except Exception as _ae:
@@ -502,6 +563,7 @@ async def kyb_review(
         **row,
         "wallet_provisioning_error": wallet_provisioning_error,
         "stripe_customer_creation_error": stripe_customer_creation_error,
+        "status_unchanged": "staff_suspension" if staff_suspended else None,
     }
 
 

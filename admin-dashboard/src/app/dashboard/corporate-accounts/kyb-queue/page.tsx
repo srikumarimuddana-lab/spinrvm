@@ -74,10 +74,21 @@ export default function KybQueuePage() {
         load();
     }, []);
 
+    // A staff suspension that lands after the queue loaded is kept by the
+    // backend (status_unchanged) — say so instead of a silent success.
+    const warnIfStillSuspended = (res: { status_unchanged?: string | null }) => {
+        if (res?.status_unchanged === "staff_suspension") {
+            toast({
+                title: "Decision recorded — company still suspended",
+                description: "This company is suspended by staff. Reactivate it from its account page if appropriate.",
+            });
+        }
+    };
+
     const approve = async (id: string) => {
         setBusyId(id);
         try {
-            await reviewKyb(id, { approve: true });
+            warnIfStillSuspended(await reviewKyb(id, { approve: true }));
             await load();
         } catch (e: any) {
             toast({ title: "Approval failed", description: e?.message, variant: "destructive" });
@@ -91,10 +102,12 @@ export default function KybQueuePage() {
         const id = rejectTarget.id;
         setBusyId(id);
         try {
-            await reviewKyb(id, {
-                approve: false,
-                note: rejectNote.trim() || undefined,
-            });
+            warnIfStillSuspended(
+                await reviewKyb(id, {
+                    approve: false,
+                    note: rejectNote.trim() || undefined,
+                })
+            );
             setRejectTarget(null);
             setRejectNote("");
             await load();

@@ -46,7 +46,12 @@
     "end_ride": "Terminer la course",
     "sos": "SOS",
     "driver_timeout": "Chauffeur non disponible",
-    "driver_timeout_msg": "Le chauffeur n\u2019a pas r\u00e9pondu \u00e0 temps. Recherche d\u2019un autre chauffeur\u2026"
+    "driver_timeout_msg": "Le chauffeur n\u2019a pas r\u00e9pondu \u00e0 temps. Recherche d\u2019un autre chauffeur\u2026",
+    "no_drivers_title": "Aucun chauffeur disponible pour le moment",
+    "no_drivers_msg": "Nous n\u2019avons trouv\u00e9 aucun chauffeur pour ce trajet. R\u00e9essayez pour voir un prix \u00e0 jour, ou planifiez-le pour plus tard.",
+    "no_drivers_try_again": "R\u00e9essayer",
+    "no_drivers_schedule": "Planifier pour plus tard",
+    "no_drivers_dismiss": "Pas maintenant"
   },
   "rating": {
     "title": "Comment s\u2019est pass\u00e9e votre course\u00a0?",

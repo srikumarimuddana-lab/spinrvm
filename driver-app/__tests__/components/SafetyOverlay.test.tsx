@@ -229,4 +229,18 @@ describe('SafetyOverlay — location dot respects Reduce Motion', () => {
     // The text equivalent of the pulse is still shown.
     expect(getByText('LIVE')).toBeTruthy();
   });
+
+  it('stops a running dot pulse when Reduce Motion turns on mid-session', async () => {
+    const props = { visible: true, rideId: 'ride-1', onClose: jest.fn(), onTrigger: jest.fn() };
+    const { rerender } = render(<SafetyOverlay {...props} />);
+    await flush();
+    const running = loopSpy.mock.results[0].value;
+    const stopSpy = jest.spyOn(running, 'stop');
+
+    mockReduceMotion = true;
+    rerender(<SafetyOverlay {...props} />);
+    await flush();
+    expect(stopSpy).toHaveBeenCalled();
+    expect(loopSpy).toHaveBeenCalledTimes(1);
+  });
 });

@@ -31,4 +31,15 @@ describe('SkeletonBox — Reduce Motion', () => {
     expect(loopSpy).not.toHaveBeenCalled();
     expect(toJSON()).not.toBeNull();
   });
+
+  it('stops a running pulse when Reduce Motion turns on mid-session', () => {
+    const { rerender } = render(<SkeletonBox />);
+    const running = loopSpy.mock.results[0].value;
+    const stopSpy = jest.spyOn(running, 'stop');
+
+    mockReduceMotion = true;
+    rerender(<SkeletonBox />);
+    expect(stopSpy).toHaveBeenCalled();
+    expect(loopSpy).toHaveBeenCalledTimes(1);
+  });
 });

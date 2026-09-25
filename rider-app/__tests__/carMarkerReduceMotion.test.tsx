@@ -13,9 +13,30 @@ import { CarMarker } from '@shared/components/CarMarker';
 
 // Controls the OS Reduce Motion setting as seen through the shared hook.
 let mockReduceMotion = false;
-jest.mock('@shared/hooks/useReduceMotion', () => ({
-  useReduceMotion: () => mockReduceMotion,
-}));
+// Stateful like the real hook: flipping the setting re-renders the
+// component through its own state, which React.memo(CarMarker) cannot skip.
+const mockReduceMotionSubscribers = new Set<(v: boolean) => void>();
+jest.mock('@shared/hooks/useReduceMotion', () => {
+  const ReactActual = require('react');
+  return {
+    useReduceMotion: () => {
+      const [value, setValue] = ReactActual.useState(mockReduceMotion);
+      ReactActual.useEffect(() => {
+        mockReduceMotionSubscribers.add(setValue);
+        return () => {
+          mockReduceMotionSubscribers.delete(setValue);
+        };
+      }, []);
+      return value;
+    },
+  };
+});
+const setMockReduceMotion = (value: boolean) => {
+  mockReduceMotion = value;
+  act(() => {
+    mockReduceMotionSubscribers.forEach((set) => set(value));
+  });
+};
 
 // react-native-maps requires native modules Jest can't load — stub with
 // components that support everything CarMarker actually uses: a ref with
@@ -106,5 +127,17 @@ describe('CarMarker — pulsing ring respects Reduce Motion (shared copy)', () =
     });
     expect(loopSpy).not.toHaveBeenCalled();
     expect(() => unmount()).not.toThrow();
+  });
+
+  it('stops a running ring pulse when Reduce Motion turns on mid-session', () => {
+    const ring = { color: '#F59E0B', pulsing: true };
+    const { unmount } = render(<CarMarker coordinate={coord} ring={ring} />);
+    const running = loopSpy.mock.results[0].value;
+    const stopSpy = jest.spyOn(running, 'stop');
+
+    setMockReduceMotion(true);
+    expect(stopSpy).toHaveBeenCalled();
+    expect(loopSpy).toHaveBeenCalledTimes(1);
+    unmount();
   });
 });

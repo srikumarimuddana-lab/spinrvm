@@ -26,6 +26,11 @@ Discrepancy types detected:
                              never refunded; read-only scheduled dry run of
                              scripts/reconcile_cancelled_captured_refunds.py,
                              see _detect_cancelled_captured
+  PAYOUT_STUCK_RESERVED    — payouts row still status='reserved' more than
+                             1h after creation (process died between the
+                             reserve INSERT and the Stripe Transfer outcome
+                             write); read-only, see
+                             _reconcile_stuck_reserved_payouts
 
 Design:
   - Redis SET NX EX leader lock so only one replica runs per 23h window.
@@ -161,7 +166,14 @@ _ORPHAN_HOLD_METRIC = "spinr_payment_stripe_orphan_hold_total"
 # hit its row ceiling). Without this, a check failing every day would look
 # identical to a clean one to an alert rule.
 _CHECK_FAILED_METRIC = "spinr_payment_reconcile_check_failed_total"
-_CHECK_NAMES = ("orphan_hold", "cancelled_captured")
+_CHECK_NAMES = ("orphan_hold", "cancelled_captured", "stuck_reserved_payout")
+# payouts rows still 'reserved' past this age. The reserve INSERT and the
+# terminal write straddle one Stripe Transfer call (routes/drivers/payouts.py),
+# so a live request resolves in seconds; an hour is unambiguously stranded.
+_STUCK_RESERVED_PAYOUT_AFTER = timedelta(hours=1)
+_STUCK_RESERVED_PAYOUT_LIMIT = 500
+_STUCK_RESERVED_METRIC = "spinr_payment_stuck_reserved_payouts_total"
+_PAYOUT_TYPES = ("standard", "instant", "auto")
 
 # Pre-register every series at 0 in EVERY process at import. The counters are
 # in-process and render with a worker_pid label, so without this a series
@@ -172,6 +184,8 @@ for _o in _CC_ALERT_OUTCOMES:
 metrics.inc(_ORPHAN_HOLD_METRIC, by=0)
 for _c in _CHECK_NAMES:
     metrics.inc(_CHECK_FAILED_METRIC, {"check": _c}, by=0)
+for _t in _PAYOUT_TYPES:
+    metrics.inc(_STUCK_RESERVED_METRIC, {"payout_type": _t}, by=0)
 
 
 def _pod_id() -> str:
@@ -442,6 +456,7 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
     # times.
     orphan_holds: Any = "skipped_backfill"
     cc_counts: Any = "skipped_backfill"
+    stuck_reserved: Any = "skipped_backfill"
     if target_date is None:
         orphan_holds = await _reconcile_orphan_holds(_stripe)
         if orphan_holds is not None:
@@ -454,6 +469,13 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
         # _detect_cancelled_captured.
         cc_counts, cc_flagged = await _detect_cancelled_captured()
         discrepancies.extend(cc_flagged)
+
+        # ── 3i. Payout rows stranded in 'reserved' ──────────────────────
+        # Read-only: whether the Stripe Transfer went through is exactly
+        # what a human has to confirm. See _reconcile_stuck_reserved_payouts.
+        stuck_reserved = await _reconcile_stuck_reserved_payouts()
+        if stuck_reserved is not None:
+            discrepancies.extend(stuck_reserved)
 
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
@@ -470,6 +492,8 @@ async def _run_reconciliation_tick(target_date: Optional[date] = None) -> None:
         "stripe_orphan_holds": orphan_holds if not isinstance(orphan_holds, list) else len(orphan_holds),
         # None = the scan failed (logged); otherwise per-outcome ride counts.
         "cancelled_captured_unrefunded": cc_counts,
+        # None = the check itself failed (logged), NOT "zero stuck rows".
+        "payouts_stuck_reserved": stuck_reserved if not isinstance(stuck_reserved, list) else len(stuck_reserved),
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -562,6 +586,98 @@ async def _reconcile_payouts() -> List[Dict[str, Any]]:
             row.get("status"),
             extra={"domain": "payments"},
         )
+    return discrepancies
+
+
+def _payout_transfer_idempotency_key(payout_id: str, payout_type: Optional[str]) -> Optional[str]:
+    """The Stripe idempotency key the reserve-then-transfer path used.
+
+    Not stored on the row; it is deterministic in routes/drivers/payouts.py.
+    Auto payouts use attempt-scoped keys (utils/auto_payout.py) and tag the
+    Transfer with metadata.payout_id instead, so no single key is returned.
+    """
+    if payout_type == "instant":
+        return f"instant-payout-transfer-{payout_id}"
+    if payout_type in (None, "standard"):
+        return f"payout-transfer-{payout_id}"
+    return None
+
+
+async def _reconcile_stuck_reserved_payouts() -> Optional[List[Dict[str, Any]]]:
+    """Detect payouts rows stranded in status='reserved'.
+
+    routes/drivers/payouts.py INSERTs the row as 'reserved' before calling
+    stripe.Transfer and only then writes a terminal status. A process death
+    in between (crash, deploy, timeout) leaves the row 'reserved' forever: it
+    keeps deducting from the driver's payable balance, and migration 250's
+    one-in-flight index blocks every new payout for that driver.
+
+    Read-only, never transitions a row: only Stripe can say whether the
+    Transfer happened, and guessing wrong either double-pays (re-open) or
+    loses the driver's money (fail). Surfaced for manual review with the
+    idempotency key to search in Stripe. Returns None when the check itself
+    failed (logged + counted), never an empty list that looks clean.
+    """
+    cutoff = datetime.now(timezone.utc) - _STUCK_RESERVED_PAYOUT_AFTER
+    try:
+        rows = (
+            await db_supabase.get_rows(
+                "payouts",
+                {"status": "reserved", "created_at": {"$lt": cutoff.isoformat()}},
+                columns="id,driver_id,payout_type,status,created_at",
+                order="created_at",
+                limit=_STUCK_RESERVED_PAYOUT_LIMIT,
+            )
+            or []
+        )
+    except Exception:
+        logger.error(
+            "stripe_reconcile: stuck-reserved payouts query failed", exc_info=True, extra={"domain": "payments"}
+        )
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "stuck_reserved_payout"})
+        return None
+
+    if len(rows) >= _STUCK_RESERVED_PAYOUT_LIMIT:
+        # Oldest-first, so the most urgent rows are the ones surfaced.
+        logger.error(
+            "stripe_reconcile: stuck-reserved payouts scan hit its %d-row ceiling — more may exist",
+            _STUCK_RESERVED_PAYOUT_LIMIT,
+            extra={"domain": "payments"},
+        )
+        metrics.inc(_CHECK_FAILED_METRIC, {"check": "stuck_reserved_payout"})
+
+    discrepancies: List[Dict[str, Any]] = []
+    for row in rows:
+        # Defensive: re-assert the state, never trust the query filter alone.
+        if row.get("status") != "reserved" or not row.get("id"):
+            continue
+        created = row.get("created_at")
+        if created and not _is_older_than(created, cutoff):
+            continue  # still in flight
+        payout_type = row.get("payout_type")
+        idem = _payout_transfer_idempotency_key(row["id"], payout_type)
+        discrepancies.append(
+            {
+                "type": "PAYOUT_STUCK_RESERVED",
+                "payout_id": row["id"],
+                "driver_id": row.get("driver_id"),
+                "payout_type": payout_type,
+                "created_at": created,
+                "stripe_idempotency_key": idem,
+            }
+        )
+        logger.error(
+            "stripe_reconcile: PAYOUT_STUCK_RESERVED payout=%s driver=%s payout_type=%s created_at=%s "
+            "stripe_idempotency_key=%s — confirm in Stripe whether the Transfer happened before touching the row",
+            row["id"],
+            row.get("driver_id"),
+            payout_type,
+            created,
+            idem or "n/a (auto: search Transfers by metadata.payout_id)",
+            extra={"domain": "payments", "driver_id": row.get("driver_id")},
+        )
+        label = payout_type if payout_type in _PAYOUT_TYPES else "other"
+        metrics.inc(_STUCK_RESERVED_METRIC, {"payout_type": label})
     return discrepancies
 
 

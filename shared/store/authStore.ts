@@ -6,6 +6,7 @@ import { appCache, CACHE_KEYS } from '../cache';
 import { isAppCheckRejection, rejectionBody } from '../auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
+import { clearRefreshProposal, refreshProposalFor, REFRESH_PROPOSAL_KEY } from '../auth/refreshProposal';
 import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -293,6 +294,7 @@ async function clearLocalSessionUnlocked(): Promise<void> {
   await storage.deleteItem('auth_token');
   await storage.deleteItem('fg_access_token');
   await storage.deleteItem('refresh_token');
+  await storage.deleteItem(REFRESH_PROPOSAL_KEY);
   await storage.deleteItem('token_expires_at');
   // Positive evidence that this session ended, for the headless contexts that
   // cannot read this store (see shared/auth/sessionMarker.ts). Written before
@@ -413,7 +415,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // simultaneous-refresh window where the winner hasn't persisted yet.
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const res = await api.post('/auth/refresh', { refresh_token: candidate });
+          // X8: replaying the same proposal after a lost response recovers the
+          // committed successor instead of being treated as token theft.
+          const proposal = await refreshProposalFor(candidate);
+          const res = await api.post('/auth/refresh', proposal
+            ? { refresh_token: candidate, proposed_refresh_token: proposal }
+            : { refresh_token: candidate });
           const { token, refresh_token: newRefresh, expires_in, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
           let expiresIn = typeof expires_in === 'number' && Number.isFinite(expires_in) && expires_in > 0
             ? expires_in
@@ -437,6 +444,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             throw new Error('Token refresh returned invalid credentials');
           }
           await publishTokensUnlocked(token, newRefresh, expiresIn, csrf_token, false);
+          await clearRefreshProposal();
           return true;
         } catch (e: unknown) {
           // The /auth/refresh path rejects with a raw fetch Response (HTTP

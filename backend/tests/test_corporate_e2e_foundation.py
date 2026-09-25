@@ -61,7 +61,8 @@ def test_create_approve_suspend_reactivate_flow(test_client, admin_override):
         ),
         patch(
             "routes.corporate_accounts.get_corporate_account_by_id",
-            AsyncMock(side_effect=[active_row, suspended_row]),
+            # kyb-review pre-read (closed-company guard), then the two status changes.
+            AsyncMock(side_effect=[created, active_row, suspended_row]),
         ),
         patch(
             "db_supabase.update_corporate_account_status",

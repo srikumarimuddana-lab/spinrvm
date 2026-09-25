@@ -397,14 +397,50 @@ async def kyb_review(
 
     from db_supabase import record_kyb_decision
 
+    # 'closed' is terminal (domain-corporate.md): the wallet has been wound
+    # down and the Stripe subscription cancelled, so a KYB decision must never
+    # flip it back to active/suspended. Refuse outright — no status write, no
+    # decision stamp, no decision email — and compare-and-set on the status
+    # read here so a close that lands mid-review also loses nothing (same
+    # pattern as change_company_status). Kill switch, default on.
+    expected_status = None
+    settings = await get_app_settings()
+    if settings.get("corporate_kyb_refuses_closed_company", True):
+        current = await get_corporate_account_by_id(validated_id=normalized_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Corporate account not found")
+        expected_status = current.get("status")
+        if expected_status == CompanyStatus.CLOSED.value:
+            logger.warning("KYB review refused: company %s is closed", normalized_id)
+            raise HTTPException(
+                status_code=409,
+                detail="Corporate account is closed; a KYB decision cannot change its status.",
+            )
+
     row = await record_kyb_decision(
         company_id=normalized_id,
         reviewer_id=current_admin["id"],
         approved=decision.approve,
         note=decision.note,
+        expected_status=expected_status,
     )
     if not row:
-        raise HTTPException(status_code=404, detail="Corporate account not found")
+        latest = await get_corporate_account_by_id(validated_id=normalized_id) if expected_status else None
+        if not latest:
+            raise HTTPException(status_code=404, detail="Corporate account not found")
+        logger.warning(
+            "KYB review lost a concurrent status change: company=%s expected=%s actual=%s",
+            normalized_id,
+            expected_status,
+            latest.get("status"),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Corporate account status changed while this review was in flight "
+                f"(now '{latest.get('status')}'). No decision was recorded — refresh and try again."
+            ),
+        )
 
     wallet_provisioning_error = False
     stripe_customer_creation_error = False

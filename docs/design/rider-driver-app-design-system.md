@@ -87,6 +87,20 @@ on-token than assuming either app is now fully clean — the remaining
 hardcoded values are the ones that don't mechanically reduce to a token
 swap, not an overlooked backlog.
 
+## Motion
+
+Motion is less settled than color and type. There are no spring tokens yet, and most animations still hardcode their own durations (see `docs/audit/2026-09-25-ux-motion-admin-website-research.md` §1). What exists and is enforced today:
+
+- **Timing tokens.** `shared/utils/motion.ts` exports `TIMING` (`fast` 150, `base` 250, `slow` 400 ms, plus the shake step) and `EASING`. Use these rather than a new literal duration. Add a spring or easing token only when its first real caller lands, not ahead of it.
+- **Reduce Motion is mandatory for loops.** Any `Animated.loop` (pulse, shimmer, presence ring) must check `useReduceMotion()` from `shared/hooks/useReduceMotion.ts`. Under Reduce Motion:
+  - don't start the loop
+  - reset the value to a static resting state that still conveys the same state
+  - include the value in the effect's deps, so a mid-session change stops a running loop
+
+  The hook subscribes to setting changes, which the older one-shot `AccessibilityInfo.isReduceMotionEnabled()` calls do not. Prefer it in new code.
+- **Motion never carries information alone.** If a pulse means "live" or "waiting", a text label or colour must say the same thing (WCAG 2.1 AA is the floor — see CLAUDE.md's Saskatchewan Regulatory section).
+- **Known exception, deliberately not yet gated:** the SOS hold pulse (`shared/components/SOSButton.tsx`). It is the only feedback that a hold is registering, so it needs a non-motion substitute (e.g. haptic ticks) before it can stop under Reduce Motion.
+
 ## If you're changing a token
 
 Edit `shared/theme/index.ts` (or `ThemeContext.tsx` for resolution behavior)

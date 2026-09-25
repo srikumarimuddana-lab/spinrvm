@@ -11,6 +11,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { SPACING, FONT } from '@shared/utils/responsive';
+import { useReduceMotion } from '@shared/hooks/useReduceMotion';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 // Guarded native-module require — must stay runtime require(), not a
@@ -135,9 +136,12 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   // creation.
   // eslint-disable-next-line react-hooks/refs
   const goAnim = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotion();
 
   useEffect(() => {
-    if (canGoOnline && !isOnline) {
+    // Reduce Motion: the GO button stays at rest scale (the else branch);
+    // its label and colour already say it's actionable without the pulse.
+    if (canGoOnline && !isOnline && !reduceMotion) {
       try {
         Animated.loop(
           Animated.sequence([
@@ -164,7 +168,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     // lifetime, so excluding it changes nothing about when this effect
     // fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canGoOnline, isOnline]);
+  }, [canGoOnline, isOnline, reduceMotion]);
 
   // Welcome / Onboarding Notification Check — fires once when documents are
   // first required so a new driver knows to upload them.

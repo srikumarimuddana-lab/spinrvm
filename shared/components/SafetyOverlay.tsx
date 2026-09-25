@@ -12,6 +12,7 @@ import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useHoldToConfirm } from '../hooks/useHoldToConfirm';
 import { useEmergencyContacts } from '../hooks/useEmergencyContacts';
+import { useReduceMotion } from '../hooks/useReduceMotion';
 import { getSOSLocation } from '../utils/sosLocation';
 import api from '@shared/api/client';
 
@@ -38,6 +39,7 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
   const [failed, setFailed] = useState(false);
   const [shareState, setShareState] = useState<'idle' | 'loading' | 'failed'>('idle');
   const pulse = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotion();
   const shareFailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -75,6 +77,12 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
 
   useEffect(() => {
     if (!visible) return undefined;
+    // Reduce Motion: the location dot stays fully visible instead of pulsing;
+    // the "LIVE" label beside it carries the same meaning.
+    if (reduceMotion) {
+      pulse.setValue(1);
+      return undefined;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.4, duration: 900, useNativeDriver: true }),
@@ -83,7 +91,7 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
     );
     loop.start();
     return () => loop.stop();
-  }, [visible, pulse]);
+  }, [visible, reduceMotion, pulse]);
 
   // Don't leave the share-failure reset timer running after unmount.
   useEffect(

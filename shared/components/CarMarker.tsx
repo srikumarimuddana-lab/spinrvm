@@ -27,6 +27,7 @@ import {
 import { smoothFix, isImplausibleJump, type SmoothingState } from '../utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '../utils/fixFeed';
 import { captureException } from '../services/errorReporting';
+import { useReduceMotion } from '../hooks/useReduceMotion';
 
 const CAR_IMAGES = {
     standard: require('../assets/car_marker.png'),
@@ -813,12 +814,16 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // eslint-disable-next-line react-hooks/refs
     const ringPulseAnim = useRef(new Animated.Value(0)).current;
     const ringLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+    // Reduce Motion: no loop — the pulse layer rests at value 0 (opacity
+    // 0.4, scale 1), so a pulsing ring still reads as a stronger static
+    // ring than a non-pulsing one.
+    const reduceMotion = useReduceMotion();
     useEffect(() => {
         if (ringLoopRef.current) {
             ringLoopRef.current.stop();
             ringLoopRef.current = null;
         }
-        if (!ring?.pulsing) {
+        if (!ring?.pulsing || reduceMotion) {
             ringPulseAnim.setValue(0);
             return;
         }
@@ -837,7 +842,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             loop.stop();
             ringLoopRef.current = null;
         };
-    }, [ring?.pulsing, ringPulseAnim]);
+    }, [ring?.pulsing, reduceMotion, ringPulseAnim]);
 
     // Custom marker failed to load (offline + cold cache, dead URL) — fall
     // back to the bundled variant. Reset when the URL changes so a fixed

@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 try:
@@ -147,6 +147,27 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "resend_api_key",
     }
 )
+
+# N23 money controls (migration 475): the per-admin daily cap, the alert
+# threshold, and the kill switch for real dispute refunds. A settings-module
+# admin who could raise their own cap or switch refunds on would defeat the
+# control, so changing any of these requires super_admin. Compared by value
+# (Decimal/bool), not string: the dashboard round-trips the whole settings
+# object on every save, so an unchanged value must not 403 an unrelated save.
+_SUPER_ADMIN_ONLY_MONEY_FIELDS = frozenset(
+    {"admin_money_daily_cap_per_admin", "admin_money_alert_threshold", "admin_dispute_refunds_enabled"}
+)
+
+
+def _same_setting_value(new: Any, old: Any) -> bool:
+    if isinstance(new, bool) or isinstance(old, bool):
+        return bool(new) == bool(old)
+    if old is None:
+        return new is None
+    try:
+        return Decimal(str(new)) == Decimal(str(old))
+    except (InvalidOperation, ValueError):
+        return False
 
 
 # Columns that live on the settings row but are NOT settings — internal state
@@ -830,6 +851,12 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
         current = existing or {}
         for field in _SUPER_ADMIN_ONLY_FIELDS:
             if field in update_fields and (update_fields[field] or "") != (current.get(field) or ""):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Only super admins can change {field}",
+                )
+        for field in _SUPER_ADMIN_ONLY_MONEY_FIELDS:
+            if field in update_fields and not _same_setting_value(update_fields[field], current.get(field)):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Only super admins can change {field}",

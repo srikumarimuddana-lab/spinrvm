@@ -233,17 +233,38 @@ describe('ringing', () => {
     expect(mockStop).toHaveBeenCalled();
   });
 
-  it('reports the first result of a car session once, not per offer', async () => {
+  it('never reports a successful or degraded-but-playing tone to Sentry', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
     makeOwner();
     offerLive(offer('r1'));
     await flush();
+    mockStart.mockImplementation(() => Promise.resolve('playing_unfocused'));
+    offerLive(offer('r2'));
+    await flush();
+    expect(mockRecordNonFatal).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed tone once per car session, not per offer', async () => {
+    mockStart.mockImplementation(() => Promise.resolve('error'));
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    offerEnds();
     offerLive(offer('r2'));
     await flush();
     expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
     expect(mockRecordNonFatal.mock.calls[0][1]).toMatchObject({
       reason: 'car_offer_tone_result',
-      result: 'playing',
+      result: 'error',
     });
+  });
+
+  it('an offer that arrives already expired never rings and expires at once', () => {
+    makeOwner();
+    offerLive(offer('r1', { offer_expires_at: new Date(Date.now() - 5_000).toISOString() }));
+    expect(mockStart).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(ring.OFFER_EXPIRY_GRACE_MS);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
   });
 
   it.each([
@@ -540,11 +561,14 @@ describe('offerDeadlineMs', () => {
     expect(ring.offerDeadlineMs(o, 25, NOW)).toBe(12_000);
   });
 
-  it('falls back to the store countdown when the expiry is missing, invalid or past', () => {
+  it('falls back to the store countdown when the expiry is missing or invalid', () => {
     expect(ring.offerDeadlineMs({ ride_id: 'r', countdown_seconds: 30 }, 25, NOW)).toBe(25_000);
     expect(ring.offerDeadlineMs({ ride_id: 'r', offer_expires_at: 'garbage' }, 25, NOW)).toBe(25_000);
+  });
+
+  it('returns 0 for a valid expiry already in the past (a delayed push)', () => {
     const past = new Date(NOW - 1_000).toISOString();
-    expect(ring.offerDeadlineMs({ ride_id: 'r', offer_expires_at: past }, 25, NOW)).toBe(25_000);
+    expect(ring.offerDeadlineMs({ ride_id: 'r', offer_expires_at: past }, 25, NOW)).toBe(0);
   });
 
   it('then the payload countdown, then 15 s', () => {

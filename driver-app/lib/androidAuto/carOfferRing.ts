@@ -131,7 +131,11 @@ function liveOffer(): CarOffer | null {
 
 /**
  * How long this offer has left, in ms: the server's absolute expiry first, then
- * the store's countdown, then the payload's, then 15 s. Clamped to 1..60 s.
+ * the store's countdown, then the payload's, then 15 s. Clamped to 1..60 s,
+ * except that a valid expiry already in the past returns 0: the offer is dead
+ * (a delayed push), so it gets no tone and expires at once, as notifeeService
+ * and the phone screen already treat it. Only a missing or unparseable expiry
+ * uses the relative fallbacks.
  */
 export function offerDeadlineMs(
   offer: CarOffer,
@@ -140,7 +144,8 @@ export function offerDeadlineMs(
 ): number {
   let ms = FALLBACK_OFFER_MS;
   const expiresAt = Date.parse(String(offer.offer_expires_at ?? ''));
-  if (Number.isFinite(expiresAt) && expiresAt - now > 0) {
+  if (Number.isFinite(expiresAt)) {
+    if (expiresAt - now <= 0) return 0;
     ms = expiresAt - now;
   } else if (typeof countdownSeconds === 'number' && countdownSeconds > 0) {
     ms = countdownSeconds * 1000;
@@ -257,11 +262,18 @@ function armExpiry(rideId: string): void {
 }
 
 function reportOnce(result: string): void {
+  // Success is a log line, never a Sentry event (CLAUDE.md: degraded-but-
+  // recovered is a warning log, never Sentry). 'playing_unfocused' means the
+  // tone plays but music is not ducked: worth a warning, not an exception.
+  if (result === 'playing') return;
+  if (result === 'playing_unfocused' || result === 'blocked_call') {
+    console.warn('[android-auto] car offer tone:', result);
+    return;
+  }
   if (reportedThisSession) return;
   reportedThisSession = true;
-  // One event per car session: tells us, from real head units, whether focus
-  // is granted (playing) or refused (playing_unfocused), and how often the
-  // native side fails. Not per offer — that would be an event per ride.
+  // A real failure (the ring went back to the phone): one event per car
+  // session, not per offer — that would be an event per ride.
   recordNonFatal(new Error(`Car offer tone: ${result}`), {
     domain: 'drivers',
     module: 'androidAuto',
@@ -271,6 +283,8 @@ function reportOnce(result: string): void {
 }
 
 function startCarTone(offer: CarOffer, gen: number): void {
+  // An already-expired offer (see offerDeadlineMs) never rings.
+  if (ringDeadlineAt <= Date.now()) return;
   carRingHandled = true;
   void (async () => {
     try {

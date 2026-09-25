@@ -489,9 +489,9 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             # for legacy rows. Matches the T4A summary and the trips view.
             "total_earnings": sum((_ride_income(r) for r in rides), Decimal("0")),
             "total_tips": sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0")),
-            "total_incentives": float(_incentive_total),
-            "total_cancel_fees": float(_cancel_fees_total),
-            "total_tax": float(_total_tax),
+            "total_incentives": _f(_incentive_total),
+            "total_cancel_fees": _f(_cancel_fees_total),
+            "total_tax": _f(_total_tax),
             "total_rides": len(all_completed_rides),
             "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in all_completed_rides),
             "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in all_completed_rides),
@@ -596,7 +596,7 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
         # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
         # float only at the response boundary.
         results = [
-            {"date": date, **{**data, "earnings": float(data["earnings"]), "tips": _f(data["tips"])}}
+            {"date": date, **{**data, "earnings": _f(data["earnings"]), "tips": _f(data["tips"])}}
             for date, data in sorted(daily_data.items())
         ]
     except Exception as e:
@@ -787,7 +787,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
         # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
         # float only at the response boundary.
         for w in weekly_data.values():
-            w["earnings"] = float(w["earnings"])
+            w["earnings"] = _f(w["earnings"])
             w["tips"] = _f(w["tips"])
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
     except Exception as e:
@@ -890,7 +890,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
         # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
         # float only at the response boundary.
         for m in monthly_data.values():
-            m["earnings"] = float(m["earnings"])
+            m["earnings"] = _f(m["earnings"])
             m["tips"] = _f(m["tips"])
         return sorted(monthly_data.values(), key=lambda x: x["month"])
     except Exception as e:
@@ -963,7 +963,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
             Decimal("0"),
         )
         return {
-            "earnings": float(earnings_total),
+            "earnings": _f(earnings_total),
             "rides": len(rides),
             "tips": _f(sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))),
         }

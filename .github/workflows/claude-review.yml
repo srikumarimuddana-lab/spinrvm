@@ -11,13 +11,14 @@ name: Claude PR review
 # Optional (recommended):
 #   SUPABASE_READONLY_TOKEN, CONTEXT7_API_KEY — mirror of .claude/mcp.example.json
 #
-# COST CONTROL (ACTION_ITEMS.md C7): this repo is pre-launch and the
-# ANTHROPIC_API_KEY has intentionally been left unset since 2026-08-01 on
-# cost grounds — see C7's decision record. Re-enabling this workflow is a
-# trial, not a permanent switch-on: whoever sets the secret should also set
-# a hard spend cap + billing alert in the Anthropic Console first (this
-# workflow cannot enforce a dollar cap itself, only bound per-run cost).
-# Two levers are set below to keep that per-run cost predictable:
+# COST CONTROL (ACTION_ITEMS.md C7, E12 of docs/audit/2026-09-25-contributor-
+# governance-baseline.md): this repo is pre-launch and the ANTHROPIC_API_KEY
+# has intentionally been left unset since 2026-08-01 on cost grounds — see
+# C7's decision record. Re-enabling this workflow is a trial, not a permanent
+# switch-on: whoever sets the secret should also set a hard spend cap +
+# billing alert in the Anthropic Console first (this workflow cannot enforce
+# a dollar cap itself, only bound per-run cost). Three levers now keep that
+# per-run cost predictable and bound run *volume* to the highest-risk paths:
 #   --model claude-sonnet-5 — the cheaper, faster model this repo already
 #     uses for its own Claude Code sessions (see this file's own commit
 #     trailers), not the more expensive default.
@@ -25,8 +26,13 @@ name: Claude PR review
 #     large or confusing diff. If reviews start truncating mid-audit on
 #     legitimately large PRs, raise this number in its own commit with a
 #     citation of which PR needed it — don't raise it speculatively.
-# Trigger scoping (no `synchronize`, docs/`.claude/` excluded) already
-# bounds run *volume*; these two bound per-run *cost*.
+#   `paths:` below (added 2026-09-25, E12) — the automatic per-push trigger
+#     now only fires on the same money/auth/dispatch/schema/safety paths
+#     CODEOWNERS already treats as sensitive, instead of every non-doc PR.
+#     A PR outside those paths gets no automatic AI review, but any PR can
+#     still get one on demand via a `/claude review` comment (unfiltered,
+#     see the issue_comment trigger below) — so this narrows *automatic*
+#     cost, not reviewer access.
 #
 # The `--model` string above could not be verified end-to-end against a
 # live Anthropic API call from this session (network-restricted sandbox).
@@ -45,10 +51,33 @@ on:
     # audits to review one final state. Re-review a pushed branch on demand
     # with a `/claude review` comment (see the issue_comment trigger below,
     # which is not path-filtered and works on any PR).
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.claude/**'
+    #
+    # Path allowlist (E12, 2026-09-25): mirrors .github/CODEOWNERS' own
+    # money/schema/auth/dispatch/safety domain list, so the automatic trigger
+    # only fires where an unreviewed regression is most expensive. Keep this
+    # list in sync with CODEOWNERS by hand — GitHub Actions can't include
+    # another file's path list, and letting the two drift defeats the point
+    # (a path CODEOWNERS calls sensitive but this list omits gets no
+    # automatic AI review either). A PR outside this list can still be
+    # reviewed on demand — see the issue_comment trigger below.
+    paths:
+      - 'backend/routes/payments*'
+      - 'backend/services/fare_service.py'
+      - 'backend/services/corporate_*'
+      - 'backend/routes/corporate_*'
+      - 'backend/routes/wallet*'
+      - 'backend/utils/payment_retry.py'
+      - 'backend/utils/surge_engine.py'
+      - 'backend/migrations/**'
+      - 'backend/routes/auth*'
+      - 'backend/core/config.py'
+      - 'backend/core/middleware.py'
+      - 'backend/utils/crypto.py'
+      - 'backend/utils/rate_limiter.py'
+      - '.github/workflows/security-gates.yml'
+      - 'backend/services/dispatch_service.py'
+      - 'backend/routes/rides/**'
+      - 'backend/routes/safety*'
   issue_comment:
     types: [created]
 

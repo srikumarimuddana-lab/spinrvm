@@ -52,6 +52,22 @@ jest.mock('firebase/auth', () => ({
   signOut: jest.fn(),
 }));
 
+// X8 refresh-successor commitment (shared/auth/refreshProposal.ts) lazily
+// requires the real expo-crypto native module inside refreshTokens(). Left
+// unmocked, that require trips a jest-expo sandbox edge case ("You are
+// trying to `import` a file outside of the scope of the test code",
+// surfaced via expo/src/winter's lazy fetch installer) because this test
+// loads the real, unmocked shared/store/authStore.ts from outside
+// driver-app's rootDir.
+//
+// All-equal bytes deliberately make refreshProposalFor() resolve to null
+// (generateProposal()'s own "no-op/broken RNG" guard) so this file's
+// pre-existing assertions about plain (proposal-less) /auth/refresh calls
+// stay valid — this suite predates X8 and isn't testing it.
+jest.mock('expo-crypto', () => ({
+  getRandomBytes: jest.fn((n: number) => new Uint8Array(n).fill(1)),
+}));
+
 // SecureStore — in-memory backing. Variable prefixed `mock*` so the jest
 // factory is allowed to reference it per the out-of-scope rule.
 const mockSecureStoreBacking: Record<string, string> = {};

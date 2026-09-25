@@ -507,12 +507,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // On error the store retains its module-level fallbacks (15s countdown,
   // 100m pickup radius) so the flow never breaks on a transient hiccup.
   const driverConfigQuery = useDriverConfig();
+  // Migration 467, default off: the Android Allow-all-the-time gate (go-online
+  // check + disclosure, forced offline on resume). Off keeps the previous flow.
+  const alwaysLocationGateRef = useRef(false);
   useEffect(() => {
     if (!driverConfigQuery.data) return;
     applyDriverConfig(driverConfigQuery.data);
     // Admin may have uploaded a custom ride-offer sound — swap the
     // player to that URL. Null/empty reverts to the bundled placeholder.
     setOfferSoundUrl((driverConfigQuery.data as { ride_offer_sound_url?: string | null }).ride_offer_sound_url ?? null);
+    alwaysLocationGateRef.current =
+      (driverConfigQuery.data as { always_location_required?: boolean }).always_location_required === true;
   }, [driverConfigQuery.data, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
@@ -665,7 +670,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           // Android drivers cannot stay online on "while using the app".
           // A closed app then has no heartbeat and never receives offers.
           // Don't pull a driver offline mid-trip.
-          if (Platform.OS === 'android' && useDriverStore.getState().rideState === 'idle') {
+          if (Platform.OS === 'android' && alwaysLocationGateRef.current &&
+              useDriverStore.getState().rideState === 'idle') {
             // Not AppState: once the backend is offline the app must follow,
             // even if the driver backgrounded it during the request.
             const isCurrent = () => !cancelled && !isTogglingRef.current &&
@@ -1870,7 +1876,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
 
       const next = !isOnline;
-      if (next && Platform.OS === 'android' && !(await ensureAlwaysLocationForGoOnline())) {
+      if (next && Platform.OS === 'android' && alwaysLocationGateRef.current &&
+          !(await ensureAlwaysLocationForGoOnline())) {
         return;
       }
       setIsOnline(next);

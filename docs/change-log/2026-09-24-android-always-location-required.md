@@ -30,6 +30,10 @@ Review follow-up (same PR):
 - After a successful forced offline, the resume path runs the same teardown as the toggle: sensors, background task, geofence, location integrity.
 - After the backend write, the resume path re-checks that the driver is still idle, on the same account, with no toggle in progress. An offer accepted or a toggle tapped during the request leaves local state to that newer action. The backend separately refuses offline during an active trip or offer (409 `OBLIGATION_ACTIVE`).
 - The logic lives in `utils/alwaysLocationGate.ts` so it has unit tests; the dashboard hook has no test harness.
+- **Feature flag (Codex review).** Migration 467 adds `settings.driver_always_location_gate_enabled`, default **false**. `/drivers/config` serves it as `always_location_required`. The go-online check with disclosure, and the forced offline on resume, run only when it is true. With it false, go-online and resume behave as before this PR.
+- Not flagged, and so live on deploy:
+  - `startBackgroundLocation` now stops a still-registered task when Allow all the time is missing. In practice only go-online reaches that with a running task.
+  - The go-online rollback message is now an alert with Open settings instead of a toast.
 
 ## 4. Risk & impact on existing functionality
 
@@ -38,6 +42,7 @@ Review follow-up (same PR):
 - `goOfflineWithoutAlwaysLocation` calls `authStore.updateDriverStatus(false)` (the same `PUT /drivers/{id}/status` the toggle uses) and the toggle's own teardown functions: `stopSensorMonitoring`, `stopBackgroundLocation`, `stopGeofenceRecovery`, `resetLocationIntegrity`. No other caller of the new module.
 - The disclosure uses `showAlert` and subscribes to `useAlertStore` only while it is open. Other alerts are unchanged; one shown while the disclosure is open closes it as "Not now".
 - No ride-state, money, or insurance-period change.
+- **Server race (Codex review, not fixed here).** On the default availability path (`driver_availability_v2_enabled = false`), `PUT /drivers/{id}/status` checks for active rides and pending offers, then writes `is_online=false` later. Dispatch can claim the driver in between. The v2 path does this in one RPC that returns `OBLIGATION_ACTIVE`. This affects every go-offline, the manual toggle included, and predates this PR. The flagged forced-offline adds more calls to that path, and its `isCurrent()` re-check is a client-side mitigation only. An atomic v1 transition is a backend dispatch change, left for a separate PR.
 
 ## 5. User-experience effect
 
@@ -54,6 +59,11 @@ Review follow-up (same PR):
 | `driver-app/hooks/useDriverDashboard.ts` | Block Android go-online, and idle resume, without Allow all the time | The online flag was sticking without the permission |
 | `driver-app/utils/__tests__/backgroundLocation.test.ts` | Denied always-permission does not start tracking | Regression |
 | `driver-app/utils/alwaysLocationGate.ts` | Disclosure, go-online gate, forced offline with teardown | Play disclosure; no swallowed status error; testable outside the hook |
+| `backend/migrations/467_driver_always_location_gate_flag.sql` | Default-off flag column | Codex review: flag the new validation |
+| `backend/routes/drivers/profile.py` | `always_location_required` on `/drivers/config` | Flag reaches the app |
+| `backend/routes/admin/settings.py`, `backend/tests/test_admin_settings_write_allowlist_drift.py` | Admin-writable field, drift snapshot | Flip via admin API |
+| `backend/tests/test_drivers_shared_status_profile_coverage.py` | Flag → config tests | Regression |
+| `driver-app/__tests__/hooks/useDriverDashboard.alwaysLocationGate.contract.test.ts` | Both entry points check the flag | Hook has no harness |
 | `driver-app/utils/__tests__/alwaysLocationGate.test.ts` | Disclosure answers, gate order, backend-failure and teardown paths | Covers the hook's new behavior |
 
 ## 7. Before / after
@@ -84,7 +94,8 @@ const wentOffline = await goOfflineWithoutAlwaysLocation({ updateDriverStatus, s
 
 ## 8. Rollback plan
 
-Revert this commit and ship the previous JS. No migration and no feature flag. Drivers already taken offline can tap Go online again on the previous build.
+- Operational: `UPDATE public.settings SET driver_always_location_gate_enabled = false WHERE id = 'app_settings';`. The app picks it up on its next `/drivers/config` refresh (10 min staleTime, persisted cache), so it is not instant.
+- Otherwise revert and ship the previous JS. Drivers already taken offline can tap Go online again.
 
 ## 9. Verification performed
 

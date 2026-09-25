@@ -77,6 +77,26 @@ _DEFAULT_ICON = "location"
 # (user_id, icon) for these two. Everything else (including _DEFAULT_ICON)
 # can repeat freely, same as routes/addresses.py's own singleton rule.
 _SINGLETON_ICONS = frozenset(_TYPE_ICONS.values())
+# Icons that name a type of their own (routes/addresses.py _OTHER_TYPED_ICONS).
+_OTHER_TYPED_ICONS = frozenset({"gym", "school", "other"})
+# Name given to a downgraded duplicate. It must NOT be exactly "Home"/"Work":
+# routes/addresses.py _singleton_type (and rider-app savedPlaceIcon.ts) treat
+# an untyped ('location') row whose name is exactly Home/Work as the rider's
+# Home/Work, so a downgraded row still named "Home" would be promoted back on
+# the rider's next edit and the real Home deleted by _drop_other_singletons.
+_DOWNGRADED_LABELS = {"home": "Previous Home", "work": "Previous Work"}
+
+
+def _existing_singleton_type(name: str | None, icon: str | None) -> str | None:
+    """Same rule as routes/addresses.py _singleton_type: the icon wins; only
+    an untyped row falls back to an exact Home/Work label match."""
+    icon_l = (icon or "").strip().lower()
+    if icon_l in _SINGLETON_ICONS:
+        return icon_l
+    if icon_l in _OTHER_TYPED_ICONS:
+        return None
+    label = (name or "").strip().lower()
+    return label if label in _SINGLETON_ICONS else None
 
 
 @dataclass
@@ -230,11 +250,11 @@ def build_saved_address_import_plan(
     user_ids = sorted({r["user_id"] for r in resolved})
     existing_by_user: dict[str, set[str]] = {}
     existing_home_work_by_user: dict[str, set[str]] = {}
-    for row in _select_in("saved_addresses", "user_id,address,icon", "user_id", user_ids):
+    for row in _select_in("saved_addresses", "user_id,name,address,icon", "user_id", user_ids):
         existing_by_user.setdefault(row["user_id"], set()).add(row["address"])
-        icon = row.get("icon")
-        if icon in _SINGLETON_ICONS:
-            existing_home_work_by_user.setdefault(row["user_id"], set()).add(icon)
+        existing_type = _existing_singleton_type(row.get("name"), row.get("icon"))
+        if existing_type:
+            existing_home_work_by_user.setdefault(row["user_id"], set()).add(existing_type)
 
     # Tracks a home/work icon a *prior row in this same batch* already
     # claimed for a user, so two legacy 'home' rows for the same rider don't
@@ -243,18 +263,22 @@ def build_saved_address_import_plan(
     claimed_this_batch: dict[str, set[str]] = {}
 
     # Earliest-created legacy row wins the DB's one Home/one Work slot, not
-    # just whichever the CSV happens to list first -- same "oldest row is
-    # kept" rule routes/addresses.py uses for this table's own live
-    # replace-on-save logic, rather than depending on export row order.
+    # just whichever the CSV happens to list first, so the result doesn't
+    # depend on export row order. (routes/addresses.py keeps the oldest row's
+    # id but overwrites its content on a live save; this one-time import
+    # keeps the oldest row's content and keeps the later one as a plain
+    # saved place instead of discarding it.)
     for r in sorted(resolved, key=lambda c: c["created_at"]):
         if r["address"] in existing_by_user.get(r["user_id"], set()):
             plan.skipped_already_imported += 1
             continue
 
         icon = r["icon"]
+        name = r["label"]
         if icon in _SINGLETON_ICONS:
             claimed = claimed_this_batch.setdefault(r["user_id"], set())
             if icon in existing_home_work_by_user.get(r["user_id"], set()) or icon in claimed:
+                name = _DOWNGRADED_LABELS[icon]
                 icon = _DEFAULT_ICON
                 plan.downgraded_duplicate_home_work += 1
             else:
@@ -264,7 +288,7 @@ def build_saved_address_import_plan(
             {
                 "id": str(uuid.uuid4()),
                 "user_id": r["user_id"],
-                "name": r["label"],
+                "name": name,
                 "address": r["address"],
                 "lat": r["lat"],
                 "lng": r["lng"],

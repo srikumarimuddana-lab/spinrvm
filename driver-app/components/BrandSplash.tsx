@@ -445,6 +445,9 @@ export default function BrandSplash({
           style={[styles.mark, markStyle]}
         />
 
+        {/* font-scale-lock: decorative splash shown for about two seconds;
+            brand dressing, not information, positioned absolutely around the
+            animated mark. */}
         <Animated.Text
           testID="brand-splash-tagline"
           allowFontScaling={false}
@@ -456,6 +459,7 @@ export default function BrandSplash({
           {SPLASH_TAGLINE}
         </Animated.Text>
 
+        {/* font-scale-lock: see the tagline above. */}
         <Animated.Text
           testID="brand-splash-provenance"
           allowFontScaling={false}

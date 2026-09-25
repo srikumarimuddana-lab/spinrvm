@@ -238,3 +238,51 @@ async def test_dispute_rejected_is_identical_with_flag_on_or_off(flag):
     assert result["refund"] is None
     assert update_one.await_args.args[2]["status"] == "rejected"
     assert audit.await_args.args[4]["refund_issued"] is False
+
+
+@pytest.mark.anyio
+async def test_concurrent_resolve_loser_gets_409_and_no_second_audit_row():
+    """Two resolves both read the dispute as open (the race). The status write
+    is a compare-and-set, so only the first lands; the second gets 409, writes
+    no dispute_resolved audit row (the cap can't double count), and its Stripe
+    call is a replay under the same idempotency key, not a second refund."""
+    from backend.routes.disputes import ResolveDisputeRequest, admin_resolve_dispute
+
+    row = dict(_DISPUTE)  # the "database" row
+
+    async def cas_update(table, filters, update):
+        assert filters["id"] == row["id"]
+        if row["status"] in filters["status"]["$nin"]:
+            return None  # 0 rows matched
+        row.update(update)
+        return dict(row)
+
+    refund_create = MagicMock(return_value=MagicMock(status="succeeded", id="re_1"))
+    settings = {"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": True}
+    with (
+        patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dict(_DISPUTE)])),
+        patch(
+            "backend.routes.disputes.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_123"}),
+        ),
+        patch("backend.routes.disputes.db_supabase.update_one", cas_update),
+        patch("backend.routes.disputes.get_app_settings", AsyncMock(return_value=settings)),
+        patch("backend.routes.disputes.log_admin_action", AsyncMock()) as audit,
+        patch("backend.routes.disputes.send_push_notification", AsyncMock()) as push,
+        patch(f"{CAPS_MOD}.log_admin_action", AsyncMock()),
+        _cap_settings(admin_money_daily_cap_per_admin=None),
+        patch("stripe.Refund.create", refund_create),
+    ):
+        req = ResolveDisputeRequest(resolution="approved", refund_amount=Decimal("10.00"))
+        first = await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
+        with pytest.raises(HTTPException) as exc:
+            await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin={"id": "admin_2", "role": "admin"})
+
+    assert first["refund_issued"] is True
+    assert exc.value.status_code == 409
+    assert row["resolved_by"] == "admin_1"
+    assert audit.await_count == 1  # only the winner's dispute_resolved row
+    assert push.await_count == 1
+    keys = {c.kwargs["idempotency_key"] for c in refund_create.call_args_list}
+    amounts = {c.kwargs["amount"] for c in refund_create.call_args_list}
+    assert keys == {"refund-dispute-disp_1"} and amounts == {1000}  # replay, not a second refund

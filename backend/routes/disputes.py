@@ -356,7 +356,24 @@ async def admin_resolve_dispute(
     if refund_result:
         update_data["refund_result"] = refund_result
 
-    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
+    # Compare-and-set: two concurrent resolves both pass the read-then-check
+    # above. Only the one whose write still finds the dispute unresolved wins;
+    # the loser gets 409 and writes no audit row (so the N23 cap can't double
+    # count). With the flag on, the loser may already have called Stripe, but
+    # the deterministic idempotency key (refund-dispute-{id}) makes that a
+    # replay of the winner's refund (or a 400 mismatch -> 502), never a second
+    # refund. Same pattern as ride acceptance's {'status': 'searching'} filter.
+    claimed = await db_supabase.update_one(
+        "disputes", {"id": dispute_id, "status": {"$nin": ["resolved", "rejected"]}}, update_data
+    )
+    if not claimed:
+        logger.warning(
+            "[REFUND] dispute %s already resolved by a concurrent request; admin %s lost the race (refund_result=%s)",
+            dispute_id,
+            current_admin.get("id"),
+            refund_result.get("status"),
+        )
+        raise HTTPException(status_code=409, detail="Dispute already resolved")
 
     await log_admin_action(
         current_admin,

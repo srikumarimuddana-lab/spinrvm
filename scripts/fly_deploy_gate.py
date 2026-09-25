@@ -135,7 +135,13 @@ def wait_for_deploy_evidence(*, expected_sha, repository, fetch_runs, fetch_jobs
             newer = _superseded_by(expected_sha, read_main_sha)
         orphaned_main = newer
         if newer:
-            if has_deploy_run(newer):
+            try:
+                successor_queued = has_deploy_run(newer)
+            except GateDenied:
+                # A transient API error looking up the successor run is retried
+                # on the next poll like any other evidence read, not a hard deny.
+                successor_queued = False
+            if successor_queued:
                 return GateResult(ready=False, superseded_by=newer)
         elif result.ready:
             return result
@@ -173,6 +179,26 @@ def _read_main_sha(repository):
     return (data.get("object") or {}).get("sha")
 
 
+def check_still_main(*, expected_sha, run_attempt, read_main_sha):
+    """Guard the deploy job against a re-run of only that job.
+
+    A re-run of just ``deploy`` reuses the cached ``gate`` output without
+    re-running the gate, so on any attempt after the first it must confirm
+    this SHA is still main's tip; otherwise an older build could deploy over
+    a newer one. Attempt 1 runs straight after its own gate and is allowed.
+    """
+    if str(run_attempt or "1") == "1":
+        return
+    current = read_main_sha()
+    if not current:
+        raise GateDenied("unable to read main to confirm this re-run is still the newest commit")
+    if current != expected_sha:
+        raise GateDenied(
+            f"main is now {current}, not {expected_sha}; re-run the whole workflow on the newest main "
+            "commit instead of re-running only the deploy job"
+        )
+
+
 def _write_output(name, value):
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
@@ -189,6 +215,19 @@ def main():
             print(f"Fly deploy gate denied: {exc}", file=sys.stderr)
             return 1
         print("Fly production probe configuration passed.")
+        return 0
+    if sys.argv[1:] == ["--check-still-main"]:
+        repository = os.environ.get("GITHUB_REPOSITORY", "")
+        try:
+            check_still_main(
+                expected_sha=os.environ.get("GITHUB_SHA", ""),
+                run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+                read_main_sha=lambda: _read_main_sha(repository),
+            )
+        except GateDenied as exc:
+            print(f"Fly deploy gate denied: {exc}", file=sys.stderr)
+            return 1
+        print("This commit is still main's tip (or this is the first attempt).")
         return 0
     if sys.argv[1:]:
         print("Fly deploy gate denied: unsupported command.", file=sys.stderr)

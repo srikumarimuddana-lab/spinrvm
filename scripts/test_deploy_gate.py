@@ -197,6 +197,21 @@ class DeployEvidenceTests(unittest.TestCase):
         self.assertEqual(result.superseded_by, "c" * 40)
         self.assertEqual(checks, ["c" * 40, "c" * 40])
 
+    def test_transient_successor_lookup_error_is_retried_not_denied(self):
+        calls = []
+
+        def has_deploy_run(sha):
+            calls.append(sha)
+            if len(calls) == 1:
+                raise GateDenied("unable to retrieve GitHub Actions deployment evidence")
+            return True
+
+        sleeps = []
+        result = wait(lambda _sha: all_success_runs(), lambda: "c" * 40, has_deploy_run=has_deploy_run, sleeps=sleeps)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.superseded_by, "c" * 40)
+        self.assertEqual(sleeps, [60])
+
     def test_unreadable_main_is_denied_not_treated_as_superseded(self):
         for main_sha in (None, ""):
             with self.subTest(main_sha=main_sha):
@@ -249,6 +264,34 @@ class GateEntrypointTests(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class CheckStillMainTests(unittest.TestCase):
+    def test_first_attempt_is_allowed_without_reading_main(self):
+        def boom():
+            raise AssertionError("main must not be read on attempt 1")
+
+        fly_deploy_gate.check_still_main(expected_sha=SHA, run_attempt="1", read_main_sha=boom)
+
+    def test_rerun_on_current_main_is_allowed(self):
+        fly_deploy_gate.check_still_main(expected_sha=SHA, run_attempt="2", read_main_sha=lambda: SHA)
+
+    def test_rerun_after_main_advanced_is_denied(self):
+        with self.assertRaisesRegex(GateDenied, "re-run the whole workflow"):
+            fly_deploy_gate.check_still_main(expected_sha=SHA, run_attempt="2", read_main_sha=lambda: "c" * 40)
+
+    def test_rerun_with_unreadable_main_is_denied(self):
+        with self.assertRaises(GateDenied):
+            fly_deploy_gate.check_still_main(expected_sha=SHA, run_attempt="3", read_main_sha=lambda: None)
+
+    def test_entrypoint_exit_codes(self):
+        for attempt, main_sha, expected in (("1", "c" * 40, 0), ("2", SHA, 0), ("2", "c" * 40, 1)):
+            env = {"GITHUB_SHA": SHA, "GITHUB_REPOSITORY": REPO, "GITHUB_RUN_ATTEMPT": attempt}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(fly_deploy_gate.sys, "argv", ["fly_deploy_gate.py", "--check-still-main"]), \
+                mock.patch.object(fly_deploy_gate, "_read_main_sha", lambda _repo, sha=main_sha: sha), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                self.assertEqual(fly_deploy_gate.main(), expected, (attempt, main_sha))
+
+
 class DeployWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -282,6 +325,12 @@ class DeployWorkflowTests(unittest.TestCase):
         gate_job = self.source[gate_start:deploy_start]
         for secret in ("FLY_API_TOKEN", "SENTRY_DSN", "METRICS_AUTH_TOKEN", "FLY_HEALTH_URL"):
             self.assertNotIn(secret, gate_job)
+
+    def test_deploy_job_rechecks_main_before_anything_else_on_rerun(self):
+        deploy_job = self.source[self.source.index("\n  deploy:\n"):]
+        guard = deploy_job.index("python3 scripts/fly_deploy_gate.py --check-still-main")
+        self.assertLess(guard, deploy_job.index("--check-probes"))
+        self.assertLess(guard, deploy_job.index("flyctl deploy"))
 
     def test_production_readiness_and_served_sha_probes_are_required(self):
         self.assertIn("Verify production probe configuration", self.source)

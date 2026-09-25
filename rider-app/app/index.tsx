@@ -29,6 +29,10 @@ export default function Index() {
     setAttempts((n) => n + 1);
     try {
       await initialize();
+    } catch (e) {
+      // initialize() rethrows unexpected teardown failures; these callers
+      // are fire-and-forget, so report here instead of rejecting unhandled.
+      console.error('[Index] Session recovery attempt failed:', e);
     } finally {
       retryingRef.current = false;
     }

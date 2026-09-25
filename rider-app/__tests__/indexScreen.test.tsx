@@ -107,6 +107,22 @@ describe('Index (rider-app cold start routing)', () => {
     expect(initialize).toHaveBeenCalled();
   });
 
+  it('reports a rejected recovery attempt instead of leaking the rejection', async () => {
+    const initialize = jest.fn().mockRejectedValue(new Error('cache cleanup failed'));
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      useAuthStore.setState({
+        isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize,
+      } as any);
+      await renderScreen();
+      expect(initialize).toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledWith('[Index] Session recovery attempt failed:', expect.any(Error));
+      expect(mockReplace).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it('offers "Sign in instead" after repeated failed retries', async () => {
     jest.useFakeTimers();
     try {

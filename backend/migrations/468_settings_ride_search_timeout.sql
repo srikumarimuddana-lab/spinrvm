@@ -10,6 +10,12 @@
 -- (2026-09-25) is 180 s for launch; an admin sets it in Settings.
 -- Scheduled rides keep their own deadline (utils/scheduled_ride_config.py).
 --
+-- Upper bound 300, not higher: ride_offers has UNIQUE (ride_id, driver_id)
+-- (migration 100) and the offer-skip key lasts 300 s. A longer search would
+-- re-rank a driver already offered this ride; on the PostgREST claim path the
+-- ride_offers insert then fails and releases the whole batch. Raise this only
+-- together with a fix for that constraint.
+--
 -- Plan: .claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md (Phase 2)
 --
 -- Rollback:
@@ -19,7 +25,7 @@
 ALTER TABLE public.settings
     ADD COLUMN IF NOT EXISTS ride_search_timeout_seconds INT NOT NULL DEFAULT 300
         CONSTRAINT settings_ride_search_timeout_range
-        CHECK (ride_search_timeout_seconds BETWEEN 90 AND 600);
+        CHECK (ride_search_timeout_seconds BETWEEN 90 AND 300);
 
 COMMENT ON COLUMN public.settings.ride_search_timeout_seconds IS
-    'Seconds an on-demand ride may stay in searching before it is auto-cancelled as no_drivers_found. Range 90-600, default 300. Scheduled rides use their own deadline.';
+    'Seconds an on-demand ride may stay in searching before it is auto-cancelled as no_drivers_found. Range 90-300, default 300. Scheduled rides use their own deadline.';

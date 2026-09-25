@@ -320,13 +320,9 @@ class SettingsUpdateRequest(BaseModel):
     # expiry (reason "offer_expired") is handled as a missed offer, not a
     # decline. Default off.
     offer_expired_decline_as_miss_enabled: Optional[bool] = None
-    # Migration 467 — re-offer a ride to drivers who declined it (not to
-    # drivers who ignored it). Bounds mirror the DB CHECKs.
-    dispatch_reoffer_enabled: Optional[bool] = None
-    dispatch_decline_reoffer_after_seconds: Optional[int] = Field(default=None, ge=15, le=120)
-    dispatch_max_offers_per_driver_per_ride: Optional[int] = Field(default=None, ge=1, le=3)
-    # Migration 468 — on-demand search window before auto-cancel.
-    ride_search_timeout_seconds: Optional[int] = Field(default=None, ge=90, le=600)
+    # Migration 468 — on-demand search window before auto-cancel. Capped at
+    # 300 while ride_offers keeps UNIQUE (ride_id, driver_id); see the migration.
+    ride_search_timeout_seconds: Optional[int] = Field(default=None, ge=90, le=300)
     # Migration 469 — wider second search pass. No fare change.
     dispatch_expanded_radius_enabled: Optional[bool] = None
     dispatch_expanded_radius_after_seconds: Optional[int] = Field(default=None, ge=0, le=300)

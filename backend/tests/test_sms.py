@@ -3,11 +3,14 @@ Unit tests for SMS service functionality.
 Tests cover OTP SMS sending, general SMS, and Twilio integration.
 """
 
+import asyncio
+import contextvars
 import importlib
 import os
 import sys
+import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -183,6 +186,282 @@ class TestSMSService:
         assert otp_code in expected_message
         assert "verification code" in expected_message.lower()
         assert "expires in 5 minutes" in expected_message
+
+
+_TWILIO_KW = {"twilio_sid": "AC123", "twilio_token": "token", "twilio_from": "+10000000000"}
+
+
+def _capacity(executor) -> int:
+    """Admission slots (max_workers + queue_size) of a BoundedExecutor."""
+    return executor._slots._initial_value
+
+
+def _saturated(sms_mod, pool: str) -> int:
+    counters = sms_mod.metrics.snapshot()["counters"]["spinr_sms_executor_saturated_total"]
+    return counters[(("pool", pool),)]
+
+
+def _occupied(sms_mod, pool: str) -> float:
+    return sms_mod.metrics.snapshot()["gauges"]["spinr_sms_executor_occupied_slots"][(("pool", pool),)]
+
+
+class TestSMSBoundedExecutor:
+    """Twilio sends run on dedicated bounded pools (security-auditor finding on
+    #5784): a hung Twilio/DNS call must pin at most the SMS pool's threads,
+    never the event loop's shared default executor, and a full pool must fail
+    fast with the normal {"success": False} shape."""
+
+    @pytest.mark.asyncio
+    async def test_sends_run_on_dedicated_executors_not_default(self):
+        import backend.sms_service as sms_mod
+
+        thread_names: list = []
+
+        def _create(**_kwargs):
+            thread_names.append(threading.current_thread().name)
+            return MagicMock(sid="SM1")
+
+        with patch("twilio.http.http_client.TwilioHttpClient"), patch("twilio.rest.Client") as mock_client_cls:
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            assert (await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW))["success"] is True
+            assert (await sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW))["success"] is True
+            assert (await sms_mod.send_sos_sms("+13065551234", "SOS", **_TWILIO_KW))["success"] is True
+
+        general_name, otp_name, sos_name = thread_names
+        # Default-executor threads are named "asyncio_N"; ours carry a prefix.
+        assert general_name.startswith("spinr-sms_"), general_name
+        assert otp_name.startswith("spinr-sms-otp_"), otp_name
+        assert sos_name.startswith("spinr-sms-sos_"), sos_name
+
+    @pytest.mark.asyncio
+    async def test_caller_contextvars_are_visible_inside_send(self):
+        """asyncio.to_thread copied the caller's context into the worker
+        thread (Sentry scope/span, request_id, deadline); the bounded pools
+        must too, or the Twilio HTTP span attaches to a stale request."""
+        import backend.sms_service as sms_mod
+
+        marker = contextvars.ContextVar("sms_test_marker", default="unset")
+        seen = []
+
+        def _create(**_kwargs):
+            seen.append(marker.get())
+            return MagicMock(sid="SM1")
+
+        with patch("twilio.http.http_client.TwilioHttpClient"), patch("twilio.rest.Client") as mock_client_cls:
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            for i, send in enumerate((sms_mod.send_sms, sms_mod.send_sos_sms, sms_mod.send_sms)):
+                marker.set(f"request-{i}")
+                assert (await send("+13065551234", "hi", **_TWILIO_KW))["success"] is True
+
+        assert seen == ["request-0", "request-1", "request-2"]
+
+    @pytest.mark.asyncio
+    async def test_saturated_pool_fails_fast_and_default_executor_stays_free(self):
+        import backend.sms_service as sms_mod
+
+        release = threading.Event()
+        capacity = _capacity(sms_mod._SMS_EXECUTOR)
+
+        def _hang(**_kwargs):
+            release.wait(5)
+            return MagicMock(sid="SM-late")
+
+        try:
+            with (
+                patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.1),
+                patch("twilio.http.http_client.TwilioHttpClient"),
+                patch("twilio.rest.Client") as mock_client_cls,
+            ):
+                mock_client_cls.return_value.messages.create.side_effect = _hang
+
+                # Fill every worker and queue slot with sends that hang; each
+                # caller's wait times out, but the hung threads (and the
+                # queued items behind them) still hold their slots.
+                hung = await asyncio.gather(
+                    *(sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW) for _ in range(capacity))
+                )
+                assert all(r["success"] is False and r["error"] == "TimeoutError" for r in hung)
+                assert len(sms_mod._SMS_EXECUTOR._threads) == sms_mod._SMS_EXECUTOR._max_workers == 16
+
+                before = _saturated(sms_mod, "general")
+                start = time.monotonic()
+                result = await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW)
+                elapsed = time.monotonic() - start
+
+                assert result == {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
+                assert elapsed < 0.05, "a full SMS pool must reject immediately, not wait"
+                # The wedge is alertable: rejection counted, pool reads fully occupied.
+                assert _saturated(sms_mod, "general") == before + 1
+                assert _occupied(sms_mod, "general") == capacity
+
+                # The loop's shared default executor is untouched by the outage.
+                probe = await asyncio.wait_for(asyncio.to_thread(lambda: "free"), timeout=1.0)
+                assert probe == "free"
+        finally:
+            release.set()
+
+    @pytest.mark.asyncio
+    async def test_sos_pool_has_capacity_while_otp_and_general_pools_saturated(self):
+        import backend.sms_service as sms_mod
+
+        release = threading.Event()
+
+        def _create(**_kwargs):
+            if not threading.current_thread().name.startswith("spinr-sms-sos"):
+                release.wait(5)  # Twilio hangs for the OTP flood and the broadcast...
+            return MagicMock(sid="SM-sos")
+
+        try:
+            with (
+                patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.1),
+                patch("twilio.http.http_client.TwilioHttpClient"),
+                patch("twilio.rest.Client") as mock_client_cls,
+            ):
+                mock_client_cls.return_value.messages.create.side_effect = _create
+
+                await asyncio.gather(
+                    *(
+                        sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW)
+                        for _ in range(_capacity(sms_mod._OTP_SMS_EXECUTOR))
+                    ),
+                    *(
+                        sms_mod.send_sms("+13065551234", "bulk", **_TWILIO_KW)
+                        for _ in range(_capacity(sms_mod._SMS_EXECUTOR))
+                    ),
+                )
+                otp = await sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW)
+                assert otp["success"] is False and otp["error"] == "ExecutorSaturated"
+                bulk = await sms_mod.send_sms("+13065551234", "bulk", **_TWILIO_KW)
+                assert bulk["success"] is False and bulk["error"] == "ExecutorSaturated"
+
+                # ...but an SOS fan-out (3 contacts) still sends on its own pool.
+                sos = await asyncio.gather(
+                    *(sms_mod.send_sos_sms("+13065551234", "SOS", **_TWILIO_KW) for _ in range(3))
+                )
+                assert [r["success"] for r in sos] == [True, True, True]
+        finally:
+            release.set()
+
+    @pytest.mark.asyncio
+    async def test_otp_login_burst_after_outage_is_not_rejected(self):
+        """The /send-otp limiter is per IP, so a post-outage login burst across
+        many users can exceed the old 12-slot OTP pool. With Twilio healthy,
+        a 60-send burst must be fully admitted (pool is 8 workers + 56 queue)."""
+        import backend.sms_service as sms_mod
+
+        assert sms_mod._OTP_SMS_EXECUTOR._max_workers == 8
+        assert _capacity(sms_mod._OTP_SMS_EXECUTOR) == 64
+
+        def _create(**_kwargs):
+            time.sleep(0.02)  # healthy Twilio round trip, scaled down
+            return MagicMock(sid="SM-otp")
+
+        with patch("twilio.http.http_client.TwilioHttpClient"), patch("twilio.rest.Client") as mock_client_cls:
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            results = await asyncio.gather(
+                *(sms_mod.send_otp_sms(f"+1306555{i:04d}", "123456", **_TWILIO_KW) for i in range(60))
+            )
+
+        assert [r for r in results if not r["success"]] == []
+
+    @pytest.mark.asyncio
+    async def test_saturation_metrics_preregistered_and_tagged_by_domain(self):
+        """Every pool's counter/gauge exists at 0 from import (alert rules
+        never see a missing series), and a saturated SOS / OTP pool's error
+        log carries domain=safety / domain=auth for Sentry filtering."""
+        from loguru import logger
+
+        import backend.sms_service as sms_mod
+
+        for pool in ("sos", "otp", "general"):
+            assert isinstance(_saturated(sms_mod, pool), int)
+            assert isinstance(_occupied(sms_mod, pool), (int, float))
+
+        release = threading.Event()
+        records: list = []
+        sink_id = logger.add(lambda m: records.append(m.record), level="ERROR")
+
+        def _hang(**_kwargs):
+            release.wait(5)
+            return MagicMock(sid="SM-late")
+
+        try:
+            with (
+                patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.1),
+                patch("twilio.http.http_client.TwilioHttpClient"),
+                patch("twilio.rest.Client") as mock_client_cls,
+            ):
+                mock_client_cls.return_value.messages.create.side_effect = _hang
+                for pool, send in (("sos", sms_mod.send_sos_sms), ("otp", sms_mod.send_otp_sms)):
+                    await asyncio.gather(
+                        *(send("+13065551234", "x", **_TWILIO_KW) for _ in range(_capacity(sms_mod._SMS_POOLS[pool])))
+                    )
+                    before = _saturated(sms_mod, pool)
+                    result = await send("+13065551234", "x", **_TWILIO_KW)
+                    assert result["error"] == "ExecutorSaturated"
+                    assert _saturated(sms_mod, pool) == before + 1
+                    assert _occupied(sms_mod, pool) == _capacity(sms_mod._SMS_POOLS[pool])
+        finally:
+            release.set()
+            logger.remove(sink_id)
+
+        tags = {r["extra"].get("sms_pool"): r["extra"].get("domain") for r in records if "sms_pool" in r["extra"]}
+        assert tags == {"sos": "safety", "otp": "auth"}
+
+    @pytest.mark.asyncio
+    async def test_max_size_broadcast_plus_small_callers_never_saturates_when_healthy(self):
+        """Fail-fast must only fire in an outage pile-up, never on a healthy
+        broadcast: drive the real admin _fan_out (Semaphore(50) in flight) and,
+        concurrently, a burst of one-off sends (guest notices / opt-out
+        notices) with Twilio mocked fast -- zero may be rejected."""
+        import backend.sms_service as sms_mod
+        from backend.routes.admin import messaging
+
+        created = []
+
+        def _create(**_kwargs):
+            time.sleep(0.02)  # healthy Twilio round trip, scaled down
+            created.append(1)
+            return MagicMock(sid="SM-ok")
+
+        recipients = [{"id": f"u{i}", "phone": f"+1306555{i:04d}"} for i in range(200)]
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("twilio.http.http_client.TwilioHttpClient"),
+            patch("twilio.rest.Client") as mock_client_cls,
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(
+                    return_value={
+                        "twilio_account_sid": "AC123",
+                        "twilio_auth_token": "token",
+                        "twilio_from_number": "+10000000000",
+                    }
+                ),
+            ),
+            patch.object(messaging.db_supabase, "update_one", update_mock),
+        ):
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            _, small = await asyncio.gather(
+                messaging._fan_out(
+                    "msg-max",
+                    recipients,
+                    title="T",
+                    description="D",
+                    channels=["sms"],
+                    is_marketing=False,
+                    target_app=None,
+                    msg_type="info",
+                ),
+                asyncio.gather(*(sms_mod.send_sms("+13065551234", "guest", **_TWILIO_KW) for _ in range(100))),
+            )
+
+        update_mock.assert_awaited_once_with(
+            "cloud_messages", {"id": "msg-max"}, {"successful": 200, "failed_count": 0}
+        )
+        assert all(r["success"] for r in small), [r.get("error") for r in small if not r["success"]]
+        assert len(created) == 300
 
 
 class TestTwilioIntegration:

@@ -3225,7 +3225,7 @@ async def test_trigger_emergency_success():
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.manager") as mock_manager,
         patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides._deps.send_sms", new_callable=AsyncMock, return_value={"success": True}),
+        patch("backend.routes.rides._deps.send_sos_sms", new_callable=AsyncMock, return_value={"success": True}),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[{"phone": "+13065550001", "id": "ec-1"}])

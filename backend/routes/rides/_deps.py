@@ -52,7 +52,7 @@ try:
     )
     from ...services.fare_service import build_fare_breakdown_lines, calculate_fare
     from ...settings_loader import get_app_settings, get_last_known_app_settings
-    from ...sms_service import send_sms
+    from ...sms_service import send_sms, send_sos_sms
     from ...socket_manager import manager
     from ...utils.address_verification import verify_address_matches_coordinate
     from ...utils.audit_logger import log_user_action
@@ -107,7 +107,7 @@ except ImportError:
     )
     from services.fare_service import build_fare_breakdown_lines, calculate_fare
     from settings_loader import get_app_settings, get_last_known_app_settings
-    from sms_service import send_sms
+    from sms_service import send_sms, send_sos_sms
     from socket_manager import manager
     from utils.address_verification import verify_address_matches_coordinate
     from utils.audit_logger import log_user_action

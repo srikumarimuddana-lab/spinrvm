@@ -31,11 +31,13 @@ from ._shared import (  # noqa: F401
 )
 
 try:
+    from ...services.fare_service import _f
     from ...utils.legacy_rides import (
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
     )
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
+    from services.fare_service import _f  # type: ignore
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
@@ -215,8 +217,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             (
                 _d(p.get("amount") or 0)
                 for p in payout_rows
-                if p.get("payout_type") == "clawback"
-                and str(p.get("status") or "").lower() not in _not_money_out
+                if p.get("payout_type") == "clawback" and str(p.get("status") or "").lower() not in _not_money_out
             ),
             Decimal("0"),
         )
@@ -487,7 +488,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             # Driver INCOME = driver_earnings (canonical), fare-component fallback
             # for legacy rows. Matches the T4A summary and the trips view.
             "total_earnings": sum((_ride_income(r) for r in rides), Decimal("0")),
-            "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
+            "total_tips": sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0")),
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
             "total_tax": float(_total_tax),
@@ -588,14 +589,15 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
                 + _d(r.get("time_fare") or 0)
                 + _d(r.get("tip_amount") or 0)
             )
-            daily_data[date_str]["tips"] += r.get("tip_amount", 0) or 0
+            daily_data[date_str]["tips"] += _d(r.get("tip_amount") or 0)
             daily_data[date_str]["rides"] += 1
             daily_data[date_str]["distance_km"] += r.get("distance_km", 0) or 0
 
         # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
         # float only at the response boundary.
         results = [
-            {"date": date, **{**data, "earnings": float(data["earnings"])}} for date, data in sorted(daily_data.items())
+            {"date": date, **{**data, "earnings": float(data["earnings"]), "tips": _f(data["tips"])}}
+            for date, data in sorted(daily_data.items())
         ]
     except Exception as e:
         # An empty chart reads as "no rides this period" — surface the DB error
@@ -778,7 +780,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
                 + _d(r.get("time_fare") or 0)
                 + _d(r.get("tip_amount") or 0)
             )
-            weekly_data[week_key]["tips"] += r.get("tip_amount", 0) or 0
+            weekly_data[week_key]["tips"] += _d(r.get("tip_amount") or 0)
             weekly_data[week_key]["rides"] += 1
             weekly_data[week_key]["distance_km"] += r.get("distance_km", 0) or 0
 
@@ -786,6 +788,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
         # float only at the response boundary.
         for w in weekly_data.values():
             w["earnings"] = float(w["earnings"])
+            w["tips"] = _f(w["tips"])
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
     except Exception as e:
         logger.error(f"Error fetching weekly earnings: {e}", exc_info=True)
@@ -880,7 +883,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
                 + _d(r.get("time_fare") or 0)
                 + _d(r.get("tip_amount") or 0)
             )
-            monthly_data[month_key]["tips"] += r.get("tip_amount", 0) or 0
+            monthly_data[month_key]["tips"] += _d(r.get("tip_amount") or 0)
             monthly_data[month_key]["rides"] += 1
             monthly_data[month_key]["distance_km"] += r.get("distance_km", 0) or 0
 
@@ -888,6 +891,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
         # float only at the response boundary.
         for m in monthly_data.values():
             m["earnings"] = float(m["earnings"])
+            m["tips"] = _f(m["tips"])
         return sorted(monthly_data.values(), key=lambda x: x["month"])
     except Exception as e:
         logger.error(f"Error fetching monthly earnings: {e}", exc_info=True)
@@ -961,7 +965,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
         return {
             "earnings": float(earnings_total),
             "rides": len(rides),
-            "tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
+            "tips": _f(sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))),
         }
 
     current = summarize(current_rides)

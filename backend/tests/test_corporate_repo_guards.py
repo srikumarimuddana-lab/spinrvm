@@ -112,3 +112,50 @@ def test_wallet_config_allow_list_matches_route_schema():
 
     assert set(WalletConfigPatch.model_fields) <= corporate_repo._WALLET_CONFIG_PATCHABLE_COLUMNS
     assert "balance" not in corporate_repo._WALLET_CONFIG_PATCHABLE_COLUMNS
+
+
+# ── record_kyb_decision compare-and-set (KYB decision must not reopen a closed company) ──
+
+
+@pytest.mark.anyio
+async def test_kyb_decision_without_expected_status_is_unconditional(mock_supabase_client):
+    """Kill-switch-off path: behaviour identical to before the guard."""
+    table = _wire_update_chain(mock_supabase_client, [{"id": "c1", "status": "active"}])
+
+    row = await corporate_repo.record_kyb_decision(company_id="c1", reviewer_id="admin-001", approved=True, note=None)
+
+    assert row == {"id": "c1", "status": "active"}
+    assert table.eq.call_args_list == [call("id", "c1")]
+
+
+@pytest.mark.anyio
+async def test_kyb_decision_with_expected_status_filters_on_it(mock_supabase_client):
+    table = _wire_update_chain(mock_supabase_client, [{"id": "c1", "status": "suspended"}])
+
+    row = await corporate_repo.record_kyb_decision(
+        company_id="c1",
+        reviewer_id="admin-001",
+        approved=False,
+        note=None,
+        expected_status="pending_verification",
+    )
+
+    assert row == {"id": "c1", "status": "suspended"}
+    assert table.update.call_args.args[0]["status"] == "suspended"
+    assert table.eq.call_args_list == [call("id", "c1"), call("status", "pending_verification")]
+
+
+@pytest.mark.anyio
+async def test_kyb_decision_cas_losing_path_returns_none(mock_supabase_client):
+    """0 rows matched (company closed mid-review) → None, nothing reopened."""
+    _wire_update_chain(mock_supabase_client, [])
+
+    row = await corporate_repo.record_kyb_decision(
+        company_id="c1",
+        reviewer_id="admin-001",
+        approved=True,
+        note=None,
+        expected_status="pending_verification",
+    )
+
+    assert row is None

@@ -243,11 +243,19 @@ async def record_kyb_decision(
     reviewer_id: str,
     approved: bool,
     note: Optional[str],
+    expected_status: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Record a KYB approve/reject decision. Approval flips status to active.
 
     Rejection flips status to suspended so the company can re-upload and be
     re-reviewed without creating a fresh account.
+
+    ``expected_status``, when given, makes this a compare-and-set, same as
+    ``update_corporate_account_status``: the UPDATE also filters on the status
+    the caller read, so a row that moved underneath (e.g. closed by another
+    admin mid-review) matches zero rows and gets ``None`` back instead of
+    being flipped out of ``closed``. Callers must re-read to tell "row gone"
+    from "status changed".
     """
     new_status = "active" if approved else "suspended"
     patch = {
@@ -262,7 +270,10 @@ async def record_kyb_decision(
         patch["kyb_review_note"] = note  # column exists since migration 225
 
     def _fn():
-        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
+        query = supabase.table("corporate_accounts").update(patch).eq("id", company_id)
+        if expected_status is not None:
+            query = query.eq("status", expected_status)
+        res = query.execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)

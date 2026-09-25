@@ -26,17 +26,17 @@
 
 ## 3. Fix / remediation
 
-- **Offer card:** the earnings amount and its dollar sign scale up to `MAX_FONT_SCALE`. The dollar sign previously scaled without limit. The hero row wraps the trip metrics below a large amount instead of the card's `overflow: hidden` cutting them off.
+- **Offer card:** the earnings amount, its dollar sign and the countdown seconds scale up to `MAX_FONT_SCALE`. The dollar sign and countdown previously scaled without limit; the countdown sits in a fixed 52 pt ring, which 1.5× still fits. The hero row wraps the trip metrics below a large amount instead of the card's `overflow: hidden` cutting them off.
 - **Justified locks:** comment-only changes; each lock keeps a `font-scale-lock:` explanation.
   - SOS wordmark: a fixed 44 pt circle.
   - Driver splash: about 2 s of decorative branding.
   - Android Auto hero: RN applies the phone's text size on the car screen, and the hero is already car-sized.
-- **Navigation banner:** its text scales up to `MAX_FONT_SCALE`. It reports its rendered height through a new optional `onHeightChange` prop.
+- **Navigation banner:** its text scales up to `MAX_FONT_SCALE`, and the instruction may wrap to 2 lines instead of truncating at 1. It reports its rendered height through a new optional `onHeightChange` prop.
 - **SOS placement:** new `sosTopOffset(insetsTop, bannerShown, bannerHeight)`.
   - While a step shows and the banner's height is known, SOS sits 8 pt below the banner.
   - Otherwise, and never higher than this, it stays in its default slot (`insetsTop + 56`).
   - This applies to both SOS variants (`SOSButton` and the flag-gated `SafetyShield`).
-- **Guard:** `driver-app/__tests__/fontScalingLock.test.ts` covers driver-app `app`, `components` and `lib`, plus `shared/components`.
+- **Guard:** `driver-app/__tests__/fontScalingLock.test.ts` covers driver-app `app`, `components` and `lib`, plus `shared/components`. Both apps' guards now also catch `maxFontSizeMultiplier={1}`, which locks text the same way.
 
 ## 4. Risk & impact on existing functionality
 
@@ -47,7 +47,8 @@
 - **Default text size, what doesn't change:**
   - SOS placement when no step is shown.
   - The offer card; its wrap only applies on overflow.
-  - The banner itself.
+
+  The one exception is the banner: a long turn instruction now wraps to a second line instead of truncating, which makes the banner (and SOS below it) a little taller for that step.
 - **Position change while a step appears or disappears:** SOS moves about 14 pt when a step shows or hides. A reviewer was asked to assess an in-progress hold during that move.
 - **Stale height:** `navBannerHeight` is not reset when the banner unmounts, but `sosTopOffset` ignores it whenever no step is shown.
 - **Consumers:**
@@ -65,11 +66,11 @@
 
 | File path | What changed | Why |
 |---|---|---|
-| `driver-app/components/panels/RideOfferPanel.tsx` | Amount and dollar sign capped; hero row wraps | Offer text scales without clipping |
+| `driver-app/components/panels/RideOfferPanel.tsx` | Amount, dollar sign and countdown capped; hero row wraps | Offer text scales without clipping |
 | `shared/components/SOSButton.tsx` | Comment only (`font-scale-lock:` wording) | Justified lock, guard-readable |
 | `driver-app/components/BrandSplash.tsx` | Comments only | Justified locks |
 | `driver-app/lib/androidAuto/CarOfferPanel.tsx` | Comment only | Justified lock |
-| `driver-app/components/dashboard/NavigationStepBanner.tsx` | Text capped; `onHeightChange`; `sosTopOffset` helper and constants | Banner scales; SOS placement is computed |
+| `driver-app/components/dashboard/NavigationStepBanner.tsx` | Text capped; instruction up to 2 lines; `onHeightChange`; `sosTopOffset` helper and constants | Banner scales and stays readable; SOS placement is computed |
 | `driver-app/app/driver/(tabs)/index.tsx` | `navBannerHeight` state; SOS wrappers use `sosTopOffset` | SOS stays visible |
 | `driver-app/__tests__/components/NavigationStepBanner.test.tsx` | +6 tests | SOS offset rules and height reporting |
 | `driver-app/__tests__/fontScalingLock.test.ts` | New guard | Stops unexplained locks from returning |
@@ -108,10 +109,24 @@ const sosTop = sosTopOffset(insets.top, !!currentNavStep, navBannerHeight);
 - [x] **Driver guard test:** passes, with 5 justified locks remaining.
 - [x] **Typecheck:** `yarn tsc --noEmit` is clean (0 errors).
 - [x] **Lint:** ESLint on the touched files matches before exactly: 5 errors and 130 warnings, all pre-existing.
-- [ ] **Safety review:** `spinr-safety-sos-reviewer` is running. The outcome will be recorded before merge.
-- [ ] **Accessibility review:** `spinr-accessibility-reviewer` is running. The outcome will be recorded before merge.
+- [x] **Safety review:** `spinr-safety-sos-reviewer` ran on the diff (code-read only). Verdict: safe to merge.
+  - **Confirmed:**
+    - the SOS render conditions are identical before and after
+    - SOS never sits above its default slot
+    - a stale banner height is never read
+    - no overlay shares SOS's region
+    - the `SOSButton` change is comment-only
+    - an in-progress hold is not interrupted when SOS moves, because React Native tracks the touch by instance
+  - **Should-fix, accepted and on the device list:** during a pickup-to-dropoff leg change the step briefly clears, so SOS can shift up and back down while the next leg loads. That only matters for a fresh tap in that brief window.
+- [x] **Accessibility review:** `spinr-accessibility-reviewer` ran on the diff (code-read only).
+  - **Blocker:** none.
+  - **Confirmed:** Accept/Decline and the timer sit outside the scrolling body, so the hero can't push them off-screen. The three locks are justified.
+  - **Should-fix, both done:**
+    - the countdown seconds in the 52 pt ring are now capped
+    - the turn instruction may use 2 lines
+  - **Nit, done:** the guard now catches `maxFontSizeMultiplier={1}` in both apps.
 
 ## 10. What was NOT verified
 
 - **No device testing.** The banner's real rendered height, SOS's new position relative to the map controls and speed chip, and the offer card at 1.5× were reasoned about from the styles. driver-app has no visual tooling.
-- **Needs a person:** a device pass during an active ride with turn-by-turn steps, at default and at the largest text size. Confirm SOS is fully visible and tappable, including a hold while a step appears or disappears. Also check an offer at the largest text size.
+- **Needs a person:** a device pass during an active ride with turn-by-turn steps, at default and at the largest text size. Confirm SOS is fully visible and tappable, including a hold while a step appears or disappears and a pickup-to-dropoff leg change. Also check an offer at the largest text size, with the countdown ring and a long two-line turn instruction.

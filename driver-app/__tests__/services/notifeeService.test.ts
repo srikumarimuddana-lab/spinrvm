@@ -391,6 +391,22 @@ describe('notifeeService', () => {
       expect(postedChannel(1)).toBe(ALARM);
     });
 
+    it('persists ring_mode, and a cold-started reclaim without one reads it back', async () => {
+      // Fresh module = the new JS context of an app opened from a killed-state offer.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      AsyncStorage.getItem.mockResolvedValueOnce('alarm');
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { reclaim: true });
+      expect(AsyncStorage.getItem).toHaveBeenCalledWith('spinr_ride_offer_ring_mode');
+      expect(postedChannel()).toBe(ALARM);
+
+      await displayRideOfferNotification({ ...BASE_OFFER, ride_id: 'ride-2', ring_mode: 'notification' });
+      expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_ride_offer_ring_mode', 'notification');
+      expect(postedChannel(1)).toBe('ride-offers-v3');
+    });
+
     it('a driver who muted sound effects stays on the silent channel', async () => {
       const { displayRideOfferNotification } = require('../../services/notifeeService');
       await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' }, { muted: true });

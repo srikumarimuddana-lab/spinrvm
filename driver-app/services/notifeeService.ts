@@ -25,6 +25,7 @@ import notifee, {
     type Event,
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // v3: Android channel settings (incl. sound) are IMMUTABLE once created on a
 // device. v2 was created pointing at a `ride_offer` raw resource that was
@@ -60,7 +61,8 @@ const RIDE_OFFER_RING_CHANNEL_ID = 'ride-offers-v4';
 // Alarm-volume channel, created NATIVELY with USAGE_ALARM
 // (plugins/withRideOfferRingChannel.js) because Notifee cannot set a channel's
 // audio usage. Silent/vibrate mode does not mute the alarm stream, and DND
-// lets alarms through by default. Posted to only when the offer says
+// lets alarm sound through by default (whether the card itself shows under
+// DND still needs DND access, which this app does not ask for). Posted to only when the offer says
 // ring_mode=alarm (settings flag, migration 466) AND the channel exists and is
 // not blocked; otherwise ride-offers-v3. JS never creates it: a JS create would
 // lock in notification-stream audio on binaries without the plugin.
@@ -117,10 +119,32 @@ let rideOfferDismissTimer: ReturnType<typeof setTimeout> | null = null;
 let rideOfferDeadline: { rideId: string; expiresAtMs: number } | null = null;
 // Last ring_mode the backend sent. The reclaim re-post is built from app state
 // that does not carry it, and the setting is global, not per ride.
+// Persisted too: opening the app from a killed-state offer starts a new JS
+// context, and a reclaim there has no ring_mode of its own.
 let lastRingMode: string | undefined;
+const RING_MODE_KEY = 'spinr_ride_offer_ring_mode';
+
+async function rememberRingMode(mode: string): Promise<void> {
+    if (mode === lastRingMode) return;
+    lastRingMode = mode;
+    await AsyncStorage.setItem(RING_MODE_KEY, mode).catch((e: unknown) => {
+        console.error('[Notifee] could not persist ring_mode:', e);
+    });
+}
+
+async function currentRingMode(): Promise<string | undefined> {
+    if (lastRingMode === undefined) {
+        const stored = await AsyncStorage.getItem(RING_MODE_KEY).catch((e: unknown) => {
+            console.error('[Notifee] could not read ring_mode — using ride-offers-v3:', e);
+            return null;
+        });
+        if (lastRingMode === undefined && stored) lastRingMode = stored;
+    }
+    return lastRingMode;
+}
 
 async function loudChannelId(): Promise<string> {
-    if (Platform.OS !== 'android' || lastRingMode !== 'alarm') return rideOfferChannelId;
+    if (Platform.OS !== 'android' || (await currentRingMode()) !== 'alarm') return rideOfferChannelId;
     try {
         const channel = await notifee.getChannel(RIDE_OFFER_ALARM_CHANNEL_ID);
         if (channel && !channel.blocked) return RIDE_OFFER_ALARM_CHANNEL_ID;
@@ -304,7 +328,8 @@ export async function displayRideOfferNotification(
     const reclaim = opts?.reclaim === true;
     // Recorded even on silent/muted posts: a foreground offer that later
     // reclaims the ring needs to know which channel to ring on.
-    if (offer.ring_mode) lastRingMode = offer.ring_mode;
+    // The in-memory value is set synchronously; only the write is async.
+    if (offer.ring_mode) void rememberRingMode(offer.ring_mode);
 
     // HANDOVER, not an update — this is the fix for the overlapping ringtones.
     //

@@ -496,3 +496,64 @@ async def test_maybe_run_tick_leap_year_feb29():
         await _maybe_run_tick()
 
     mock_issue.assert_called_once_with(2027)
+
+
+# ---------------------------------------------------------------------------
+# t4a_annual_job_loop — heartbeat (REL-001 / ROADMAP N17, 2026-09-25)
+#
+# Before this change the loop polled every 60s but never called
+# record_heartbeat, so it sat permanently in loop_monitor's "never_ticked"
+# state — the one state get_loop_status never flags as unhealthy — no
+# matter whether it crashed or a full year passed with no tick at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loop_records_heartbeat_every_tick():
+    """Heartbeats once per 60s poll iteration, independent of whether
+    _maybe_run_tick() actually ran the annual batch — matches the
+    reconciliation.py/distance_reconciliation.py fast-inner-poll pattern."""
+    import asyncio
+
+    tick_count = {"n": 0}
+
+    async def _fake_sleep(_seconds):
+        tick_count["n"] += 1
+        if tick_count["n"] >= 3:
+            raise asyncio.CancelledError
+
+    with (
+        patch("utils.t4a_annual_job._maybe_run_tick", AsyncMock()),
+        patch("utils.t4a_annual_job._record_heartbeat") as hb_mock,
+        patch("utils.t4a_annual_job.asyncio.sleep", side_effect=_fake_sleep),
+    ):
+        from utils.t4a_annual_job import t4a_annual_job_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await t4a_annual_job_loop()
+
+    assert hb_mock.call_count == 3
+    hb_mock.assert_called_with("t4a_annual_job (yearly Feb 28)")
+
+
+@pytest.mark.asyncio
+async def test_loop_still_heartbeats_when_tick_raises():
+    """A tick that raises must not suppress the heartbeat — the exception is
+    already caught and logged; the heartbeat proves the task itself is
+    still alive even though that tick's work failed."""
+    import asyncio
+
+    async def _fake_sleep(_seconds):
+        raise asyncio.CancelledError
+
+    with (
+        patch("utils.t4a_annual_job._maybe_run_tick", AsyncMock(side_effect=RuntimeError("boom"))),
+        patch("utils.t4a_annual_job._record_heartbeat") as hb_mock,
+        patch("utils.t4a_annual_job.asyncio.sleep", side_effect=_fake_sleep),
+    ):
+        from utils.t4a_annual_job import t4a_annual_job_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await t4a_annual_job_loop()
+
+    hb_mock.assert_called_once_with("t4a_annual_job (yearly Feb 28)")

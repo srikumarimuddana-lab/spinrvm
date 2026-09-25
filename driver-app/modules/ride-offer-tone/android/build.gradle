@@ -1,0 +1,19 @@
+// Local Expo module (autolinked from driver-app/modules/, the default
+// expo.autolinking.nativeModulesDir). Same shape as the create-expo-module
+// local template: expo-module-gradle-plugin applies Kotlin, the SDK versions
+// from the app's version catalog, and the expo-modules-core dependency.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.rideoffertone'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.rideoffertone"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}

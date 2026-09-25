@@ -35,7 +35,7 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { useRideLocationFallback } from '../hooks/useRideLocationFallback';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from './_layout';
 import { fetchDirectionsRoute } from '@shared/api/directions';
 import { getRideMapCoords } from '../utils/rideMapCoords';
@@ -517,11 +517,15 @@ function RideInProgressScreenContent() {
       <View style={styles.etaHero}>
         <View style={{ flex: 1 }}>
           <Text style={styles.etaLabel}>ARRIVING AT</Text>
-          <Text style={styles.etaTime} allowFontScaling={false}>{estimatedTime}</Text>
+          <Text style={styles.etaTime} maxFontSizeMultiplier={MAX_FONT_SCALE}>{estimatedTime}</Text>
                     <DriverLocationStatus capturedAt={currentDriver?.location_captured_at} color={colors.textDim} />
         </View>
         <View style={styles.etaBadge}>
+          {/* font-scale-lock: fixed 56pt circle with a fixed lineHeight; larger
+              text would clip. The same ETA is shown at scalable size in the
+              trip-stats row below. */}
           <Text style={styles.etaBadgeNum} allowFontScaling={false}>{eta}</Text>
+          {/* font-scale-lock: see the badge number above. */}
           <Text style={styles.etaBadgeUnit} allowFontScaling={false}>min</Text>
         </View>
       </View>
@@ -615,19 +619,19 @@ function RideInProgressScreenContent() {
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${riderBill.toFixed(2)}</Text>
+            <Text style={styles.fareValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${riderBill.toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareItem}>
             <Ionicons name="speedometer-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
+            <Text style={styles.fareValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
             <Text style={styles.fareLabel}>Distance</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareItem}>
             <Ionicons name="time-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>{eta} min</Text>
+            <Text style={styles.fareValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>{eta} min</Text>
             <Text style={styles.fareLabel}>ETA</Text>
           </View>
         </View>
@@ -720,7 +724,7 @@ function RideInProgressScreenContent() {
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.statusPill}>
           <View style={styles.greenDot} />
-          <Text style={styles.statusText} allowFontScaling={false}>Ride Started - Enjoy your trip</Text>
+          <Text style={styles.statusText} maxFontSizeMultiplier={MAX_FONT_SCALE}>Ride Started - Enjoy your trip</Text>
         </View>
       </SafeAreaView>
 

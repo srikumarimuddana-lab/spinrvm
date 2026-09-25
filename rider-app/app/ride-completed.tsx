@@ -19,7 +19,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { Analytics } from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, HELD_FOR_REVIEW_ALERT, PaymentAlertButton } from '../utils/attemptRidePayment';
@@ -719,7 +719,7 @@ function RideCompletedScreenContent() {
                   card statement against. */}
               <Text
                 style={styles.fareAmount}
-                allowFontScaling={false}
+                maxFontSizeMultiplier={MAX_FONT_SCALE}
                 accessibilityLabel={rideLoaded ? undefined : 'Trip total still loading'}
               >
                 {rideLoaded ? `$${fare.toFixed(2)}` : '—'}
@@ -754,21 +754,21 @@ function RideCompletedScreenContent() {
               <View style={[styles.statIconWrap, { backgroundColor: colors.infoBg }]}>
                 <Ionicons name="time-outline" size={16} color={colors.info} />
               </View>
-              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
+              <Text style={styles.statVal} maxFontSizeMultiplier={MAX_FONT_SCALE}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statCard}>
               <View style={[styles.statIconWrap, { backgroundColor: '#F0FDF4' }]}>
                 <Ionicons name="navigate-outline" size={16} color={colors.success} />
               </View>
-              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statVal} maxFontSizeMultiplier={MAX_FONT_SCALE}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statCard}>
               <View style={[styles.statIconWrap, { backgroundColor: '#FEF3C7' }]}>
                 <Ionicons name="flash-outline" size={16} color="#D97706" />
               </View>
-              <Text style={styles.statVal} allowFontScaling={false}>
+              <Text style={styles.statVal} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                 {duration > 0 ? (distance / (duration / 60)).toFixed(0) : '0'} km/h
               </Text>
               <Text style={styles.statLbl}>Avg Speed</Text>

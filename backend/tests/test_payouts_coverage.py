@@ -718,6 +718,16 @@ class TestRequestPayoutStripeBranch:
 
 
 class TestRequestInstantPayoutGaps:
+    @pytest.fixture(autouse=True)
+    def _service_area_gate_passes(self):
+        # Service-area gate has its own tests; it fails closed for a driver
+        # with no resolvable area (ROADMAP N22), so stand in an enabled one.
+        with patch(
+            "backend.routes.drivers.payouts._require_instant_payout_enabled",
+            AsyncMock(return_value={"id": "sa_test", "timezone": "America/Regina", "instant_payout_enabled": True}),
+        ):
+            yield
+
     def _get_rows(self, driver, account=None):
         def side_effect(table, filters=None, **kw):
             if table == "drivers":

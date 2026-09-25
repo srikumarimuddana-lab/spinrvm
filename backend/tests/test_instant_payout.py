@@ -87,6 +87,19 @@ def _bank_account():
 
 
 class TestRequestInstantPayout:
+    @pytest.fixture(autouse=True)
+    def _service_area_gate_passes(self):
+        # These tests exercise the Stripe/eligibility plumbing, not the
+        # service-area gate — that has its own tests (test_auto_payout.py's
+        # TestInstantPayoutKillSwitch, test_instant_payout_velocity_cap.py).
+        # The gate fails closed for a driver with no resolvable service area
+        # (ROADMAP N22), so stand in a resolved, enabled area here.
+        with patch(
+            "backend.routes.drivers.payouts._require_instant_payout_enabled",
+            AsyncMock(return_value={"id": "sa_test", "timezone": "America/Regina", "instant_payout_enabled": True}),
+        ):
+            yield
+
     def _balance(self, payable: str = "200.00"):
         return {
             "payable_balance": payable,

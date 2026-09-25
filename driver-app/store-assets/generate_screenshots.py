@@ -704,9 +704,7 @@ def scr_earnings():
     <div class="row sp" style="margin-bottom:11px">
       <div><div style="font-size:10px;font-weight:800;letter-spacing:.1em;color:%(MUTED)s">
         AVAILABLE BALANCE</div>
-        <div style="font-size:23px;font-weight:800;letter-spacing:-0.02em">$318.64</div></div>
-      <div class="btn primary" style="height:40px;padding:0 18px;font-size:13.5px;border-radius:12px">
-        Cash out</div></div>
+        <div style="font-size:23px;font-weight:800;letter-spacing:-0.02em">$318.64</div></div></div>
     <div class="row sp" style="border-top:1px solid %(BORDER)s;padding-top:11px">
       <div style="font-size:12px;font-weight:700;color:%(MUTED)s">Next payout</div>
       <div style="font-size:12px;font-weight:800">Every Sunday</div></div></div>
@@ -1005,7 +1003,7 @@ def build_cards(b, logo):
             "Today, this week, this month &mdash; total earned, trips and your next payout, "
             "always in view.",
             scr_earnings(), logo, [
-                ("left", 0.52, ic("cash"), "Paid every Sunday", "Or cash out anytime"),
+                ("left", 0.52, ic("cash"), "Paid every Sunday", "Automatic weekly deposits"),
                 ("right", 0.81, ic("chart"), "T4A-ready", "Tax docs at year end"),
             ]), CREAM),
         ("07-rider-pin", light_card(

@@ -424,6 +424,21 @@ Card order follows `01-inventory/epics.md` §2. Cards 1–5 are the live-tested 
 - **First reversible step:** a nightly workflow that runs `run_migrations.py --status` against production (read-only) and alerts on `pending > 0`. Blast radius: none (read). Rollback: disable the workflow. Precondition: a read-capable connection secret — a human step (§9).
 - Cites: HIST-006/-009/-011, SEC-R10-002/-008/-010, REL-003/-004, COMP-007/-018 (corrected), CARTO-005, C43, C108, ADR-001/-004/-007.
 
+## §4 annex — Regulatory obligations with a Now step (added per `08-hostile-review.md` correction 9)
+
+The regulator/auditor persona's objection stands: the cards above are an architecture programme with the regulator's list in the appendix. These items have a concrete Now step inside the cards named, and every tax or legal conclusion stays ASSUMED until a primary source is read (§9).
+
+| Obligation / finding | Now step (inside card) | Owner | Label |
+|---|---|---|---|
+| STRAT-004 — Meta ad SDK + per-ride `Purchase` conversion, undisclosed, against "What Spinr Is NOT" | Disclose in the privacy policy and sub-processor list now; founder decides keep-as-attribution-only or remove (§7.0, §9 Q16c) | founder + compliance | VERIFIED (code) / decision pending |
+| COMP-002 — every SK eligibility rule beyond document expiry is dark (flag default `false`) | Card 18 / compliance: run the recheck **report-only** for one cycle, publish the count, then flip per rule; move the check into `driver_availability_service` so the v2 path cannot bypass it | compliance owner (none today) + `spinr-regulatory-compliance-checker` | VERIFIED (code) / requirement UNKNOWN (COMP-001 class question) |
+| COMP-005 / COMP-017 — SGI monthly km return and quarterly report have no schedule or submission record | Card 18: `regulatory_filings` table (append-only, like migration 64) + a monthly reminder loop per the `spinr-background-loop` contract, flagged; on-demand export already exists | compliance owner + accountant | ASSUMED (obligation) |
+| COMP-009 — the independent-contractor agreement is unsigned by every driver | Card 8/15: an e-signature step in onboarding (`consent_version`-style stamp) behind a flag; legal reviews the draft first | legal + driver-journey owner | VERIFIED (no flow) / ASSUMED (legal effect) |
+| COMP-010 — WAV: "estimated wait + standard alternative" promised in `regulatory-sk.md` is not built; rider sees a greyed toggle | Card 10/1: stop claiming it in the doc now; then a "notify me when a WAV driver is online" affordance behind a server flag | maps/dispatch owner | VERIFIED (gap) / ASSUMED (legal requirement) |
+| COMP-011 — WCAG 2.1 AA is a target, not a tested state; no SMS fallback for booking | Card 17's primitives + RIDERJ-004 are the Now steps; the accessibility statement's contact route must be provisioned before it is published (a contact address is cited 13 times and not provisioned — the address itself is deliberately not reproduced here) | mobile owners + compliance | VERIFIED |
+| COMP-003 / MONEY-011 / COMP-015 — PST on fares; GST number on receipts; platform tax posture | No code step until the accountant's dated determination (§9 Q6–8); the receipt renderer change is one line once the number is known | accountant / tax counsel | ASSUMED |
+| COMP-007 — retention drift (indefinite tombstones, never-purged safety incidents, phone never scrubbed) and the retention class for every *new* table in this file (`ride_status_events`, `trust_signals`, approvals) | Card 18 step 8: Step O + phone scrub; every new table lands with its class and purge step | platform owner | VERIFIED (drift) / ASSUMED (numbers) |
+
 ---
 
 ## §5 Sequencing on a live product

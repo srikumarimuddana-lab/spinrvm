@@ -142,6 +142,12 @@ pytest-mock>=3.14.0
 # pytest-timeout is used by CI's `pytest --timeout=30` flag (ci.yml backend-test job).
 # Without it in the lockfile, CI fails with "unrecognized arguments: --timeout=30".
 pytest-timeout>=0.4.0
+# pytest-xdist parallelizes ci.yml backend-test's mocked-DB tier (`-n auto`).
+# tests/test_sms.py is deliberately excluded from that parallel run and kept
+# sequential -- its real-thread, sub-second-timeout tests are sensitive to the
+# CPU contention multiple xdist worker processes introduce (verified: 11/11
+# of that file's tests failed under -n auto that pass cleanly alone).
+pytest-xdist>=3.6.1
 # schemathesis: property-based API fuzz testing against our own OpenAPI schema
 # (backend/tests/test_schemathesis_fuzz.py). Pilot, GET-only for now — see
 # docs/audit/2026-09-08-agentic-tooling-atlas.md for scope and rationale.

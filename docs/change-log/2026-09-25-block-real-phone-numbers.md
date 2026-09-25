@@ -52,12 +52,7 @@ No detector for phone numbers existed anywhere:
   | Legacy numeric driver IDs | 2 | `backend/tests/test_dual_run_monitor.py` |
   | Docstring regex examples | 2 | `backend/ai/stream_filter.py`, its test |
   | Published vendor support line (toll-free) | 1 | `docs/runbooks/security-incident.md` |
-  | **Non-555 Saskatchewan-area numbers — need a human look (possibly real)** | 8 | see below |
-
-  The 8 Saskatchewan-area (306/639) matches outside the 555 exchange are shown masked. PR #5812 did not cover them, and this PR's file scope does not allow editing them:
-  - `backend/diagnose_driver_ws.py` lines 17 and 209, `***-***-3307`. This is a CLI help/docstring example.
-  - `docs/audit/2026-08-16-legacy-ride-count-drop-investigation.md` line 77, `***-***-3307`. It is the same number, in a table row the doc itself labels "real".
-  - `backend/tests/test_legacy_mongo_driver_import_service.py` lines 618, 701, 722 and 735, plus `backend/tests/test_admin_legacy_driver_import.py` line 344, all `***-***-8526`. These are legacy-import fixtures.
+  | Non-555 Saskatchewan-area numbers that may be real | 8 | removed separately in PR #5826 |
 - **CI — G5a (gitleaks git history, `security-gates.yml`).** gitleaks-action auto-loads `.gitleaks.toml`, so the new rule applies. The job is `continue-on-error: true`, so the new findings cannot turn it red.
   - Pull request and push runs scan only the new commits. A PR that adds a phone-shaped line gets a (non-blocking) finding, and gitleaks-action may post a PR comment for it.
   - Scheduled and dispatch runs scan full history, so they will now also list historical numbers, including the ones PR #5812 removed (still in history) and the 555-xxxx fixtures.
@@ -79,6 +74,7 @@ Nobody who uses the apps sees a difference (riders, drivers, corporate admins, i
 | `.claude/hooks/pre-commit` | New check 12 (blocking phone-number scan of added lines); step counters `N/11` → `N/12` | Catch real numbers before they reach git |
 | `.gitleaks.toml` | New `spinr-nanp-phone-number` rule, with an allowlist that mirrors the hook | CI backstop (G5a) for commits made with `--no-verify` or without the hook |
 | `tests/hooks/test_pre_commit_phone_numbers.sh` | New: 29 assertions, run in a throwaway real-git repo | Regression coverage for block/allow/masking/fail-closed |
+| `tests/hooks/test_pre_commit.sh` | Shim falls back to the real git by absolute path, plus a re-entry guard | It previously recursed forever (fork bomb) on un-intercepted git calls |
 | `docs/change-log/2026-09-25-block-real-phone-numbers.md` | This entry | CLAUDE.md Change Impact Log requirement |
 
 ## 7. Before / after
@@ -120,4 +116,7 @@ This is dev tooling with no live data involved. To roll back:
 - **G5b on a real build.** A real admin-dashboard `npm run build` followed by a G5b scan was not run. The `.next/` exclusion was verified only on a synthetic bundle file. If the path allowlist behaved differently on real build paths, G5b (blocking) could turn red on minified numeric literals. Reverting §8's gitleaks block fixes that immediately.
 - **gitleaks-action v3 PR comments.** Its behaviour for the new rule (whether it comments, and what it redacts) was reasoned about, not observed on a live PR run.
 - **awk and shellcheck coverage.** The check was run on mawk (Linux) only. macOS BWK awk and gawk were not exercised, though the program avoids interval expressions and gawk-only functions for that reason. `shellcheck` is not installed in this environment, so the hook was not linted.
-- **Pre-existing test hazard, not fixed here (out of scope).** `tests/hooks/test_pre_commit.sh`, the pre-existing hook test, fork-bombs when run. Its fake `git` on PATH falls back to `command git`, which resolves to the shim itself, so it recurses forever as soon as the hook makes a call the shim does not intercept (check 9's `git rev-parse --show-toplevel`, added after the test was written). Running it once during this work spawned tens of thousands of processes and hit the container's process limit before the processes were killed. The new test avoids fake `git` shims entirely. The old file should be rewritten the same way, or at least resolve the real git by absolute path before changing PATH. It is not wired into CI, so nothing automated runs it today.
+- **Pre-existing test hazard, fixed in this PR.** `tests/hooks/test_pre_commit.sh`, the pre-existing hook test, used to fork-bomb when run. Its fake `git` on PATH fell back to `command git`, which resolved to the shim itself, so it recursed forever as soon as the hook made a call the shim did not intercept (check 9's `git rev-parse --show-toplevel`, added after the test was written). Running it once during this work spawned tens of thousands of processes and hit the container's process limit before the processes were killed.
+  - **The fix.** The shim now calls the real git by absolute path (`REAL_GIT`, resolved before fakebin goes on PATH), and a `SPINR_GIT_SHIM_ACTIVE` guard makes any re-entry exit 97 instead of recursing.
+  - **Verified.** I ran it once under `timeout 120`: 13 passed, 0 failed. The process count stayed at about 90 (88 before, 91 during). The test does not assert the `N/11` / `N/12` step labels, so the renumbering needed no change there.
+  - **Still not in CI.** Nothing automated runs this test today.

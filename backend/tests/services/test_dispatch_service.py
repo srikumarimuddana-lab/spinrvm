@@ -303,6 +303,82 @@ class TestFilterAndRankDrivers:
         out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
         assert len(out) == 1
 
+    # ── C136 T3: exclusion observability ─────────────────────────────
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_wrong_direction_destination_exclusion_logged_and_metered(self, mock_logger, mock_metric_inc):
+        driver = self._wrong_direction_driver(id="drv-dest-42", destination_expires_at=_future_iso())
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        ride["id"] = "ride-99"
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        assert out == []
+
+        mock_logger.info.assert_called_once()
+        assert "dispatch candidate exclusions" in mock_logger.info.call_args[0][0]
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["destination"] == 1
+        assert extra["destination_excluded_driver_ids"] == ["drv-dest-42"]
+
+        dest_metric = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total" and c[1].get("labels") == {"reason": "destination"}
+        ]
+        assert len(dest_metric) == 1
+        assert dest_metric[0][1]["by"] == 1
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_expired_destination_not_counted_as_destination_exclusion(self, mock_logger, mock_metric_inc):
+        driver = self._wrong_direction_driver(destination_expires_at=_past_iso())
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["destination"] == 0
+        assert extra["destination_excluded_driver_ids"] == []
+        dest_metrics = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total"
+            and c[1].get("labels", {}).get("reason") == "destination"
+        ]
+        assert dest_metrics == []
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_outside_radius_counted_as_radius_not_destination(self, mock_logger, mock_metric_inc):
+        drivers = [self._driver("d_far", lat=53.0, lng=-106.0)]
+        ride = self._ride()
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 1.0)
+        assert out == []
+
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["radius"] == 1
+        assert extra["exclusion_counts"]["destination"] == 0
+
+        radius_metric = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total" and c[1].get("labels") == {"reason": "radius"}
+        ]
+        assert len(radius_metric) == 1
+        assert radius_metric[0][1]["by"] == 1
+
+    @patch("services.dispatch_service.logger")
+    def test_filter_results_unchanged_by_exclusion_observability(self, mock_logger):
+        drivers = [
+            self._driver("d_near", lat=52.0, lng=-106.0, rating=5.0),
+            self._driver("d_low", rating=3.0),
+            self._wrong_direction_driver(id="d_dest", destination_expires_at=_future_iso()),
+        ]
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "rating_based", 4.0, 10.0)
+        assert [t[0]["id"] for t in out] == ["d_near"]
+        assert out[0][1] == 0.0
+
 
 class TestIsDestinationModeActive:
     NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)

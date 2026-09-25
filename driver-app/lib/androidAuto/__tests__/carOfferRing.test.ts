@@ -335,7 +335,9 @@ describe('hand back to the phone', () => {
     expect(mockDisplay).not.toHaveBeenCalled();
   });
 
-  it.each(['error', 'unsupported'])(
+  // 'cancelled' here is the native hard stop firing mid prompt-wait: nothing
+  // superseded it in JS, so treating it as "handled" left every source silent.
+  it.each(['error', 'unsupported', 'cancelled'])(
     'a %s start hands back and drops ownership for the rest of that offer',
     async (result) => {
       mockStart.mockImplementation(() => Promise.resolve(result));
@@ -356,6 +358,22 @@ describe('hand back to the phone', () => {
       expect(ring.isCarRingOwner()).toBe(true);
     },
   );
+
+  it('a start cancelled by a JS-side hand back does not hand back twice', async () => {
+    let resolveStart: (r: string) => void = () => {};
+    mockStart.mockImplementation(() => new Promise((r) => { resolveStart = r; }));
+    const handler = jest.fn();
+    ring.registerPhoneRingHandler(handler);
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+
+    ring.setCarOfferToneEnabled(false); // stops the tone and hands back once
+    resolveStart('cancelled'); // the native side resolves the superseded start
+    await flush();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 
   it('a start that throws is treated like an error', async () => {
     mockStart.mockImplementation(() => Promise.reject(new Error('boom')));

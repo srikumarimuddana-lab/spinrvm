@@ -279,7 +279,10 @@ function startCarTone(offer: CarOffer, gen: number): void {
       log('car offer tone:', result, offer.ride_id);
       setDebugFact('offerTone', result);
       reportOnce(result);
-      if (result === 'unsupported' || result === 'error') {
+      // 'cancelled' with the same gen means no JS stop or new offer superseded
+      // it: the native hard stop fired while still waiting out a nav prompt,
+      // so nothing ever played. Hand back, or every source stays silent.
+      if (result === 'unsupported' || result === 'error' || result === 'cancelled') {
         carRingHandled = false;
         toneFailed = true;
         refreshOwner(); // owner → false → handBack
@@ -293,7 +296,7 @@ function startCarTone(offer: CarOffer, gen: number): void {
         }, ms);
       }
       // 'blocked_call': never ring over a call, and no hand back either — the
-      // phone would ring over the same call. 'cancelled': superseded.
+      // phone would ring over the same call.
     } catch (e) {
       logError('car offer tone start threw:', e);
       if (gen !== ringGen) return;

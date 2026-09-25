@@ -1,9 +1,9 @@
 # Wallet, Payments, Loyalty & Promotions Domain
 
-Rider wallet, driver earnings + payouts, Stripe integration (PaymentIntents + Connect), loyalty tiers, quests, promotions, disputes, and ancillary features (favorites, addresses, notifications).
+Rider wallet, driver earnings + payouts, Stripe integration (PaymentIntents + Connect), loyalty tiers, quests, promotions, Stripe chargebacks, and ancillary features (favorites, addresses, notifications).
 
 **Files covered:**
-`routes/wallet.py`, `routes/payments.py`, `routes/loyalty.py`, `routes/quests.py`, `routes/promotions.py`, `routes/disputes.py`, `routes/favorites.py`, `routes/addresses.py`, `routes/notifications.py`, `routes/webhooks.py`, `routes/admin/wallet.py`, `routes/admin/promotions.py`, `routes/admin/subscriptions.py`, `routes/admin/messaging.py`, `utils/payment_retry.py`, `utils/email_receipt.py`, `utils/cloudinary.py`.
+`routes/wallet.py`, `routes/payments.py`, `routes/loyalty.py`, `routes/quests.py`, `routes/promotions.py`, `routes/disputes.py`, `routes/favorites.py`, `routes/addresses.py`, `routes/notifications.py`, `routes/webhooks.py`, `routes/admin/wallet.py`, `routes/admin/promotions.py`, `routes/admin/subscriptions.py`, `routes/admin/messaging.py`, `utils/payment_retry.py`, `utils/email_receipt.py`, `utils/cloudinary.py`. In-app disputes were disabled and their code removed 2026-09-25 (owner decision); `routes/disputes.py` is now just 410 stubs for the old create/resolve endpoints, and the surviving read-only historical `disputes` view plus the Stripe chargeback endpoints live under `routes/admin/support.py`, not here.
 
 For corporate B2B wallet specifics — master wallet, off-session auto-topup, spend policies, low-balance nudges — see `docs/CORPORATE_B2B.md`. The B2B wallet shares the Stripe webhook dispatcher and idempotency tables documented here, but has its own RPC (`corporate_wallet_apply_delta`) and its own loops.
 
@@ -20,7 +20,7 @@ For corporate B2B wallet specifics — master wallet, off-session auto-topup, sp
 | Loyalty | `loyalty_points`, `loyalty_redemptions` | Tiered multipliers 1.0 / 1.25 / 1.5 / 2.0. |
 | Quests | `quests`, `quest_progress` | 6 quest types; driver-only. |
 | Promotions | `promotions`, `promotion_redemptions` | 10 validation rules layered on top of a coupon code. |
-| Disputes | `disputes` | Ride dispute lifecycle with admin resolution. |
+| Disputes (retired) | `disputes` | In-app disputes are disabled (2026-09-25); `disputes` rows are read-only history. See §7. |
 | Notifications | `notifications`, `notification_preferences`, FCM | Push + in-app inbox. |
 
 ---
@@ -175,17 +175,16 @@ Full CRUD, targeting editor, usage analytics, push-to-segment ("notify eligible 
 
 ---
 
-## 7. Disputes (`routes/disputes.py`)
+## 7. Disputes (retired — `routes/disputes.py`)
 
-Rider or driver opens a dispute on a completed ride (wrong fare, wrong route, etc.).
+In-app disputes are disabled (owner decision 2026-09-25). A rider or driver who disagrees with a charge is directed to email support@spinr.ca (a Zoho Desk ticket) or contact their card issuer/bank — the latter becomes a Stripe chargeback (`charge.dispute.*` webhooks → `stripe_disputes`, §3), which is unaffected by this and stays fully supported.
 
-```
-create  → status=open
-admin reviews → resolve (refund | no-action | adjust) → status=resolved
-escalation path via admin support module
-```
+What remains:
+- `POST /disputes` and admin `PUT /admin/disputes/{id}/resolve` — always **410**, no DB read or write.
+- Existing `disputes` rows (from before the disable) are a read-only historical view: `GET /admin/disputes` (list), `GET /admin/disputes/stats`, `GET /admin/disputes/{id}` — all served by `routes/admin/support.py`, not `routes/disputes.py`.
+- The `disputes` table, its migrations and RLS are kept for the 7-year financial-record retention window; the old hard `DELETE` was removed.
 
-Endpoints: `POST /disputes`, `GET /disputes/{id}`, `GET /disputes` (mine), `POST /disputes/{id}/message`. Admin-side CRUD + resolution lives under `routes/admin/*`.
+See `docs/change-log/2026-09-25-disable-in-app-disputes.md` and `docs/change-log/2026-09-25-remove-disabled-dispute-code.md` for the full history.
 
 ---
 
@@ -229,7 +228,7 @@ After ride completion + payment success, asynchronously render an HTML receipt (
 
 ## 11. Cloudinary (`utils/cloudinary.py`)
 
-User-uploaded images (profile photo, driver vehicle photo, dispute evidence). Signed upload URLs; server validates MIME + size. Driver documents still go to Supabase Storage (`STORAGE_BUCKET=driver-documents`) with stricter policies — documents handler under `documents.py`.
+User-uploaded images (profile photo, driver vehicle photo). Signed upload URLs; server validates MIME + size. Driver documents still go to Supabase Storage (`STORAGE_BUCKET=driver-documents`) with stricter policies — documents handler under `documents.py`.
 
 ---
 
@@ -252,7 +251,6 @@ User-uploaded images (profile photo, driver vehicle photo, dispute evidence). Si
 | `WalletTransaction` | Ledger entry (credit/debit, amount, reason, created_at). |
 | `LoyaltyRedemptionRequest` | `{reward_id, metadata?}`. |
 | `PromotionApplyRequest` | `{code, ride_id?}` (or apply during ride create). |
-| `DisputeCreateRequest` | `{ride_id, reason, details, evidence_urls}`. |
 | `NotificationPreferenceUpdate` | Per-channel booleans. |
 
 ---

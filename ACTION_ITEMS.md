@@ -4743,7 +4743,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `audit_logs` to do this (see separate flag below — this conflicts with
     this repo's own documented 7-year regulatory retention policy).
   - Confirmed against `bookings.csv`/`drivers.csv`/`customers.csv`: 3 of
-    the 4 targeted phone numbers (`3062929175`, `3066009097`, `3065203304`
+    the 4 targeted phone numbers (`phone ending 9175`, `phone ending 9097`, `phone ending 3304`
     in local 10-digit form) appear **repeatedly** in the legacy MongoDB
     export as both driver and customer records — several clearly test
     accounts ("Test YK", "Yy", "Hh", "Test Y") alongside apparently-real
@@ -13792,8 +13792,8 @@ record of what was assumed vs. what was actually true</summary>
 
 ### C136. Destination mode silently hides drivers from dispatch; push tokens cross accounts on shared devices
 - [ ] **Status:** in progress 2026-09-24 (branch `fix/c136-destination-mode-and-push-token-ownership`).
-- **What's wrong:** found in a live Regina test. Driver `3066009097` got zero offers all day
-  while `3065203304` got them normally. Only material difference: `destination_mode = true`.
+- **What's wrong:** found in a live Regina test. Driver `phone ending 9097` got zero offers all day
+  while `phone ending 3304` got them normally. Only material difference: `destination_mode = true`.
   `dispatch_service._ride_brings_driver_closer_to_destination` excludes that driver from every
   ride not heading toward its destination. The mode never expires, the driver app gives no
   on-screen indication it's on, and the exclusion is never logged. Separately,

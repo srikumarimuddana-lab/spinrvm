@@ -1,6 +1,6 @@
 # C136: Destination mode silently hides drivers from dispatch, and push tokens cross accounts on shared devices
 
-**Found:** 2026-09-24, live test in Regina. Kiran booked repeatedly as a rider; driver `3066009097` got **zero** offers all day while driver `3065203304` got them normally.
+**Found:** 2026-09-24, live test in Regina. Kiran booked repeatedly as a rider; driver `phone ending 9097` got **zero** offers all day while driver `phone ending 3304` got them normally.
 
 **Owner:** Ravi (SDLC lead). Reports to Pandi.
 
@@ -10,7 +10,7 @@
 
 Both drivers were online, available, verified, in the Regina service area, with fresh GPS and push tokens on file. The one material difference:
 
-| | 3065203304 (offers) | 3066009097 (no offers) |
+| | phone ending 3304 (offers) | phone ending 9097 (no offers) |
 |---|---|---|
 | `destination_mode` | false | **true**, destination south Regina |
 | Offers on 2026-09-24 | 1 | **0** |

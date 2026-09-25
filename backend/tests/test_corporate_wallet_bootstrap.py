@@ -14,6 +14,10 @@ def test_wallet_created_on_kyb_approval(test_client, admin_override):
             AsyncMock(return_value=active_row),
         ) as m_kyb,
         patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
+        patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
             AsyncMock(return_value={"id": "w1", "company_id": "c1", "balance": 0}),
         ) as m_wallet,
@@ -37,6 +41,10 @@ def test_wallet_not_created_on_rejection(test_client, admin_override):
         patch(
             "db_supabase.record_kyb_decision",
             AsyncMock(return_value=rejected_row),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
         ),
         patch(
             "routes.corporate_accounts.ensure_corporate_wallet",

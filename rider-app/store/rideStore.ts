@@ -909,10 +909,25 @@ export const useRideStore = create<RideState>((set, get) => ({
       // audit finding). A 2-minute bucket is long enough to cover a manual
       // retry of the same attempt, short enough that a genuinely new booking
       // a few minutes later still gets its own key.
+      //
+      // Content fields cover everything that changes vehicle/price/dispatch --
+      // a rider who cancels and rebooks the identical route within the same
+      // bucket with a different vehicle tier, promo, stop, or schedule must
+      // get a distinct key, not silently reuse the first ride's row (2026-09-25
+      // swarm-watch finding #5708).
       const idempotencyBucket = Math.floor(Date.now() / 120_000);
+      const idempotencyStopsSig = stops
+        .filter((s) => s.lat && s.lng)
+        .map((s) => `${s.lat.toFixed(5)},${s.lng.toFixed(5)}`)
+        .join('|');
+      const idempotencyPromoCode = get().appliedPromo?.code || 'none';
+      const idempotencySchedule = scheduledTime ? formatLocalNaiveIso(scheduledTime) : 'now';
       const idempotencyKey =
         `ride-${userId}-${pickup.lat.toFixed(5)}-${pickup.lng.toFixed(5)}-` +
-        `${dropoff.lat.toFixed(5)}-${dropoff.lng.toFixed(5)}-${idempotencyBucket}`;
+        `${dropoff.lat.toFixed(5)}-${dropoff.lng.toFixed(5)}-` +
+        `${selectedVehicle.id}-${idempotencyPromoCode}-${paymentMethod}-${paymentMethodId ?? 'none'}-` +
+        `${idempotencySchedule}-${corporateAccountId || 'none'}-${requiresWav}-` +
+        `${idempotencyStopsSig}-${idempotencyBucket}`;
       const response = await api.post<Ride | RideRequiresAction>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });

@@ -138,3 +138,27 @@
 | **Rollback plan** | Behaviour: `UPDATE settings SET corporate_kyb_refuses_closed_company = false WHERE id = 'app_settings';`. Schema: drop the column after reverting the code, then delete the tracking row. |
 | **Verification performed** | The flag reads `true`, and the tracking row checksum matches the file on `main`. |
 | **What was NOT verified** | An admin settings save round-trip with the new field was not run through the UI. |
+
+## 12. Applied migration 482 (`destination_mode_enabled`, merged in #5813)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5813 merged at about 18:37 UTC. Until its column exists, destination mode is off through the code default (`app_settings.get("destination_mode_enabled") is True`), but admins cannot switch it on without a code change. |
+| **Fix/remediation** | Owner-approved at about 18:41 UTC. Ran the merged file's statements verbatim (`ADD COLUMN IF NOT EXISTS … BOOLEAN NOT NULL DEFAULT FALSE`, plus its `COMMENT`) in one transaction, with the tracking row inserted: checksum `2c5b099e…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`, `applied_at` 18:42:41 UTC. |
+| **Risk & impact** | Additive. It adds a metadata-only constant default on the one-row `settings` table. Behaviour is unchanged: the feature was already off through the code default, and 0 drivers had `destination_mode` true before the apply. |
+| **User experience effect** | None. Drivers on the new build still see destination mode hidden, and old builds still get the 409 on save. |
+| **Rollback plan** | Behaviour: `UPDATE settings SET destination_mode_enabled = true WHERE id = 'app_settings';` (no deploy). Schema: drop the column after reverting the code, then delete the tracking row. |
+| **Verification performed** | Before the apply: column absent, no tracking row, 0 drivers in destination mode. After: `settings.destination_mode_enabled = false` for `app_settings`, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | The deployed backend was not observed reading the new column (the settings cache has a 60 s TTL). No live offer was placed after the apply. Fly.io (the primary host) was not inspected. |
+
+## 13. Applied migration 483 (`service_areas_instant_payout_default_off`, merged in #5810)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5810 merged at about 18:40 UTC. Instant payouts are removed in code, but `service_areas.instant_payout_enabled` still defaulted to `true` (migration 314), so a newly created service area would state "instant enabled". |
+| **Fix/remediation** | Owner-approved at about 18:45 UTC. Ran the merged file's statements verbatim (`ALTER COLUMN … SET DEFAULT false`, then the normalising `UPDATE … WHERE instant_payout_enabled IS DISTINCT FROM false`) in one transaction, with the tracking row inserted: checksum `62b21d1c…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`, `applied_at` 18:45:56 UTC. |
+| **Risk & impact** | Metadata-only default change. The `UPDATE` touched 0 rows, because all 6 areas were already `false` from the §9 switch-off. No code reads the column any more. |
+| **User experience effect** | None. |
+| **Rollback plan** | `ALTER TABLE public.service_areas ALTER COLUMN instant_payout_enabled SET DEFAULT true;`, then delete the tracking row. Row values are left as they are. |
+| **Verification performed** | Before the apply: no tracking row, default `true`, 6 areas, 0 not false. After: default `false`, 0 of 6 areas not false, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | No service area was created after the apply to observe the new default. Fly.io (the primary host) was not inspected. |

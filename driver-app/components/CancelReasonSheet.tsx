@@ -7,7 +7,7 @@ import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 
 // Default driver-facing cancellation reasons (last = free-text only).
 //
@@ -84,8 +84,8 @@ export default function CancelReasonSheet({
       >
         <View style={styles.card}>
           <View style={styles.handle} />
-          <Text allowFontScaling={false} style={styles.title}>{title}</Text>
-          {message ? <Text allowFontScaling={false} style={styles.message}>{message}</Text> : null}
+          <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.title}>{title}</Text>
+          {message ? <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.message}>{message}</Text> : null}
 
           <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
             {reasons.map((r) => {
@@ -103,7 +103,7 @@ export default function CancelReasonSheet({
                     size={20}
                     color={active ? colors.primary : colors.textSecondary}
                   />
-                  <Text allowFontScaling={false} style={[styles.rowText, active && { color: colors.text }]}>{r}</Text>
+                  <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.rowText, active && { color: colors.text }]}>{r}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -125,10 +125,10 @@ export default function CancelReasonSheet({
             activeOpacity={0.8}
             disabled={!canConfirm}
           >
-            <Text allowFontScaling={false} style={styles.buttonText}>{confirmLabel}</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.buttonText}>{confirmLabel}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={onClose} activeOpacity={0.7} disabled={isPending}>
-            <Text allowFontScaling={false} style={[styles.buttonText, styles.cancelButtonText]}>Keep ride</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.buttonText, styles.cancelButtonText]}>Keep ride</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -141,6 +141,9 @@ function createStyles(colors: ThemeColors) {
     backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
     kav: { flex: 1, justifyContent: 'flex-end' },
     card: {
+      // Bounded so the title stays on screen when large OS text (or the
+      // keyboard) makes the sheet taller than the screen; the list shrinks.
+      maxHeight: '92%',
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
@@ -151,7 +154,7 @@ function createStyles(colors: ThemeColors) {
     handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 12 },
     title: { fontSize: 19, fontWeight: '700', color: colors.text, marginBottom: 6 },
     message: { fontSize: FONT.bodySm, color: colors.textSecondary, lineHeight: 18, marginBottom: 12 },
-    list: { maxHeight: 280, marginBottom: 12 },
+    list: { maxHeight: 280, flexShrink: 1, marginBottom: 12 },
     row: {
       flexDirection: 'row',
       alignItems: 'center',

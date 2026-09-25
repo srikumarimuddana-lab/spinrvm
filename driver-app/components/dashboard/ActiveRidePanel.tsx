@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { shakeHorizontal } from '@shared/utils/motion';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { launchNavigation } from '../../lib/navigation/launchNavigation';
@@ -613,17 +613,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               <Ionicons name={status.icon} size={20} color={status.color} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
-              <Text allowFontScaling={false} style={styles.statusSub}>{status.sub}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.statusSub}>{status.sub}</Text>
             </View>
             <View style={styles.earningsBox}>
-              <Text style={styles.earningsValue}>${earnings.toFixed(2)}</Text>
-              <Text allowFontScaling={false} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
+              <Text style={styles.earningsValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>${earnings.toFixed(2)}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
               {/* Only when a bonus actually applies — a "+$0.00" line on every
                   ordinary ride is noise. Same wording as the offer panel so the
                   figure the driver accepted is the figure they keep seeing. */}
               {hasBonus && (
-                <Text allowFontScaling={false} style={styles.earningsBreakdown} numberOfLines={1}>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.earningsBreakdown} numberOfLines={2}>
                   ${fareEarnings.toFixed(2)} + ${bonusEarnings.toFixed(2)} bonus
                 </Text>
               )}
@@ -646,7 +646,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         <View style={styles.tripCard}>
           <View style={styles.riderRow}>
             <View style={styles.riderAvatar}>
-              <Text allowFontScaling={false} style={styles.riderAvatarText}>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.riderAvatarText}>
                 {riderName.charAt(0).toUpperCase()}
               </Text>
             </View>
@@ -675,7 +675,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <View style={styles.routeRow}>
               <View style={[styles.dot, { backgroundColor: colors.success }]} />
               <View style={{ flex: 1 }}>
-                <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
               </View>
             </View>
@@ -687,7 +687,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 <View style={styles.routeRow}>
                   <View style={[styles.dot, { backgroundColor: colors.warning }]} />
                   <View style={{ flex: 1 }}>
-                    <Text allowFontScaling={false} style={styles.routeLabel}>STOP {idx + 1}</Text>
+                    <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.routeLabel}>STOP {idx + 1}</Text>
                     <Text style={styles.routeAddress} numberOfLines={2}>{stop.address || 'Stop'}</Text>
                   </View>
                 </View>
@@ -699,7 +699,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <View style={styles.routeRow}>
               <View style={styles.destSquare} />
               <View style={{ flex: 1 }}>
-                <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
               </View>
             </View>
@@ -721,7 +721,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.noteBanner}>
             <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.primary} style={{ marginTop: 1 }} />
             <View style={{ flex: 1 }}>
-              <Text allowFontScaling={false} style={styles.noteLabel}>Rider note</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.noteLabel}>Rider note</Text>
               <Text style={styles.noteText}>{(ride as any).rider_notes}</Text>
             </View>
           </View>
@@ -732,7 +732,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.quietBanner}>
             <Ionicons name="volume-mute" size={16} color="#8B5CF6" style={{ marginTop: 1 }} />
             <View style={{ flex: 1 }}>
-              <Text allowFontScaling={false} style={styles.quietLabel}>Quiet ride requested</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.quietLabel}>Quiet ride requested</Text>
               <Text style={styles.quietText}>The rider prefers minimal conversation.</Text>
             </View>
           </View>
@@ -743,9 +743,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.otpCard}>
             <View style={styles.otpHeader}>
               <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
-              <Text allowFontScaling={false} style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
             </View>
-            <Text allowFontScaling={false} style={styles.otpSub}>{t('activeRide.askRiderForCode')}</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.otpSub}>{t('activeRide.askRiderForCode')}</Text>
             <Animated.View style={[styles.otpBoxRow, { transform: [{ translateX: shakeAnim }] }]}>
               {[0, 1, 2, 3].map(i => (
                 <View
@@ -756,7 +756,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                     pinError && styles.otpBoxError,
                   ]}
                 >
-                  <Text style={styles.otpDigit}>{otpInput[i] || ''}</Text>
+                  <Text style={styles.otpDigit} maxFontSizeMultiplier={MAX_FONT_SCALE}>{otpInput[i] || ''}</Text>
                 </View>
               ))}
             </Animated.View>
@@ -765,7 +765,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 <ActivityIndicator size="small" color={colors.primary} />
               </View>
             ) : pinError ? (
-              <Text allowFontScaling={false} style={styles.otpErrorText}>{t('activeRide.incorrectPin')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.otpErrorText}>{t('activeRide.incorrectPin')}</Text>
             ) : null}
             <View style={styles.keypad}>
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
@@ -791,7 +791,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   }}
                 >
                   {key === 'del' ? <Ionicons name="backspace-outline" size={20} color={colors.text} />
-                    : key !== null ? <Text allowFontScaling={false} style={styles.kpText}>{key}</Text>
+                    : key !== null ? <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.kpText}>{key}</Text>
                     : null}
                 </TouchableOpacity>
               ))}
@@ -814,7 +814,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               accessibilityLabel={t('activeRide.navigateToPickup')}
             >
               <Ionicons name="navigate" size={20} color={colors.surface} />
-              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>{t('activeRide.navigateToPickup')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.actionPrimaryText, styles.actionNeutralText]}>{t('activeRide.navigateToPickup')}</Text>
             </TouchableOpacity>
             {(() => {
               const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
@@ -832,7 +832,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                     <>
                       <Ionicons name="flag" size={18} color={atPickup ? '#fff' : colors.textDim} />
                       <Text
-                        allowFontScaling={false}
+                        maxFontSizeMultiplier={MAX_FONT_SCALE}
                         style={atPickup ? styles.actionPrimaryText : [styles.actionSecondaryText, { color: colors.textDim }]}
                       >
                         {!atPickup && distanceToPickup !== null && distanceToPickup !== undefined
@@ -861,7 +861,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               disabled={!!nextStop && !nextStopHasDestination}
             >
               <Ionicons name="navigate" size={20} color={colors.surface} />
-              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.actionPrimaryText, styles.actionNeutralText]}>
                 {nextStopHasDestination ? `Navigate to stop ${nextStopIndex + 1}` : t('activeRide.navigateToDropoff')}
               </Text>
             </TouchableOpacity>
@@ -874,7 +874,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               accessibilityLabel={`Mark stop ${nextStopIndex + 1} complete`}
             >
               <Ionicons name="checkmark-circle" size={20} color="#fff" />
-              <Text allowFontScaling={false} style={styles.actionPrimaryText}>Arrived at stop {nextStopIndex + 1}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.actionPrimaryText}>Arrived at stop {nextStopIndex + 1}</Text>
             </TouchableOpacity>
             ) : nextStop ? (
               <Text style={styles.actionSecondaryText}>This stop’s destination is unavailable. Refresh the ride to continue.</Text>
@@ -896,7 +896,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               {isLoading ? <ActivityIndicator color="#fff" /> : (
                 <>
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.completeTrip')}</Text>
+                  <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.actionPrimaryText}>{t('activeRide.completeTrip')}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -918,7 +918,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             accessibilityLabel="Report no-show"
             onPress={onReportNoShow}
           >
-            <Text allowFontScaling={false} style={styles.actionPrimaryText}>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.actionPrimaryText}>
               {noShowReady ? 'Report no-show' : `Report no-show in ${noShowLeft}s`}
             </Text>
           </TouchableOpacity>
@@ -941,7 +941,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               ],
             )}
           >
-            <Text allowFontScaling={false} style={styles.cancelText}>Cancel Ride</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.cancelText}>Cancel Ride</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -1003,6 +1003,9 @@ function createStyles(colors: ThemeColors) {
     statusText: { fontSize: FONT.bodyMd, fontWeight: '800' },
     statusSub: { fontSize: 12, fontWeight: '600', color: colors.textDim, marginTop: 1, fontVariant: ['tabular-nums'] },
     earningsBox: {
+      // Bounded so a large (OS-scaled) earnings figure can't squeeze the
+      // status column beside it to nothing.
+      maxWidth: '50%',
       alignItems: 'center',
       backgroundColor: colors.successBg,
       borderRadius: 14,
@@ -1102,7 +1105,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACING.xs },
-    otpTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+    otpTitle: { fontSize: 14, fontWeight: '700', color: colors.text, flexShrink: 1 },
     otpSub: { fontSize: 12, color: colors.textDim, marginBottom: 14 },
     otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14, justifyContent: 'center' },
     otpBox: {
@@ -1148,20 +1151,24 @@ function createStyles(colors: ThemeColors) {
     actions: { gap: 8 },
     actionPrimary: {
       flexDirection: 'row',
-      height: 52,
+      // min, not fixed: labels wrap to two lines at large OS text sizes.
+      minHeight: 52,
+      paddingVertical: SPACING.sm,
       borderRadius: 16,
       justifyContent: 'center',
       alignItems: 'center',
       gap: 8,
     },
-    actionPrimaryText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#fff' },
+    actionPrimaryText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#fff', flexShrink: 1, textAlign: 'center' },
     // Charcoal in light mode, white in dark mode — the "open external
     // navigation" action, distinct from green trip-advancing actions.
     actionNeutral: { backgroundColor: colors.text },
     actionNeutralText: { color: colors.surface },
     actionSecondary: {
       flexDirection: 'row',
-      height: 50,
+      // min, not fixed: labels wrap to two lines at large OS text sizes.
+      minHeight: 50,
+      paddingVertical: SPACING.sm,
       borderRadius: 14,
       justifyContent: 'center',
       alignItems: 'center',
@@ -1170,7 +1177,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1.5,
       borderColor: colors.border,
     },
-    actionSecondaryText: { fontSize: FONT.bodyMd, fontWeight: '700' },
+    actionSecondaryText: { fontSize: FONT.bodyMd, fontWeight: '700', flexShrink: 1, textAlign: 'center' },
     actionSecondaryDisabled: {
       opacity: 0.45,
     },

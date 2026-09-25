@@ -521,9 +521,9 @@ function RideInProgressScreenContent() {
                     <DriverLocationStatus capturedAt={currentDriver?.location_captured_at} color={colors.textDim} />
         </View>
         <View style={styles.etaBadge}>
-          {/* font-scale-lock: fixed 56pt circle with a fixed lineHeight; larger
-              text would clip. The same ETA is shown at scalable size in the
-              trip-stats row below. */}
+          {/* font-scale-lock: fixed 56pt circle; a 2–3 digit ETA at 1.5x runs
+              past the circle's edge. The same ETA is shown at scalable size in
+              the trip-stats row below. */}
           <Text style={styles.etaBadgeNum} allowFontScaling={false}>{eta}</Text>
           {/* font-scale-lock: see the badge number above. */}
           <Text style={styles.etaBadgeUnit} allowFontScaling={false}>min</Text>

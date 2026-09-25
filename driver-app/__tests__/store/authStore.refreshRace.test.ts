@@ -42,6 +42,12 @@ jest.mock('firebase/auth', () => ({
 }));
 
 const mockSecureStoreBacking: Record<string, string> = {};
+// shared/auth/refreshProposal.ts lazily requires expo-crypto during refresh.
+// The real module loads Expo's runtime, whose lazy globals then fail Jest's
+// post-suite cleanup. No random bytes here means no proposal is sent, so the
+// exact /auth/refresh bodies asserted below are unchanged.
+jest.mock('expo-crypto', () => ({ getRandomBytes: () => undefined }));
+
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn((k: string) =>
     Promise.resolve(mockSecureStoreBacking[k] ?? null),

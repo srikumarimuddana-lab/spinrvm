@@ -316,12 +316,37 @@ def _matches(row, filters):
 
 
 class _InterleavedDB:
-    """Just the db_supabase calls routes/addresses.py makes, one turn each."""
+    """Just the db_supabase calls routes/addresses.py makes, one turn each.
 
-    def __init__(self, rows, schedule):
+    With ``unique=True`` it also enforces migration 485's partial unique
+    index ``(user_id, icon) WHERE icon IN ('home','work')`` the way Postgres
+    does: a write whose new/updated row would duplicate another row's key is
+    rejected as a whole (nothing changes) and surfaces as the
+    DuplicateRecordError repositories/_base.py raises for a 23505.
+    ``unique=False`` is the state before the migration is applied (the code
+    ships first and must work either way).
+    """
+
+    def __init__(self, rows, schedule, unique=False, dup_error=None):
         self.rows = [dict(r) for r in rows]
         self.schedule = list(schedule)
         self.cond = asyncio.Condition()
+        self.unique = unique
+        self.dup_error = dup_error
+
+    def _check_unique(self, written):
+        if not self.unique:
+            return
+        for w in written:
+            if w.get("icon") not in ("home", "work"):
+                continue
+            twins = [r for r in self.rows if r["user_id"] == w["user_id"] and r.get("icon") == w["icon"]]
+            if len(twins) > 1:
+                raise self.dup_error(
+                    details={
+                        "original": 'duplicate key value violates unique constraint "uq_saved_addresses_user_home_work"'
+                    }
+                )
 
     async def _turn(self):
         me = _turn_owner.get()
@@ -350,9 +375,15 @@ class _InterleavedDB:
 
     async def update_one(self, table, filters, update, **_kw):
         await self._turn()
+        before = [dict(r) for r in self.rows]
         hit = [r for r in self.rows if _matches(r, filters)]
         for r in hit:
             r.update(update)
+        try:
+            self._check_unique(hit)
+        except Exception:
+            self.rows = before  # statement rolled back
+            raise
         return dict(hit[0]) if hit else None
 
     async def delete_many(self, table, filters):
@@ -364,6 +395,11 @@ class _InterleavedDB:
     async def insert_one(self, table, doc):
         await self._turn()
         self.rows.append(dict(doc))
+        try:
+            self._check_unique([doc])
+        except Exception:
+            self.rows.pop()  # statement rolled back
+            raise
         return dict(doc)
 
 
@@ -382,11 +418,11 @@ def _schedules(turns_each=4):
         yield ["A" if i in a_slots else "B" for i in range(2 * turns_each)]
 
 
-def _run_interleaved(rows, schedule, req_a, req_b):
+def _run_interleaved(rows, schedule, req_a, req_b, unique=False):
     from fastapi import HTTPException
 
     mod = _addresses_module()
-    db = _InterleavedDB(rows, schedule)
+    db = _InterleavedDB(rows, schedule, unique=unique, dup_error=mod.DuplicateRecordError)
 
     async def _one(name, make):
         _turn_owner.set(name)
@@ -434,8 +470,20 @@ def _homes(rows):
     return [r for r in rows if r["user_id"] == "user_1" and r["icon"] == "home"]
 
 
+def _assert_ok_or_409(results, schedule):
+    """Every request either succeeded or got the retryable 409 — never 404/500."""
+    from fastapi import HTTPException
+
+    for r in results:
+        if isinstance(r, HTTPException):
+            assert r.status_code == 409, schedule
+        else:
+            assert isinstance(r, dict), schedule
+
+
 class TestConcurrentSaves:
     def test_two_devices_promoting_different_rows_to_home_never_lose_both(self):
+        # Without the index (code deployed before migration 485 is applied).
         rows = [_row("A", "other", "2026-01-01"), _row("B", "gym", "2026-01-02")]
         for schedule in _schedules():
             final, results = _run_interleaved(
@@ -444,13 +492,53 @@ class TestConcurrentSaves:
             assert _homes(final), f"no Home left under schedule {schedule}"
             assert all(isinstance(r, dict) for r in results), schedule
 
+    def test_with_index_two_promotes_end_with_exactly_one_home(self):
+        # With migration 485: the temporary duplicate the delete-first order
+        # allowed is now impossible; the request that loses the race gets 409.
+        rows = [_row("A", "other", "2026-01-01"), _row("B", "gym", "2026-01-02")]
+        saw_409 = False
+        for schedule in _schedules():
+            final, results = _run_interleaved(
+                rows, schedule, _patch_req("A", icon="home"), _patch_req("B", icon="home"), unique=True
+            )
+            assert len(_homes(final)) == 1, f"expected exactly one Home under {schedule}"
+            _assert_ok_or_409(results, schedule)
+            saw_409 = saw_409 or any(not isinstance(r, dict) for r in results)
+        assert saw_409, "an overlapping double promote should surface a 409 somewhere"
+
     def test_promote_racing_a_new_home_post_never_loses_home(self):
         rows = [_row("H", "home", "2026-01-01"), _row("X", "other", "2026-01-02")]
         for schedule in _schedules():
             final, _ = _run_interleaved(rows, schedule, _patch_req("X", icon="home"), _post_req())
             assert _homes(final), f"no Home left under schedule {schedule}"
 
+    def test_with_index_promote_racing_a_new_home_post_ends_with_one_home(self):
+        rows = [_row("H", "home", "2026-01-01"), _row("X", "other", "2026-01-02")]
+        for schedule in _schedules():
+            final, results = _run_interleaved(rows, schedule, _patch_req("X", icon="home"), _post_req(), unique=True)
+            assert len(_homes(final)) == 1, f"expected exactly one Home under {schedule}"
+            _assert_ok_or_409(results, schedule)
+
+    def test_two_first_home_posts_without_index_can_duplicate(self):
+        # The gap migration 485 closes: two devices saving a rider's FIRST
+        # Home at once both insert.
+        saw_dup = False
+        for schedule in _schedules():
+            final, _ = _run_interleaved([], schedule, _post_req(), _post_req(name="My house"))
+            saw_dup = saw_dup or len(_homes(final)) == 2
+        assert saw_dup
+
+    def test_with_index_two_first_home_posts_end_with_one_home_and_a_409(self):
+        saw_409 = False
+        for schedule in _schedules():
+            final, results = _run_interleaved([], schedule, _post_req(), _post_req(name="My house"), unique=True)
+            assert len(_homes(final)) == 1, f"expected exactly one Home under {schedule}"
+            _assert_ok_or_409(results, schedule)
+            saw_409 = saw_409 or any(not isinstance(r, dict) for r in results)
+        assert saw_409
+
     def test_two_home_posts_over_existing_duplicates_never_lose_home(self):
+        # Pre-index state only: duplicate Homes cannot exist once 485 is applied.
         rows = [_row("H1", "home", "2026-01-01"), _row("H2", "home", "2026-01-02")]
         for schedule in _schedules():
             final, results = _run_interleaved(rows, schedule, _post_req(), _post_req(name="My house"))
@@ -458,6 +546,7 @@ class TestConcurrentSaves:
             assert all(isinstance(r, dict) for r in results), schedule
 
     def test_two_renames_of_duplicate_homes_delete_nothing(self):
+        # Pre-index state only (see above).
         rows = [_row("H1", "home", "2026-01-01"), _row("H2", "home", "2026-01-02")]
         for schedule in _schedules():
             final, _ = _run_interleaved(
@@ -465,22 +554,30 @@ class TestConcurrentSaves:
             )
             assert len(_homes(final)) == 2, schedule
 
-    def test_home_work_swap_on_two_devices_is_a_known_gap_reported_as_409(self):
-        # Known residual gap (change log §4): two devices swapping an existing
-        # Home and Work can lose one of the two rows — making A the Work
-        # replaces the old Work (B) before B is re-typed. If B's request
-        # already started, it now gets a retryable 409 instead of a bare 404;
-        # if it starts after A finished, B is genuinely gone (404). Either
-        # way a lost row must never come back as a silent 200. This pins
-        # today's behaviour until the partial unique index lands.
+    @pytest.mark.parametrize("unique", [False, True], ids=["no_index", "with_index_485"])
+    def test_home_work_swap_on_two_devices_is_a_known_gap_reported_as_409(self, unique):
+        # Known residual gap (change logs 2026-09-25 fix-saved-addresses §4
+        # and saved-address-unique-home-work §4): two devices swapping an
+        # existing Home and Work can lose rows — making A the Work replaces
+        # (deletes) the old Work B before B is re-typed, and vice versa. If
+        # the row vanishes mid-request the client gets a retryable 409; if
+        # B starts after A finished, B is genuinely gone (404). A lost row
+        # never comes back as a silent 200.
+        #
+        # Migration 485's unique index does NOT close this: nothing here
+        # writes a duplicate — the loss comes from the replace's delete, which
+        # the index cannot see. Closing it needs the read/delete/write to run
+        # in one DB transaction (an RPC), a follow-up. With the index the
+        # outcome is identical, and there is still never a duplicate.
         from fastapi import HTTPException
 
         rows = [_row("A", "home", "2026-01-01"), _row("B", "work", "2026-01-02")]
         saw_409 = False
         for schedule in _schedules():
             final, results = _run_interleaved(
-                rows, schedule, _patch_req("A", icon="work"), _patch_req("B", icon="home")
+                rows, schedule, _patch_req("A", icon="work"), _patch_req("B", icon="home"), unique=unique
             )
+            assert len(_homes(final)) <= 1 and len([x for x in final if x["icon"] == "work"]) <= 1, schedule
             for r in results:
                 if isinstance(r, HTTPException):
                     assert r.status_code in (404, 409), schedule
@@ -529,6 +626,8 @@ class TestDriverAppSavesAreNotSingletons:
         assert table.insert.call_count == 2
         table.update.assert_not_called()
         table.delete.assert_not_called()
+        # Stored untyped, so migration 485's one-Home index never sees them.
+        assert [c.args[0]["icon"] for c in table.insert.call_args_list] == ["location", "location"]
 
     def test_headerless_driver_falls_back_to_is_driver(self, client, table, as_user):
         as_user(DRIVER)
@@ -537,6 +636,7 @@ class TestDriverAppSavesAreNotSingletons:
         assert r.status_code == 200
         table.insert.assert_called_once()
         table.delete.assert_not_called()
+        assert table.insert.call_args.args[0]["icon"] == "location"
 
     def test_rider_app_still_replaces_even_for_a_dual_role_user(self, client, table, as_user):
         as_user(DRIVER)
@@ -554,3 +654,96 @@ class TestDriverAppSavesAreNotSingletons:
         r = client.patch("/api/v1/addresses/a1", json={"icon": "home"}, headers={"X-App-Platform": "driver"})
         assert r.status_code == 200
         table.delete.assert_not_called()
+        assert table.update.call_args.args[0] == {"icon": "location"}
+
+
+class TestDriverIconNormalisation:
+    """Non-rider-app "home"/"work" is stored as "location" (migration 485)."""
+
+    @pytest.mark.parametrize("icon", ["home", "work", "HOME"])
+    def test_driver_app_home_or_work_stored_as_location(self, client, table, icon):
+        r = client.post("/api/v1/addresses", json={**PAYLOAD, "icon": icon}, headers={"X-App-Platform": "driver"})
+        assert r.status_code == 200
+        assert table.insert.call_args.args[0]["icon"] == "location"
+        assert r.json()["icon"] == "location"
+
+    @pytest.mark.parametrize("icon", ["gym", "school", "other", "location"])
+    def test_driver_app_other_icons_unchanged(self, client, table, icon):
+        r = client.post(
+            "/api/v1/addresses", json={**PAYLOAD, "name": "Depot", "icon": icon}, headers={"X-App-Platform": "driver"}
+        )
+        assert r.status_code == 200
+        assert table.insert.call_args.args[0]["icon"] == icon
+
+    def test_rider_app_home_keeps_home_icon(self, client, table):
+        r = client.post("/api/v1/addresses", json=PAYLOAD, headers={"X-App-Platform": "rider"})
+        assert r.status_code == 200
+        assert table.insert.call_args.args[0]["icon"] == "home"
+
+    def test_driver_patch_without_icon_leaves_icon_alone(self, client, table):
+        row = {"id": "h1", "user_id": "user_1", "name": "Home", "icon": "home"}
+        table.responses["select"] = [row]
+        table.responses["update"] = [{**row, "name": "Base"}]
+        r = client.patch("/api/v1/addresses/h1", json={"name": "Base"}, headers={"X-App-Platform": "driver"})
+        assert r.status_code == 200
+        assert table.update.call_args.args[0] == {"name": "Base"}
+
+
+# -- Unique violation (23505) -> 409 ----------------------------------------
+
+_PG_23505 = (
+    "{'code': '23505', 'message': 'duplicate key value violates unique constraint "
+    "\"uq_saved_addresses_user_home_work\"', 'details': 'Key (user_id, icon)=(user_1, home) already exists.'}"
+)
+
+
+def _fail_op_with_23505(table, op):
+    """Make the given write op's execute() raise the PostgREST 23505 error."""
+    original = table.execute.side_effect
+    state = {"op": None}
+    op_side = getattr(table, op).side_effect
+
+    def _mark(*a, **k):
+        state["op"] = op
+        return op_side(*a, **k)
+
+    getattr(table, op).side_effect = _mark
+
+    def _execute():
+        if state["op"] == op:
+            state["op"] = None
+            raise Exception(_PG_23505)
+        return original()
+
+    table.execute.side_effect = _execute
+
+
+class TestUniqueViolationIs409:
+    def test_first_home_insert_losing_the_race_is_409(self, client, table, caplog):
+        table.responses["select"] = []  # no Home yet -> insert
+        _fail_op_with_23505(table, "insert")
+        with caplog.at_level("ERROR"):
+            r = client.post("/api/v1/addresses", json=PAYLOAD)
+        assert r.status_code == 409
+        assert "another device" in r.json()["detail"]
+        rec = [x for x in caplog.records if "unique violation" in x.getMessage()]
+        assert rec and rec[0].levelname == "ERROR"
+        msg = rec[0].getMessage()
+        assert "user_1" in msg and "uq_saved_addresses_user_home_work" in msg
+        # IDs only: no address text, no coordinates, no key values.
+        assert "1 Test Street" not in msg and "50.0" not in msg and "(user_1, home)" not in msg
+
+    def test_replace_update_losing_the_race_is_409(self, client, table):
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
+        _fail_op_with_23505(table, "update")
+        r = client.post("/api/v1/addresses", json=PAYLOAD)
+        assert r.status_code == 409
+        table.insert.assert_not_called()
+
+    def test_patch_promote_losing_the_race_is_409(self, client, table):
+        row = {"id": "a1", "user_id": "user_1", "name": "Cafe", "icon": "other"}
+        table.responses["select"] = [row]
+        _fail_op_with_23505(table, "update")
+        r = client.patch("/api/v1/addresses/a1", json={"icon": "home"})
+        assert r.status_code == 409
+        assert "another device" in r.json()["detail"]

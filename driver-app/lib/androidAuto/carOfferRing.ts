@@ -21,6 +21,14 @@
  *
  * Driven only from register.ts (syncCarOfferRing on every store change while a
  * head unit is connected), so nothing here runs on a phone-only session.
+ *
+ * ─── Car-only offer expiry ──────────────────────────────────────────────────
+ * The only offer countdown lives in the phone screen (app/driver/(tabs)/
+ * index.tsx), which calls the store's setCountdown(0) → declineRide(
+ * 'offer_expired'). On a car-only launch that screen never mounts, so an
+ * unanswered offer never expired and setIncomingRide (idle-only) then refused
+ * every later offer. This module arms the same setCountdown(0) at the offer
+ * deadline + 1.5 s, and only fires it when no phone UI is mounted.
  */
 import { Platform } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
@@ -50,6 +58,10 @@ export const OFFER_TONE_GAP_MS = 2_500;
 const FALLBACK_OFFER_MS = 15_000;
 const MIN_TONE_MS = 1_000;
 const MAX_TONE_MS = 60_000;
+/** Lets the server's own expiry (and the phone's countdown, if any) land first. */
+export const OFFER_EXPIRY_GRACE_MS = 1_500;
+/** Re-check interval while an accept is in flight at the deadline. */
+const EXPIRY_HOLD_RETRY_MS = 2_000;
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[car-offer-ring]', ...args);
@@ -73,6 +85,7 @@ let carRingHandled = false;
 // Bumped on every change of offer; async work checks it before acting.
 let ringGen = 0;
 let stopTimer: ReturnType<typeof setTimeout> | null = null;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOwner = false;
 let reportedThisSession = false;
 let phoneRingHandler: ((offer: CarOffer) => void) | null = null;
@@ -201,6 +214,39 @@ function clearStopTimer(): void {
   }
 }
 
+function clearExpiryTimer(): void {
+  if (expiryTimer !== null) {
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+  }
+}
+
+/**
+ * Expire an unanswered offer when no phone UI is mounted (see the header).
+ * Armed only while a car is connected; left armed across a disconnect, since
+ * it re-validates the store before acting and the stuck state it prevents is
+ * the same with or without the car.
+ */
+function armExpiry(rideId: string): void {
+  clearExpiryTimer();
+  if (!carConnected) return;
+  const fire = () => {
+    expiryTimer = null;
+    // The phone screen runs its own countdown; never race it.
+    if (phoneRingHandler) return;
+    const st = useDriverStore.getState();
+    if (st.rideState !== 'ride_offered' || st.incomingRide?.ride_id !== rideId) return;
+    if (st.acceptNetworkHold) {
+      // An accept is in flight; the store settles the offer when it returns.
+      expiryTimer = setTimeout(fire, EXPIRY_HOLD_RETRY_MS);
+      return;
+    }
+    log('car-only offer expired →', rideId);
+    st.setCountdown(0);
+  };
+  expiryTimer = setTimeout(fire, Math.max(0, ringDeadlineAt - Date.now()) + OFFER_EXPIRY_GRACE_MS);
+}
+
 function reportOnce(result: string): void {
   if (reportedThisSession) return;
   reportedThisSession = true;
@@ -281,12 +327,14 @@ export function syncCarOfferRing(s: CarOfferRingState): void {
     ringingRideId = id;
     ringDeadlineAt = Date.now() + offerDeadlineMs(s.incomingRide as CarOffer, s.countdownSeconds);
     toneFailed = false;
+    armExpiry(id);
     if (computeOwner()) startCarTone(s.incomingRide as CarOffer, ringGen);
     refreshOwner();
     return;
   }
   if (ringingRideId === null) return;
   resetRing();
+  clearExpiryTimer();
   ringingRideId = null;
   toneFailed = false;
   refreshOwner();

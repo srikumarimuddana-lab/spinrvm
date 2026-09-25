@@ -18,11 +18,13 @@ jest.mock('../../../modules/ride-offer-tone', () => ({
   stopRideOfferTone: () => mockStop(),
 }));
 
+const mockSetCountdown = jest.fn();
 const mockDriver: Record<string, unknown> = {
   rideState: 'idle',
   incomingRide: null,
   countdownSeconds: 0,
   acceptNetworkHold: false,
+  setCountdown: (n: number) => mockSetCountdown(n),
 };
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: { getState: () => mockDriver },
@@ -418,6 +420,73 @@ describe('hand back to the phone', () => {
     offerLive(offer('r1'));
     await flush();
     expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('car-only offer expiry', () => {
+  // countdownSeconds 10 → deadline 10 s, fires at 10 s + grace.
+  const FIRE_AT = 10_000 + 1_500;
+
+  it('expires an unanswered offer when no phone UI is mounted', () => {
+    ring.setCarConnected(true); // flag off: expiry is not tied to the tone
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(FIRE_AT - 1);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
+  });
+
+  it('never races the phone screen countdown', () => {
+    ring.registerPhoneRingHandler(jest.fn());
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+
+  it('does nothing once the offer was answered', () => {
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    offerEnds('navigating_to_pickup');
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+
+  it('re-validates the store at fire time (state changed with no sync)', () => {
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    mockDriver.rideState = 'idle';
+    mockDriver.incomingRide = null;
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+
+  it('is not armed without a car', () => {
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+
+  it('a replacing offer gets its own deadline; the old one never fires', () => {
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    jest.advanceTimersByTime(5_000);
+    offerLive(offer('r2'), 30);
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(30_000 + 1_500 - FIRE_AT);
+    expect(mockSetCountdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits out an accept in flight, then expires only if still unanswered', () => {
+    ring.setCarConnected(true);
+    offerLive(offer('r1'), 10);
+    mockDriver.acceptNetworkHold = true;
+    jest.advanceTimersByTime(FIRE_AT);
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+    mockDriver.acceptNetworkHold = false; // accept failed offline, offer still up
+    jest.advanceTimersByTime(2_000);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
   });
 });
 

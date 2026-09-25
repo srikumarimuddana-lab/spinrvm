@@ -78,6 +78,10 @@ async def get_public_settings():
         # MapViewDirections call site keeps calling Google Directions
         # directly from the device with the bundled key, unchanged.
         "directions_proxy_enabled": bool(settings.get("directions_proxy_enabled", False)),
+        # Rider "No drivers available right now" sheet (migration 470) --
+        # dark-launched, rider-app only. False = rider-app keeps today's
+        # jump-to-home + toast on a no_drivers_found auto-cancel.
+        "rider_no_drivers_sheet_enabled": bool(settings.get("rider_no_drivers_sheet_enabled", False)),
         # PostHog session replay (rider-app + driver-app). Default off.
         # Project API key is client-safe (phc_...), same class as
         # stripe_publishable_key. Apps fail closed if the flag is on but

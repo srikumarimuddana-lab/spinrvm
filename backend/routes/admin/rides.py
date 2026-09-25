@@ -1412,7 +1412,7 @@ async def admin_create_ride(
                 "quiet_mode": bool(ride_doc.get("quiet_mode")),
                 "countdown_seconds": _admin_timeout,
                 "offer_expires_at": _offer_expires_at,
-                # Migration 466, same as the auto-dispatch path.
+                # Migration 471, same as the auto-dispatch path.
                 "ring_mode": ride_offer_ring_mode(_admin_settings),
             }
             await manager.send_personal_message(

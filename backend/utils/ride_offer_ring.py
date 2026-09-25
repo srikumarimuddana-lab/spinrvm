@@ -1,4 +1,4 @@
-"""Which Android channel a ride-offer notification rings on (migration 466).
+"""Which Android channel a ride-offer notification rings on (migration 471).
 
 Stamped on every ``new_ride_assignment`` payload as ``ring_mode`` so the
 driver app's headless push handler knows without a settings fetch. The app

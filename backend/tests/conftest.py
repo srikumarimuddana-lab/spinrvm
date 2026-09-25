@@ -445,6 +445,28 @@ def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def _stub_already_offered_driver_ids(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
+    """Default the dispatch already-offered read to "nobody offered yet".
+
+    routes/rides/matching.py `_already_offered_driver_ids` adds one
+    ride_offers read to every dispatch attempt. Many dispatch tests fake
+    get_rows with ordered side_effect lists that predate it, so an extra read
+    would shift them. Its behaviour is covered by
+    test_dispatch_already_offered_filter.py, which is exempt from this stub.
+    """
+    if os.path.basename(getattr(request.module, "__file__", "")) == "test_dispatch_already_offered_filter.py":
+        yield
+        return
+    for name in ("backend.routes.rides.matching", "routes.rides.matching"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "_already_offered_driver_ids"):
+            monkeypatch.setattr(module, "_already_offered_driver_ids", AsyncMock(return_value=set()))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def block_external_network_in_payment_regressions(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:

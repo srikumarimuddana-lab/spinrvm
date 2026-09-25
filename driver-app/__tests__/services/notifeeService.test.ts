@@ -335,7 +335,7 @@ describe('notifeeService', () => {
     });
   });
 
-  // Migration 466: the backend stamps ring_mode; the native plugin creates
+  // Migration 471: the backend stamps ring_mode; the native plugin creates
   // ride-offers-alarm-v1 (USAGE_ALARM). Alarm only when both line up.
   describe('alarm-volume channel', () => {
     const ALARM = 'ride-offers-alarm-v1';

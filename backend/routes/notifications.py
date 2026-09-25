@@ -69,7 +69,7 @@ class DebugRideOfferRequest(BaseModel):
     dropoff_address: str = "Test dropoff — Stonebridge, Saskatoon"
     fare: float = 12.50
     countdown_seconds: int = 30
-    # Migration 466. Test one Android channel on one device without flipping
+    # Migration 471. Test one Android channel on one device without flipping
     # ride_offer_alarm_channel_enabled; omitted = whatever the flag says.
     ring_mode: Optional[Literal["alarm", "notification"]] = None
 

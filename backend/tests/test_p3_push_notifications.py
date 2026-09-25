@@ -1437,7 +1437,7 @@ class TestDebugRideOffer:
         assert "dropoff_address" in data
 
     async def test_ring_mode_follows_alarm_flag(self):
-        """Migration 466: the debug offer carries the same ring_mode as a live
+        """Migration 471: the debug offer carries the same ring_mode as a live
         offer — notification by default, alarm when the flag is on."""
         user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token-1234567890"}
 

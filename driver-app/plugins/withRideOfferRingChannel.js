@@ -13,7 +13,7 @@ const path = require('path');
 //    notification stream and cannot set AudioAttributes, so this has to be
 //    native. notifeeService.ts posts to it only when the offer carries
 //    ring_mode=alarm (settings flag ride_offer_alarm_channel_enabled,
-//    migration 466) AND this channel exists and is not blocked; otherwise it
+//    migration 471) AND this channel exists and is not blocked; otherwise it
 //    posts on ride-offers-v3 as before. JS never creates this channel.
 //    Unverified on hardware when written: the v4 ringtone attempt below hid
 //    the minimised offer, so this needs a device test (debug-ride-offer with

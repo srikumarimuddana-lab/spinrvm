@@ -21,7 +21,7 @@ Notifee's `createChannel` always builds the channel's `AudioAttributes` with `US
 
 ## 3. Fix / remediation
 
-- Migration 466 adds `settings.ride_offer_alarm_channel_enabled` (default **false**), writable through `PUT /api/admin/settings`.
+- Migration 471 adds `settings.ride_offer_alarm_channel_enabled` (default **false**), writable through `PUT /api/admin/settings`.
 - Every `new_ride_assignment` payload carries `ring_mode`: `"alarm"` when the flag is exactly true, else `"notification"` (`utils/ride_offer_ring.py`). Stamped in auto-dispatch (`matching.py`, shared by the WS message and the data-only FCM push), admin direct-assign, and `POST /notifications/debug-ride-offer`. The debug endpoint also takes an explicit `ring_mode` so one device can be tested without flipping the flag.
 - The driver-app config plugin creates `ride-offers-alarm-v1` natively in `Application.onCreate` (`USAGE_ALARM`, HIGH importance, `ride_offer` sound, same vibration/lights/lockscreen settings as v3). It still deletes v4.
 - `notifeeService` posts a loud offer on `ride-offers-alarm-v1` only when the last `ring_mode` seen is `"alarm"` **and** `notifee.getChannel` finds the channel unblocked. Missing, blocked or a lookup error falls back to `ride-offers-v3`. In-app (silent) and muted posts keep the silent channel. The last `ring_mode` is remembered in memory and in AsyncStorage (`spinr_ride_offer_ring_mode`), because the reclaim re-post (app backgrounded mid-offer) is built from app state that does not carry it — including after the app was opened from a killed-state offer, which starts a new JS context.
@@ -56,7 +56,7 @@ Alternative considered: a native foreground service playing the tone with `Media
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/466_ride_offer_alarm_channel_flag.sql` | New default-false column | Flag without redeploy |
+| `backend/migrations/471_ride_offer_alarm_channel_flag.sql` | New default-false column | Flag without redeploy |
 | `backend/routes/admin/settings.py` | `ride_offer_alarm_channel_enabled` on `SettingsUpdateRequest` | Settable via admin API |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Column added to snapshot | Drift guard |
 | `backend/utils/ride_offer_ring.py` | `ride_offer_ring_mode(settings)` | One definition of the rule |

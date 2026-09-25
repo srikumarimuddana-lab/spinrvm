@@ -113,10 +113,60 @@ _POST_ACCEPT_STATUSES = (
 )
 
 
+# On-demand "no driver found" search window: settings.ride_search_timeout_seconds
+# (migration 468). 300 s is the historical hard-coded value and the fallback when
+# the setting is missing or unreadable; the clamp mirrors the column's CHECK.
+# utils/stuck_ride_sweeper.py reads the same setting with the same default and
+# clamp, so the durable backstop cancels at the same time as ride_search_timeout.
+# Scheduled rides do not use it — they keep their fixed 300 s grace after pickup.
+_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS = 300
+_MIN_RIDE_SEARCH_TIMEOUT_SECONDS = 90
+# Max 300: the offer-skip key lasts 300 s and ride_offers is UNIQUE(ride_id, driver_id) (migration 100).
+_MAX_RIDE_SEARCH_TIMEOUT_SECONDS = 300
+_NO_DRIVER_RETRY_SECONDS = 10
+
 # Cap the no-driver re-dispatch chain. At 10s/attempt this is ~5 min, matching
 # the stuck-ride sweeper's cancel window — defense-in-depth so a sweeper failure
-# can't leave a ride re-dispatching (and re-querying drivers) forever.
+# can't leave a ride re-dispatching (and re-querying drivers) forever. This is
+# the cap at the default 300 s window; _dispatch_retry derives the live cap from
+# the configured window via _max_dispatch_attempts().
 _MAX_DISPATCH_ATTEMPTS = 30
+
+
+async def _ride_search_timeout_seconds() -> int:
+    """The configured on-demand search window in seconds, clamped to 90..300.
+
+    Missing setting (column not migrated yet) → 300, silently. A read error or
+    a non-integer value → 300, logged at error level. Never raises: a settings
+    problem must not stop a ride from being cancelled.
+    """
+    try:
+        settings = await _deps.get_app_settings()
+        raw = settings.get("ride_search_timeout_seconds")
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"[DISPATCH] could not read ride_search_timeout_seconds, using {_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS}s: {e}"
+        )
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    if raw is None:
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    try:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            raise TypeError(f"unsupported type {type(raw).__name__}")
+        seconds = int(raw)
+    except (TypeError, ValueError, OverflowError) as e:
+        logger.error(
+            f"[DISPATCH] invalid ride_search_timeout_seconds={raw!r}, "
+            f"using {_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS}s: {e}"
+        )
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    return max(_MIN_RIDE_SEARCH_TIMEOUT_SECONDS, min(_MAX_RIDE_SEARCH_TIMEOUT_SECONDS, seconds))
+
+
+def _max_dispatch_attempts(timeout_seconds: int) -> int:
+    """No-driver retry cap for a search window: ceil(window / 10 s). 300 s → 30."""
+    return -(-timeout_seconds // _NO_DRIVER_RETRY_SECONDS)
+
 
 # Escalating re-arm delays for dispatch ERRORS (DB blip mid-attempt): back off
 # 10s → 30s → 60s so a struggling dependency isn't hammered at a fixed cadence.
@@ -152,7 +202,7 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         if deadline:
             if datetime.now(timezone.utc) >= deadline:
                 return
-        elif attempt > _MAX_DISPATCH_ATTEMPTS:
+        elif attempt > _max_dispatch_attempts(await _ride_search_timeout_seconds()):
             return
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
@@ -210,6 +260,31 @@ def _exclude_rider_owned_candidates(ride: dict, candidates: list[dict]) -> list[
             len(kept),
         )
     return kept
+
+
+# A ride accumulates at most max_simultaneous_offers (<= 10) rows per dispatch
+# attempt, so this is far above any real count and only bounds the read.
+_OFFERED_DRIVER_ROW_CAP = 1000
+
+
+async def _already_offered_driver_ids(ride_id: str) -> set:
+    """Drivers holding any ride_offers row for this ride, whatever its status.
+
+    ride_offers is UNIQUE (ride_id, driver_id) (migration 100), so a ride can
+    never be offered to the same driver twice. The Redis offer-skip key keeps
+    those drivers out of the pool, but it lasts 300 s and fails open when Redis
+    is down. A driver who gets back in then makes the PostgREST claim path's
+    batch ride_offers insert fail, which releases every driver claimed in that
+    round and raises, on every retry. This read is the durable filter; it uses
+    the ride_offers(ride_id) index.
+    """
+    rows = await _deps.db_supabase.get_rows(
+        "ride_offers",
+        {"ride_id": ride_id},
+        columns="driver_id",
+        limit=_OFFERED_DRIVER_ROW_CAP,
+    )
+    return {r["driver_id"] for r in rows or [] if r.get("driver_id")}
 
 
 # Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
@@ -423,6 +498,50 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         ) = await _shared.dispatch.resolve_matching_config(
             ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
         )
+
+        # ── Wider second pass (migration 469, default off) ─────────────────
+        # Once a ride has been searching for dispatch_expanded_radius_after_seconds,
+        # search min(radius × multiplier, max_km) — never less than the normal
+        # radius. Rebinding `search_radius` here means the primary geo box, the
+        # candidate read, filter_and_rank_drivers and the vehicle cascade below
+        # all use the same value, so the box and the haversine gate cannot
+        # disagree. Flag off → nothing is read or changed.
+        #
+        # "Searching since" is ride_requested_at: stamped at booking, and reset to
+        # the flip time when a scheduled ride enters searching (utils/scheduled_rides.py,
+        # features.py). It is the same clock the stuck-ride sweeper cancels on.
+        # Not `attempt`: offer-timeout / decline re-dispatches restart it at 0.
+        if app_settings.get("dispatch_expanded_radius_enabled") is True:
+            _searching_since = parse_iso_utc(ride.get("ride_requested_at"))
+            try:
+                _exp_after_s = int(app_settings.get("dispatch_expanded_radius_after_seconds", 45))
+                _exp_mult = float(app_settings.get("dispatch_expanded_radius_multiplier", 1.5))
+                _exp_max_km = float(app_settings.get("dispatch_expanded_radius_max_km", 20))
+            except (TypeError, ValueError):
+                # DB CHECKs (migration 469) should make this unreachable; if it
+                # happens, dispatch on the normal radius rather than fail the attempt.
+                logger.opt(exception=True).error(
+                    "[DISPATCH] invalid dispatch_expanded_radius_* settings for ride_id={} — using normal radius",
+                    ride_id,
+                )
+            else:
+                if _searching_since is None:
+                    logger.warning(
+                        "[DISPATCH] ride_id={} has missing/unparseable ride_requested_at — expanded radius not applied",
+                        ride_id,
+                    )
+                elif (datetime.now(timezone.utc) - _searching_since).total_seconds() >= _exp_after_s:
+                    _normal_radius = search_radius
+                    _expanded = max(_normal_radius, min(_normal_radius * _exp_mult, _exp_max_km))
+                    if _expanded > _normal_radius:
+                        search_radius = _expanded
+                        logger.info(
+                            "[DISPATCH] expanded radius ride_id={} normal_km={} effective_km={}",
+                            ride_id,
+                            _normal_radius,
+                            search_radius,
+                        )
+                        _metric_inc("spinr_dispatch_radius_expanded_total")
 
         # Which geo provider actually serves the candidate reads below. Same
         # resolution the provider framework does internally (area override beats
@@ -678,6 +797,22 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 logger.info(
                     f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}"
                 )
+
+            # Drivers already offered this ride, from the DB — covers an expired
+            # or unreadable Redis skip key. See _already_offered_driver_ids. A
+            # failed read is not skipped: continuing without it could admit an
+            # already-offered driver and fail the batch insert, so it raises
+            # into match_driver_to_ride's retry shell (10/30/60 s backoff).
+            _offered_ids: set = await _already_offered_driver_ids(ride_id)
+            if _offered_ids:
+                _before_offered = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d["id"] not in _offered_ids]
+                if len(all_drivers) != _before_offered:
+                    logger.info(
+                        "[DISPATCH] skipped {} driver(s) already offered ride {} (DB)",
+                        _before_offered - len(all_drivers),
+                        ride_id,
+                    )
 
             # Subscription guard: if the ride's service area requires a Spinr Pass,
             # filter out candidates without an active subscription.  One batch IN
@@ -935,6 +1070,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 logger.warning(
                                     "[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc
                                 )
+                        # Same durable already-offered filter as the primary pool.
+                        if _offered_ids:
+                            _casc_pool = [d for d in _casc_pool if d["id"] not in _offered_ids]
                         # Fix 2: apply subscription filter to cascade pool when the service area
                         # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                         if _sub_required and _casc_pool:
@@ -1589,7 +1727,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     "scheduled_time": ride.get("scheduled_time"),
                     "countdown_seconds": offer_timeout,
                     "offer_expires_at": _offer_expires_at,
-                    # Migration 466: Android channel for the minimised offer.
+                    # Migration 471: Android channel for the minimised offer.
                     "ring_mode": ride_offer_ring_mode(app_settings),
                     "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
                     "incentives": _incentives if _incentives else None,
@@ -2178,16 +2316,23 @@ async def _batch_offer_timeout_handler(
         logger.opt(exception=True).error(f"[DISPATCH] Batch timeout handler error for ride {ride_id}: {e}")
 
 
-async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
+async def ride_search_timeout(r_id: str, timeout_seconds: Optional[int] = _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS):
     """Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.
 
-    Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
-    message to the rider's channel and fires a push notification so the rider
-    is alerted even if the app is backgrounded.
+    ``timeout_seconds=None`` means "use the configured on-demand window"
+    (``settings.ride_search_timeout_seconds``, default 300 s), read here in the
+    spawned task so the booking request never waits on it. booking.py passes
+    None for on-demand rides only. Scheduled callers (utils/scheduled_rides.py,
+    and booking.py for a scheduled ride dispatched at once) keep the fixed 300 s
+    default, and a scheduled ride's grace after pickup is 300 s even when None
+    is passed — the setting never changes scheduled-ride deadlines.
+
+    Publishes a ``ride_cancelled`` WS message to the rider's channel and fires
+    a push notification so the rider is alerted even if the app is backgrounded.
 
     Durable backstop: this is an in-process asyncio timer, so a pod
     restart/deploy drops it. ``utils.stuck_ride_sweeper`` is the restart-safe
-    equivalent — it cancels rides stuck in ``searching`` past the same 5-minute
+    equivalent — it cancels rides stuck in ``searching`` past the same configured
     threshold with the identical payload (``no_drivers_found`` attribution,
     ``ride_cancelled`` WS, push, driver release) via an atomic replay-safe DB
     claim. So a lost timer here still cancels within ~one 60s sweep of the
@@ -2196,10 +2341,13 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     Extracted from ``create_ride`` so it can be unit-tested directly — see
     backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
     """
+    scheduled_grace = _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    if timeout_seconds is None:
+        timeout_seconds = await _ride_search_timeout_seconds()
     await asyncio.sleep(timeout_seconds)
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
-        deadline = scheduled_search_deadline(current_ride or {}, timeout_seconds)
+        deadline = scheduled_search_deadline(current_ride or {}, scheduled_grace)
         if deadline and current_ride.get("status") == RideStatus.SEARCHING:
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining > 0:
@@ -2335,6 +2483,10 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     "type": "ride_cancelled",
                     "ride_id": r_id,
                     "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
+                    # Machine-readable twin of the DB attribution above: the
+                    # rider app keys its "No drivers available" sheet on it
+                    # (``reason`` is display text here, not a code).
+                    "cancellation_type": "no_drivers_found",
                 },
                 f"rider_{current_ride['rider_id']}",
             )
@@ -2343,6 +2495,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 RideStatus.CANCELLED,
                 rider_id=current_ride["rider_id"],
                 reason="no_drivers_found",
+                cancellation_type="no_drivers_found",
                 is_auto=True,
             )
             try:
@@ -2360,7 +2513,12 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 current_ride["rider_id"],
                 "Ride Cancelled ❌",
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
+                {
+                    "type": "ride_cancelled",
+                    "ride_id": r_id,
+                    "is_auto": "true",
+                    "cancellation_type": "no_drivers_found",
+                },
                 target_app="rider",
             )
             if current_ride.get("guest_booking"):

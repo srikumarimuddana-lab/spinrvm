@@ -1,4 +1,4 @@
-"""utils/ride_offer_ring.py — ring_mode stamped on ride-offer payloads (migration 466)."""
+"""utils/ride_offer_ring.py — ring_mode stamped on ride-offer payloads (migration 471)."""
 
 import pytest
 

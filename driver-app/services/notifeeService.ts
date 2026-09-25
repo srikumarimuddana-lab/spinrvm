@@ -63,7 +63,7 @@ const RIDE_OFFER_RING_CHANNEL_ID = 'ride-offers-v4';
 // audio usage. Silent/vibrate mode does not mute the alarm stream, and DND
 // lets alarm sound through by default (whether the card itself shows under
 // DND still needs DND access, which this app does not ask for). Posted to only when the offer says
-// ring_mode=alarm (settings flag, migration 466) AND the channel exists and is
+// ring_mode=alarm (settings flag, migration 471) AND the channel exists and is
 // not blocked; otherwise ride-offers-v3. JS never creates it: a JS create would
 // lock in notification-stream audio on binaries without the plugin.
 const RIDE_OFFER_ALARM_CHANNEL_ID = 'ride-offers-alarm-v1';
@@ -105,7 +105,7 @@ export interface RideOfferDisplayData {
     // Signed, short-lived URL to the branded fare-banner image. When present,
     // the Android card expands to this rich BigPicture instead of the text card.
     offer_card_url?: string;
-    // 'alarm' | 'notification' from the backend (migration 466). Android only.
+    // 'alarm' | 'notification' from the backend (migration 471). Android only.
     ring_mode?: string;
 }
 

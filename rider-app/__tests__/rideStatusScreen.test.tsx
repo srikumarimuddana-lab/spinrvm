@@ -30,6 +30,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text, TextInput, Image, BackHandler } from 'react-native';
 
 import { useRideStore } from '../store/rideStore';
+import { useNoDriversStore } from '../store/noDriversStore';
 import RideStatusScreen from '../app/ride-status';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -447,4 +448,32 @@ it('the hardware back button also triggers handleBackPress', async () => {
   expect(handler).toBeDefined();
   act(() => { handler(); });
   expect(mockBack).toHaveBeenCalled();
+});
+
+describe('no-drivers auto-cancel learned from the poll', () => {
+  const cancelled = {
+    id: 'ride-1', status: 'cancelled', cancellation_type: 'no_drivers_found', pickup_otp: '1234',
+    pickup_address: '100 Queen St', pickup_lat: 52.13, pickup_lng: -106.67,
+    dropoff_address: '200 King St', dropoff_lat: 52.12, dropoff_lng: -106.65,
+  };
+
+  it('raises the sheet and goes home when the switch is on', async () => {
+    useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null });
+    resetStore({ currentRide: cancelled });
+    await renderScreen();
+
+    expect(useNoDriversStore.getState().prompt?.rideId).toBe('ride-1');
+    expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('does nothing new when the switch is off', async () => {
+    useNoDriversStore.setState({ enabled: false, prompt: null, _shownRideId: null });
+    resetStore({ currentRide: cancelled });
+    await renderScreen();
+
+    expect(useNoDriversStore.getState().prompt).toBeNull();
+    expect(mockClearRide).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
 });

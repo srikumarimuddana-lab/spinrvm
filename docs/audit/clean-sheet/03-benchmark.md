@@ -312,6 +312,7 @@ lacks or has only partially built. Each is a §7.1-format finding card.
 - Verification to close: a rider can add/remove a stop mid-trip in a manual test on both platforms.
 
 ### BENCH-004 — Driver instant cash-out exists in the backend but has no driver-app UI
+- **Superseded 2026-09-25: owner decision weekly-only, no instant payouts.** The instant endpoints now return 410 (`docs/change-log/2026-09-25-remove-instant-payouts.md`).
 - Hierarchy: L2 Driver Earnings & Payouts › L3 Batch cash-out › L4 S-earn-05 › L5 a driver wants same-day access to earnings
 - Severity: MEDIUM-HIGH   Priority score: S×B×L = high × high × medium (driver-retention-relevant; Uber/Lyft treat Instant Pay as a headline driver-facing benefit)
 - Status: VERIFIED (this lane, direct code read)   Existing item: new — not previously filed as its own finding; `strategy.md` U5 notes the fee mechanics but not the missing UI

@@ -323,6 +323,14 @@ jest.mock('../../components/dashboard', () => {
 });
 
 import { useDriverStore as mockedUseDriverStore } from '../../store/driverStore';
+// C136 T2 banner has its own test (components/DestinationModeBanner.test.tsx);
+// stub it here so its GET /drivers/destination doesn't consume this file's api mock.
+jest.mock('../../components/DestinationModeBanner', () => ({
+  DestinationModeBanner: () => {
+    const { Text: RNText } = require('react-native');
+    return <RNText accessibilityLabel="destination-mode-banner">DestinationModeBanner</RNText>;
+  },
+}));
 import { RideOfferPanel as MockRideOfferPanel } from '../../components/panels/RideOfferPanel';
 import { MapControls as MockMapControls } from '../../components/dashboard';
 import { clearLiveRoute as mockClearLiveRoute, publishLiveRoute as mockPublishLiveRoute } from '../../hooks/liveRouteShared';

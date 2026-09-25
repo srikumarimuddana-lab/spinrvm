@@ -358,7 +358,9 @@
     "autoNavigate": "Auto-Start Navigation",
     "autoNavigateDesc": "Open your maps app when you accept a ride and when the trip starts",
     "destinationModeTitle": "Destination Mode",
-    "destinationModeDesc": "Set a heading-home destination"
+    "destinationModeDesc": "Set a heading-home destination",
+    "destinationModeOn": "On",
+    "destinationModeOff": "Off"
   },
   "destinationMode": {
     "title": "Destination Mode",
@@ -387,7 +389,18 @@
     "clearedTitle": "Destination Cleared",
     "clearedMsg": "Destination mode has been turned off.",
     "clearFailedTitle": "Clear Failed",
-    "clearFailedMsg": "Could not clear your destination. Please try again."
+    "clearFailedMsg": "Could not clear your destination. Please try again.",
+    "bannerTitle": "Heading home",
+    "bannerOnlyToward": "Only rides toward {{area}}",
+    "bannerEndsIn": "ends in {{time}}",
+    "bannerFallbackArea": "your destination",
+    "durationHoursMinutes": "{{h}}h {{m}}m",
+    "durationMinutes": "{{m}}m",
+    "bannerTurnOff": "Turn off",
+    "bannerTurnOffA11y": "Turn off destination mode",
+    "bannerA11y": "Destination mode is on. You only get rides toward {{area}}.",
+    "bannerTurnOffFailedTitle": "Couldn't turn off",
+    "bannerTurnOffFailedMsg": "Destination mode is still on. Check your connection and try again."
   },
   "payout": {
     "title": "Payout",

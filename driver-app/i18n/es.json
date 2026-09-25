@@ -295,7 +295,9 @@
     "autoNavigate": "Iniciar navegación automáticamente",
     "autoNavigateDesc": "Abrir tu app de mapas al aceptar un viaje y al iniciar el trayecto",
     "destinationModeTitle": "Modo Destino",
-    "destinationModeDesc": "Establece un destino de fin de turno"
+    "destinationModeDesc": "Establece un destino de fin de turno",
+    "destinationModeOn": "Activado",
+    "destinationModeOff": "Desactivado"
   },
   "destinationMode": {
     "title": "Modo Destino",
@@ -324,7 +326,18 @@
     "clearedTitle": "Destino borrado",
     "clearedMsg": "El modo destino ha sido desactivado.",
     "clearFailedTitle": "Error al borrar",
-    "clearFailedMsg": "No se pudo borrar tu destino. Inténtelo de nuevo."
+    "clearFailedMsg": "No se pudo borrar tu destino. Inténtelo de nuevo.",
+    "bannerTitle": "Rumbo a casa",
+    "bannerOnlyToward": "Solo viajes hacia {{area}}",
+    "bannerEndsIn": "termina en {{time}}",
+    "bannerFallbackArea": "tu destino",
+    "durationHoursMinutes": "{{h}} h {{m}} min",
+    "durationMinutes": "{{m}} min",
+    "bannerTurnOff": "Desactivar",
+    "bannerTurnOffA11y": "Desactivar el modo destino",
+    "bannerA11y": "El modo destino está activado. Solo recibes viajes hacia {{area}}.",
+    "bannerTurnOffFailedTitle": "No se pudo desactivar",
+    "bannerTurnOffFailedMsg": "El modo destino sigue activado. Revisa tu conexión e inténtalo de nuevo."
   },
   "errors": {
     "networkError": "Error de red. Verifica tu conexión.",

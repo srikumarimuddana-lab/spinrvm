@@ -74,7 +74,7 @@ DELETE FROM users WHERE id = ANY(v_user_ids);
 | `stats_since` (UTC) | Phones targeted | Mode |
 |---|---|---|
 | 2026-08-14 20:13:03 | `phone ending 9175` | real (`p_dry_run := false`) |
-| 2026-08-14 20:38:25 | `phone ending 9097`, `+13065203307`, `phone ending 3304` | real (`p_dry_run := false`) |
+| 2026-08-14 20:38:25 | `phone ending 9097`, `phone ending 3307`, `phone ending 3304` | real (`p_dry_run := false`) |
 | 2026-08-14 20:08:24 | `phone ending 9175` | dry run only |
 
 Both real executions fall squarely inside the 2026-08-13 → 2026-08-16 gap window.

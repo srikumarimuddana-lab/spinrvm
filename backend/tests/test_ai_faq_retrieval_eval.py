@@ -7,9 +7,11 @@ right FAQ is not in the top 5 the user gets "I couldn't find that" — or an
 answer built from an unrelated FAQ — for a question the help centre does
 answer. That is the failure this file tracks.
 
-Corpus: data/faq_corpus_snapshot.json is a read-only snapshot of the 60
-active production ``faqs`` rows taken 2026-09-25 (ids replaced with readable
-slugs). Production runs with ai_faq_semantic_enabled=false and no stored
+Corpus: data/faq_corpus_snapshot.json mirrors the 68 active production
+``faqs`` rows as of 2026-09-25 (ids replaced with readable slugs): the original
+60, plus 8 payment/payout/age FAQs added and 3 payout/cancellation answers
+rewritten that day (docs/change-log/2026-09-25-faq-content-payments-payouts.md).
+Keep it in step with production when FAQs change. Production runs with ai_faq_semantic_enabled=false and no stored
 embeddings, so lexical ranking IS the live path this measures.
 
 The thresholds are a RATCHET, not a target: they pin the measured baseline so
@@ -64,7 +66,7 @@ CASES = [
     ("rider", "is there a fee if I cancel", "cancellation fee", {"r_cancel"}),
     ("rider", "can I book a ride for tomorrow morning", "schedule ride later", {"r_schedule"}),
     ("rider", "I left my phone in the car", "lost item left phone", {"r_lost_item"}),
-    ("rider", "do you take cash", "cash payment methods", {"r_pay_methods"}),
+    ("rider", "do you take cash", "cash payment methods", {"r_pay_methods", "r_cash"}),
     ("rider", "can I pay with apple pay", "apple pay payment methods", {"r_pay_methods"}),
     ("rider", "how do I add money to my wallet", "wallet top up", {"r_wallet_topup"}),
     ("rider", "where do I enter a coupon", "promo code", {"r_promo"}),
@@ -121,6 +123,10 @@ CASES = [
     ("driver", "do I need a class 4 licence", "driver licence class", {"d_licence"}),
     ("driver", "the start trip button isn't working", "can't start ride", {"d_cant_start", "d_cant_start_accepted"}),
     ("driver", "how do I talk to someone at spinr", "contact support", {"d_contact"}),
+    # Out-of-corpus until the 2026-09-25 FAQ additions; phrasing predates them.
+    ("rider", "can I tip my driver", "tip driver", {"r_tip"}),
+    ("driver", "what is the minimum age to drive", "minimum age driver", {"d_min_age"}),
+    ("driver", "how do I set up direct deposit", "direct deposit bank account", {"d_bank"}),
 ]
 
 # Questions the help centre does NOT answer. The ideal tool result is the
@@ -130,18 +136,16 @@ OUT_OF_CORPUS = [
     ("rider", "can I bring my cat in a carrier"),
     ("rider", "can I smoke in the car"),
     ("rider", "how many passengers can I bring"),
-    ("rider", "can I tip my driver"),
     ("rider", "can I choose a female driver"),
-    ("driver", "what is the minimum age to drive"),
     ("driver", "can I drive in saskatoon and regina"),
-    ("driver", "how do I set up direct deposit"),
 ]
 
 # Measured 2026-09-25 against the snapshot above. Ratchet: raise, never lower.
-FLOOR_NATURAL_TOP1 = 23
-FLOOR_NATURAL_TOP5 = 32
-FLOOR_KEYWORD_TOP1 = 43
-FLOOR_KEYWORD_TOP5 = 48
+# (60-FAQ corpus, 48 cases: 23 / 32 / 43 / 48. After the FAQ additions, 51 cases.)
+FLOOR_NATURAL_TOP1 = 26
+FLOOR_NATURAL_TOP5 = 36
+FLOOR_KEYWORD_TOP1 = 45
+FLOOR_KEYWORD_TOP5 = 51
 
 
 def _score(query_index):
@@ -159,7 +163,7 @@ def _score(query_index):
 
 
 def test_corpus_snapshot_is_well_formed():
-    assert len(CORPUS) == 60
+    assert len(CORPUS) == 68
     assert len(_ID_BY_QUESTION) == len(CORPUS), "duplicate FAQ question text"
     ids = {r["id"] for r in CORPUS}
     for case in CASES:

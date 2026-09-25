@@ -7,16 +7,14 @@ A1c Sub-tier C coverage: backend/routes/disputes.py (73.88% -> target 90%+).
 dollars-to-cents HALF_UP conversion and idempotency key on the happy
 (partial_refund, Stripe succeeds) path only.
 
-NOTE: like `routes/promotions.py`'s `admin_router`, this module's
-`admin_router` (`admin_get_disputes` / `admin_resolve_dispute`) is never
-mounted in `backend/server.py` — the live `/api/admin/disputes` surface is
-`routes/admin/support.py` (confirmed: `grep -n "disputes" backend/server.py`
-shows only `disputes_router`, this module's user-facing `api_router`,
-included; `test_admin_support_routes.py` targets
-`routes/admin/support.py` explicitly, not this module). Both functions are
-exercised here as plain async functions (as `test_dispute_refund_cents.py`
-already does for `admin_resolve_dispute`), not via HTTP, for coverage
-purposes — flagged as a finding, not fixed.
+NOTE (corrected 2026-09-25, N23): this module's `admin_router` IS mounted,
+via `routes/admin/__init__.py` (require_module("disputes")). Its PUT
+/disputes/{id}/resolve used to be shadowed by a duplicate handler in
+`routes/admin/support.py`; that duplicate was removed, so this handler now
+serves the dashboard (see test_admin_support_routes.py's route-resolution
+test). Both functions are exercised here as plain async functions for
+coverage. Refund-path tests set admin_dispute_refunds_enabled=True; the
+flag-off behaviour is covered in test_admin_money_caps_routes.py.
 
 This file closes:
 - `admin_get_disputes`: empty list, enrichment with known user/ride,
@@ -171,6 +169,10 @@ class TestAdminResolveDispute:
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as mock_update,
             patch("backend.routes.disputes.log_admin_action", AsyncMock()),
             patch("backend.routes.disputes.send_push_notification", AsyncMock()),
+            patch(
+                "backend.routes.disputes.get_app_settings",
+                AsyncMock(return_value={"admin_dispute_refunds_enabled": True}),
+            ),
         ):
             result = await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
         assert result["refund"]["status"] == "manual_required"
@@ -189,7 +191,10 @@ class TestAdminResolveDispute:
                 "backend.routes.disputes.db_supabase.get_ride",
                 AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_1"}),
             ),
-            patch("backend.routes.disputes.get_app_settings", AsyncMock(return_value={})),
+            patch(
+                "backend.routes.disputes.get_app_settings",
+                AsyncMock(return_value={"admin_dispute_refunds_enabled": True}),
+            ),
         ):
             with pytest.raises(HTTPException) as exc:
                 await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
@@ -208,7 +213,7 @@ class TestAdminResolveDispute:
             ),
             patch(
                 "backend.routes.disputes.get_app_settings",
-                AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+                AsyncMock(return_value={"stripe_secret_key": "sk_test", "admin_dispute_refunds_enabled": True}),
             ),
             patch("stripe.Refund.create", MagicMock(side_effect=Exception("card issuer down"))),
             patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as mock_update,

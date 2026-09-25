@@ -3,9 +3,9 @@ credit/debit and dispute refunds BEFORE any money moves.
 
 Wallet endpoints go through HTTP; the audit_logs daily-sum read runs through the
 real get_rows path against the conftest ``mock_supabase_client``. The dispute
-handler is called directly, as test_dispute_refund_cents.py does (over HTTP,
-PUT /api/admin/disputes/{id}/resolve is served by routes/admin/support.py,
-which is registered first and moves no money).
+handler is called directly, as test_dispute_refund_cents.py does; the HTTP
+route-resolution test lives in test_admin_support_routes.py. Dispute refunds
+only move money when admin_dispute_refunds_enabled is on.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ _DISPUTE = {"id": "disp_1", "ride_id": "ride_1", "user_id": "user_1", "status": 
 _ADMIN = {"id": "admin_1", "role": "admin"}
 
 
-async def _resolve(refund_amount: str, *, cap, refund_create):
+async def _resolve(refund_amount: str, *, cap, refund_create, flag=True, resolution="partial_refund"):
     from backend.routes.disputes import ResolveDisputeRequest, admin_resolve_dispute
 
     async def fake_get_rows(table, filters=None, **kwargs):
@@ -121,7 +121,8 @@ async def _resolve(refund_amount: str, *, cap, refund_create):
         assert table == "audit_logs" and filters["actor_id"] == "admin_1"
         return list(TODAY_ROWS)
 
-    req = ResolveDisputeRequest(resolution="partial_refund", refund_amount=Decimal(refund_amount))
+    settings = {"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": flag}
+    req = ResolveDisputeRequest(resolution=resolution, refund_amount=Decimal(refund_amount))
     with (
         patch("backend.routes.disputes.db_supabase.get_rows", fake_get_rows),
         patch(
@@ -129,15 +130,15 @@ async def _resolve(refund_amount: str, *, cap, refund_create):
             AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_123"}),
         ),
         patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as update_one,
-        patch("backend.routes.disputes.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
-        patch("backend.routes.disputes.log_admin_action", AsyncMock()),
-        patch("backend.routes.disputes.send_push_notification", AsyncMock()),
+        patch("backend.routes.disputes.get_app_settings", AsyncMock(return_value=settings)),
+        patch("backend.routes.disputes.log_admin_action", AsyncMock()) as audit,
+        patch("backend.routes.disputes.send_push_notification", AsyncMock()) as push,
         patch(f"{CAPS_MOD}.log_admin_action", AsyncMock()),
         _cap_settings(admin_money_daily_cap_per_admin=cap),
         patch("stripe.Refund.create", refund_create),
     ):
         result = await admin_resolve_dispute(dispute_id="disp_1", req=req, current_admin=dict(_ADMIN))
-    return result, update_one
+    return result, update_one, audit, push
 
 
 @pytest.mark.anyio
@@ -150,9 +151,71 @@ async def test_dispute_refund_over_cap_is_403_and_no_stripe_call():
 
 
 @pytest.mark.anyio
-async def test_dispute_refund_under_cap_is_allowed():
+async def test_dispute_refund_flag_on_under_cap_calls_stripe():
     refund_create = MagicMock(return_value=MagicMock(status="succeeded", id="re_1"))
-    result, update_one = await _resolve("10.00", cap="100.00", refund_create=refund_create)
+    result, update_one, audit, push = await _resolve("10.00", cap="100.00", refund_create=refund_create)
     assert result["success"] is True
+    assert result["refund_issued"] is True
     refund_create.assert_called_once()
     update_one.assert_awaited_once()
+    assert audit.await_args.args[4]["refund_issued"] is True
+    assert "has been issued" in push.await_args.args[2]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("resolution", ["approved", "partial_refund"])
+async def test_dispute_refund_flag_off_records_resolution_without_refund(resolution):
+    refund_create = MagicMock()
+    # cap=1.00 would block a flag-on refund; flag off must not even reach the cap.
+    result, update_one, audit, push = await _resolve(
+        "10.00", cap="1.00", refund_create=refund_create, flag=False, resolution=resolution
+    )
+    refund_create.assert_not_called()
+    assert result["refund_issued"] is False
+    assert "no refund was issued" in result["message"].lower()
+    assert result["refund"] == {"status": "not_issued", "reason": "admin_dispute_refunds_disabled"}
+    update_one.assert_awaited_once()
+    assert update_one.await_args.args[2]["status"] == "resolved"
+    details = audit.await_args.args[4]
+    assert details["refund_issued"] is False
+    assert "has been issued" not in push.await_args.args[2]
+
+
+@pytest.mark.anyio
+async def test_dispute_flag_read_failure_is_503_and_no_refund():
+    from backend.routes.disputes import ResolveDisputeRequest, admin_resolve_dispute
+
+    refund_create = MagicMock()
+    with (
+        patch("backend.routes.disputes.db_supabase.get_rows", AsyncMock(return_value=[dict(_DISPUTE)])),
+        patch(
+            "backend.routes.disputes.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "ride_1", "rider_id": "user_1", "stripe_charge_id": "pi_123"}),
+        ),
+        patch("backend.routes.disputes.db_supabase.update_one", AsyncMock()) as update_one,
+        patch("backend.routes.disputes.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("stripe.Refund.create", refund_create),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await admin_resolve_dispute(
+                dispute_id="disp_1",
+                req=ResolveDisputeRequest(resolution="approved", refund_amount=Decimal("5")),
+                current_admin=dict(_ADMIN),
+            )
+    assert exc.value.status_code == 503
+    refund_create.assert_not_called()
+    update_one.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("flag", [True, False])
+async def test_dispute_rejected_is_identical_with_flag_on_or_off(flag):
+    refund_create = MagicMock()
+    result, update_one, audit, _ = await _resolve(
+        "10.00", cap="1.00", refund_create=refund_create, flag=flag, resolution="rejected"
+    )
+    refund_create.assert_not_called()
+    assert result["refund_issued"] is False and "message" not in result
+    assert result["refund"] is None
+    assert update_one.await_args.args[2]["status"] == "rejected"
+    assert audit.await_args.args[4]["refund_issued"] is False

@@ -422,6 +422,50 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
         )
 
+        # ── Wider second pass (migration 469, default off) ─────────────────
+        # Once a ride has been searching for dispatch_expanded_radius_after_seconds,
+        # search min(radius × multiplier, max_km) — never less than the normal
+        # radius. Rebinding `search_radius` here means the primary geo box, the
+        # candidate read, filter_and_rank_drivers and the vehicle cascade below
+        # all use the same value, so the box and the haversine gate cannot
+        # disagree. Flag off → nothing is read or changed.
+        #
+        # "Searching since" is ride_requested_at: stamped at booking, and reset to
+        # the flip time when a scheduled ride enters searching (utils/scheduled_rides.py,
+        # features.py). It is the same clock the stuck-ride sweeper cancels on.
+        # Not `attempt`: offer-timeout / decline re-dispatches restart it at 0.
+        if app_settings.get("dispatch_expanded_radius_enabled") is True:
+            _searching_since = parse_iso_utc(ride.get("ride_requested_at"))
+            try:
+                _exp_after_s = int(app_settings.get("dispatch_expanded_radius_after_seconds", 45))
+                _exp_mult = float(app_settings.get("dispatch_expanded_radius_multiplier", 1.5))
+                _exp_max_km = float(app_settings.get("dispatch_expanded_radius_max_km", 20))
+            except (TypeError, ValueError):
+                # DB CHECKs (migration 469) should make this unreachable; if it
+                # happens, dispatch on the normal radius rather than fail the attempt.
+                logger.opt(exception=True).error(
+                    "[DISPATCH] invalid dispatch_expanded_radius_* settings for ride_id={} — using normal radius",
+                    ride_id,
+                )
+            else:
+                if _searching_since is None:
+                    logger.warning(
+                        "[DISPATCH] ride_id={} has missing/unparseable ride_requested_at — expanded radius not applied",
+                        ride_id,
+                    )
+                elif (datetime.now(timezone.utc) - _searching_since).total_seconds() >= _exp_after_s:
+                    _normal_radius = search_radius
+                    _expanded = max(_normal_radius, min(_normal_radius * _exp_mult, _exp_max_km))
+                    if _expanded > _normal_radius:
+                        search_radius = _expanded
+                        logger.info(
+                            "[DISPATCH] expanded radius ride_id={} normal_km={} effective_km={}",
+                            ride_id,
+                            _normal_radius,
+                            search_radius,
+                        )
+                        _metric_inc("spinr_dispatch_radius_expanded_total")
+
         # Which geo provider actually serves the candidate reads below. Same
         # resolution the provider framework does internally (area override beats
         # global) — computed here only so the pool-size guard can see it.

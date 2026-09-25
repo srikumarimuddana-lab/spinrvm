@@ -66,8 +66,9 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "preauth_capture (5min)": 5 * 60 * 3,  # 15 min
     "referral_payout (5min)": 5 * 60 * 3,  # 15 min
     "orphaned_hold_reconciler (15m)": 15 * 60 * 3,  # 45 min
-    # 3h: real heartbeat cadence is the 1h inner poll (auto_payout.py
-    # `interval = 3600`), not the weekly Sunday batch window in the name.
+    # 3h: the loop polls hourly (auto_payout.py `interval = 3600`). The
+    # Sunday batch records a progress heartbeat per driver
+    # (run_weekly_auto_payout), so a long-but-healthy batch is not flagged.
     "auto_payout (1h, Sundays)": 3600 * 3,  # 3 h
     "support_sla_breach_sweep (5min)": 5 * 60 * 3,  # 15 min
     # Everything else.
@@ -98,9 +99,9 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     # in this change — see utils/t4a_annual_job.py); real work fires once a
     # year, but a crashed/hung loop should still surface promptly, so this
     # follows capacity_watchdog's pattern for a frequently-polling-but-
-    # rarely-acting loop rather than a literal 3x-of-a-year. NOT independently
-    # verified against a real annual batch run at production driver counts —
-    # see the change-impact log for this caveat.
+    # rarely-acting loop rather than a literal 3x-of-a-year. The annual batch
+    # records a progress heartbeat per driver (_run_issuance), so a long run
+    # is not flagged; a single driver's queries hanging >10 min still is.
     "t4a_annual_job (yearly Feb 28)": 10 * 60,  # 10 min
 }
 

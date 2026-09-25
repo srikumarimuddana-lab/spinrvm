@@ -138,6 +138,9 @@ async def _run_issuance(year: int) -> None:
 
     eligible: list[dict] = []
     for driver in drivers:
+        # Progress heartbeat so the 10-minute watchdog threshold does not flag
+        # the one long-but-healthy annual batch as stale (N17 review).
+        _record_heartbeat(_LOOP_NAME)
         try:
             earnings = await _driver_annual_earnings(driver["id"], year)
         except Exception:
@@ -150,6 +153,7 @@ async def _run_issuance(year: int) -> None:
 
     notified = 0
     for item in eligible:
+        _record_heartbeat(_LOOP_NAME)
         driver = item["driver"]
         earnings = item["earnings"]
         user_id = driver.get("user_id")

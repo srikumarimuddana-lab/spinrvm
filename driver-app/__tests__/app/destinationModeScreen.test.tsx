@@ -220,7 +220,11 @@ describe('DestinationModeScreen', () => {
       if (url.startsWith('/maps/places/details')) return Promise.resolve({ data: { lat: 52.12, lng: -106.66 } });
       return Promise.reject(new Error('unexpected url ' + url));
     });
-    mockApiPost.mockResolvedValue({ data: { destination_expires_at: '2026-09-25T20:00:00+00:00' } });
+    // Relative to now, not a fixed date: isDestinationActive() treats a past
+    // expiry as off, so a hardcoded timestamp turns this test red once it passes.
+    mockApiPost.mockResolvedValue({
+      data: { destination_expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() },
+    });
     const r = await renderScreen();
     const input = r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' });
     act(() => {

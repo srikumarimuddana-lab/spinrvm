@@ -2,38 +2,21 @@ const { withDangerousMod, withMainApplication } = require('@expo/config-plugins'
 const fs = require('fs');
 const path = require('path');
 
-// Creates the Android ride-offer channel natively, with its sound routed to the
-// RING volume stream (AudioAttributes.USAGE_NOTIFICATION_RINGTONE) instead of
-// the NOTIFICATION stream.
+// Removes the Android ride-offers-v4 channel created by an earlier revision of
+// this plugin.
 //
-// Why: while the app is open, the offer tone is the in-app MP3 loop
-// (hooks/useRideOfferSound.ts), which plays on the MEDIA stream. Once the app
-// is minimised or killed, expo-audio pauses that player and the OS notification
-// takes over the ring (services/notifeeService.ts). Notifee's createChannel
-// always builds the channel's AudioAttributes with USAGE_NOTIFICATION and has no
-// option to change it, so the minimised offer played at the phone's
-// "Notifications" volume. On many devices (Samsung in particular) that slider
-// sits well below media/ring, and drivers reported a loud offer in-app but a
-// barely audible one when minimised (vibration was fine — it ignores volume).
-// Ring volume is what an incoming phone call uses, which matches the
-// CATEGORY_CALL "incoming call" style this notification already uses.
+// That revision created the channel with AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+// so a minimised offer would play at ring volume. On device Android treats that
+// usage as a phone ringtone and does not show a shade or heads-up notification
+// (full-screen intent is not granted to this app). Drivers with the app open
+// still heard the in-app MP3; drivers with the app minimised got nothing.
+// Channel settings are immutable, so the bad channel has to be deleted, not
+// edited. notifeeService.ts posts on ride-offers-v3 and also deletes v4 from JS.
+// This native delete runs in Application.onCreate so a cold start, including
+// the headless FCM launch, drops v4 before any offer is posted.
 //
-// Why native, and in Application.onCreate: Android channel sound settings are
-// immutable once a channel exists, so ride-offers-v4 must be created with the
-// right AudioAttributes BEFORE anything in JS can touch that id. onCreate runs
-// before any JS, including the headless launch Firebase does for a data-only
-// offer push while the app is killed. notifeeService.ts only posts to v4 when
-// it finds the channel already present, and never creates v4 itself — so a
-// binary without this plugin (or where this code failed) keeps using the
-// Notifee-created ride-offers-v3 exactly as before, instead of JS locking v4 in
-// with the quiet notification stream forever.
-//
-// Must run after withRideOfferSound (which copies ride_offer.mp3 into
-// res/raw). The Kotlin side looks the resource up by name and skips channel
-// creation if it is missing, so a missing file degrades to v3, never to a
-// silent v4.
-//
-// Native change — ships in an EAS build, not an OTA update.
+// Native change — ships in an EAS build, not an OTA update. The JS delete in
+// notifeeService.ts covers a binary that still contains the old create code.
 
 const CHANNEL_ID = 'ride-offers-v4';
 const KOTLIN_CLASS = 'RideOfferRingChannel';
@@ -42,14 +25,8 @@ const CALL_MARKER = `${KOTLIN_CLASS}.ensure(this)`;
 function buildKotlinSource(packageName) {
     return `package ${packageName}
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.content.ContentResolver
 import android.content.Context
-import android.graphics.Color
-import android.media.AudioAttributes
-import android.net.Uri
 import android.os.Build
 import android.util.Log
 
@@ -62,42 +39,15 @@ object ${KOTLIN_CLASS} {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         try {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return
-            // Immutable once created; the driver's own per-channel changes
-            // (Settings -> Notifications) must survive every cold start.
-            if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-
-            val soundId = context.resources.getIdentifier("ride_offer", "raw", context.packageName)
-            if (soundId == 0) {
-                // Without the sound this channel would ring the default tone at
-                // best. Skip it: notifeeService.ts falls back to ride-offers-v3.
-                Log.e(TAG, "res/raw/ride_offer missing — ring-volume ride-offer channel NOT created")
-                return
+            // Immutable, and this usage hides the notification. Delete it so
+            // the Notifee v3 channel is the one offers post to.
+            if (manager.getNotificationChannel(CHANNEL_ID) != null) {
+                manager.deleteNotificationChannel(CHANNEL_ID)
             }
-            val soundUri = Uri.parse(
-                ContentResolver.SCHEME_ANDROID_RESOURCE + "://" + context.packageName + "/" + soundId
-            )
-            val audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-
-            // Mirrors the ride-offers-v3 settings in services/notifeeService.ts;
-            // the only intended difference is the RINGTONE audio usage.
-            val channel = NotificationChannel(CHANNEL_ID, "Ride Offers", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "New ride requests — rings at call volume like an incoming call"
-                setSound(soundUri, audioAttributes)
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 300, 500, 300, 500)
-                enableLights(true)
-                lightColor = Color.GREEN
-                setBypassDnd(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-            manager.createNotificationChannel(channel)
         } catch (e: Exception) {
-            // Never crash app start over this — notifeeService.ts falls back
-            // to ride-offers-v3 when this channel does not exist.
-            Log.e(TAG, "failed to create ring-volume ride-offer channel", e)
+            // Never crash app start over this — notifeeService.ts also deletes
+            // this channel and posts on ride-offers-v3.
+            Log.e(TAG, "failed to remove ring-volume ride-offer channel", e)
         }
     }
 }

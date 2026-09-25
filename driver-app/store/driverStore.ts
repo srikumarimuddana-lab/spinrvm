@@ -579,7 +579,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // silently disappeared with no feedback.
             const incoming = get().incomingRide;
             if (incoming) {
-                get().declineRide(incoming.ride_id).catch(console.log);
+                // 'offer_expired' tells the backend the driver didn't respond,
+                // so it can count a missed offer instead of a decline.
+                get().declineRide(incoming.ride_id, 'offer_expired').catch(console.log);
                 set({ error: 'Ride offer expired. You\'ll see the next one when it comes in.' });
             }
         }
@@ -698,8 +700,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // Optional reason (e.g. 'service_animal', reported via the
             // offer card's long-press flag). Omit the body entirely when
             // there's no reason — mirrors cancelRide below — so the default
-            // fast decline (single tap, auto-decline-on-timeout) keeps
-            // posting exactly the same request it always has.
+            // fast decline (single tap) keeps posting exactly the same
+            // request it always has. The countdown auto-decline passes
+            // 'offer_expired'.
             const trimmed = reason?.trim();
             if (trimmed) {
                 await api.post(`/drivers/rides/${rideId}/decline`, { reason: trimmed });

@@ -650,6 +650,25 @@ async def _after_accept_notify(ride_id: str, ride: dict | None, driver: dict) ->
         spawn(send_live_activity_update(ride, EVENT_START))
 
 
+async def _offer_expired_as_miss_enabled() -> bool:
+    """settings.offer_expired_decline_as_miss_enabled (migration 466), default off.
+
+    A settings read failure is logged and answered with 503 rather than
+    guessed: treating it as "off" would mark the offer declined and reset the
+    miss streak even when the flag is on. A 503 leaves the offer pending, so
+    the server-side expiry still decides it.
+    """
+    try:
+        from ...settings_loader import get_app_settings as _get_settings
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from settings_loader import get_app_settings as _get_settings  # type: ignore
+    try:
+        return bool((await _get_settings()).get("offer_expired_decline_as_miss_enabled"))
+    except Exception:
+        logger.error("decline_ride: settings read failed for an offer_expired decline — returning 503", exc_info=True)
+        raise HTTPException(status_code=503, detail="Settings temporarily unavailable") from None
+
+
 @router.post("/rides/{ride_id}/decline")
 async def decline_ride(
     ride_id: str,
@@ -662,8 +681,10 @@ async def decline_ride(
     # Optional decline reason (e.g. "service_animal", flagged from the offer
     # card's long-press option). Body-only — never a query param — so a
     # driver's flag can't ride along in a proxy/access log line. Absent for
-    # the default fast decline (single tap, auto-decline-on-timeout), which
-    # keeps posting no body at all, so this stays fully backward compatible.
+    # the default fast decline (single tap), which keeps posting no body at
+    # all, so this stays fully backward compatible. Driver-app builds from
+    # 2026-09-25 send "offer_expired" on the countdown auto-decline; older
+    # builds send no body for it.
     reason = None
     _raw_body: dict = {}
     if request is not None:
@@ -745,6 +766,34 @@ async def decline_ride(
     # degradation, insurance-period churn, and audit-log pollution.
     is_assigned = ride.get("driver_id") == driver["id"]
 
+    # Countdown auto-decline: the driver app posts reason "offer_expired" when
+    # the offer card's timer reaches 0 with no tap. That is a missed offer, not
+    # a decline. The decline path below resets the miss streak, which kept a
+    # foregrounded, unattended app from ever reaching auto_offline_miss_threshold.
+    # So leave this driver's offer pending: the server-side expiry (batch
+    # timeout handler, offer-expiry reaper, v2 resolve_driver_offer 'expire')
+    # processes it at expires_at, sets the skip key and re-dispatches. Legacy
+    # offers are then counted as a miss. A v2 offer counts as a miss only with a
+    # 'presented' delivery receipt (offer_expiry_counts_as_miss, migration 461),
+    # which the driver app does not send yet; for those the streak is kept, not
+    # reset and not incremented.
+    # The pending-row check is the same ownership guard as WS-18 below. With no
+    # pending row (already expired or resolved) this falls through unchanged.
+    expired_as_miss = reason == "offer_expired" and await _offer_expired_as_miss_enabled()
+    if expired_as_miss and not is_assigned:
+        pending_offer = await db_supabase.get_rows(
+            "ride_offers",
+            {"ride_id": ride_id, "driver_id": driver["id"], "status": "pending"},
+            columns="id",
+            limit=1,
+        )
+        if pending_offer:
+            logger.info(
+                f"[DECLINE] countdown auto-decline for ride {ride_id} driver {driver['id']} — "
+                "left pending for server expiry (counted as a missed offer)"
+            )
+            return {"success": True, "outcome": "left_to_expire", "already_resolved": False}
+
     # v2 offers are declined atomically (claim release, readiness, one
     # insurance transition). Legacy offers return None and fall through.
     if not is_assigned and is_v2_driver(driver):
@@ -801,12 +850,17 @@ async def decline_ride(
     # opened at claim/offer time in match_driver_to_ride. See the helper for why
     # this is not "record Period 1" and not silence either.
     await _deps.release_driver_and_close_period(driver["id"], reason="offer_declined", ride_id=ride_id)
-    await reset_miss_streak(driver["id"])
+    # A countdown auto-decline on an assigned ride still runs this path (it is
+    # what reverts the ride to searching), but it is not a response, so it must
+    # not wipe the miss streak.
+    if not expired_as_miss:
+        await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it. `reason`
     # is None for the ordinary fast decline (no UI to enter free text today —
-    # the only non-null value currently reachable is the fixed code
-    # "service_animal" from the offer card's long-press flag), so this never
+    # the non-null values the apps send are the fixed codes "service_animal"
+    # from the offer card's long-press flag and "offer_expired" from the
+    # countdown auto-decline when the flag above is off), so this never
     # carries rider/driver PII.
     try:
         import uuid as _uuid

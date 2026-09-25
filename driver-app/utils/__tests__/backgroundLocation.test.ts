@@ -15,6 +15,8 @@ jest.mock('expo-location', () => ({
   startLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
   hasStartedLocationUpdatesAsync: jest.fn(() => Promise.resolve(true)),
   stopLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
+  getForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
+  requestForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
   getBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: mockBgPermission })),
   requestBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
   getCurrentPositionAsync: jest.fn(() => Promise.resolve(null)),
@@ -720,6 +722,24 @@ describe('updateBackgroundLocationCadence', () => {
     mockHasStartedLocationUpdates.mockClear();
     mockHasStartedLocationUpdates.mockResolvedValue(true);
     mockBgPermission = 'granted';
+  });
+
+  it('refuses to go online without Allow all the time, even if a task is still registered', async () => {
+    const previous = mockBgPermission;
+    const request = Location.requestBackgroundPermissionsAsync as jest.Mock;
+    mockBgPermission = 'denied';
+    request.mockResolvedValue({ status: 'denied' });
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    try {
+      const { requireAlwaysLocationPermission } = require('../backgroundLocation');
+      await expect(startBackgroundLocation()).resolves.toBe(false);
+      await expect(requireAlwaysLocationPermission()).resolves.toBe(false);
+      expect(mockStartUpdates).not.toHaveBeenCalled();
+      expect(Location.stopLocationUpdatesAsync).toHaveBeenCalledWith('spinr-background-location');
+    } finally {
+      mockBgPermission = previous;
+      request.mockResolvedValue({ status: 'granted' });
+    }
   });
 
   it('starts from native location-service liveness, not task registration', async () => {

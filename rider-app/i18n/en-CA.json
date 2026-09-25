@@ -46,7 +46,12 @@
     "end_ride": "End Ride",
     "sos": "SOS",
     "driver_timeout": "Driver Unavailable",
-    "driver_timeout_msg": "The driver did not respond in time. Finding another driver\u2026"
+    "driver_timeout_msg": "The driver did not respond in time. Finding another driver\u2026",
+    "no_drivers_title": "No drivers available right now",
+    "no_drivers_msg": "We couldn\u2019t find a driver for this trip. Try again to see an updated price, or schedule it for later.",
+    "no_drivers_try_again": "Try again",
+    "no_drivers_schedule": "Schedule for later",
+    "no_drivers_dismiss": "Not now"
   },
   "rating": {
     "title": "How was your ride?",

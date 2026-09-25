@@ -35,6 +35,7 @@ try:
     from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from ...utils.money import dollars_to_cents, to_decimal
     from ...utils.rate_limiter import default_limiter as limiter
+    from ...utils.ride_offer_ring import ride_offer_ring_mode
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
@@ -62,6 +63,7 @@ except ImportError:
     from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import default_limiter as limiter
+    from utils.ride_offer_ring import ride_offer_ring_mode  # type: ignore
 
 from .drivers import (
     _DRIVER_SORT_COLUMNS,
@@ -1410,6 +1412,8 @@ async def admin_create_ride(
                 "quiet_mode": bool(ride_doc.get("quiet_mode")),
                 "countdown_seconds": _admin_timeout,
                 "offer_expires_at": _offer_expires_at,
+                # Migration 471, same as the auto-dispatch path.
+                "ring_mode": ride_offer_ring_mode(_admin_settings),
             }
             await manager.send_personal_message(
                 dispatch_payload,

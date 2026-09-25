@@ -208,6 +208,23 @@ describe('authStore.initialize — cold-start refresh-token restoration', () => 
     errorLog.mockRestore();
   });
 
+  it('exits recovery when refresh succeeds but /auth/me fails and the cached profile is used', async () => {
+    mockSecureStoreBacking.refresh_token = 'persisted-refresh';
+    useAuthStore.setState({ sessionRecoverable: true });
+    (appCache.get as jest.Mock).mockImplementation((key: string) =>
+      Promise.resolve(key === 'user' ? { id: 'u-1', profile_complete: true } : null));
+    mockPost.mockResolvedValueOnce({ data: { token: 'access', refresh_token: 'rotated', access_expires_at: futureIso(900) } });
+    mockGet.mockRejectedValueOnce(new Error('Network request failed'));
+    try {
+      await useAuthStore.getState().initialize();
+      expect(useAuthStore.getState()).toMatchObject({
+        token: 'access', user: { id: 'u-1' }, isInitialized: true, sessionRecoverable: false,
+      });
+    } finally {
+      (appCache.get as jest.Mock).mockReset().mockResolvedValue(null);
+    }
+  });
+
   it('exits recovery when a successful read confirms there is no token', async () => {
     useAuthStore.setState({ sessionRecoverable: true });
     await useAuthStore.getState().initialize();

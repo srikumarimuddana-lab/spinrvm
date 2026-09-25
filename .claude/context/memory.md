@@ -27,6 +27,25 @@ a pointer/rationale log, not a narrative.
 
 ## Entries
 
+- **2026-09-25 — Re-offering a ride to drivers who declined it: deferred past
+  the Saskatoon launch (founder decision).** The founder's rule is: re-ask
+  drivers who *declined* (they were at the phone), never re-ask drivers who
+  *ignored* (not at the phone; 3 misses → auto-offline). It can't be built
+  as-is: `ride_offers` is `UNIQUE (ride_id, driver_id)` (migration 100), so a
+  second offer to the same driver breaks the PostgREST claim path (batch
+  insert fails, whole round released, repeats every retry). Options were a
+  one-way migration (partial unique on `status='pending'` + rewriting
+  `dispatch_claim_batch`, `dispatch_claim_batch_v2`, `dispatch_claim_offers_v3`),
+  reusing the declined row (loses decline history in admin analytics), or
+  deferring. Chose **defer**: lowest expected value of the plan (most declines
+  are about distance/destination, which don't change a minute later) for a
+  one-way schema change right before launch. Revisit with real post-launch
+  decline→accept data. Until then a driver is offered a given ride at most
+  once, enforced durably by `_already_offered_driver_ids` in
+  `routes/rides/matching.py`, and `ride_search_timeout_seconds` is capped at
+  300. Plan: `.claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md`
+  (Phase 1); PR srikumarimuddana-lab/spinrvm#5776.
+
 - **2026-09-11 — D5, in-app VoIP: premise was stale, corrected but still
   unscoped.** D5's original text claimed "Twilio Proxy PSTN masking already
   covers the need" — false. `backend/routes/rides/chat.py:64` and

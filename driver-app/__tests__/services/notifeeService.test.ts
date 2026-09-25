@@ -12,8 +12,6 @@
 import { EventType } from '@notifee/react-native';
 
 const mockCreateChannel = jest.fn().mockResolvedValue(undefined);
-// Default: no native ride-offers-v4 channel (a binary without
-// plugins/withRideOfferRingChannel), so the Notifee-created v3 is used.
 const mockGetChannel = jest.fn().mockResolvedValue(null);
 const mockDeleteChannel = jest.fn().mockResolvedValue(undefined);
 const mockRequestPermission = jest.fn().mockResolvedValue(undefined);
@@ -88,37 +86,18 @@ describe('notifeeService', () => {
       expect(mockSetNotificationCategories).not.toHaveBeenCalled();
     });
 
-    // The native ring-volume channel (plugins/withRideOfferRingChannel.js)
-    // exists: JS must neither create v3 nor touch v4's settings, and must drop
-    // v3 so the driver doesn't see two "Ride Offers" channels.
-    it('uses the native ride-offers-v4 channel when it exists and drops v3', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    // ride-offers-v4 (USAGE_NOTIFICATION_RINGTONE) hides the minimised offer
+    // on device. Always recreate v3 and delete v4, even if a previous build
+    // left v4 on the phone.
+    it('deletes ride-offers-v4 and keeps posting on v3', async () => {
       const { ensureNotifeeReady } = require('../../services/notifeeService');
       await ensureNotifeeReady();
 
-      expect(mockGetChannel).toHaveBeenCalledWith('ride-offers-v4');
-      expect(mockCreateChannel).toHaveBeenCalledTimes(1);
-      expect(mockCreateChannel).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'ride-offers-fg-v2' }),
-      );
-      expect(mockCreateChannel).not.toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'ride-offers-v4' }),
-      );
-      expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-v3');
-    });
-
-    it('falls back to creating v3 when the v4 lookup rejects', async () => {
-      mockGetChannel.mockRejectedValueOnce(new Error('native bad state'));
-      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-      const { ensureNotifeeReady } = require('../../services/notifeeService');
-      await ensureNotifeeReady();
-
+      expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-v4');
       expect(mockCreateChannel).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'ride-offers-v3' }),
       );
       expect(mockDeleteChannel).not.toHaveBeenCalledWith('ride-offers-v3');
-      expect(errSpy).toHaveBeenCalled();
-      errSpy.mockRestore();
     });
 
     it('registers the iOS category with Accept/Decline instead of creating channels', async () => {
@@ -159,18 +138,16 @@ describe('notifeeService', () => {
       expect(req.id).toBe('ride-offer-current');
     });
 
-    it('posts a loud offer to ride-offers-v4 when the native channel exists', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    it('posts a loud offer to ride-offers-v3, never the ring-volume channel', async () => {
       const { displayRideOfferNotification } = require('../../services/notifeeService');
       await displayRideOfferNotification(BASE_OFFER);
 
       const req = mockDisplayNotification.mock.calls[0][0];
-      expect(req.android.channelId).toBe('ride-offers-v4');
+      expect(req.android.channelId).toBe('ride-offers-v3');
       expect(req.android.loopSound).toBe(true);
     });
 
-    it('keeps a silent (in-app) offer on the silent channel even when v4 exists', async () => {
-      mockGetChannel.mockResolvedValueOnce({ id: 'ride-offers-v4' });
+    it('keeps a silent (in-app) offer on the silent channel', async () => {
       const { displayRideOfferNotification } = require('../../services/notifeeService');
       await displayRideOfferNotification(BASE_OFFER, { silent: true });
 
@@ -355,6 +332,103 @@ describe('notifeeService', () => {
       await displayRideOfferNotification(BASE_OFFER);
       const req = mockDisplayNotification.mock.calls[0][0];
       expect(req.android.style.type).toBe(1); // BIG_TEXT
+    });
+  });
+
+  // Migration 471: the backend stamps ring_mode; the native plugin creates
+  // ride-offers-alarm-v1 (USAGE_ALARM). Alarm only when both line up.
+  describe('alarm-volume channel', () => {
+    const ALARM = 'ride-offers-alarm-v1';
+    const alarmChannel = { id: ALARM, blocked: false };
+    const postedChannel = (call = 0) => mockDisplayNotification.mock.calls[call][0].android.channelId;
+
+    // clearAllMocks keeps implementations, so an earlier test's persistent
+    // mockRejectedValue would make every post here add a fallback call and
+    // shift the call indices below (Codex review on #5778).
+    beforeEach(() => {
+      mockDisplayNotification.mockReset();
+      mockDisplayNotification.mockResolvedValue(undefined);
+      mockGetChannel.mockReset();
+      mockGetChannel.mockResolvedValue(null);
+    });
+
+    it('posts on the alarm channel when the offer says alarm and the channel exists', async () => {
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(mockGetChannel).toHaveBeenCalledWith(ALARM);
+      expect(postedChannel()).toBe(ALARM);
+    });
+
+    it('falls back to ride-offers-v3 when this build has no alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce(null);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('falls back to ride-offers-v3 when the driver blocked the alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce({ ...alarmChannel, blocked: true });
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('falls back to ride-offers-v3 when the channel lookup throws', async () => {
+      mockGetChannel.mockRejectedValueOnce(new Error('native'));
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(postedChannel()).toBe('ride-offers-v3');
+    });
+
+    it('does not look up the alarm channel when the offer says notification or nothing', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'notification' });
+      await displayRideOfferNotification({ ...BASE_OFFER, ride_id: 'ride-2' });
+      expect(mockGetChannel).not.toHaveBeenCalled();
+      expect(postedChannel(0)).toBe('ride-offers-v3');
+      expect(postedChannel(1)).toBe('ride-offers-v3');
+    });
+
+    it('keeps the silent channel for a foreground post, but a later reclaim rings on the alarm channel', async () => {
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      // Foreground WS offer: carries ring_mode, posts silently.
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' }, { silent: true });
+      // App backgrounded: the reclaim offer is rebuilt from app state, no ring_mode.
+      await displayRideOfferNotification(BASE_OFFER, { reclaim: true });
+      expect(postedChannel(0)).toBe('ride-offers-fg-v2');
+      expect(postedChannel(1)).toBe(ALARM);
+    });
+
+    it('persists ring_mode, and a cold-started reclaim without one reads it back', async () => {
+      // Fresh module = the new JS context of an app opened from a killed-state offer.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      AsyncStorage.getItem.mockResolvedValueOnce('alarm');
+      mockGetChannel.mockResolvedValueOnce(alarmChannel);
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { reclaim: true });
+      expect(AsyncStorage.getItem).toHaveBeenCalledWith('spinr_ride_offer_ring_mode');
+      expect(postedChannel()).toBe(ALARM);
+
+      await displayRideOfferNotification({ ...BASE_OFFER, ride_id: 'ride-2', ring_mode: 'notification' });
+      expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_ride_offer_ring_mode', 'notification');
+      expect(postedChannel(1)).toBe('ride-offers-v3');
+    });
+
+    it('a driver who muted sound effects stays on the silent channel', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' }, { muted: true });
+      expect(postedChannel()).toBe('ride-offers-fg-v2');
+      expect(mockGetChannel).not.toHaveBeenCalled();
+    });
+
+    it('never looks up the alarm channel on iOS', async () => {
+      mockPlatform.OS = 'ios';
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification({ ...BASE_OFFER, ring_mode: 'alarm' });
+      expect(mockGetChannel).not.toHaveBeenCalled();
     });
   });
 

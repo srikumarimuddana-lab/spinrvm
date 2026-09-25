@@ -214,6 +214,27 @@ it('gives the refresh POST its own full deadline instead of inheriting whatever 
   } finally { jest.useRealTimers(); }
 });
 
+it('retries an App Check 401 after 30s without blacklisting the refresh token', async () => {
+  jest.useFakeTimers();
+  (fetch as jest.Mock).mockResolvedValueOnce({
+    ok: false,
+    status: 401,
+    json: async () => ({ detail: 'App Check token required' }),
+  });
+  try {
+    expect(await renewBackgroundAuthToken()).toBeNull();
+    expect(mockStorage.bg_rejected_refresh).toBeUndefined();
+    expect(mockStorage.refresh_token).toBe('refresh-old');
+    expect(await renewBackgroundAuthToken()).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(await renewBackgroundAuthToken()).toBe('access-new');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 it('does not replay a rejected credential after the headless runtime restarts', async () => {
   (fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 });
   expect(await renewBackgroundAuthToken()).toBeNull();

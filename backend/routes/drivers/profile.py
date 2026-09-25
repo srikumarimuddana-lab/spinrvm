@@ -98,6 +98,9 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
         "ride_offer_timeout_seconds": _clamp(app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15),
         "pickup_radius_meters": _clamp(app_settings.get("pickup_radius_meters"), 10, 1000, 100),
         "ride_offer_sound_url": ride_offer_sound_url,
+        # Migration 467, default off: Android must grant Allow all the time to
+        # go or stay online. False on a settings read failure too.
+        "always_location_required": app_settings.get("driver_always_location_gate_enabled") is True,
     }
 
 

@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
+import { isAppCheckRejection } from '../../shared/auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../../shared/auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions } from '../../shared/auth/sessionLock';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -63,7 +64,17 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           if (!response.ok) {
             // A rejected credential must not be replayed on every GPS callback.
             // Foreground auth owns definitive sign-out and account recovery.
-            if (response.status === 401) {
+            // An App Check 401 is not that rejection: the refresh token was
+            // never checked. Back off 30s (the catch below) and try again.
+            let appCheckRejection = false;
+            if (response.status === 401 && typeof response.json === 'function') {
+              try {
+                appCheckRejection = isAppCheckRejection(await withStepDeadline(response.json(), 2_000));
+              } catch {
+                appCheckRejection = false;
+              }
+            }
+            if (response.status === 401 && !appCheckRejection) {
               retryAfter = Infinity;
               await SecureStore.setItemAsync('bg_rejected_refresh', fingerprint, sessionKeychainOptions);
             }

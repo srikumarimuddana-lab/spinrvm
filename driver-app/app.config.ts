@@ -396,10 +396,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // ride_offer.caf → iOS bundle (APNs/Notifee sound). Without this the
         // ride-offer channel referenced a nonexistent resource and rang silent.
         './plugins/withRideOfferSound',
-        // Removes the ride-offers-v4 channel if a previous build created it.
-        // That channel used ring-volume audio and Android hid the minimised
-        // offer entirely. Must stay after withRideOfferSound. See
-        // plugins/withRideOfferRingChannel.js.
+        // Creates the alarm-volume ride-offers-alarm-v1 channel (used only when
+        // an offer says ring_mode=alarm), and removes the ride-offers-v4
+        // channel if a previous build created it — that one used ring-volume
+        // audio and Android hid the minimised offer entirely. Must stay after
+        // withRideOfferSound. See plugins/withRideOfferRingChannel.js.
         './plugins/withRideOfferRingChannel',
         // Adds an iOS Notification Service Extension that downloads + attaches
         // the ride-offer fare banner so the offer push shows the rich image

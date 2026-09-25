@@ -163,6 +163,19 @@ async def test_dispute_refund_flag_on_under_cap_calls_stripe():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(("status", "issued"), [("pending", True), ("failed", False), ("canceled", False)])
+async def test_dispute_refund_issued_only_for_succeeded_or_pending(status, issued):
+    refund_create = MagicMock(return_value=MagicMock(status=status, id="re_1"))
+    result, update_one, audit, push = await _resolve("10.00", cap="100.00", refund_create=refund_create)
+    refund_create.assert_called_once()
+    assert result["refund_issued"] is issued
+    assert audit.await_args.args[4]["refund_issued"] is issued  # what the cap sums on
+    assert ("has been issued" in push.await_args.args[2]) is issued
+    assert update_one.await_args.args[2]["refund_amount"] == (Decimal("10.00") if issued else 0)
+    assert ("message" in result) is (not issued)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("resolution", ["approved", "partial_refund"])
 async def test_dispute_refund_flag_off_records_resolution_without_refund(resolution):
     refund_create = MagicMock()

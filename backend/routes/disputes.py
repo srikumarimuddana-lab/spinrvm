@@ -318,11 +318,19 @@ async def admin_resolve_dispute(
                     )
                 )
                 refund_result = {"status": refund.status, "refund_id": refund.id}
-                refund_issued = True
-                logger.info(
-                    f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
-                    f"${req.refund_amount} for dispute {dispute_id}"
-                )
+                # Only succeeded/pending means money is (or will be) returned;
+                # failed/canceled (or anything else) is not a refund.
+                refund_issued = refund.status in ("succeeded", "pending")
+                if refund_issued:
+                    logger.info(
+                        f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
+                        f"${req.refund_amount} for dispute {dispute_id}"
+                    )
+                else:
+                    logger.error(
+                        f"[REFUND] Stripe refund {refund.id} for dispute {dispute_id} returned "
+                        f"status={refund.status}; no refund issued, manual follow-up required"
+                    )
             except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
                 raise HTTPException(
@@ -331,13 +339,14 @@ async def admin_resolve_dispute(
                 ) from refund_err
 
     # Stripe succeeded (or not required) — persist the resolved status
+    # Flag off, or a Stripe refund that came back failed/canceled: nothing was
+    # refunded, so keep refund_amount (summed as total_refunded by
+    # admin_dispute_stats_rollup) at 0. manual_required keeps its amount, as before.
+    nothing_refunded = wants_refund and (not refunds_enabled or ("refund_id" in refund_result and not refund_issued))
     update_data: Dict[str, Any] = {
         "status": "resolved" if req.resolution != "rejected" else "rejected",
         "resolution": req.resolution,
-        # Flag off: nothing was refunded, so keep refund_amount (summed as
-        # total_refunded by admin_dispute_stats_rollup) at 0; the approved
-        # amount is in refund_result for the manual refund.
-        "refund_amount": 0 if wants_refund and not refunds_enabled else (req.refund_amount or 0),
+        "refund_amount": 0 if nothing_refunded else (req.refund_amount or 0),
         "admin_note": req.admin_note or "",
         "resolved_at": datetime.now(timezone.utc).isoformat(),
         # F-32: carried over from support.py's removed duplicate handler.
@@ -401,6 +410,6 @@ async def admin_resolve_dispute(
     if wants_refund and not refund_issued:
         response["message"] = (
             "Dispute resolved, but no refund was issued. Issue the refund manually in Stripe "
-            "(automatic dispute refunds are off, or the ride has no card payment)."
+            "(automatic dispute refunds are off, Stripe did not complete the refund, or the ride has no card payment)."
         )
     return response

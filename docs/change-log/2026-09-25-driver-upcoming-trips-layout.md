@@ -21,8 +21,8 @@ The driver-app **Upcoming trips** screen (`Profile → Upcoming trips`) rendered
 
 ## 3. Fix / remediation
 
-- Use the shared `ScreenHeader` (owns the top safe-area inset + back button), with the same `ScreenHeader` + sibling `FlatList` shape `lost-and-found.tsx` already uses.
-- Error and empty are now mutually exclusive; the error state has a "Try again" button.
+- Use the shared `ScreenHeader` (owns the top safe-area inset + back button); list adds `insets.bottom` padding like its siblings, with the same `ScreenHeader` + sibling `FlatList` shape `lost-and-found.tsx` already uses.
+- Error and empty are now mutually exclusive; the error state has a "Try Again" button (filled, 44pt min height).
 - Pull-to-refresh via the existing `SafeRefreshControl`.
 - Cards: date and time (no seconds) on one row, pickup/drop-off on separate rows with a coloured dot, theme `surface` background.
 
@@ -39,7 +39,7 @@ No API or data change — same `GET /drivers/rides/upcoming` call, same response
 
 - **Driver only.** The screen now has the standard red gradient header with a back arrow, like other Profile sub-screens.
 - Visible on next app update (JS bundle); no mid-session effect beyond the screen looking different the next time it's opened.
-- Copy: adds a "Try again" button label; existing strings unchanged.
+- Copy: adds a "Try Again" retry button (same filled shape as Lost & Found); existing strings unchanged.
 - Not feature-flagged: this is a layout bug fix on a single, previously broken screen with one entry point, using the app's existing standard header — not new behaviour.
 
 ## 6. Files modified

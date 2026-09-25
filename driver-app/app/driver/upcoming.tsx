@@ -3,6 +3,7 @@ import { View, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 
 import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import { SPACING, FONT } from '@shared/utils/responsive';
@@ -32,6 +33,7 @@ function formatWhen(raw?: string): { date: string; time: string } | null {
 
 export default function UpcomingRidesScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [rides, setRides] = useState<UpcomingRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -69,10 +71,13 @@ export default function UpcomingRidesScreen() {
           <Text style={[styles.emptyText, { color: colors.error }]}>{error}</Text>
           <TouchableOpacity
             onPress={() => load()}
-            style={[styles.retryBtn, { borderColor: colors.primary }]}
+            style={[styles.retryBtn, { backgroundColor: colors.primary }]}
+            activeOpacity={0.8}
             accessibilityRole="button"
+            accessibilityLabel="Retry loading upcoming trips"
           >
-            <Text style={{ color: colors.primary, fontWeight: '600' }}>Try again</Text>
+            <Ionicons name="refresh" size={18} color="#fff" />
+            <Text style={styles.retryBtnText}>Try Again</Text>
           </TouchableOpacity>
         </View>
       );
@@ -96,7 +101,7 @@ export default function UpcomingRidesScreen() {
         <FlatList
           data={error ? [] : rides}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 16 }]}
           refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.primary} />}
           ListEmptyComponent={renderEmpty}
           renderItem={({ item }) => {
@@ -142,5 +147,10 @@ const styles = StyleSheet.create({
   stopText: { flex: 1, fontSize: FONT.bodySm, lineHeight: 20 },
   emptyWrap: { alignItems: 'center', paddingTop: 48, paddingHorizontal: SPACING.lg },
   emptyText: { marginTop: SPACING.sm, textAlign: 'center', fontSize: FONT.bodyMd },
-  retryBtn: { marginTop: SPACING.md, borderWidth: 1, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 20 },
+  // Same shape as lost-and-found.tsx's retry button.
+  retryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: SPACING.md,
+    paddingHorizontal: SPACING.lg, paddingVertical: 12, borderRadius: 25, minHeight: 44,
+  },
+  retryBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '600' },
 });

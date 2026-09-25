@@ -707,7 +707,9 @@ async def test_bulk_revoke_falls_back_for_missing_reason_column_and_counts_succe
 
     assert update_mock.await_count == 2
     assert "revocation_reason" in update_mock.await_args_list[0].args[2]["$set"]
-    assert update_mock.await_args_list[1].args[2] == {"$set": {"revoked_at": update_mock.await_args_list[0].args[2]["$set"]["revoked_at"]}}
+    assert update_mock.await_args_list[1].args[2] == {
+        "$set": {"revoked_at": update_mock.await_args_list[0].args[2]["$set"]["revoked_at"]}
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1060,6 +1062,141 @@ async def test_sentry_capture_carries_surface_tag():
     _, kwargs = capture_mock.call_args
     assert kwargs["tags"]["surface"] == "backend"
     assert kwargs["tags"]["domain"] == "auth"
+
+
+@pytest.mark.asyncio
+async def test_reuse_cascade_carries_request_id_for_correlation():
+    """CRIMSON-SMOKE-7445-9: the Sentry capture and its audit_logs row must
+    both carry the request-scoped request_id (utils/log_context.py), the same
+    one scripts/incident-analysis/correlate_incident.py joins on and every
+    other audit_logger.py write already includes. Without this, a triage
+    investigator can only match a reuse event to its audit row by eyeballing
+    user_id + timestamp -- exactly the manual workaround the 2026-09-25 daily
+    Sentry triage run had to do because correlate_incident.py's request_id
+    join returned zero clusters for this alert path."""
+    import json
+
+    from utils.log_context import set_request_context
+
+    capture_mock = MagicMock()
+    inserted: list[tuple[str, dict]] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-1"}
+
+    try:
+        set_request_context("req-reuse-9f3a", "user-rider-1")
+        with (
+            patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+            patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+            patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+            patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
+            patch("sentry_sdk.capture_message", capture_mock),
+        ):
+            from utils.refresh_tokens import _handle_refresh_token_reuse
+
+            await _handle_refresh_token_reuse(_revoked_row())
+    finally:
+        set_request_context("", "")  # avoid leaking into other tests' contexts
+
+    capture_mock.assert_called_once()
+    _, kwargs = capture_mock.call_args
+    assert kwargs["tags"]["request_id"] == "req-reuse-9f3a"
+
+    audit_inserts = [doc for table, doc in inserted if table == "audit_logs"]
+    assert len(audit_inserts) == 1
+    assert audit_inserts[0]["request_id"] == "req-reuse-9f3a"
+    # request_id is a top-level column (migration 279), never inside the
+    # details JSON blob -- that's what correlate_incident.py's join expects.
+    assert "request_id" not in json.loads(audit_inserts[0]["details"])
+
+
+@pytest.mark.asyncio
+async def test_reuse_cascade_request_id_omitted_outside_request_context():
+    """A replay detected outside an HTTP request (shouldn't happen for this
+    code path today, but must never crash) omits the Sentry tag entirely and
+    writes NULL on the audit row, rather than the ContextVar's empty-string
+    default or a fabricated placeholder like "unknown". A placeholder string
+    would be truthy, so correlate_incident.py's `if req_id:` grouping would
+    bucket every such event into one artificial merged cluster that no real
+    audit_logs row (never keyed "unknown") could ever join against --
+    reviewer-caught (spinr-observability-reviewer) on the first draft of this
+    fix, which used `or "unknown"`. Also matches log_admin_action's own
+    request_id-null convention, so the partial index on audit_logs stays
+    meaningful."""
+    from utils.log_context import set_request_context
+
+    capture_mock = MagicMock()
+    inserted: list[tuple[str, dict]] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-1"}
+
+    try:
+        set_request_context("", "")  # simulates no RequestIDMiddleware having run
+        with (
+            patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+            patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+            patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+            patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
+            patch("sentry_sdk.capture_message", capture_mock),
+        ):
+            from utils.refresh_tokens import _handle_refresh_token_reuse
+
+            await _handle_refresh_token_reuse(_revoked_row())
+    finally:
+        set_request_context("", "")
+
+    _, kwargs = capture_mock.call_args
+    assert "request_id" not in kwargs["tags"]
+
+    audit_inserts = [doc for table, doc in inserted if table == "audit_logs"]
+    assert audit_inserts[0]["request_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_race_audit_row_carries_request_id():
+    """_record_post_revoke_race writes its own, separate audit_logs insert
+    literal (the explicit-sign-out-replay path, distinct from
+    _handle_refresh_token_reuse's cascade insert) -- reviewer-flagged
+    (spinr-observability-reviewer) gap: the other two tests only drive the
+    cascade insert, so a typo'd/dropped request_id field on this second
+    insert site would have shipped with green tests."""
+    import json
+
+    from utils.log_context import set_request_context
+
+    inserted: list[tuple[str, dict]] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-race"}
+
+    row = _revoked_row(audience="admin", user_id="admin-001")
+    row["replaced_by"] = None
+    row["revocation_reason"] = "admin_logout_all"
+    row["revoked_at"] = _seconds_ago(1.3)
+
+    try:
+        set_request_context("req-post-revoke-race-77", "admin-001")
+        with (
+            patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+            patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+            patch("sentry_sdk.capture_message", MagicMock()),
+        ):
+            from utils.refresh_tokens import lookup_refresh_token
+
+            result = await lookup_refresh_token("logged-out-raw")
+    finally:
+        set_request_context("", "")
+
+    assert result is None
+    audit_inserts = [doc for table, doc in inserted if table == "audit_logs"]
+    assert len(audit_inserts) == 1
+    assert audit_inserts[0]["request_id"] == "req-post-revoke-race-77"
+    assert "request_id" not in json.loads(audit_inserts[0]["details"])
 
 
 @pytest.mark.asyncio

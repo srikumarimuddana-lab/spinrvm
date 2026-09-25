@@ -37,10 +37,12 @@ try:
     from ..core.config import settings
     from ..db import db
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
+    from ..utils.log_context import get_request_id
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
     from utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
+    from utils.log_context import get_request_id
 
 # audiences for which token_version lives on the `users` table; admin
 # audiences live on `admin_staff`. Anything else is rejected at the
@@ -543,6 +545,11 @@ async def _record_post_revoke_race(row: dict) -> None:
                 "entity_type": "user",
                 "entity_id": row.get("user_id") or "unknown",
                 "actor_id": "system:refresh_reuse_detector",
+                # CRIMSON-SMOKE-7445-9: top-level column (migration 279), same one
+                # `_capture_reuse_event`'s Sentry tag now carries — lets
+                # correlate_incident.py join this row to its Sentry event and
+                # request-scoped log lines instead of a manual user_id match.
+                "request_id": get_request_id() or None,
                 "details": json.dumps(
                     {
                         "replayed_row_id": row.get("id") or "",
@@ -585,15 +592,30 @@ def _capture_reuse_event(row: dict, *, repeated: bool, benign_race: bool = False
     try:
         import sentry_sdk  # type: ignore
 
+        tags = {
+            "spinr_alert": alert,
+            "audience": audience or "unknown",
+            "domain": "auth",
+            "surface": "backend",
+        }
+        # CRIMSON-SMOKE-7445-9: a top-level tag (not buried in `contexts`) so
+        # this event can be joined by
+        # scripts/incident-analysis/correlate_incident.py's request_id-keyed
+        # correlation, and by ad-hoc Sentry search. Omitted (not a literal
+        # "unknown" string) when replay is detected outside a request
+        # (shouldn't happen for this code path, but must never crash on a
+        # missing id) — a fabricated placeholder value would be truthy and
+        # get bucketed into one artificial merged cluster by the correlator,
+        # which groups on `if req_id:`, while no audit_logs row is ever
+        # keyed "unknown" to join it against.
+        request_id = get_request_id()
+        if request_id:
+            tags["request_id"] = request_id
+
         sentry_sdk.capture_message(
             message,
             level=level,
-            tags={
-                "spinr_alert": alert,
-                "audience": audience or "unknown",
-                "domain": "auth",
-                "surface": "backend",
-            },
+            tags=tags,
             contexts={
                 "refresh_token_reuse": {
                     "row_id": row_id,
@@ -742,6 +764,8 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 "entity_type": "user",
                 "entity_id": user_id or "unknown",
                 "actor_id": "system:refresh_reuse_detector",
+                # CRIMSON-SMOKE-7445-9: see _record_post_revoke_race's comment above.
+                "request_id": get_request_id() or None,
                 "details": json.dumps(details_payload),
             },
         )

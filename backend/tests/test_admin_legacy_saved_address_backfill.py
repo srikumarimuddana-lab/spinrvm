@@ -38,6 +38,9 @@ def super_admin_override():
 ADDRESS_HEADER = "_id,customer_id,lat,long,name,type,created_at"
 GOOD_ADDRESS_ROW = 'OA-1,OC-1,52.1332,-106.6700,"123 Main Street, Saskatoon, SK S7K 0J5",home,1700000000000'
 OUT_OF_PROVINCE_ROW = 'OA-2,OC-1,30.7190586,76.7487044,"Some address in India",home,1700000000000'
+# A second Home row for the same legacy customer -- migration 485 allows
+# only one 'home' row per user_id, so this must land as 'location'.
+SECOND_HOME_ROW = 'OA-3,OC-1,52.1500,-106.6500,"456 Other Street, Saskatoon, SK S7K 0J6",home,1700000000000'
 
 # customers.csv shape: only _id/phone matter to this crosswalk.
 CUSTOMERS_HEADER = "_id,name,phone,email,created_at"
@@ -189,6 +192,53 @@ def test_commit_is_idempotent_on_rerun(test_client, super_admin_override):
     assert second.status_code == 200, second.text
     assert second.json()["addresses_inserted"] == 0
     assert len(store["saved_addresses"]) == 1
+
+
+def test_second_home_row_in_batch_is_downgraded_to_location(test_client, super_admin_override):
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        validate_resp = _post(
+            test_client,
+            "/api/admin/riders/saved-address-backfill/validate",
+            _address_csv(GOOD_ADDRESS_ROW, SECOND_HOME_ROW),
+            _customers_csv(GOOD_CUSTOMERS_ROW),
+        )
+        assert validate_resp.status_code == 200, validate_resp.text
+        body = validate_resp.json()
+        assert body["counts"]["addresses_to_insert"] == 2
+        assert body["counts"]["downgraded_duplicate_home_work"] == 1
+
+        commit_resp = test_client.post(
+            "/api/admin/riders/saved-address-backfill/commit",
+            files=_files(_address_csv(GOOD_ADDRESS_ROW, SECOND_HOME_ROW), _customers_csv(GOOD_CUSTOMERS_ROW)),
+            data={"batch": body["batch"], "validation_token": body["validation_token"]},
+        )
+    assert commit_resp.status_code == 200, commit_resp.text
+    commit_body = commit_resp.json()
+    assert commit_body["addresses_inserted"] == 2
+    assert commit_body["race_conflicts"] == []
+    icons = sorted(r["icon"] for r in store["saved_addresses"])
+    assert icons == ["home", "location"]
+
+
+def test_existing_home_in_db_is_not_duplicated_by_import(test_client, super_admin_override):
+    store = _fresh_store()
+    store["saved_addresses"] = [
+        {"id": "existing-home-1", "user_id": "rider-1", "address": "A previously saved home", "icon": "home"}
+    ]
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _validate_then_commit(test_client, _address_csv(GOOD_ADDRESS_ROW), _customers_csv(GOOD_CUSTOMERS_ROW))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["addresses_inserted"] == 1
+    homes = [r for r in store["saved_addresses"] if r["icon"] == "home"]
+    assert len(homes) == 1
+    assert homes[0]["id"] == "existing-home-1"
+    imported = [r for r in store["saved_addresses"] if r["id"] != "existing-home-1"]
+    assert len(imported) == 1
+    assert imported[0]["icon"] == "location"
 
 
 def test_out_of_province_row_is_excluded(test_client, super_admin_override):

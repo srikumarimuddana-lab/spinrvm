@@ -8,7 +8,8 @@ const path = require('path');
 // 1. Creates ride-offers-alarm-v1, whose sound plays on the ALARM stream
 //    (AudioAttributes.USAGE_ALARM). The alarm stream is not muted by silent or
 //    vibrate ringer mode, follows the alarm volume slider, and Do Not Disturb
-//    lets alarms through by default. Notifee's createChannel always uses the
+//    lets alarm sound through by default (the card under DND still depends on
+//    DND access, which this app does not request). Notifee's createChannel always uses the
 //    notification stream and cannot set AudioAttributes, so this has to be
 //    native. notifeeService.ts posts to it only when the offer carries
 //    ring_mode=alarm (settings flag ride_offer_alarm_channel_enabled,

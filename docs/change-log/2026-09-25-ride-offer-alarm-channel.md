@@ -24,7 +24,7 @@ Notifee's `createChannel` always builds the channel's `AudioAttributes` with `US
 - Migration 466 adds `settings.ride_offer_alarm_channel_enabled` (default **false**), writable through `PUT /api/admin/settings`.
 - Every `new_ride_assignment` payload carries `ring_mode`: `"alarm"` when the flag is exactly true, else `"notification"` (`utils/ride_offer_ring.py`). Stamped in auto-dispatch (`matching.py`, shared by the WS message and the data-only FCM push), admin direct-assign, and `POST /notifications/debug-ride-offer`. The debug endpoint also takes an explicit `ring_mode` so one device can be tested without flipping the flag.
 - The driver-app config plugin creates `ride-offers-alarm-v1` natively in `Application.onCreate` (`USAGE_ALARM`, HIGH importance, `ride_offer` sound, same vibration/lights/lockscreen settings as v3). It still deletes v4.
-- `notifeeService` posts a loud offer on `ride-offers-alarm-v1` only when the last `ring_mode` seen is `"alarm"` **and** `notifee.getChannel` finds the channel unblocked. Missing, blocked or a lookup error falls back to `ride-offers-v3`. In-app (silent) and muted posts keep the silent channel. The last `ring_mode` is remembered because the reclaim re-post (app backgrounded mid-offer) is built from app state that does not carry it.
+- `notifeeService` posts a loud offer on `ride-offers-alarm-v1` only when the last `ring_mode` seen is `"alarm"` **and** `notifee.getChannel` finds the channel unblocked. Missing, blocked or a lookup error falls back to `ride-offers-v3`. In-app (silent) and muted posts keep the silent channel. The last `ring_mode` is remembered in memory and in AsyncStorage (`spinr_ride_offer_ring_mode`), because the reclaim re-post (app backgrounded mid-offer) is built from app state that does not carry it — including after the app was opened from a killed-state offer, which starts a new JS context.
 
 Alternative considered: a native foreground service playing the tone with `MediaPlayer` on the alarm stream for the offer window. More control (exact duration, stops on accept), but a new native service, foreground-service type declarations and Play policy review. The channel approach reuses the existing plugin, the Notifee card, and `loopSound` (`FLAG_INSISTENT`, which already rings until the offer's `timeoutAfter`), so it is the smaller change to try first.
 
@@ -47,7 +47,7 @@ Alternative considered: a native foreground service playing the tone with `Media
 
 ## 5. User-experience effect
 
-- Drivers (Android, new binary, flag on): a minimised/locked/killed-app offer rings at alarm volume, through silent/vibrate and DND's default "alarms allowed", looping until the offer expires.
+- Drivers (Android, new binary, flag on): a minimised/locked/killed-app offer rings at alarm volume, through silent/vibrate, looping until the offer expires. Under DND the alarm sound is allowed by default, but whether the card shows still depends on DND access, which the app does not request.
 - Drivers with the flag off, iOS drivers, and anyone on an older build: no change.
 - Visible on the next offer after the flag flips (settings cache ≤60 s). No copy change on the offer itself.
 - New channel name visible in Android settings: "Ride Offers (loud)".
@@ -85,7 +85,7 @@ const channelId = muted ? RIDE_OFFER_SILENT_CHANNEL_ID : await loudChannelId();
 ## 8. Rollback plan
 
 - Operational, no release: `UPDATE public.settings SET ride_offer_alarm_channel_enabled = false WHERE id = 'app_settings';` Offers created after the 60 s settings cache carry `ring_mode: "notification"`.
-- An app process that already saw an `"alarm"` offer keeps it until it receives a `"notification"` offer: `lastRingMode` is module state, and every offer carries the field, so the next offer corrects it.
+- A device that already saw an `"alarm"` offer keeps it (memory + AsyncStorage) until it receives a `"notification"` offer. Every offer carries the field, so the next offer corrects it; only a reclaim of an already-alarm offer can still ring loud after the flip.
 - The native channel stays on devices but is unused. No data to clean up. The migration's own comment has the optional column drop.
 
 ## 9. Verification performed

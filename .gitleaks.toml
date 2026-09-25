@@ -168,3 +168,40 @@ description = "RFC 2606 reserved example domains used by admin-dashboard's own C
 regexes = [
     '''@example\.(com|org|net)['"]''',
 ]
+
+# NANP phone-number detector — added 2026-09-25 after PR #5812 removed real
+# Saskatchewan driver phone numbers from ACTION_ITEMS.md, two audit docs and
+# three backend test fixtures. gitleaks' built-in ruleset has no phone detector
+# and neither PII rule above fires without their column-name keywords, so no
+# `keywords` here: the rule runs on every file. It mirrors check 12 of
+# .claude/hooks/pre-commit (keep the two in step): any common NANP shape, area
+# code and exchange starting 2-9 (keeps 1xxxxxxxxx Unix timestamps out), and
+# the number must not touch a letter, digit, "_" or a leading "." (hex/UUID/
+# Stripe-ID fragments, longer numeric IDs, decimal fractions). Group 1 is the
+# number itself so --redact / reports never carry the boundary character.
+#
+# CI blast radius: G5a (git history, gitleaks-action, auto-loads this file) is
+# `continue-on-error: true`, so historical numbers — including the ones #5812
+# removed, which are still in history — add non-blocking findings there, they
+# cannot turn it red. G5b (admin bundle, blocking) scans compiled .next/ output
+# where minified numeric literals are phone-shaped by coincidence, so this rule
+# alone is path-allowlisted for `.next/` below; every other rule still scans it.
+[[rules]]
+id = "spinr-nanp-phone-number"
+description = "Possible real North-American phone number — use the reserved fictional range 555-0100..555-0199 for fixtures and examples; never commit a real person's number."
+regex = '''(?m)(?:^|[^0-9A-Za-z_.])((?:\+?1[ .-]?)?(?:\([2-9][0-9]{2}\)|[2-9][0-9]{2})[ .-]?[2-9][0-9]{2}[ .-]?[0-9]{4})(?:[^0-9A-Za-z_.]|\.[^0-9]|\.?$)'''
+secretGroup = 1
+
+# regexTarget "match" = the full regex match, boundary characters included —
+# needed so the second entry can see the "-" in front of a bare digit run.
+[rules.allowlist]
+description = "Reserved-for-fiction 555-01xx numbers, bare digit IDs after '-' (e.g. issuecomment-NNNNNNNNNN), int32/uint32 limits, compiled Next.js output"
+regexTarget = "match"
+regexes = [
+    '''555[ .-]?01[0-9]{2}[^0-9]*$''',
+    '''^-[0-9]{10,11}[^0-9]*$''',
+    '''(?:2147483647|4294967295)''',
+]
+paths = [
+    '''\.next/''',
+]

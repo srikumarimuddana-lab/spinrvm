@@ -96,9 +96,10 @@ Blast-radius grep: `record_kyb_decision`, `update_corporate_account_status`, `ky
 - **§3a blast radius:**
   - `record_kyb_decision(preserve_status=...)` is a new keyword with default False; its only caller is `kyb_review`.
   - `corporate_accounts.py` now imports `derive_kyb_state` from `corporate_company_kyb.py` (dual-import). That module does not import `corporate_accounts`, so there is no cycle.
-  - `KYBReviewResponse` gains an optional `status_unchanged` field, which is additive. The admin dashboard's `reviewKyb` ignores the response body.
+  - `KYBReviewResponse` gains an optional `status_unchanged` field, which is additive. The admin dashboard's only `reviewKyb` caller is `kyb-queue/page.tsx`, which now reads that field (see §5).
   - The admin `kyb-document` confirm route has no status guard. It changes no status.
 - No interaction with background loops, the ride state machine, or wallet deltas. No money moves, and a refused review now also skips wallet and Stripe-customer provisioning.
+- **§3a wallet dependency.** An approval on a staff-suspended company still provisions the wallet and Stripe customer, because only this path creates the wallet row. The company still cannot book: `require_company_bookable` (`services/corporate_policy_service.py`) refuses any non-`active` company. That block has its own kill switch, `corporate_inactive_company_blocks_booking` (default on), and a code comment at the provisioning call site now records the dependency.
 
 ## 5. User-experience effect
 
@@ -112,10 +113,11 @@ Blast-radius grep: `record_kyb_decision`, `update_corporate_account_status`, `ky
   - A resubmit racing a close or suspend now gets a 409 instead of silently reopening the company.
 - **Internal admin: KYB decision on a staff-suspended company (§3a).**
   - The API returns 200 with `status: "suspended"` and `status_unchanged: "staff_suspension"`. The company stays suspended on its detail page until staff reactivate it through the status control.
-  - The KYB queue page (`kyb-queue/page.tsx`) lists only `pending_verification` companies and ignores the response body, so it shows no message. The row just leaves the queue after reload.
-  - This path is reached only when staff suspend a company while it sits in the queue, or through a direct API call.
-  - Rendering the `status_unchanged` message in the queue UI is a frontend follow-up. No admin-dashboard code changed here.
+  - The KYB queue page (`kyb-queue/page.tsx`) lists only `pending_verification` companies, so this path is reached only when staff suspend a company while it sits in the queue, or through a direct API call.
+  - In that case the queue now shows a toast: "Decision recorded — company still suspended", telling the admin to reactivate it from its account page if appropriate. Before, the admin saw a silent success and the row just left the queue.
+  - The toast is new copy on an internal admin screen only. It appears only when the backend returns `status_unchanged`, so every other approve/reject looks exactly as before.
 - **Corporate admin: staff-suspended company (§3a).** No KYB decision email; the portal keeps showing "suspended — contact support".
+  - Open product question: on a rejection, the reviewer's note is stored and visible to staff, but the portal never shows it to a staff-suspended company, because the portal shows the note only in the `rejected` state. A company with a fixable document problem therefore gets no specific feedback until staff reactivate it. This follows the portal's existing rule and is not a data loss.
 - Nothing is visible mid-session to riders or drivers.
 
 ## 6. Files modified
@@ -130,6 +132,8 @@ Blast-radius grep: `record_kyb_decision`, `update_corporate_account_status`, `ky
 | `backend/tests/test_corporate_kyb.py` | Pre-read mocks; +8 guard tests (closed approve/reject, open statuses, CAS loser 409, row-gone 404, kill switch off) | Regression |
 | `backend/tests/test_corporate_company_kyb.py` | Updated flip-args assertion; +4 tests (closed submit, closed upload-url message, CAS loser 409, kill switch off) | Regression |
 | `backend/tests/test_corporate_{stripe_customer,wallet_bootstrap,admin_routes,e2e_wallet,e2e_foundation}.py` | Mock the new pre-read | Keep existing coverage valid |
+| `admin-dashboard/src/lib/api/corporate.ts` | `reviewKyb` response type gains optional `status_unchanged` | Type the new backend field |
+| `admin-dashboard/src/app/dashboard/corporate-accounts/kyb-queue/page.tsx` | Toast when approve/reject returns `status_unchanged: "staff_suspension"` | Don't show a silent success when the company stays suspended |
 
 ## 7. Before / after
 
@@ -194,10 +198,9 @@ Concrete scenarios:
 
 - Not tested against live or staging Supabase; tests used mocked clients only. The CAS relies on PostgREST applying both `.eq()` filters to the UPDATE. #5793 makes the same assumption for `update_corporate_account_status`.
 - Migration 478 was not applied anywhere, including `--dry-run`, because no `DATABASE_URL` was available. It was renumbered from 477, which `claude/fix-admin-money-action-caps` already uses (`477_disputes_resolution_columns.sql`). The highest number on `origin/main` is 473, and 474–477 are held by in-flight PRs. CHECK B will flag a collision if one lands first.
-- The admin-dashboard rendering of the new 409 detail was not exercised. No frontend code changed, and no production build was run because there is no frontend diff.
-- No `spinr-*` reviewer agent was run on the final diff (CLAUDE.md gate 10), because this session had no Agent tool. Recommended before merge: `spinr-corporate-billing-reviewer` and `spinr-migration-reviewer`.
+- The admin-dashboard rendering of the new 409 detail and of the new toast was not exercised in a browser. The existing Playwright test (`e2e/corporate.spec.ts`) mocks the KYB-review response without `status_unchanged`, so it covers the unchanged path only. `kyb-queue` is not one of the 6 seeded visual-regression pages.
+- Reviewer agents (gate 10): `spinr-migration-reviewer` and `spinr-corporate-billing-reviewer` reviewed the closed-company guard, and `spinr-corporate-billing-reviewer` reviewed the §3a delta separately. All returned SAFE with no blockers. Their should-fix items are addressed here: admin-writable flag, queue toast, wallet dependency comment. The one exception is the product question in §5.
 - §3a's staff-suspension rule was not checked against production data. Nobody has counted how many suspended companies carry each `kyb_last_decision` value, so the misclassification edge in §3a is reasoned about, not measured.
-- The admin queue UI does not render `status_unchanged`. That was reasoned about from `kyb-queue/page.tsx`, not exercised in a browser.
 
 ## 11. Sign-off
 

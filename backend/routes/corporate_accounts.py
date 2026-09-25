@@ -462,6 +462,10 @@ async def kyb_review(
     wallet_provisioning_error = False
     stripe_customer_creation_error = False
     if decision.approve:
+        # Runs even when staff_suspended keeps the company 'suspended': only this
+        # path ever creates the wallet row. A suspended company still cannot book
+        # because require_company_bookable (corporate_policy_service) blocks it,
+        # itself behind corporate_inactive_company_blocks_booking.
         try:
             await ensure_corporate_wallet(company_id=normalized_id)
         except Exception:

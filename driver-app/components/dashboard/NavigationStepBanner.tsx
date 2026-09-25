@@ -96,7 +96,10 @@ export const NavigationStepBanner: React.FC<NavigationStepBannerProps> = ({
         <Ionicons name={iconForManeuver(step.maneuver)} size={26} color="#fff" />
       </View>
       <View style={styles.textWrap}>
-        <Text style={styles.instruction} numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE}>
+        {/* Two lines, not one: a long instruction ("…then keep right toward …")
+            stays readable, especially at larger OS text sizes. The SOS button
+            follows the banner's height (onHeightChange). */}
+        <Text style={styles.instruction} numberOfLines={2} maxFontSizeMultiplier={MAX_FONT_SCALE}>
           {step.instruction}
         </Text>
         <Text style={styles.distance} maxFontSizeMultiplier={MAX_FONT_SCALE}>

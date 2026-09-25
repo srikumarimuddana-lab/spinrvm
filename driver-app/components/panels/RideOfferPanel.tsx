@@ -270,8 +270,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             ) : null}
                         </View>
                         <View style={[styles.timerCircle, { borderColor: timerColor }]}>
-                            <Text style={[styles.timerText, { color: timerColor }]}>{countdownSeconds}</Text>
-                            <Text style={[styles.timerUnit, { color: timerColor }]}>s</Text>
+                            <Text style={[styles.timerText, { color: timerColor }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>{countdownSeconds}</Text>
+                            <Text style={[styles.timerUnit, { color: timerColor }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>s</Text>
                         </View>
                     </View>
 

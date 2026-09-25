@@ -11,7 +11,7 @@ import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useLanguageStore } from '../../store/languageStore';
 import { onRideRated } from '@shared/utils/appRating';
 import { showAlert } from '../AlertDialog';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 
 const n = (v: number | string | null | undefined): number => {
   if (v == null) return 0;
@@ -137,7 +137,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             style={styles.earningsHero}
           >
             <Text style={styles.earningsHeroLabel}>{t('tripCompleted.yourEarnings')}</Text>
-            <Text style={styles.earningsHeroAmount} allowFontScaling={false}>
+            <Text style={styles.earningsHeroAmount} maxFontSizeMultiplier={MAX_FONT_SCALE}>
               ${earned.toFixed(2)}
             </Text>
             <View style={styles.keepBadge}>
@@ -179,45 +179,45 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
               <Text style={styles.sectionValue}>${money(rideFareTotal)}</Text>
             </View>
             <View style={styles.fareRow}>
-              <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
               <Text style={styles.fareItemValue}>${money(completedRide?.base_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
-              <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
               <Text style={styles.fareItemValue}>${money(completedRide?.distance_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
-              <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
               <Text style={styles.fareItemValue}>${money(completedRide?.time_fare)}</Text>
             </View>
             {n(completedRide?.booking_fee) > 0 && (
               <View style={styles.fareRow}>
-                <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.bookingFee')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.bookingFee')}</Text>
                 <Text style={styles.fareItemValue}>${money(completedRide?.booking_fee)}</Text>
               </View>
             )}
             {n(completedRide?.tip_amount) > 0 && (
               <View style={styles.fareRow}>
-                <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.tip')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.tip')}</Text>
                 <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(completedRide?.tip_amount)}</Text>
               </View>
             )}
             {bonus > 0 && (
               <View style={styles.fareRow}>
-                <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.bonus')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareItemLabel}>{t('tripCompleted.bonus')}</Text>
                 <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(bonus)}</Text>
               </View>
             )}
             <View style={styles.fareDivider} />
             <View style={styles.fareRow}>
-              <Text allowFontScaling={false} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
               <Text style={styles.fareEarningsValue}>${earned.toFixed(2)}</Text>
             </View>
           </View>
 
           {!submitted && (
             <View style={styles.ratingSection}>
-              <Text allowFontScaling={false} style={styles.ratingLabel} accessibilityRole="text">{t('tripCompleted.howWasRider')}</Text>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.ratingLabel} accessibilityRole="text">{t('tripCompleted.howWasRider')}</Text>
               <View style={styles.starsRow}>
                 {[1, 2, 3, 4, 5].map((star) => (
                   <TouchableOpacity
@@ -331,7 +331,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           accessibilityState={{ disabled: submitting }}
         >
           <LinearGradient colors={[colors.primary, colors.primaryDark]} style={styles.actionGradient}>
-            <Text allowFontScaling={false} style={styles.actionBtnText}>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.actionBtnText}>
               {submitting ? t('tripCompleted.submitting') : rating > 0 ? t('tripCompleted.rateDone') : t('tripCompleted.skipRating')}
             </Text>
           </LinearGradient>
@@ -472,6 +472,9 @@ function createStyles(colors: ThemeColors) {
       gap: 16,
     },
     fareItemLabel: {
+      // Shrinks/wraps so a long label (e.g. French) plus its amount fits at
+      // large OS text sizes.
+      flexShrink: 1,
       color: colors.textDim,
       fontSize: 14,
     },

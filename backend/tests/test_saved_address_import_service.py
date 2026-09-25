@@ -389,13 +389,13 @@ def test_earlier_created_at_wins_home_regardless_of_csv_row_order(monkeypatch):
 
 def test_two_home_rows_for_different_users_both_stay_home(monkeypatch):
     _install(
-        monkeypatch, store={"users": [_rider(), _rider(id="rider-2", phone="+13065559999")], "saved_addresses": []}
+        monkeypatch, store={"users": [_rider(), _rider(id="rider-2", phone="+13065550102")], "saved_addresses": []}
     )
     rows = [
         _address_row(_id="addr-1", customer_id="mongo-cust-1", name="111 First Street, Saskatoon, SK"),
         _address_row(_id="addr-2", customer_id="mongo-cust-2", name="222 Second Street, Saskatoon, SK"),
     ]
-    customers = [_customer_row(), _customer_row(_id="mongo-cust-2", phone="3065559999")]
+    customers = [_customer_row(), _customer_row(_id="mongo-cust-2", phone="3065550102")]
     plan = svc.build_saved_address_import_plan(rows, customers, batch="b1")
     icons_by_user = {r["user_id"]: r["icon"] for r in plan.rows_to_insert}
     assert icons_by_user == {"rider-1": "home", "rider-2": "home"}

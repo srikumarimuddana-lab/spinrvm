@@ -31,7 +31,7 @@ No detector for phone numbers existed anywhere:
   - **No new bypass.** The hook has no per-check escape hatch today. Its only bypass is git's own `--no-verify` ("Emergency bypass only"), and none was added. A per-line "allow" marker would sit right next to a pasted real number, which defeats the purpose.
   - **Portability.** The check uses POSIX awk only, with no `{n}` intervals and no `grep -P`, so it runs on mawk, gawk and macOS awk.
 - **`.gitleaks.toml` rule `spinr-nanp-phone-number`.** It uses the same regex and the same allowlist, applied through `regexTarget = "match"` so that the `-` in front of a bare ID is visible. `secretGroup = 1` keeps the boundary character out of the reported secret.
-- **Tests.** `tests/hooks/test_pre_commit_phone_numbers.sh` has 30 assertions covering block and allow cases, masking, file:line reporting and fail-closed behaviour.
+- **Tests.** `tests/hooks/test_pre_commit_phone_numbers.sh` has 29 assertions covering block and allow cases, masking, file:line reporting and fail-closed behaviour. It runs the real hook end to end in a throwaway `git init` repo with the real git binary, with no fake `git` on PATH, and wraps every hook run in `timeout 60`.
 
 ## 4. Risk & impact on existing functionality
 
@@ -78,7 +78,7 @@ Nobody who uses the apps sees a difference (riders, drivers, corporate admins, i
 |---|---|---|
 | `.claude/hooks/pre-commit` | New check 12 (blocking phone-number scan of added lines); step counters `N/11` → `N/12` | Catch real numbers before they reach git |
 | `.gitleaks.toml` | New `spinr-nanp-phone-number` rule, with an allowlist that mirrors the hook | CI backstop (G5a) for commits made with `--no-verify` or without the hook |
-| `tests/hooks/test_pre_commit_phone_numbers.sh` | New: 30 assertions | Regression coverage for block/allow/masking/fail-closed |
+| `tests/hooks/test_pre_commit_phone_numbers.sh` | New: 29 assertions, run in a throwaway real-git repo | Regression coverage for block/allow/masking/fail-closed |
 | `docs/change-log/2026-09-25-block-real-phone-numbers.md` | This entry | CLAUDE.md Change Impact Log requirement |
 
 ## 7. Before / after
@@ -107,7 +107,7 @@ This is dev tooling with no live data involved. To roll back:
 
 ## 9. Verification performed
 
-- [x] `bash tests/hooks/test_pre_commit_phone_numbers.sh`: 30 passed, 0 failed, run several times.
+- [x] `timeout 300 bash tests/hooks/test_pre_commit_phone_numbers.sh`: 29 passed, 0 failed.
 - [x] Real scratch commit in the worktree with an added made-up non-fictional number: the hook blocked it with exit 1 and masked output. With `306-555-0142` the same commit passed. The scratch commit was then reset away.
 - [x] gitleaks 8.18.4 (G5b's pinned version) against synthetic fixtures: exactly the same block/allow decisions as the hook. The rule-scoped `.next/` path allowlist was confirmed.
 - [x] Full-tree measurement with the hook's awk logic and with gitleaks (`--no-git` over `git ls-files`): 688 and 689 matches, reconciled line by line. The single difference is explained in §4.
@@ -120,4 +120,4 @@ This is dev tooling with no live data involved. To roll back:
 - **G5b on a real build.** A real admin-dashboard `npm run build` followed by a G5b scan was not run. The `.next/` exclusion was verified only on a synthetic bundle file. If the path allowlist behaved differently on real build paths, G5b (blocking) could turn red on minified numeric literals. Reverting §8's gitleaks block fixes that immediately.
 - **gitleaks-action v3 PR comments.** Its behaviour for the new rule (whether it comments, and what it redacts) was reasoned about, not observed on a live PR run.
 - **awk and shellcheck coverage.** The check was run on mawk (Linux) only. macOS BWK awk and gawk were not exercised, though the program avoids interval expressions and gawk-only functions for that reason. `shellcheck` is not installed in this environment, so the hook was not linted.
-- **Pre-existing test hazard, not fixed here (out of scope).** `tests/hooks/test_pre_commit.sh`, the pre-existing hook test, is now a fork bomb. Its git shim falls back to `command git`, which resolves to the shim itself, so it recurses forever as soon as the hook makes an un-intercepted call (check 9's `git rev-parse --show-toplevel`). It hung and spawned about 27k processes here before being killed. The new test resolves the real git path first. The old file should get the same one-line fix.
+- **Pre-existing test hazard, not fixed here (out of scope).** `tests/hooks/test_pre_commit.sh`, the pre-existing hook test, fork-bombs when run. Its fake `git` on PATH falls back to `command git`, which resolves to the shim itself, so it recurses forever as soon as the hook makes a call the shim does not intercept (check 9's `git rev-parse --show-toplevel`, added after the test was written). Running it once during this work spawned tens of thousands of processes and hit the container's process limit before the processes were killed. The new test avoids fake `git` shims entirely. The old file should be rewritten the same way, or at least resolve the real git by absolute path before changing PATH. It is not wired into CI, so nothing automated runs it today.

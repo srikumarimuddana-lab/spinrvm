@@ -1,7 +1,9 @@
 #!/bin/bash
 # Tests for check 12 of .claude/hooks/pre-commit (real phone numbers in added lines).
-# Runs the hook against synthetic staged diffs via a git shim (same approach as
-# tests/hooks/test_pre_commit.sh) and asserts block/allow plus masked output.
+# End-to-end against a THROWAWAY git repo (git init in a temp dir) using the
+# real git binary — no fake `git` on PATH (a PATH shim that falls back to
+# `command git` resolves to itself and fork-bombs). Every hook run is wrapped
+# in `timeout 60`.
 # Usage: bash tests/hooks/test_pre_commit_phone_numbers.sh   (run from repo root)
 #
 # Every non-fictional number below is ASSEMBLED AT RUNTIME from 3/4-digit
@@ -13,50 +15,53 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-HOOK=".claude/hooks/pre-commit"
+SRC_ROOT=$(pwd)
+HOOK="$SRC_ROOT/.claude/hooks/pre-commit"
+[ -f "$HOOK" ] || { echo "run from repo root ($HOOK not found)"; exit 2; }
 PASS=0
 FAIL=0
 WORKDIR=$(mktemp -d)
-PATCH_FILE="$WORKDIR/patch.txt"
+REPO="$WORKDIR/repo"
 OUT_FILE="$WORKDIR/out.txt"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 _pass() { echo -e "${GREEN}  PASS${NC} — $1"; ((PASS++)) || true; }
 _fail() { echo -e "${RED}  FAIL${NC} — $1"; ((FAIL++)) || true; }
 
-FAKEBIN="$WORKDIR/fakebin"
-mkdir -p "$FAKEBIN"
-# Resolve the real git BEFORE the shim is on PATH. A shim fallback of
-# `command git` finds the shim itself again (command only skips functions,
-# not PATH) and recurses forever on any call it does not intercept — e.g.
-# check 9's `git rev-parse --show-toplevel`.
-REAL_GIT=$(command -v git)
-cat > "$FAKEBIN/git" <<SHIM
-#!/bin/bash
-args="\$*"
-if [[ "\$args" == *"--cached"* && "\$args" == *"-U0"* ]]; then
-  cat "$PATCH_FILE"
-elif [[ "\$args" == *"--name-only"* ]]; then
-  echo ""
-elif [[ "\$args" == *"show-current"* ]]; then
-  echo "feature/test-branch"
-else
-  "$REAL_GIT" "\$@"
-fi
-SHIM
-chmod +x "$FAKEBIN/git"
+# Throwaway repo: feature branch (check 5), the real .gitleaks.toml (check 1
+# passes --config .gitleaks.toml if gitleaks is installed), one base commit.
+git init -q "$REPO"
+cd "$REPO" || exit 2
+git config user.email "test@example.com"
+git config user.name "hook test"
+git config commit.gpgsign false
+git checkout -q -b feature/phone-hook-test
+cp "$SRC_ROOT/.gitleaks.toml" .gitleaks.toml
+printf 'line %s\n' 1 2 3 4 5 6 7 8 9 > notes.md
+git add -A && git commit -q --no-verify -m base
 
-# _run label patch want_exit — runs the whole hook, output captured to $OUT_FILE
+# _reset — drop all staged/unstaged changes back to the base commit
+_reset() { git reset -q --hard && git clean -fdq; }
+
+# _run label want_exit — runs the real hook once against the current index
 _run() {
-  local label="$1" want_exit="$3" got_exit=0
-  printf '%s\n' "$2" > "$PATCH_FILE"
-  PATH="$FAKEBIN:$PATH" bash "$HOOK" > "$OUT_FILE" 2>&1 || got_exit=$?
+  local label="$1" want_exit="$2" got_exit=0
+  timeout 60 bash "$HOOK" > "$OUT_FILE" 2>&1 || got_exit=$?
   if [ "$got_exit" -eq "$want_exit" ]; then
     _pass "$label (exit $got_exit)"
   else
     _fail "$label — expected exit $want_exit, got $got_exit"
-    grep -i "phone" "$OUT_FILE" | sed 's/^/        /'
+    grep -iE "phone|BLOCKED" "$OUT_FILE" | sed 's/^/        /'
   fi
+}
+
+# _stage_new label want_exit path content — new file with one line, staged
+_stage_new() {
+  _reset
+  mkdir -p "$(dirname "$3")"
+  printf '%s\n' "$4" > "$3"
+  git add "$3"
+  _run "$1" "$2"
 }
 
 _out_has() {
@@ -72,63 +77,69 @@ E=234
 L=5678
 FULL="$A$E$L"
 
-# _diff path line... — one-file staged diff with real headers, hunk at line 10
-_diff() {
-  local path="$1"; shift
-  printf 'diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -9,0 +10,%s @@\n' \
-    "$path" "$path" "$path" "$path" "$#"
-  printf '+%s\n' "$@"
-}
-
 echo ""
 echo "=== Pre-commit check 12 (phone numbers) tests ==="
 echo ""
 echo "Blocked shapes"
-_run "+1 AAA EEE LLLL"     "+call +1 $A $E $L"        1
-_run "(AAA) EEE-LLLL"      "+tel: ($A) $E-$L"         1
-_run "AAA-EEE-LLLL"        "+phone: $A-$E-$L."        1
-_run "AAAEEELLLL"          "+PHONE = \"$FULL\""       1
-_run "+1AAAEEELLLL"        "+PHONE = \"+1$FULL\""     1
-_run "AAA.EEE.LLLL"        "+$A.$E.$L"                1
-_run "1-AAA-EEE-LLLL"      "+1-$A-$E-$L"              1
-_run "555 exchange outside 01xx still blocked" "+$A-555-$L" 1
-_run "one real among fictional" "+$A-555-0142 and $A-$E-$L" 1
+_stage_new "+1 AAA EEE LLLL"   1 a.md "call +1 $A $E $L"
+_stage_new "(AAA) EEE-LLLL"    1 a.md "tel: ($A) $E-$L"
+_stage_new "AAA-EEE-LLLL"      1 a.md "phone: $A-$E-$L."
+_stage_new "AAAEEELLLL"        1 a.py "PHONE = \"$FULL\""
+_stage_new "+1AAAEEELLLL"      1 a.py "PHONE = \"+1$FULL\""
+_stage_new "AAA.EEE.LLLL"      1 a.md "$A.$E.$L"
+_stage_new "1-AAA-EEE-LLLL"    1 a.md "1-$A-$E-$L"
+_stage_new "555 exchange outside 01xx still blocked" 1 a.md "$A-555-$L"
+_stage_new "one real among fictional" 1 a.md "$A-555-0142 and $A-$E-$L"
 
 echo ""
 echo "Masked file:line output"
-_run "doc diff blocked" "$(_diff docs/notes.md 'intro line' "driver cell $A $E $L")" 1
-_out_has   "reports file:line with last 4 only" "docs/notes.md:11: ***-***-$L"
+_reset
+printf 'line %s\n' 1 2 3 4 5 6 7 8 9 10 "driver cell $A $E $L" > notes.md
+git add notes.md
+_run "added line in an existing doc blocked" 1
+_out_has   "reports file:line with last 4 only" "notes.md:11: ***-***-$L"
 _out_lacks "never echoes the full number (digits)" "$FULL"
 _out_lacks "never echoes the full number (formatted)" "$A $E $L"
 
 echo ""
 echo "Allowed"
-_run "fictional 555-0100..0199, any area code" \
-  "+$A-555-0142 (416) 555-0199 +1${A}5550100 ${A}.555.0150" 0
-_run "UUID/hex fragment" "+id 550e8400-e29b-41d4-a716-${FULL}00 and 0x$FULL" 0
-_run "Unix timestamps (s and ms)" "+ts 1727000000 ms 1727000000123" 0
-_run "numeric ID longer than 11 digits" "+id 12${FULL}99" 0
-_run "11 digits not starting with 1" "+id 2${FULL}" 0
-_run "Stripe-style ID" "+pi_3$FULL cus_$FULL" 0
-_run "decimal fraction" "+lat 52.$FULL and ${FULL}.5" 0
-_run "int32/uint32 limits" "+MAX = 2147483647; UMAX = 4294967295" 0
-_run "bare ID after '-' (GitHub comment URL)" "+see pull/1#issuecomment-$FULL" 0
-_run "exchange starting 0/1 is not NANP" "+$A-123-$L" 0
-_run "removed line is not scanned" "$(printf 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -3,1 +2,0 @@\n-OLD = \"%s\"' "$FULL")" 0
-_run "lockfile skipped" "$(_diff admin-dashboard/package-lock.json "\"x\": \"$FULL\"")" 0
-_run "yarn.lock skipped" "$(_diff yarn.lock "x $FULL")" 0
-_run "svg skipped" "$(_diff shared/assets/icon.svg "<path d=\"M $A $E $L\"/>")" 0
-_run "same number in a .py file is NOT skipped" "$(_diff backend/x.py "P = \"$FULL\"")" 1
+_stage_new "fictional 555-0100..0199, any area code" 0 a.md \
+  "$A-555-0142 (416) 555-0199 +1${A}5550100 ${A}.555.0150"
+_stage_new "UUID/hex fragment" 0 a.md "id 550e8400-e29b-41d4-a716-${FULL}00 and 0x$FULL"
+_stage_new "Unix timestamps (s and ms)" 0 a.md "ts 1727000000 ms 1727000000123"
+_stage_new "numeric ID longer than 11 digits" 0 a.md "id 12${FULL}99"
+_stage_new "11 digits not starting with 1" 0 a.md "id 2${FULL}"
+_stage_new "Stripe-style ID" 0 a.md "pi_3$FULL cus_$FULL"
+_stage_new "decimal fraction" 0 a.md "lat 52.$FULL and ${FULL}.5"
+_stage_new "int32/uint32 limits" 0 a.md "MAX = 2147483647; UMAX = 4294967295"
+_stage_new "bare ID after '-' (GitHub comment URL)" 0 a.md "see pull/1#issuecomment-$FULL"
+_stage_new "exchange starting 0/1 is not NANP" 0 a.md "$A-123-$L"
+_stage_new "lockfile skipped" 0 admin/package-lock.json "\"x\": \"$FULL\""
+_stage_new "yarn.lock skipped" 0 yarn.lock "x $FULL"
+_stage_new "svg skipped" 0 icon.svg "<path d=\"M $A $E $L\"/>"
+
+# Removed line: commit a number (bypassing the hook, throwaway repo only),
+# then stage its deletion — deletions must never be flagged.
+_reset
+printf 'OLD = "%s"\nkeep = 1\n' "$FULL" > old.py
+git add old.py && git commit -q --no-verify -m "fixture with number"
+printf 'keep = 1\n' > old.py
+git add old.py
+_run "removed line is not scanned" 0
+git reset -q --hard HEAD~1
 
 echo ""
 echo "Fail closed"
+# A broken awk (not git) earlier on PATH: exits 2, cannot recurse.
+_reset
+printf 'nothing phone-shaped here\n' > a.md
+git add a.md
 BROKEN_AWK_BIN="$WORKDIR/brokenawk"
 mkdir -p "$BROKEN_AWK_BIN"
 printf '#!/bin/sh\nexit 2\n' > "$BROKEN_AWK_BIN/awk"
 chmod +x "$BROKEN_AWK_BIN/awk"
-printf '%s\n' "+nothing phone-shaped here" > "$PATCH_FILE"
 got_exit=0
-PATH="$BROKEN_AWK_BIN:$FAKEBIN:$PATH" bash "$HOOK" > "$OUT_FILE" 2>&1 || got_exit=$?
+PATH="$BROKEN_AWK_BIN:$PATH" timeout 60 bash "$HOOK" > "$OUT_FILE" 2>&1 || got_exit=$?
 if [ "$got_exit" -eq 1 ]; then _pass "awk failure blocks instead of passing (exit 1)"; else _fail "awk failure — expected exit 1, got $got_exit"; fi
 _out_has "says the scan could not run" "phone-number scan could not run"
 

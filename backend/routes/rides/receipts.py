@@ -22,6 +22,7 @@ from ._shared import (  # noqa: F401
     _build_fare_breakdown,
     _d,
     _f,
+    _round,
     _sum_fare_breakdown,
     relabel_booked_distance_lines,
 )
@@ -87,10 +88,10 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 
     if fare_locked and snapshot:
         fare_lines = list(snapshot["lines"])
-        ride_tip = float(_d(ride.get("tip_amount") or 0))
+        ride_tip = _d(ride.get("tip_amount") or 0)
         has_tip_line = any(ln.get("type") == "tip" for ln in fare_lines)
         if ride_tip > 0 and not has_tip_line:
-            fare_lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
+            fare_lines.append({"label": "Tip", "amount": _f(ride_tip), "type": "tip"})
         # Relabel the frozen "Ride fare (X km)" line to "(X km booked)" when GPS
         # diverged, matching get_ride / ride-history (queries.py). Without this the
         # receipt shows the quoted road distance in the fare line but the
@@ -99,11 +100,16 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         receipt_grand_total = _sum_fare_breakdown(fare_lines)
     else:
         fare_lines = _build_fare_breakdown(ride)
-        receipt_grand_total = ride.get("grand_total") or (
-            (ride.get("total_fare", 0) or 0)
-            + (ride.get("area_fees_total", 0) or 0)
-            + (ride.get("tax_amount", 0) or 0)
-            + (ride.get("tip_amount", 0) or 0)
+        # Legacy fallback (no persisted grand_total): summed in Decimal, then
+        # rounded to cents and emitted as float — same components and wire
+        # type as before, minus IEEE-754 drift (e.g. 0.1 + 0.2).
+        receipt_grand_total = ride.get("grand_total") or _f(
+            _round(
+                _d(ride.get("total_fare") or 0)
+                + _d(ride.get("area_fees_total") or 0)
+                + _d(ride.get("tax_amount") or 0)
+                + _d(ride.get("tip_amount") or 0)
+            )
         )
 
     # A cancelled ride's fare columns still hold the booking-time QUOTE (they
@@ -139,7 +145,7 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "airport_fee": ride.get("airport_fee", 0),
         "booking_fee": ride.get("booking_fee", 0),
         "cancellation_fee": (
-            (ride.get("cancellation_fee_admin", 0) + ride.get("cancellation_fee_driver", 0))
+            _f(_round(_d(ride.get("cancellation_fee_admin") or 0) + _d(ride.get("cancellation_fee_driver") or 0)))
             if ride.get("status") == RideStatus.CANCELLED
             else 0
         ),

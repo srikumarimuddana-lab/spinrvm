@@ -44,13 +44,20 @@ _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
 #   client): 4 workers ~= 4+ sends/s at a sub-second Twilio round trip, far
 #   above organic login volume; the small queue absorbs a burst, past that a
 #   send fails fast and the rider is told to retry.
-# - Everything else via send_sms (SOS contact opt-out notice, guest ride
-#   notices, admin cloud-messaging and marketing broadcasts at up to 50
-#   concurrent sends): 8 workers -- no fewer than the default pool's
-#   min(32, cpu+4) gave these sends on a 1-4 vCPU host -- plus a 56-deep queue.
+# - Everything else via send_sms. The bulk caller is admin cloud messaging
+#   (routes/admin/messaging.py _fan_out): asyncio.Semaphore(50) per broadcast,
+#   each recipient's SMS awaited in turn, so <= 50 in flight per broadcast;
+#   marketing SMS (utils/marketing_sms.py) is per-recipient and only reached
+#   through that same semaphore. The rest are one SMS per event (spawned guest
+#   ride notices, the SOS contact opt-out notice). 256 admission slots = one
+#   broadcast plus ~200 concurrent small sends, or ~5 simultaneous broadcasts,
+#   before anything fails fast -- the bound protects the default executor, it
+#   is not meant to drop healthy work. 16 workers so the whole 256 drains in
+#   ~8 s at a healthy ~0.5 s Twilio round trip, inside the 15 s wait; a deeper
+#   queue than the workers can drain would just turn into TimeoutErrors.
 _SOS_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=28, thread_name_prefix="spinr-sms-sos")
 _OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=8, thread_name_prefix="spinr-sms-otp")
-_SMS_EXECUTOR = BoundedExecutor(max_workers=8, queue_size=56, thread_name_prefix="spinr-sms")
+_SMS_EXECUTOR = BoundedExecutor(max_workers=16, queue_size=240, thread_name_prefix="spinr-sms")
 
 
 async def send_sms(

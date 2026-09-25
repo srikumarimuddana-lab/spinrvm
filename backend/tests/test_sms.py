@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -249,7 +249,7 @@ class TestSMSBoundedExecutor:
                     *(sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW) for _ in range(capacity))
                 )
                 assert all(r["success"] is False and r["error"] == "TimeoutError" for r in hung)
-                assert len(sms_mod._SMS_EXECUTOR._threads) == sms_mod._SMS_EXECUTOR._max_workers == 8
+                assert len(sms_mod._SMS_EXECUTOR._threads) == sms_mod._SMS_EXECUTOR._max_workers == 16
 
                 start = time.monotonic()
                 result = await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW)
@@ -305,6 +305,61 @@ class TestSMSBoundedExecutor:
                 assert [r["success"] for r in sos] == [True, True, True]
         finally:
             release.set()
+
+    @pytest.mark.asyncio
+    async def test_max_size_broadcast_plus_small_callers_never_saturates_when_healthy(self):
+        """Fail-fast must only fire in an outage pile-up, never on a healthy
+        broadcast: drive the real admin _fan_out (Semaphore(50) in flight) and,
+        concurrently, a burst of one-off sends (guest notices / opt-out
+        notices) with Twilio mocked fast -- zero may be rejected."""
+        import backend.sms_service as sms_mod
+        from backend.routes.admin import messaging
+
+        created = []
+
+        def _create(**_kwargs):
+            time.sleep(0.02)  # healthy Twilio round trip, scaled down
+            created.append(1)
+            return MagicMock(sid="SM-ok")
+
+        recipients = [{"id": f"u{i}", "phone": f"+1306555{i:04d}"} for i in range(200)]
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("twilio.http.http_client.TwilioHttpClient"),
+            patch("twilio.rest.Client") as mock_client_cls,
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(
+                    return_value={
+                        "twilio_account_sid": "AC123",
+                        "twilio_auth_token": "token",
+                        "twilio_from_number": "+10000000000",
+                    }
+                ),
+            ),
+            patch.object(messaging.db_supabase, "update_one", update_mock),
+        ):
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            _, small = await asyncio.gather(
+                messaging._fan_out(
+                    "msg-max",
+                    recipients,
+                    title="T",
+                    description="D",
+                    channels=["sms"],
+                    is_marketing=False,
+                    target_app=None,
+                    msg_type="info",
+                ),
+                asyncio.gather(*(sms_mod.send_sms("+13065551234", "guest", **_TWILIO_KW) for _ in range(100))),
+            )
+
+        update_mock.assert_awaited_once_with(
+            "cloud_messages", {"id": "msg-max"}, {"successful": 200, "failed_count": 0}
+        )
+        assert all(r["success"] for r in small), [r.get("error") for r in small if not r["success"]]
+        assert len(created) == 300
 
 
 class TestTwilioIntegration:

@@ -19,6 +19,7 @@ try:
     from ...db import db
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...services.admin_money_caps import enforce_admin_money_action_cap
     from ...utils.rate_limiter import admin_wallet_limit
     from ..wallet import _money_str, get_or_create_wallet
 except ImportError:
@@ -27,6 +28,7 @@ except ImportError:
     from dependencies import get_admin_user
     from features import send_push_notification
     from routes.wallet import _money_str, get_or_create_wallet
+    from services.admin_money_caps import enforce_admin_money_action_cap
     from utils.rate_limiter import admin_wallet_limit
 
 logger = logging.getLogger(__name__)
@@ -159,6 +161,11 @@ async def admin_credit_wallet(
     old_balance = _q(wallet.get("balance", 0))
     credit = _q(req.amount)
 
+    # N23: per-admin daily cap (403, nothing moves) + large-action alert.
+    await enforce_admin_money_action_cap(
+        admin, credit, action="wallet_credit", resource="user", resource_id=req.user_id
+    )
+
     # WS-6: atomic locked delta. The previous read-modify-write wrote the
     # balance back filtered on {"id": wallet_id} only, so any concurrent
     # mutation (ride payment, cancellation fee, another admin action) landing
@@ -262,6 +269,9 @@ async def admin_debit_wallet(
             status_code=400,
             detail=f"Insufficient balance. Need ${debit}, have ${old_balance}",
         )
+
+    # N23: per-admin daily cap (403, nothing moves) + large-action alert.
+    await enforce_admin_money_action_cap(admin, debit, action="wallet_debit", resource="user", resource_id=req.user_id)
 
     # WS-6: atomic locked delta. The sufficiency check above is advisory only —
     # it races, which is exactly how a debit could previously succeed against a

@@ -16,6 +16,7 @@ try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_push_notification
+    from ..services.admin_money_caps import enforce_admin_money_action_cap
     from ..services.zoho_desk_integration import create_ticket_for_dispute
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
@@ -25,6 +26,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
     from features import send_push_notification
+    from services.admin_money_caps import enforce_admin_money_action_cap
     from services.zoho_desk_integration import create_ticket_for_dispute
     from settings_loader import get_app_settings
     from utils.audit_logger import log_admin_action
@@ -244,6 +246,12 @@ async def admin_resolve_dispute(
 
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
+        # N23: per-admin daily cap (403, no Stripe call) + large-refund alert.
+        # Counted even on the manual_required path below — the admin still
+        # approved the refund.
+        await enforce_admin_money_action_cap(
+            current_admin, req.refund_amount, action="dispute_refund", resource="dispute", resource_id=dispute_id
+        )
         # HALF_UP cents conversion — int() truncation shaved sub-cent refund
         # amounts (e.g. 10.005 → 1000 cents instead of 1001).
         refund_amount_cents = dollars_to_cents(req.refund_amount)

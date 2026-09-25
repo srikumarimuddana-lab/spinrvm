@@ -1109,8 +1109,13 @@ jobs:
           # and dead scratch scripts -- see .github/trufflehog-exclude-paths.txt
           # for the full list and reasoning. Everything else stays scanned
           # and blocking.
+          # --no-update: without it trufflehog replaces the pinned v3.94.3
+          # above with the latest release at startup. v3.97.9 (2026-09-25)
+          # scanned far past --since-commit (803 MB of history) on
+          # every push to main, failing on long-known, already-triaged
+          # findings instead of on what the push actually changed.
           trufflehog git file://. --since-commit "$SINCE" \
-            --exclude-paths=.github/trufflehog-exclude-paths.txt --fail
+            --exclude-paths=.github/trufflehog-exclude-paths.txt --no-update --fail
 
       - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -60,7 +60,7 @@ async def _resolve_and_capture_stripe_amount(refund_amount: str) -> dict:
         ),
         patch(
             "backend.routes.disputes.get_app_settings",
-            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": True}),
         ),
         patch("backend.routes.disputes.log_admin_action", AsyncMock()),
         patch("backend.routes.disputes.send_push_notification", AsyncMock()),

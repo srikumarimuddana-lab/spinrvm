@@ -16,6 +16,7 @@ try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_push_notification
+    from ..services.admin_money_caps import enforce_admin_money_action_cap
     from ..services.zoho_desk_integration import create_ticket_for_dispute
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
@@ -25,6 +26,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
     from features import send_push_notification
+    from services.admin_money_caps import enforce_admin_money_action_cap
     from services.zoho_desk_integration import create_ticket_for_dispute
     from settings_loader import get_app_settings
     from utils.audit_logger import log_admin_action
@@ -243,7 +245,45 @@ async def admin_resolve_dispute(
             )
 
     refund_result: Dict[str, Any] = {}
-    if req.resolution in ("approved", "partial_refund") and req.refund_amount:
+    refund_issued = False
+    wants_refund = req.resolution in ("approved", "partial_refund") and bool(req.refund_amount)
+    refunds_enabled = False
+    if wants_refund:
+        # N23: refunds only move money when admin_dispute_refunds_enabled is on.
+        # Fail closed if the flag cannot be read: no refund, dispute stays open.
+        try:
+            settings = await get_app_settings()
+        except Exception as settings_err:
+            details = getattr(settings_err, "details", None)
+            logger.error(
+                "[REFUND] settings read failed for dispute %s admin %s: %r",
+                dispute_id,
+                current_admin.get("id"),
+                details.get("original", settings_err) if isinstance(details, dict) else settings_err,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not confirm whether dispute refunds are enabled; nothing was refunded. Retry shortly.",
+            ) from settings_err
+        refunds_enabled = settings.get("admin_dispute_refunds_enabled") is True
+
+    if wants_refund and not refunds_enabled:
+        logger.warning(
+            "[REFUND] admin_dispute_refunds_enabled is off: dispute %s resolved with no refund issued", dispute_id
+        )
+        refund_result = {
+            "status": "not_issued",
+            "reason": "admin_dispute_refunds_disabled",
+            "approved_amount": str(req.refund_amount),
+        }
+    elif wants_refund:
+        # N23: per-admin daily cap (403, no Stripe call) + large-refund alert.
+        # Enforced on the manual_required path below too — the admin still
+        # approved the refund.
+        await enforce_admin_money_action_cap(
+            current_admin, req.refund_amount, action="dispute_refund", resource="dispute", resource_id=dispute_id
+        )
         # HALF_UP cents conversion — int() truncation shaved sub-cent refund
         # amounts (e.g. 10.005 → 1000 cents instead of 1001).
         refund_amount_cents = dollars_to_cents(req.refund_amount)
@@ -258,7 +298,6 @@ async def admin_resolve_dispute(
         else:
             import stripe as _stripe  # noqa: PLC0415
 
-            settings = await get_app_settings()
             stripe_secret = settings.get("stripe_secret_key", "")
             if not stripe_secret:
                 raise HTTPException(status_code=503, detail="Stripe not configured")
@@ -279,10 +318,19 @@ async def admin_resolve_dispute(
                     )
                 )
                 refund_result = {"status": refund.status, "refund_id": refund.id}
-                logger.info(
-                    f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
-                    f"${req.refund_amount} for dispute {dispute_id}"
-                )
+                # Only succeeded/pending means money is (or will be) returned;
+                # failed/canceled (or anything else) is not a refund.
+                refund_issued = refund.status in ("succeeded", "pending")
+                if refund_issued:
+                    logger.info(
+                        f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
+                        f"${req.refund_amount} for dispute {dispute_id}"
+                    )
+                else:
+                    logger.error(
+                        f"[REFUND] Stripe refund {refund.id} for dispute {dispute_id} returned "
+                        f"status={refund.status}; no refund issued, manual follow-up required"
+                    )
             except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
                 raise HTTPException(
@@ -291,18 +339,41 @@ async def admin_resolve_dispute(
                 ) from refund_err
 
     # Stripe succeeded (or not required) — persist the resolved status
+    # Flag off, or a Stripe refund that came back failed/canceled: nothing was
+    # refunded, so keep refund_amount (summed as total_refunded by
+    # admin_dispute_stats_rollup) at 0. manual_required keeps its amount, as before.
+    nothing_refunded = wants_refund and (not refunds_enabled or ("refund_id" in refund_result and not refund_issued))
     update_data: Dict[str, Any] = {
         "status": "resolved" if req.resolution != "rejected" else "rejected",
         "resolution": req.resolution,
-        "refund_amount": req.refund_amount or 0,
+        "refund_amount": 0 if nothing_refunded else (req.refund_amount or 0),
         "admin_note": req.admin_note or "",
         "resolved_at": datetime.now(timezone.utc).isoformat(),
+        # F-32: carried over from support.py's removed duplicate handler.
+        "resolved_by": current_admin["id"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if refund_result:
         update_data["refund_result"] = refund_result
 
-    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
+    # Compare-and-set: two concurrent resolves both pass the read-then-check
+    # above. Only the one whose write still finds the dispute unresolved wins;
+    # the loser gets 409 and writes no audit row (so the N23 cap can't double
+    # count). With the flag on, the loser may already have called Stripe, but
+    # the deterministic idempotency key (refund-dispute-{id}) makes that a
+    # replay of the winner's refund (or a 400 mismatch -> 502), never a second
+    # refund. Same pattern as ride acceptance's {'status': 'searching'} filter.
+    claimed = await db_supabase.update_one(
+        "disputes", {"id": dispute_id, "status": {"$nin": ["resolved", "rejected"]}}, update_data
+    )
+    if not claimed:
+        logger.warning(
+            "[REFUND] dispute %s already resolved by a concurrent request; admin %s lost the race (refund_result=%s)",
+            dispute_id,
+            current_admin.get("id"),
+            refund_result.get("status"),
+        )
+        raise HTTPException(status_code=409, detail="Dispute already resolved")
 
     await log_admin_action(
         current_admin,
@@ -312,6 +383,8 @@ async def admin_resolve_dispute(
         {
             "resolution": req.resolution,
             "refund_amount": str(req.refund_amount or 0),
+            # N23: admin_money_caps counts only rows where a refund was issued.
+            "refund_issued": refund_issued,
             "admin_note": req.admin_note or "",
         },
     )
@@ -328,11 +401,7 @@ async def admin_resolve_dispute(
             "partial_refund": "approved",
             "rejected": "rejected",
         }.get(req.resolution, "reviewed")
-        amount_text = (
-            f" A refund of ${req.refund_amount:.2f} has been issued."
-            if req.resolution in ("approved", "partial_refund") and req.refund_amount
-            else ""
-        )
+        amount_text = f" A refund of ${req.refund_amount:.2f} has been issued." if refund_issued else ""
         try:
             await send_push_notification(
                 rider_id,
@@ -348,9 +417,16 @@ async def admin_resolve_dispute(
         except Exception as notif_err:
             logger.debug(f"Dispute resolved notification failed: {notif_err}")
 
-    return {
+    response: Dict[str, Any] = {
         "success": True,
         "dispute_id": dispute_id,
         "resolution": req.resolution,
         "refund": refund_result or None,
+        "refund_issued": refund_issued,
     }
+    if wants_refund and not refund_issued:
+        response["message"] = (
+            "Dispute resolved, but no refund was issued. Issue the refund manually in Stripe "
+            "(automatic dispute refunds are off, Stripe did not complete the refund, or the ride has no card payment)."
+        )
+    return response

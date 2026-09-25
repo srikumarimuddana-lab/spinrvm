@@ -74,11 +74,6 @@ class DisputeUpdateRequest(BaseModel):
     user_type: Optional[str] = None
 
 
-class DisputeResolveRequest(BaseModel):
-    status: Optional[str] = None  # resolved, rejected, pending
-    notes: Optional[str] = None
-
-
 class TicketCreateRequest(BaseModel):
     subject: str = ""
     category: str = "general"
@@ -324,28 +319,11 @@ async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, a
     return {"message": "Dispute updated"}
 
 
-@router.put("/disputes/{dispute_id}/resolve")
-async def admin_resolve_dispute(
-    dispute_id: str,
-    resolution: DisputeResolveRequest,
-    admin: dict = Depends(get_admin_user),
-):
-    """Resolve a dispute. resolved_by is set from the authenticated admin (F-32)."""
-    resolution_data = {
-        "resolution_status": resolution.status,
-        "resolution_notes": resolution.notes or "",
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "resolved_by": admin["id"],
-    }
-    await db_supabase.update_one("disputes", {"id": dispute_id}, resolution_data)
-    await log_admin_action(
-        admin,
-        "dispute_resolved",
-        "disputes",
-        dispute_id,
-        {"status": resolution.status, "notes": resolution.notes},
-    )
-    return {"message": "Dispute resolved"}
+# PUT /disputes/{dispute_id}/resolve is served by routes/disputes.py
+# (admin_router, require_module("disputes")). A duplicate handler here used to
+# be registered first and shadow it: it wrote resolution_status only and never
+# refunded, while the dashboard's {resolution, refund_amount, admin_note}
+# payload was silently ignored. Removed 2026-09-25 (N23).
 
 
 @router.delete("/disputes/{dispute_id}")

@@ -90,3 +90,15 @@
 | **Rollback plan** | Delete the tracking row only. **Never drop the column in production**, because it is the live kill switch. |
 | **Verification performed** | Afterwards `route_deviation_alert_enabled` still reads `true`. There are 6 tracked `47x` rows, and 561 tracked rows in total. The orphaned `415_route_deviation_alert_enabled_setting.sql` row stays as history. |
 | **What was NOT verified** | Nothing further was needed; the database change was a no-op. |
+
+## 8. Applied migrations 479 and 477 (admin money caps and disputes columns, merged in #5802)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5802 merged at 15:54 UTC. Railway auto-deployed it from `main`: deployment `969d5917`, live about 15:56. Its two migrations were not yet in production. Until they were applied, every admin settings save would fail with PGRST204, because the dashboard round-trips the new fields. Dispute create and resolve would also fail. |
+| **Fix/remediation** | Owner-approved at about 15:57. Both merged files were run verbatim, each in its own transaction with `lock_timeout 2s` and `statement_timeout 20s`, and each tracking row was inserted inside the same transaction. Checksums (from the runner's `_checksum`): 479 `aeb4fd22…`, 477 `980e928f…`. `applied_by = 'claude-audit-apply-2026-09-25'`. |
+| **Risk & impact** | Additive only. The new columns are nullable, or `NOT NULL DEFAULT FALSE`, which is a metadata-only change with no rewrite. `disputes` has 0 rows. |
+| **User experience effect** | None. The cap and the alert threshold are NULL (disabled), and `admin_dispute_refunds_enabled` is `false`. |
+| **Rollback plan** | Behavioural rollback is already in place, because everything is off. For the schema, follow each file's header: drop the added columns only after reverting the code, and delete the tracking rows. |
+| **Verification performed** | Before the apply, neither set of columns existed. Afterwards, the settings cap and threshold read `null`, the refund flag reads `false`, all 4 `disputes` columns exist, and both tracking rows are present. Railway deploy logs from 15:54 UTC, filtered for `PGRST204` / `admin_money` / `admin_dispute_refunds` / `disputes`, returned no entries, so no failed saves were seen in the ~2-minute gap. |
+| **What was NOT verified** | An admin settings save and a dispute resolve were not run through the UI after the apply. |

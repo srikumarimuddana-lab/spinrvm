@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 try:
@@ -147,6 +147,27 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
         "resend_api_key",
     }
 )
+
+# N23 money controls (migration 479): the per-admin daily cap, the alert
+# threshold, and the kill switch for real dispute refunds. A settings-module
+# admin who could raise their own cap or switch refunds on would defeat the
+# control, so changing any of these requires super_admin. Compared by value
+# (Decimal/bool), not string: the dashboard round-trips the whole settings
+# object on every save, so an unchanged value must not 403 an unrelated save.
+_SUPER_ADMIN_ONLY_MONEY_FIELDS = frozenset(
+    {"admin_money_daily_cap_per_admin", "admin_money_alert_threshold", "admin_dispute_refunds_enabled"}
+)
+
+
+def _same_setting_value(new: Any, old: Any) -> bool:
+    if isinstance(new, bool) or isinstance(old, bool):
+        return bool(new) == bool(old)
+    if old is None:
+        return new is None
+    try:
+        return Decimal(str(new)) == Decimal(str(old))
+    except (InvalidOperation, ValueError):
+        return False
 
 
 # Columns that live on the settings row but are NOT settings — internal state
@@ -514,6 +535,15 @@ class SettingsUpdateRequest(BaseModel):
     # cap, no masking/super-admin gate needed to change it (same posture as
     # dual_approval_exports_enabled above — a process control, not a secret).
     corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    # Migration 479 (N23 / ADMIN-OPS-001). Per-admin daily cap across admin
+    # wallet credits/debits and dispute refunds, plus a single-action alert
+    # threshold; enforced by services/admin_money_caps.py. Unset (NULL) =
+    # disabled. Same process-control posture as the corporate cap above.
+    admin_money_daily_cap_per_admin: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    admin_money_alert_threshold: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    # Migration 479. Ships False: admin dispute resolve records approved
+    # refunds but issues none until this is on (routes/disputes.py).
+    admin_dispute_refunds_enabled: Optional[bool] = None
     # Migration 473 / ROADMAP N22: per-driver daily cap (CAD) on instant
     # payouts (routes/drivers/payouts.py::request_instant_payout). NULL = no
     # cap. A process control, not a secret — same posture as the corporate
@@ -830,6 +860,12 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
         current = existing or {}
         for field in _SUPER_ADMIN_ONLY_FIELDS:
             if field in update_fields and (update_fields[field] or "") != (current.get(field) or ""):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Only super admins can change {field}",
+                )
+        for field in _SUPER_ADMIN_ONLY_MONEY_FIELDS:
+            if field in update_fields and not _same_setting_value(update_fields[field], current.get(field)):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Only super admins can change {field}",

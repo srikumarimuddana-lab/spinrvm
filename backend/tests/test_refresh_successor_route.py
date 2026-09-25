@@ -17,22 +17,25 @@ USER = {"id": "u1", "phone": "+13065550100", "token_version": 2, "current_sessio
 pytestmark = pytest.mark.asyncio
 
 
-def _request() -> StarletteRequest:
+def _request(cookie: str | None = None) -> StarletteRequest:
+    headers = [(b"user-agent", b"DriverApp/1.0")]
+    if cookie is not None:
+        headers.append((b"cookie", f"refresh_token={cookie}".encode()))
     return StarletteRequest(
         {
             "type": "http",
             "method": "POST",
             "path": "/auth/refresh",
             "query_string": b"",
-            "headers": [(b"user-agent", b"DriverApp/1.0")],
+            "headers": headers,
         }
     )
 
 
-def _body(proposed=PROPOSED):
+def _body(proposed=PROPOSED, refresh_token=PARENT):
     from backend.routes.auth import RefreshRequest
 
-    return RefreshRequest(refresh_token=PARENT, proposed_refresh_token=proposed)
+    return RefreshRequest(refresh_token=refresh_token, proposed_refresh_token=proposed)
 
 
 def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
@@ -56,10 +59,10 @@ def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
     }
 
 
-async def _call(auth, patches, body):
+async def _call(auth, patches, body, cookie=None):
     started = {name: p.start() for name, p in patches.items()}
     try:
-        result = await auth.refresh_access_token(request=_request(), response=MagicMock(), body=body)
+        result = await auth.refresh_access_token(request=_request(cookie), response=MagicMock(), body=body)
     finally:
         for p in patches.values():
             p.stop()
@@ -92,19 +95,49 @@ async def test_malformed_proposal_is_ignored_without_reading_flag(proposed):
     m["classify"].assert_not_awaited()
 
 
-async def test_no_match_rotates_without_the_client_proposed_raw():
-    """A "no_match" verdict is the normal case for every first-time refresh
-    (the parent hasn't been committed-replayed before). The client's proposed
-    bytes must NOT reach issue_refresh_token's `raw` kwarg here -- only the
-    recover branch (a server-committed successor) may ever populate it.
-    Passing it through on this path would let an attacker who can shape the
-    refresh request body (but not read the HttpOnly cookie) plant a known
-    plaintext as the next refresh token's secret."""
+async def test_no_match_with_cookie_parent_never_uses_the_proposal():
+    """A "no_match" verdict is the normal case for every first-time refresh.
+    When the parent comes from the HttpOnly cookie, the client's proposed bytes
+    must NOT reach issue_refresh_token's `raw` kwarg: a script that can shape
+    the refresh request body (but not read the cookie) would otherwise plant a
+    known plaintext as the next refresh token's secret."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(refresh_token=""), cookie=PARENT)
+    m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
+    m["lookup"].assert_awaited_once_with(PARENT)
+    assert "raw" not in m["issue"].await_args.kwargs
+
+
+async def test_no_match_with_body_parent_commits_the_proposal():
+    """A mobile client sends the parent in the body with its proposal. It
+    already holds a live credential, so the proposal becomes the successor's
+    secret; a lost response can then be recovered by replaying both."""
     from backend.routes import auth
 
     _result, m = await _call(auth, _patches(auth), _body())
     m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
-    m["lookup"].assert_awaited_once()
+    m["lookup"].assert_awaited_once_with(PARENT)
+    assert m["issue"].await_args.kwargs["raw"] == PROPOSED
+
+
+async def test_body_parent_is_preferred_over_a_stale_cookie():
+    """Native HTTP stacks keep the cookie from the last foreground response,
+    which is stale after the driver app's background task rotated the token.
+    With a valid proposal, the body token is the one the client holds."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(), cookie="stale-cookie-token")
+    m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
+    m["lookup"].assert_awaited_once_with(PARENT)
+    assert m["issue"].await_args.kwargs["raw"] == PROPOSED
+
+
+async def test_flag_off_keeps_cookie_precedence_and_server_random_successor():
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth, flag=False), _body(), cookie="cookie-token")
+    m["lookup"].assert_awaited_once_with("cookie-token")
     assert "raw" not in m["issue"].await_args.kwargs
 
 

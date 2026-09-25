@@ -1953,6 +1953,13 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # rotation response is recovered instead of cascading. See
     # docs/known-forks.md; admin refresh has no twin by design.
     proposed = await _accepted_refresh_proposal(body)
+    # A mobile client that proposes a successor also sends the refresh token it
+    # holds in the body. Prefer that over a cookie: native HTTP stacks keep the
+    # cookie from the last foreground response, which is stale once the driver
+    # app's background task (credentials: 'omit') has rotated the token.
+    parent_from_body = bool(proposed and body and body.refresh_token)
+    if parent_from_body:
+        refresh_token_from_cookie = body.refresh_token
     if proposed:
         verdict, successor = await classify_committed_replay(refresh_token_from_cookie, proposed)
         if verdict == "recover" and successor:
@@ -1984,11 +1991,14 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
                 action_hint="Sign in again",
             )
         # verdict == "no_match": this parent hasn't been committed-replayed
-        # before (the normal case for every first-time refresh). Clear the
-        # client-supplied value now so it can never reach issue_refresh_token
-        # as `raw` below -- only the recover branch above (a server-committed
-        # successor, not client-chosen bytes) may ever populate that kwarg.
-        proposed = None
+        # before (the normal case for every first-time refresh). The proposal
+        # becomes the successor's secret only when the caller sent the parent
+        # itself in the body: it already holds a live credential, so choosing
+        # the successor grants nothing new. A cookie-authenticated request
+        # (e.g. a script shaping the body of a webview request, unable to read
+        # the HttpOnly cookie) must never choose its successor, so clear it.
+        if not parent_from_body:
+            proposed = None
 
     row = await lookup_refresh_token(refresh_token_from_cookie)
     if not row:

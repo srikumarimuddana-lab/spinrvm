@@ -592,4 +592,44 @@ Money, safety, regulatory and data-residency decisions the blueprint cannot make
 
 ---
 
-*End of file. All nine sections complete; corrections from `07-reverification.md` applied in §0, card 8, card 9, card 13, card 16 and card 18. Written by the R19 Chief Architect lane, 2026-09-24/25.*
+## §10 Changelog — corrections applied from `08-hostile-review.md` §5 (2026-09-25)
+
+All 29 corrections were applied; none was declined outright. Two were applied with a caveat line (16, 19) and one was narrowed (18). Locations use this file's section and card numbers.
+
+| # | Correction | Applied where | Note |
+|---|---|---|---|
+| 1 | "8 pending incl. RLS enable" → C125 + 450; C43 live but untracked; 379 UNKNOWN | §1 HIST-006 row, §3 Schema row, §5.2 #1 | — |
+| 2 | Remove BUILD trip PIN; KEEP the pickup code; two residual checks; delete `trip_pin_enabled` | Card 2 (verdict, Uber/Lyft, clean-sheet, How, path, cost, advantage, why-not, cites), card 8 (verdict, Uber/Lyft, Next, path), §5.1 Track B Later, §5.3 (row deleted), §5 mid-session list, §8, §7 | Orchestrator-verified: `dependencies/__init__.py:78-80`, `ride_flow.py:1164-1210`, three rider screens. TSF-010/BENCH-001 cited only as WITHDRAWN. Also recorded that S-fulfil-05 (navigation hand-off) is not a gap — `driver-app/lib/navigation/launchNavigation.ts` exists. |
+| 3 | Guard does not see every writer; step 0 inventory; `ride_repo` + payout sync first; exit = 100 % coverage and zero rejections; keep semgrep until then | H2 smallest first step, card 3 (path step 0/1, first reversible step), §5.3 money-guard row, §7 #1 | Orchestrator-verified bypass sites `ride_repo.py:260,276`, `stripe_payout_sync_service.py:457,464`. |
+| 4 | Rider recovery must not unblock booking while `in_progress`; driver notice, fare floor, dispute path; link §9 Q16 | Card 2 clean-sheet/How/path/cost, §9 Q16 | — |
+| 5 | DISPATCH-001 blast radius corrected; emit vs doc fix as a product decision; UX-effect field required | Card 1 path step 1 and first reversible step, §5 mid-session list | — |
+| 6 | DRIVER-004 disclosure as a Now step; §9 legal question | Card 1 step 1b, §9 Q16b | — |
+| 7 | Cash-out UI gated on velocity cap + TSF-004 + first detector; velocity cap Now; rider dispute only with the interim admin cap | Card 4 (How/When/path/cost), card 3 step 3, §7 #4 | Absence of clearing/velocity logic in `payouts.py` labelled INFERRED (one grep). |
+| 8 | Wind-down key from sorted refund ids; CORP-001 part (2) conditional close | Card 5 step 1 and first reversible step | RPC behaviour on a repeated key with a different amount not read — INFERRED. |
+| 9 | Regulatory obligations annex with Now steps; STRAT-004 in §9 | New §4 annex; §9 Q16c; §7.0 | Tax/legal conclusions kept ASSUMED. |
+| 10 | §7.0 "precedes every delta"; re-rank per §6 | §7 rewritten | Event log demoted to "endorsed, additive, Later for the full migration". |
+| 11 | Assign cards 9-backend/10/14 to tracks; delete "share no files"; list real overlaps; WIP ≤ 2 tracks | §5.1 | — |
+| 12 | v1 insurance-writer deletion depends on v2 RPC coverage, not the event-log helper | §5.2 #4, card 8 Next | — |
+| 13 | PII/safety fixes flip under the Change Impact Log alone | §5.2 #5, card 9 step 4 | — |
+| 14 | Relabel the moat claims ASSUMED | Card 4 advantage line, §7 closing paragraph | Relabelled rather than deleted. |
+| 15 | Card 6: drop the ADR-005 reason; ES256/JWKS to Later behind a superseding ADR; promote separate pepper / rate-limiter key / `kid`-tagged dual HS256 to Next; drop "leaked replica no longer mints" | Card 6 clean-sheet, How/When, path, cost, why-not | — |
+| 16 | "check 11 blocking" → PR-level CI parity check with PR-body override; local hook stays warn-only; contract test = definition of done | H5, §3 Shared row, card 17 (How, step 1, first step), §5.1 Track C, §7 #5 | Applied. Caveat kept in H5/card 17: the local warn-only hook is retained as a developer nudge, not removed — it is cheap and its comment already states its limit. |
+| 17 | Migrate-on-deploy rollback semantics; `auto` expand-only, contract via `approve` | Card 18 step 4 and Next list, §5.3 row, §3 Schema row, §7 #2 | — |
+| 18 | Timestamp prefixes: delete or move to Later with U-13 evidence | Card 18 (step 5 removed; Later with the evidence requirement), §3 Schema row | Narrowed to Later rather than deleted: HIST-006's residual cross-PR race is recorded in CR #4187; the evidence bar is stated. |
+| 19 | `total_fare`/`tip_amount`/`driver_earnings` FLOAT8 → INFERRED; rollback SQL + compatibility view for the rename | H2 what-exists, card 3 step 6 | Caveat: `distance_fare`/`time_fare`/`surge_multiplier` stay VERIFIED (`08_complete_schema.sql:130-136`, read this session). |
+| 20 | Money-approval threshold set by founder/finance, not "any amount"; daily cap as enforced interim; two-admin blocking risk stated | Card 7 step 2b/3, §5.3 row, §9 Q4 (already asked) | — |
+| 21 | Client-flag delivery path (backend response field) and OTA-republish rollback for mobile | Cards 2, 3, 9, 17 (paths/reversibility), §5 mid-session paragraph, §5.3 CarMarker + new rider-recovery rows | — |
+| 22 | Retention class + purge step for `ride_status_events`, `trust_signals`, approvals; `trust_signals` purpose stated | H1 cost line, card 8 verdict and step 5, card 7 path, §4 annex last row | PIPEDA-openness reading ASSUMED. |
+| 23 | "Queryable trail" ASSUMED; calendar cost beside Cost M | H1 cost and what-it-buys, §7 demoted paragraph, §5.1 Track B Later | — |
+| 24 | Top-5 #5 wording: reduces HIST-004/-005/-008/-013 (with C21); -007/-014 not addressed in-repo | §7 #3 (the static-tests delta) | — |
+| 25 | 44 loops + watchdog = 45 entries; CLAUDE.md's 42 stale | §0 Limits | — |
+| 26 | Pass redesign contents deferred to the founder memo; "priority support" tension noted | Card 11 When | — |
+| 27 | "replacing prose rules" → "backing prose rules with tests" | Card 16 clean-sheet | — |
+| 28 | New reviewer agents → extensions of existing charters | H5, §3 Shared row, card 10 (How, first step), card 11 How, card 17 How | — |
+| 29 | §9 Q22 → pointer to `05-escalations.md` §E (COMP-013 owner-managed, closed 2026-09-24, not re-opened) | §9 Q22 | — |
+
+Not changed by this pass: §6 (the hostile review endorsed it), H3/H4/H6/H7 verdicts, cards 12–14 beyond the items above, the Mermaid diagram.
+
+---
+
+*End of file. All sections complete; corrections from `07-reverification.md` (§0) and `08-hostile-review.md` §5 (§10 changelog) applied. Written by the R19 Chief Architect lane, 2026-09-24/25.*

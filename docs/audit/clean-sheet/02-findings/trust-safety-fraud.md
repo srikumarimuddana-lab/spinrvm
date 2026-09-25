@@ -194,7 +194,10 @@ Worked through fraudulent rider, fraudulent driver, account-takeover attacker, a
 - Rollout: new tool, `require_super_admin` gate (matches C23's precedent for the equivalent-sensitivity Stripe-evidence-submission endpoint), no flag needed for a read-only export.
 - Verification to close: build + test the export tool; confirm the runbook's `reports/legal-hold/` path claim either gets real tooling behind it or is corrected to describe the actual manual process until it does.
 
-### TSF-010 — No trip PIN / rider-verifies-driver-or-vice-versa mechanism
+### TSF-010 — WITHDRAWN: No trip PIN / rider-verifies-driver-or-vice-versa mechanism
+
+> **Erratum — WITHDRAWN (orchestrator re-verification, 2026-09-25).** A pickup PIN already exists and is the only production path into `in_progress`. The backend generates a 4-digit pickup code (`backend/dependencies/__init__.py:78-80`, `generate_pickup_otp`). The rider app shows it (`rider-app/app/driver-arriving.tsx`, `driver-arrived.tsx`, `ride-status.tsx`). The driver enters it in `driver-app/components/dashboard/ActiveRidePanel.tsx`, checked with a failure lockout at `backend/routes/drivers/ride_flow.py:1164-1210` (`POST /rides/{ride_id}/verify-otp`). Found by the Step 6 hostile review (`08-hostile-review.md`) and confirmed by direct read. The original search missed it by name (the code calls it an OTP, not a PIN), the same failure as QUAL-003. What remains open is narrower: the rider-verifies-driver direction and the support path when the code is missing. Do not act on the card below as written.
+
 - Hierarchy: L2 Safety, Trust & Fraud › L3 SOS / emergency (adjacent) › L4 pickup identity verification
 - Severity: MEDIUM-HIGH   Priority score: S×B×L = medium-high (safety-adjacent — "wrong person got in the car" is both a dispute and a genuine safety incident)
 - Status: VERIFIED   Existing item: new
@@ -278,7 +281,7 @@ Per-charter checklist, each item VERIFIED by direct read this pass (not re-deriv
 
 1. **TSF-001 — The only SOS on-call runbook describes a table and paging mechanism that don't exist in code.** Highest priority in this report: it's the one item where the fix (rewrite the runbook, and separately get a real on-call target configured/bought) is cheap but the consequence of leaving it wrong is a responder following bad instructions during a real emergency.
 2. **TSF-008 — No damage/cleaning-fee claims flow exists at all.** A common real-world dispute category with zero structured handling (no fee schedule, no photo evidence, no appeal path) today.
-3. **TSF-010 — No trip PIN / pickup identity verification exists.** Table-stakes at every ride-share competitor, closes both a safety and a dispute-prevention gap, and is cheap relative to its risk reduction.
+3. ~~**TSF-010 — No trip PIN / pickup identity verification exists.**~~ WITHDRAWN 2026-09-25: a pickup code exists (see the TSF-010 erratum). Table-stakes at every ride-share competitor, closes both a safety and a dispute-prevention gap, and is cheap relative to its risk reduction.
 4. **TSF-002/TSF-003 — Driver–rider collusion and cancellation-fee farming have zero detection signal.** Confirmed (not just unconfirmed) gaps this pass closed from A8's UNKNOWN status; both were previously not even in `spinr-fraud-auditor.md`'s own 4-surface charter, meaning nothing is currently watching for them by design, not by oversight-within-an-existing-check.
 5. **TSF-004 — Chargeback pattern/velocity detection doesn't exist, only per-dispute-on-demand context.** The data (`rider_prior_dispute_count`) is already computed and just needs to move from a buried PDF field to a visible admin flag — one of the cheapest fixes in this whole report relative to its value.
 

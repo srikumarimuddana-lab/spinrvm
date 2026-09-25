@@ -26,6 +26,7 @@ This prompt is the **umbrella** above both — where they already produced a rep
 | `docs/audit/clean-sheet-prompt/one-hour-run.md` | **Only one hour?** A time-boxed rapid baseline: model plan, 8 parallel lanes, timeline, kickoff prompt |
 | `docs/audit/clean-sheet-prompt/research-sessions.md` | After the baseline — five parallel 1-hour research sessions (dispatch, pricing/payments/CRA, trust & safety, mobile & realtime, security/data/infra), each producing a techniques radar |
 | `docs/audit/clean-sheet-prompt/industry-stack-benchmark.md` | What Uber/Lyft/Grab run vs Spinr's stack (INFERRED, secondary sources), primary licence-page sources to verify, and a keep/modify/assess/trial/hold verdict per pattern |
+| `docs/audit/clean-sheet-prompt/design-sessions.md` | Five parallel 1-hour design sessions (rider app, driver app, admin console, corporate portal & public touchpoints, design system/brand/a11y/content) with screen scorecards, patterns radar, and filled kickoff prompts |
 
 **Framework alignment:** `audit-framework/ground-rules.md` (evidence + severity rules),
 `audit-framework/dimensions/01–24`, `audit-framework/modules/*`, `CLAUDE.md` (release

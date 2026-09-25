@@ -85,9 +85,9 @@ async def get_public_settings():
         # Rider home-screen Home/Work/Saved shortcuts (2026-09-25 saved-places
         # fix). Default True: it repairs buttons that ignored which one was
         # tapped. False = rider-app falls back to the old behaviour (all three
-        # just open search). No settings column exists yet (follow-up
-        # migration + admin toggle, docs/change-log/2026-09-25-fix-saved-
-        # addresses.md), so until then turning it off needs a backend deploy.
+        # just open search). Column added by migration 484; admins toggle it
+        # in the dashboard (docs/change-log/2026-09-25-admin-flag-toggles.md).
+        # The True default here also covers a DB where 484 isn't applied yet.
         "saved_place_shortcuts_enabled": bool(settings.get("saved_place_shortcuts_enabled", True)),
         # PostHog session replay (rider-app + driver-app). Default off.
         # Project API key is client-safe (phc_...), same class as

@@ -1329,6 +1329,50 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Rider & driver feature switches (2026-09-25).
+                        destination_mode_enabled: migration 482, default off
+                        (C136). saved_place_shortcuts_enabled: migration 484,
+                        default on; the key is absent from GET until 484 is
+                        applied, so `!== false` shows the real (True) default
+                        and the key is only sent once an admin flips it. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Rider &amp; Driver Features</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <Label htmlFor="destination-mode-enabled">Destination mode (drivers)</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When off, drivers cannot set a destination and dispatch ignores stored
+                                        destinations.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="destination-mode-enabled"
+                                    aria-label="Destination mode enabled"
+                                    checked={settings.destination_mode_enabled === true}
+                                    onCheckedChange={(v) => update("destination_mode_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <Label htmlFor="saved-place-shortcuts-enabled">Saved-place shortcuts (riders)</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Home/Work buttons on the rider home screen pre-fill the drop-off.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="saved-place-shortcuts-enabled"
+                                    aria-label="Saved-place shortcuts enabled"
+                                    checked={settings.saved_place_shortcuts_enabled !== false}
+                                    onCheckedChange={(v) => update("saved_place_shortcuts_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Heat Map Configuration — these 9 fields live on a
                         separate `settings` table row (id="heatmap_settings")
                         behind its own GET/PUT /api/admin/settings/heatmap

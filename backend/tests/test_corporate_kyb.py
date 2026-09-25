@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from backend.tests._factories import corporate_account_row
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
@@ -44,6 +46,10 @@ def test_approve_kyb_flips_status_to_active(test_client, admin_override):
             AsyncMock(return_value=corporate_account_row("active")),
         ),
         patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
+        patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
             AsyncMock(return_value={"id": "w1"}),
         ),
@@ -61,9 +67,15 @@ def test_approve_kyb_flips_status_to_active(test_client, admin_override):
 
 
 def test_reject_kyb_flips_status_to_suspended(test_client, admin_override):
-    with patch(
-        "db_supabase.record_kyb_decision",
-        AsyncMock(return_value=corporate_account_row("suspended")),
+    with (
+        patch(
+            "db_supabase.record_kyb_decision",
+            AsyncMock(return_value=corporate_account_row("suspended")),
+        ) as m_dec,
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
@@ -71,6 +83,8 @@ def test_reject_kyb_flips_status_to_suspended(test_client, admin_override):
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "suspended"
+    # Compare-and-set on the status read before the write.
+    assert m_dec.await_args.kwargs["expected_status"] == "pending_verification"
 
 
 def test_kyb_review_wallet_failure_is_partial_success(test_client, admin_override):
@@ -82,6 +96,10 @@ def test_kyb_review_wallet_failure_is_partial_success(test_client, admin_overrid
         patch(
             "db_supabase.record_kyb_decision",
             AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
         ),
         patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
@@ -108,6 +126,10 @@ def test_kyb_review_success_reports_no_provisioning_errors(test_client, admin_ov
         patch(
             "db_supabase.record_kyb_decision",
             AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
         ),
         patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
@@ -138,3 +160,194 @@ def test_kyb_review_404_on_missing_company(test_client, admin_override):
             json={"approve": True},
         )
     assert resp.status_code == 404, resp.text
+
+
+# ── Closed-company guard: a KYB decision must never reopen a closed company ──
+
+
+def _kyb_guard_patches(*, current, decision_row, settings=None):
+    """Pre-read, decision write, provisioning and email — each returned so a
+    test can assert on what did (not) run."""
+    return (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(side_effect=list(current)),
+        ),
+        patch("db_supabase.record_kyb_decision", AsyncMock(return_value=decision_row)),
+        patch("routes.corporate_accounts.ensure_corporate_wallet", AsyncMock(return_value={"id": "w1"})),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value=settings if settings is not None else {"stripe_secret_key": ""}),
+        ),
+        patch("utils.email_provider.send_transactional_email", AsyncMock(return_value=True)),
+    )
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_kyb_review_on_closed_company_is_refused_without_status_write(test_client, admin_override, approve):
+    closed = corporate_account_row("closed", id="c1", contact_email="owner@acme.com")
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(current=[closed], decision_row=None)
+    with p_read, p_dec as m_dec, p_wallet as m_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": approve},
+        )
+    assert resp.status_code == 409, resp.text
+    assert "closed" in resp.json()["detail"].lower()
+    m_dec.assert_not_awaited()  # no status write, no decision stamp
+    m_wallet.assert_not_awaited()
+    m_mail.assert_not_awaited()  # a closed company is not told it was "approved"
+
+
+@pytest.mark.parametrize(
+    "current_status,last_decision",
+    [
+        ("pending_verification", None),  # first review
+        ("active", "approved"),  # re-review
+        ("suspended", "rejected"),  # KYB-suspended: approval may lift it
+    ],
+)
+def test_kyb_review_approve_activates_pending_active_and_kyb_suspended(
+    test_client, admin_override, current_status, last_decision
+):
+    current = corporate_account_row(
+        current_status, id="c1", kyb_last_decision=last_decision, contact_email="owner@acme.com"
+    )
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(
+        current=[current], decision_row=corporate_account_row("active", id="c1", contact_email="owner@acme.com")
+    )
+    with p_read, p_dec as m_dec, p_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "active"
+    assert data["status_unchanged"] is None
+    assert m_dec.await_args.kwargs["expected_status"] == current_status
+    assert m_dec.await_args.kwargs["preserve_status"] is False
+    m_mail.assert_awaited_once()
+
+
+# ── Staff-suspension guard: KYB approval never lifts a staff suspension ──
+
+
+@pytest.mark.parametrize("last_decision", [None, "approved"])
+def test_kyb_approve_on_staff_suspended_company_records_decision_keeps_suspended(
+    test_client, admin_override, last_decision
+):
+    """Owner decision 2026-09-25. Staff-suspended = suspended AND
+    kyb_last_decision != 'rejected' (derive_kyb_state). The decision is stamped
+    (preserve_status=True writes kyb_* only, CAS on 'suspended'), status stays
+    'suspended', no decision email (both templates would be false), and wallet
+    provisioning still runs (idempotent, zero balance — nothing else creates it)."""
+    current = corporate_account_row(
+        "suspended", id="c1", kyb_last_decision=last_decision, contact_email="owner@acme.com"
+    )
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(
+        current=[current],
+        decision_row=corporate_account_row("suspended", id="c1", kyb_last_decision="approved"),
+    )
+    with p_read, p_dec as m_dec, p_wallet as m_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "suspended"
+    assert data["status_unchanged"] == "staff_suspension"
+    assert m_dec.await_args.kwargs["preserve_status"] is True
+    assert m_dec.await_args.kwargs["expected_status"] == "suspended"
+    m_wallet.assert_awaited_once_with(company_id="c1")
+    m_mail.assert_not_awaited()
+
+
+def test_kyb_reject_on_staff_suspended_company_stays_suspended(test_client, admin_override):
+    current = corporate_account_row("suspended", id="c1", contact_email="owner@acme.com")
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(
+        current=[current], decision_row=corporate_account_row("suspended", id="c1")
+    )
+    with p_read, p_dec as m_dec, p_wallet as m_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": False, "note": "BN mismatch"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "suspended"
+    assert resp.json()["status_unchanged"] == "staff_suspension"
+    # preserve_status also keeps kyb_last_decision off 'rejected' so the portal
+    # does not reclassify this as a self-resubmittable KYB rejection.
+    assert m_dec.await_args.kwargs["preserve_status"] is True
+    m_wallet.assert_not_awaited()
+    m_mail.assert_not_awaited()
+
+
+def test_kyb_review_cas_loser_returns_409(test_client, admin_override):
+    """Read 'pending_verification', then the company is closed before the
+    write: the CAS UPDATE matches zero rows, the re-read shows 'closed' → 409
+    and none of the post-decision side effects run."""
+    pending = corporate_account_row("pending_verification", id="c1", contact_email="owner@acme.com")
+    closed = corporate_account_row("closed", id="c1")
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(current=[pending, closed], decision_row=None)
+    with p_read, p_dec as m_dec, p_wallet as m_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 409, resp.text
+    assert "'closed'" in resp.json()["detail"]
+    assert m_dec.await_args.kwargs["expected_status"] == "pending_verification"
+    m_wallet.assert_not_awaited()
+    m_mail.assert_not_awaited()
+
+
+def test_kyb_review_cas_loser_row_gone_returns_404(test_client, admin_override):
+    pending = corporate_account_row("pending_verification", id="c1")
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(current=[pending, None], decision_row=None)
+    with p_read, p_dec, p_wallet, p_settings, p_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 404, resp.text
+
+
+def test_kyb_review_kill_switch_off_restores_unconditional_write(test_client, admin_override):
+    """corporate_kyb_refuses_closed_company=false → no pre-read, no CAS (old behaviour)."""
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(
+        current=[],
+        decision_row=corporate_account_row("suspended", id="c1"),
+        settings={"corporate_kyb_refuses_closed_company": False},
+    )
+    with p_read as m_read, p_dec as m_dec, p_wallet, p_settings, p_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": False},
+        )
+    assert resp.status_code == 200, resp.text
+    m_read.assert_not_awaited()
+    assert m_dec.await_args.kwargs["expected_status"] is None
+    assert m_dec.await_args.kwargs["preserve_status"] is False
+
+
+def test_kyb_approve_kill_switch_off_lifts_staff_suspension_as_before(test_client, admin_override):
+    """Flag off → old behaviour: no pre-read, so a staff-suspended company is
+    approved straight to active and the approval email goes out."""
+    p_read, p_dec, p_wallet, p_settings, p_mail = _kyb_guard_patches(
+        current=[],
+        decision_row=corporate_account_row("active", id="c1", contact_email="owner@acme.com"),
+        settings={"corporate_kyb_refuses_closed_company": False, "stripe_secret_key": ""},
+    )
+    with p_read as m_read, p_dec as m_dec, p_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "active"
+    assert resp.json()["status_unchanged"] is None
+    m_read.assert_not_awaited()
+    assert m_dec.await_args.kwargs["preserve_status"] is False
+    m_mail.assert_awaited_once()

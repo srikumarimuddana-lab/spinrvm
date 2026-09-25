@@ -224,6 +224,10 @@ def test_kyb_document_confirm_requires_uploaded_object(test_client, admin_overri
 def _kyb_review_mocks(approved_row):
     return (
         patch("db_supabase.record_kyb_decision", AsyncMock(return_value=approved_row)),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
         patch("routes.corporate_accounts.ensure_corporate_wallet", AsyncMock(return_value={})),
         patch("routes.corporate_accounts.get_app_settings", AsyncMock(return_value={})),
         patch("utils.email_provider.send_transactional_email", AsyncMock(return_value=True)),
@@ -232,8 +236,8 @@ def _kyb_review_mocks(approved_row):
 
 def test_kyb_review_approve_sends_decision_email(test_client, admin_override):
     row = corporate_account_row("active", id="c1", contact_email="owner@acme.com")
-    p_dec, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
-    with p_dec, p_wallet, p_settings, p_mail as m_mail:
+    p_dec, p_pre, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
+    with p_dec, p_pre, p_wallet, p_settings, p_mail as m_mail:
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
             json={"approve": True},
@@ -246,8 +250,8 @@ def test_kyb_review_approve_sends_decision_email(test_client, admin_override):
 
 def test_kyb_review_reject_email_includes_note(test_client, admin_override):
     row = corporate_account_row("suspended", id="c1", contact_email="owner@acme.com")
-    p_dec, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
-    with p_dec, p_wallet, p_settings, p_mail as m_mail:
+    p_dec, p_pre, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
+    with p_dec, p_pre, p_wallet, p_settings, p_mail as m_mail:
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
             json={"approve": False, "note": "BN mismatch"},
@@ -261,6 +265,10 @@ def test_kyb_review_email_failure_does_not_fail_review(test_client, admin_overri
     row = corporate_account_row("active", id="c1", contact_email="owner@acme.com")
     with (
         patch("db_supabase.record_kyb_decision", AsyncMock(return_value=row)),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
         patch("routes.corporate_accounts.ensure_corporate_wallet", AsyncMock(return_value={})),
         patch("routes.corporate_accounts.get_app_settings", AsyncMock(return_value={})),
         patch(

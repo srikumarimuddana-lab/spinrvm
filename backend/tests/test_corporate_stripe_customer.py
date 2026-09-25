@@ -21,6 +21,10 @@ def test_stripe_customer_created_on_kyb_approval(test_client, admin_override):
             AsyncMock(return_value=active_row),
         ),
         patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
+        patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
             AsyncMock(return_value={"id": "w1"}),
         ),
@@ -60,6 +64,10 @@ def test_stripe_customer_skipped_when_already_set(test_client, admin_override):
             AsyncMock(return_value=already_has),
         ),
         patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
+        ),
+        patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
             AsyncMock(return_value={"id": "w1"}),
         ),
@@ -88,6 +96,10 @@ def test_stripe_customer_skipped_when_no_secret(test_client, admin_override):
         patch(
             "db_supabase.record_kyb_decision",
             AsyncMock(return_value=active_row),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
         ),
         patch(
             "routes.corporate_accounts.ensure_corporate_wallet",
@@ -123,6 +135,10 @@ def test_stripe_customer_creation_failure_is_partial_success(test_client, admin_
         patch(
             "db_supabase.record_kyb_decision",
             AsyncMock(return_value=active_row),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("pending_verification", id="c1")),
         ),
         patch(
             "routes.corporate_accounts.ensure_corporate_wallet",

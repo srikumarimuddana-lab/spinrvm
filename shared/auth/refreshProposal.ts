@@ -37,16 +37,25 @@ function generateProposal(): string | null {
   return PROPOSAL_RE.test(proposal) ? proposal : null;
 }
 
+// A corrupt entry is ignored (and overwritten below), not treated as a failure.
+function parsePending(stored: string | null): { parent?: unknown; proposal?: unknown } | null {
+  if (!stored) return null;
+  try {
+    const value: unknown = JSON.parse(stored);
+    return value && typeof value === 'object' ? (value as { parent?: unknown; proposal?: unknown }) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The proposal to send with `parent`, or null to refresh without one. Never throws. */
 export async function refreshProposalFor(parent: string): Promise<string | null> {
   if (Platform.OS === 'web' || !parent) return null;
   try {
     const stored = await SecureStore.getItemAsync(REFRESH_PROPOSAL_KEY);
-    if (stored) {
-      const pending = JSON.parse(stored) as { parent?: unknown; proposal?: unknown };
-      if (pending.parent === parent && typeof pending.proposal === 'string' && PROPOSAL_RE.test(pending.proposal)) {
-        return pending.proposal;
-      }
+    const pending = parsePending(stored);
+    if (pending?.parent === parent && typeof pending.proposal === 'string' && PROPOSAL_RE.test(pending.proposal)) {
+      return pending.proposal;
     }
     const proposal = generateProposal();
     if (!proposal) return null;

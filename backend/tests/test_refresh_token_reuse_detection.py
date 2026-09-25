@@ -707,7 +707,9 @@ async def test_bulk_revoke_falls_back_for_missing_reason_column_and_counts_succe
 
     assert update_mock.await_count == 2
     assert "revocation_reason" in update_mock.await_args_list[0].args[2]["$set"]
-    assert update_mock.await_args_list[1].args[2] == {"$set": {"revoked_at": update_mock.await_args_list[0].args[2]["$set"]["revoked_at"]}}
+    assert update_mock.await_args_list[1].args[2] == {
+        "$set": {"revoked_at": update_mock.await_args_list[0].args[2]["$set"]["revoked_at"]}
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1081,3 +1083,137 @@ async def test_cascade_swallows_revoke_all_failure():
 
     # Audit log still attempted even when revoke cascade failed.
     insert_mock.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# refresh_reuse_chain_scope_enabled: a rotated rider/driver replay revokes only
+# the tokens rotated forward from it, not every session the user has.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _find_one_with_flag(enabled):
+    async def _find_one(table, query):
+        if table == "settings":
+            return {"id": "app_settings", "refresh_reuse_chain_scope_enabled": enabled}
+        return {"id": query.get("id"), "token_version": 0}
+
+    return AsyncMock(side_effect=_find_one)
+
+
+def _user_token_rows():
+    # rtk-revoked-001 -> rtk-newer-002 -> rtk-head-003 (live); rtk-other-phone is
+    # a separate login on another device and must survive.
+    return [
+        {"id": "rtk-revoked-001", "revoked_at": "2026-04-01T00:00:00+00:00", "replaced_by": "rtk-newer-002"},
+        {"id": "rtk-newer-002", "revoked_at": "2026-04-01T00:15:00+00:00", "replaced_by": "rtk-head-003"},
+        {"id": "rtk-head-003", "revoked_at": None, "replaced_by": None},
+        {"id": "rtk-other-phone", "revoked_at": None, "replaced_by": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chain_scope_revokes_only_the_rotated_chain():
+    import json
+
+    update_mock = AsyncMock(return_value=True)
+    insert_mock = AsyncMock(return_value={"id": "audit-1"})
+    revoke_all_mock = AsyncMock(return_value=[])
+    kick_mock = AsyncMock()
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_with_flag(True)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=_user_token_rows())),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+        patch("utils.refresh_tokens.db.insert_one", insert_mock),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_all_mock),
+        patch("socket_manager.manager.kick_user", kick_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse, _reuse_already_handled
+
+        row = _revoked_row()
+        await _handle_refresh_token_reuse(row)
+
+        # Only the live head of this token's chain; no token_version bump.
+        update_mock.assert_awaited_once()
+        assert update_mock.await_args.args[0] == "refresh_tokens"
+        assert update_mock.await_args.args[1] == {"id": "rtk-head-003"}
+        revoke_all_mock.assert_not_awaited()
+        kick_mock.assert_not_awaited()
+
+        details = json.loads(insert_mock.await_args.args[1]["details"])
+        assert details["scope"] == "rotation_chain"
+        assert details["cascade_revoked_row_ids"] == ["rtk-head-003"]
+        assert details["cascade_ok"] is True
+
+        # A later replay of the killed head is recognised as already answered.
+        with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[insert_mock.await_args.args[1]])):
+            assert await _reuse_already_handled(dict(row, id="rtk-head-003", replaced_by=None)) is True
+
+
+@pytest.mark.asyncio
+async def test_chain_scope_off_keeps_the_all_sessions_cascade():
+    revoke_all_mock = AsyncMock(return_value=["rtk-head-003", "rtk-other-phone"])
+    get_rows_mock = AsyncMock(return_value=_user_token_rows())
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_with_flag(False)),
+        patch("utils.refresh_tokens.db.get_rows", get_rows_mock),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_all_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row())
+
+    revoke_all_mock.assert_awaited_once()
+    get_rows_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows,update_side_effect",
+    [
+        # Successor missing from the scan: chain cannot be followed.
+        ([{"id": "rtk-revoked-001", "revoked_at": "x", "replaced_by": "rtk-newer-002"}], None),
+        # Revoking the live head fails.
+        (_user_token_rows(), RuntimeError("db down")),
+    ],
+)
+async def test_chain_scope_falls_back_to_full_cascade(rows, update_side_effect):
+    update_mock = AsyncMock(side_effect=update_side_effect) if update_side_effect else AsyncMock(return_value=True)
+    revoke_all_mock = AsyncMock(return_value=["rtk-head-003"])
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_with_flag(True)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=rows)),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_all_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row())
+
+    revoke_all_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row_overrides", [{"audience": "admin"}, {"replaced_by": None}])
+async def test_chain_scope_does_not_apply_to_admin_or_unrotated_tokens(row_overrides):
+    revoke_all_mock = AsyncMock(return_value=[])
+    get_rows_mock = AsyncMock(return_value=_user_token_rows())
+    with (
+        patch("utils.refresh_tokens.db.find_one", _find_one_with_flag(True)),
+        patch("utils.refresh_tokens.db.get_rows", get_rows_mock),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_all_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(dict(_revoked_row(user_id="admin-7"), **row_overrides))
+
+    revoke_all_mock.assert_awaited_once()
+    get_rows_mock.assert_not_awaited()

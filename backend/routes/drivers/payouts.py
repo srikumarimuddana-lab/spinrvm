@@ -34,6 +34,7 @@ from ._deps import (  # noqa: F401
     uuid,
 )
 from ._shared import (  # noqa: F401
+    _instant_payout_area_verdict,
     _money_str,
     _vault_decrypt,
     serialize_doc,
@@ -838,10 +839,13 @@ async def _require_instant_payout_enabled(driver: dict) -> dict:
     matches no row. Both used to pass straight through, so a switch ops had
     flipped off for a market never reached those drivers — and a driver can
     set their own service_area_id via PUT /drivers/me without it being
-    checked against service_areas."""
-    sa_id = driver.get("service_area_id")
-    sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1) if sa_id else []
-    if not sa_rows:
+    checked against service_areas.
+
+    The rule itself lives in ``_shared._instant_payout_area_verdict`` so the
+    balance endpoint's ``instant_payout_available`` flag reaches the same
+    verdict."""
+    service_area, refusal = await _instant_payout_area_verdict(driver)
+    if refusal == "no_service_area":
         raise HTTPException(
             status_code=403,
             detail=(
@@ -849,7 +853,7 @@ async def _require_instant_payout_enabled(driver: dict) -> dict:
                 "Your earnings are paid out automatically every Sunday."
             ),
         )
-    if sa_rows[0].get("instant_payout_enabled") is False:
+    if refusal == "disabled_in_area":
         raise HTTPException(
             status_code=403,
             detail=(
@@ -857,7 +861,7 @@ async def _require_instant_payout_enabled(driver: dict) -> dict:
                 "Your earnings are paid out automatically every Sunday."
             ),
         )
-    return sa_rows[0]
+    return service_area
 
 
 # Instant-payout rows that moved no money: excluded from the daily cap sum.

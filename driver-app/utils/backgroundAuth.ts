@@ -3,6 +3,7 @@ import * as Crypto from 'expo-crypto';
 import { isAppCheckRejection } from '../../shared/auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../../shared/auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions } from '../../shared/auth/sessionLock';
+import { clearRefreshProposal, refreshProposalFor } from '../../shared/auth/refreshProposal';
 import SpinrConfig from '@shared/config/spinr.config';
 import { initFirebaseServices, getAppCheckToken } from '@shared/services/firebase';
 import { recordNonFatal } from './crashlytics';
@@ -56,10 +57,21 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           // A hung native App Check promise must release the session lock too.
           // Late preparation may finish, but cannot continue to the POST.
           const appCheck = await withStepDeadline(initFirebaseServices().then(() => getAppCheckToken()), 8_000);
+          // X8: shared with the foreground refresh (same key, same session lock),
+          // so a lost response is recovered by whichever context retries first.
+          const proposal = await refreshProposalFor(candidate);
           const response = await withStepDeadline(fetch(`${SpinrConfig.backendUrl}/api/v1/auth/refresh`, {
             method: 'POST', signal: controller.signal, credentials: 'omit',
-            headers: { 'Content-Type': 'application/json', ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}) },
-            body: JSON.stringify({ refresh_token: candidate }),
+            // X-App-Platform: this chain belongs to the driver app (per-login
+            // sessions keep the driver's session id only for driver requests).
+            headers: {
+              'Content-Type': 'application/json',
+              'X-App-Platform': 'driver',
+              ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}),
+            },
+            body: JSON.stringify(proposal
+              ? { refresh_token: candidate, proposed_refresh_token: proposal }
+              : { refresh_token: candidate }),
           }), 8_000);
           if (!response.ok) {
             // A rejected credential must not be replayed on every GPS callback.
@@ -105,6 +117,7 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           await SecureStore.setItemAsync('refresh_token', data.refresh_token, sessionKeychainOptions);
           await SecureStore.setItemAsync('fg_access_token', data.token, sessionKeychainOptions);
           await SecureStore.setItemAsync('token_expires_at', String(tokenExpiresAt), sessionKeychainOptions);
+          await clearRefreshProposal();
           failedCandidate = null;
           retryAfter = 0;
           return await SecureStore.getItemAsync(SESSION_ENDED_KEY) ? null : data.token;

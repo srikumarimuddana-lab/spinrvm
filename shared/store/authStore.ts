@@ -6,6 +6,8 @@ import { appCache, CACHE_KEYS } from '../cache';
 import { isAppCheckRejection, rejectionBody } from '../auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
+import { clearRefreshProposal, refreshProposalFor, REFRESH_PROPOSAL_KEY } from '../auth/refreshProposal';
+import { getAppSurface } from '../auth/appSurface';
 import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -293,6 +295,7 @@ async function clearLocalSessionUnlocked(): Promise<void> {
   await storage.deleteItem('auth_token');
   await storage.deleteItem('fg_access_token');
   await storage.deleteItem('refresh_token');
+  await storage.deleteItem(REFRESH_PROPOSAL_KEY);
   await storage.deleteItem('token_expires_at');
   // Positive evidence that this session ended, for the headless contexts that
   // cannot read this store (see shared/auth/sessionMarker.ts). Written before
@@ -413,7 +416,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // simultaneous-refresh window where the winner hasn't persisted yet.
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const res = await api.post('/auth/refresh', { refresh_token: candidate });
+          // X8: replaying the same proposal after a lost response recovers the
+          // committed successor instead of being treated as token theft. The
+          // server only commits a proposal on a request with no cookie, so omit
+          // cookies: the jar may also hold a stale refresh cookie from before
+          // the driver app's background task rotated the token.
+          const proposal = await refreshProposalFor(candidate);
+          const res = proposal
+            ? await api.post('/auth/refresh', { refresh_token: candidate, proposed_refresh_token: proposal },
+              { credentials: 'omit' })
+            : await api.post('/auth/refresh', { refresh_token: candidate });
           const { token, refresh_token: newRefresh, expires_in, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
           let expiresIn = typeof expires_in === 'number' && Number.isFinite(expires_in) && expires_in > 0
             ? expires_in
@@ -437,6 +449,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             throw new Error('Token refresh returned invalid credentials');
           }
           await publishTokensUnlocked(token, newRefresh, expiresIn, csrf_token, false);
+          await clearRefreshProposal();
           return true;
         } catch (e: unknown) {
           // The /auth/refresh path rejects with a raw fetch Response (HTTP
@@ -798,8 +811,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // lock open, deadlocking any operation queued behind this logout (e.g. a
     // fresh setTokens() from a new login racing a slow prior logout).
     // Swallow errors either way — a flaky network must not block sign-out.
+    // Only the driver app takes the driver offline: a dual-role account signed
+    // in to both apps keeps driving when it signs out of the rider app.
+    const surface = getAppSurface();
     const goOffline =
-      liveCredential && driver?.id
+      liveCredential && driver?.id && surface !== 'rider'
         ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
             if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
           })
@@ -840,7 +856,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           //
           // Read the winning rotation from storage while holding the session lock.
           const currentRefreshToken = (await storage.getItem('refresh_token')) ?? get().refreshToken;
-          await api.post('/auth/logout', currentRefreshToken ? { refresh_token: currentRefreshToken } : {});
+          const logoutBody: { refresh_token?: string; client_type?: string } =
+            currentRefreshToken ? { refresh_token: currentRefreshToken } : {};
+          // Tells the server which app's push token to detach (dual-role accounts).
+          if (surface) logoutBody.client_type = surface;
+          await api.post('/auth/logout', logoutBody);
         } catch (error) {
           // Best-effort: the local session still ends. A failure here leaves the
           // refresh token live until its own expiry, which is the pre-existing

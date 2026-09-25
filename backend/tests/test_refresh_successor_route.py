@@ -17,22 +17,27 @@ USER = {"id": "u1", "phone": "+13065550100", "token_version": 2, "current_sessio
 pytestmark = pytest.mark.asyncio
 
 
-def _request() -> StarletteRequest:
+def _request(cookie: str | None = None, extra_headers: dict[str, str] | None = None) -> StarletteRequest:
+    # What the native apps send: JSON, no Origin/Referer/Sec-Fetch-* headers.
+    merged = {"user-agent": "DriverApp/1.0", "content-type": "application/json", **(extra_headers or {})}
+    headers = [(k.encode(), v.encode()) for k, v in merged.items() if v is not None]
+    if cookie is not None:
+        headers.append((b"cookie", f"refresh_token={cookie}".encode()))
     return StarletteRequest(
         {
             "type": "http",
             "method": "POST",
             "path": "/auth/refresh",
             "query_string": b"",
-            "headers": [(b"user-agent", b"DriverApp/1.0")],
+            "headers": headers,
         }
     )
 
 
-def _body(proposed=PROPOSED):
+def _body(proposed=PROPOSED, refresh_token=PARENT):
     from backend.routes.auth import RefreshRequest
 
-    return RefreshRequest(refresh_token=PARENT, proposed_refresh_token=proposed)
+    return RefreshRequest(refresh_token=refresh_token, proposed_refresh_token=proposed)
 
 
 def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
@@ -50,13 +55,16 @@ def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
         "issue": patch.object(auth, "issue_refresh_token", AsyncMock(return_value=("rotated", "row-2", expires))),
         "jwt": patch.object(auth, "create_jwt_token", return_value="access"),
         "metric": patch.object(auth, "_metric_inc", MagicMock()),
+        # login_supersede_driver_app_only_enabled has its own reader; stub it so
+        # "settings" above counts only the X8 flag these tests are about.
+        "sessions": patch.object(auth, "_driver_app_only_sessions_enabled", AsyncMock(return_value=False)),
     }
 
 
-async def _call(auth, patches, body):
+async def _call(auth, patches, body, cookie=None, headers=None):
     started = {name: p.start() for name, p in patches.items()}
     try:
-        result = await auth.refresh_access_token(request=_request(), response=MagicMock(), body=body)
+        result = await auth.refresh_access_token(request=_request(cookie, headers), response=MagicMock(), body=body)
     finally:
         for p in patches.values():
             p.stop()
@@ -89,19 +97,72 @@ async def test_malformed_proposal_is_ignored_without_reading_flag(proposed):
     m["classify"].assert_not_awaited()
 
 
-async def test_no_match_rotates_without_the_client_proposed_raw():
-    """A "no_match" verdict is the normal case for every first-time refresh
-    (the parent hasn't been committed-replayed before). The client's proposed
-    bytes must NOT reach issue_refresh_token's `raw` kwarg here -- only the
-    recover branch (a server-committed successor) may ever populate it.
-    Passing it through on this path would let an attacker who can shape the
-    refresh request body (but not read the HttpOnly cookie) plant a known
-    plaintext as the next refresh token's secret."""
+async def test_no_match_with_cookie_parent_never_uses_the_proposal():
+    """A "no_match" verdict is the normal case for every first-time refresh.
+    When the parent comes from the HttpOnly cookie, the client's proposed bytes
+    must NOT reach issue_refresh_token's `raw` kwarg: a script that can shape
+    the refresh request body (but not read the cookie) would otherwise plant a
+    known plaintext as the next refresh token's secret."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(refresh_token=""), cookie=PARENT)
+    m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
+    m["lookup"].assert_awaited_once_with(PARENT)
+    assert "raw" not in m["issue"].await_args.kwargs
+
+
+async def test_no_match_with_body_parent_commits_the_proposal():
+    """A mobile client sends the parent in the body with its proposal. It
+    already holds a live credential, so the proposal becomes the successor's
+    secret; a lost response can then be recovered by replaying both."""
     from backend.routes import auth
 
     _result, m = await _call(auth, _patches(auth), _body())
     m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
-    m["lookup"].assert_awaited_once()
+    m["lookup"].assert_awaited_once_with(PARENT)
+    assert m["issue"].await_args.kwargs["raw"] == PROPOSED
+
+
+async def test_cookie_is_never_overridden_by_a_forged_body_token():
+    """Session fixation guard. A browser attaches the victim's real cookie and
+    stores whatever Set-Cookie comes back. A forged body carrying the
+    attacker's own valid refresh token plus a proposal must not pick the
+    parent, or the victim's browser would be signed into the attacker's
+    account with a successor the attacker chose."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(refresh_token="attacker-own-token"), cookie="victim-cookie")
+    m["classify"].assert_awaited_once_with("victim-cookie", PROPOSED)
+    m["lookup"].assert_awaited_once_with("victim-cookie")
+    assert "raw" not in m["issue"].await_args.kwargs
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"origin": "https://attacker.example"},
+        {"origin": "null"},
+        {"referer": "https://attacker.example/page"},
+        {"sec-fetch-site": "cross-site"},
+        {"content-type": "text/plain"},
+    ],
+    ids=["origin", "null-origin", "referer", "sec-fetch-site", "text-plain"],
+)
+async def test_browser_request_without_cookie_never_uses_the_proposal(headers):
+    """A signed-in victim's browser omits the SameSite=Strict refresh cookie on
+    a cross-site forged POST, so a missing cookie does not mean a native app.
+    Any browser signal keeps the successor server-random."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(), headers=headers)
+    assert "raw" not in m["issue"].await_args.kwargs
+
+
+async def test_flag_off_keeps_cookie_precedence_and_server_random_successor():
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth, flag=False), _body(), cookie="cookie-token")
+    m["lookup"].assert_awaited_once_with("cookie-token")
     assert "raw" not in m["issue"].await_args.kwargs
 
 

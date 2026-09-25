@@ -5,12 +5,17 @@ Credentials are read from DB settings (passed in by caller), not env vars.
 """
 
 import asyncio
+import contextvars
 
 from loguru import logger
 
 try:
+    from .utils import metrics
+    from .utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from .utils.pii import redact_phone
 except ImportError:
+    from utils import metrics
+    from utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from utils.pii import redact_phone
 
 # Twilio's default http client has no timeout, so a slow/unresponsive Twilio
@@ -22,6 +27,61 @@ _TWILIO_HTTP_TIMEOUT_S = 10.0
 # HTTP timeout so the more specific Twilio/connection error wins in the
 # common case.
 _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
+
+# Twilio sends run on dedicated, bounded executors, not the event loop's
+# shared default pool (asyncio.to_thread). A stalled DNS lookup is not covered
+# by the HTTP timeout, and asyncio.wait_for abandons (cannot kill) a hung
+# thread -- so on the shared pool a Twilio/DNS outage could pin the threads
+# WebSocket auth, Stripe and other to_thread callers need. Here an outage pins
+# at most max_workers threads per pool; once workers AND queue are full a new
+# send fails fast (ExecutorSaturated -> the usual {"success": False, ...})
+# instead of queueing without limit.
+#
+# Three pools so neither a public OTP flood nor a bulk broadcast can starve
+# SOS:
+# - SOS (send_sos_sms: routes/rides/safety.py ride + rideless SOS only, <= 3
+#   contacts per trigger -- MAX_EMERGENCY_CONTACTS): 4 workers covers one
+#   fan-out in a single round trip; the 28-deep queue holds ~10 concurrent
+#   SOS triggers, far beyond anything seen, before failing fast.
+# - OTP (send_otp_sms: one SMS per /auth/send-otp). The 6/min limiter is per
+#   IP, so a login burst after an outage -- many users, many IPs -- is not
+#   bounded by it: 8 workers ~= 16 sends/s at a ~0.5 s round trip, and the
+#   64 slots drain in ~4 s, inside the 15 s wait. Past that a send fails fast
+#   and the rider is told to retry. Threads are created lazily, so the extra
+#   headroom costs nothing while idle.
+# - Everything else via send_sms. The bulk caller is admin cloud messaging
+#   (routes/admin/messaging.py _fan_out): asyncio.Semaphore(50) per broadcast,
+#   each recipient's SMS awaited in turn, so <= 50 in flight per broadcast;
+#   marketing SMS (utils/marketing_sms.py) is per-recipient and only reached
+#   through that same semaphore. The rest are one SMS per event (spawned guest
+#   ride notices, the SOS contact opt-out notice). 256 admission slots = one
+#   broadcast plus ~200 concurrent small sends, or ~5 simultaneous broadcasts,
+#   before anything fails fast -- the bound protects the default executor, it
+#   is not meant to drop healthy work. 16 workers so the whole 256 drains in
+#   ~8 s at a healthy ~0.5 s Twilio round trip, inside the 15 s wait; a deeper
+#   queue than the workers can drain would just turn into TimeoutErrors.
+_SOS_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=28, thread_name_prefix="spinr-sms-sos")
+_OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=8, queue_size=56, thread_name_prefix="spinr-sms-otp")
+_SMS_EXECUTOR = BoundedExecutor(max_workers=16, queue_size=240, thread_name_prefix="spinr-sms")
+_SMS_POOLS = {"sos": _SOS_SMS_EXECUTOR, "otp": _OTP_SMS_EXECUTOR, "general": _SMS_EXECUTOR}
+# Sentry `domain` tag for a saturated pool's error log (general is mixed-use).
+_POOL_DOMAIN = {"sos": "safety", "otp": "auth"}
+
+# A running send whose wait_for fires cannot be cancelled and keeps its slot
+# (e.g. a stalled DNS lookup), so a pool can wedge silently. These make it
+# alertable: saturation counts rejected sends; occupied_slots (running +
+# queued) is sampled at every submit/finish -- it can read high after an
+# abandoned thread finishes until the next send on that pool re-samples it.
+_SATURATED_METRIC = "spinr_sms_executor_saturated_total"
+_OCCUPIED_METRIC = "spinr_sms_executor_occupied_slots"
+for _pool in _SMS_POOLS:
+    metrics.inc(_SATURATED_METRIC, {"pool": _pool}, by=0)
+    metrics.set_gauge(_OCCUPIED_METRIC, 0, {"pool": _pool})
+
+
+def _record_occupancy(pool: str) -> None:
+    slots = _SMS_POOLS[pool]._slots
+    metrics.set_gauge(_OCCUPIED_METRIC, slots._initial_value - slots._value, {"pool": pool})
 
 
 async def send_sms(
@@ -36,6 +96,25 @@ async def send_sms(
     Returns:
         dict with 'success' (bool), 'provider' (str), and optionally 'sid' or 'error'.
     """
+    return await _send_sms_on(
+        "general", to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+    )
+
+
+async def send_sos_sms(
+    to_phone: str, message: str, *, twilio_sid: str = "", twilio_token: str = "", twilio_from: str = ""
+) -> dict:
+    """send_sms for SOS emergency-contact alerts, on the dedicated SOS pool so
+    an OTP flood or a bulk broadcast can never take its capacity. Same
+    arguments and return shape as send_sms."""
+    return await _send_sms_on(
+        "sos", to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+    )
+
+
+async def _send_sms_on(
+    pool: str, to_phone: str, message: str, *, twilio_sid: str, twilio_token: str, twilio_from: str
+) -> dict:
     masked = redact_phone(to_phone)
     if not all([twilio_sid, twilio_token, twilio_from]):
         # Development fallback — log to console (PII-safe: phone redacted, message dropped)
@@ -47,9 +126,9 @@ async def send_sms(
         from twilio.rest import Client
 
         def _send() -> str:
-            # Twilio's REST client is synchronous; run it in the default
-            # threadpool so the HTTP round-trip doesn't block the event loop
-            # (SOS fires several of these at once). Twilio's default
+            # Twilio's REST client is synchronous; run it on a dedicated
+            # bounded executor so the HTTP round-trip doesn't block the event
+            # loop (SOS fires several of these at once). Twilio's default
             # http_client has no timeout, so pass one explicitly — otherwise
             # a slow/unresponsive Twilio can hang this thread indefinitely.
             http_client = TwilioHttpClient(timeout=_TWILIO_HTTP_TIMEOUT_S)
@@ -57,11 +136,32 @@ async def send_sms(
             return client.messages.create(body=message, from_=twilio_from, to=to_phone).sid
 
         # Backstop the thread-pool wait too, so a hang the HTTP timeout
-        # doesn't catch still can't block the caller (or starve the
-        # threadpool) forever.
-        sid = await asyncio.wait_for(asyncio.to_thread(_send), timeout=_TWILIO_THREAD_TIMEOUT_S)
+        # doesn't catch still can't block the caller forever. run_in_executor
+        # raises ExecutorSaturated synchronously when the pool is full; a
+        # still-queued send whose wait times out is cancelled and never runs.
+        # Run inside a copy of the caller's context, as asyncio.to_thread did:
+        # Sentry's default stdlib/threading integrations read the current
+        # scope/span from contextvars when instrumenting the Twilio HTTP call,
+        # and pool threads would otherwise see whichever request's context
+        # was live when the thread was first spawned.
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        future = loop.run_in_executor(_SMS_POOLS[pool], ctx.run, _send)
+        _record_occupancy(pool)
+        try:
+            sid = await asyncio.wait_for(future, timeout=_TWILIO_THREAD_TIMEOUT_S)
+        finally:
+            _record_occupancy(pool)
         logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
         return {"success": True, "provider": "twilio", "sid": sid}
+    except ExecutorSaturated:
+        metrics.inc(_SATURATED_METRIC, {"pool": pool})
+        _record_occupancy(pool)
+        log_ctx = {"sms_pool": pool}
+        if pool in _POOL_DOMAIN:
+            log_ctx["domain"] = _POOL_DOMAIN[pool]
+        logger.bind(**log_ctx).error(f"Failed to send SMS to {masked}: ExecutorSaturated (sms pool={pool} full)")
+        return {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
     except Exception as e:
         # PIPEDA: never log or return str(e) — TwilioRestException text
         # embeds the destination number ("The 'To' number +1306... is not a
@@ -85,4 +185,7 @@ async def send_otp_sms(
 ) -> dict:
     """Send an OTP code via SMS."""
     message = f"Your Spinr verification code is: {otp_code}. It expires in 5 minutes."
-    return await send_sms(phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from)
+    # OTP pool, not the general one: an OTP flood must not starve SOS sends.
+    return await _send_sms_on(
+        "otp", phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+    )

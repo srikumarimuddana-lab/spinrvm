@@ -79,7 +79,7 @@ class _RideUpdateQuery:
         return SimpleNamespace(data=rows)
 
 
-def test_driver_accept_racing_rider_cancel_cannot_resurrect_ride(pg_conn, monkeypatch):
+def test_driver_accept_racing_rider_cancel_cannot_resurrect_ride(pg_conn, pg_dsn, monkeypatch):
     ride_id, driver_id = "pg-accept-cancel-race", "driver-state-proof"
     with pg_conn.cursor() as cur:
         cur.execute("DELETE FROM rides WHERE id = %s", (ride_id,))
@@ -92,7 +92,7 @@ def test_driver_accept_racing_rider_cancel_cannot_resurrect_ride(pg_conn, monkey
         )
 
     barrier = Barrier(2)
-    client = _RideUpdateClient(pg_conn.dsn, barrier)
+    client = _RideUpdateClient(pg_dsn, barrier)
     monkeypatch.setattr(driver_repo, "supabase", client)
     monkeypatch.setattr(_base, "supabase", client)
 

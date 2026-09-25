@@ -62,7 +62,7 @@ export const listCorporateAccounts = (opts: {
 };
 
 export const reviewKyb = (id: string, decision: { approve: boolean; note?: string }) =>
-    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/kyb-review`, {
+    request<CorporateAccount & { status_unchanged?: "staff_suspension" | null }>(`/api/admin/corporate-accounts/${id}/kyb-review`, {
         method: "POST",
         body: JSON.stringify(decision),
     });

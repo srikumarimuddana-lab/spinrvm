@@ -138,9 +138,9 @@ def test_default_off_does_not_deduct_driver_pay(refund_cur):
     assert held(refund_cur) == 0
 
 
-def test_concurrent_partial_refunds_are_capped(refund_cur, refund_conn):
+def test_concurrent_partial_refunds_are_capped(refund_cur, pg_dsn):
     def run(cents):
-        with psycopg2.connect(refund_conn.dsn) as conn, conn.cursor() as cur:
+        with psycopg2.connect(pg_dsn) as conn, conn.cursor() as cur:
             return project(cur, cents)
 
     with ThreadPoolExecutor(max_workers=2) as pool:

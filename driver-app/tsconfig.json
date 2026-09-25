@@ -105,6 +105,9 @@
       "expo-secure-store": [
         "./node_modules/expo-secure-store"
       ],
+      "expo-crypto": [
+        "./node_modules/expo-crypto"
+      ],
       "@components/*": [
         "./components/*"
       ],

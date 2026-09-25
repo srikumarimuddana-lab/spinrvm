@@ -172,6 +172,7 @@ async def issue_refresh_token(
     replaces: Optional[str] = None,
     token_version: Optional[int] = None,
     raw: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[str, str, datetime]:
     """Mint a new refresh token row for ``user_id``.
 
@@ -188,6 +189,10 @@ async def issue_refresh_token(
     conflict the insert is retried once with a server-generated token, so a
     proposal can never collide into, or probe, another row. Token material
     is never logged.
+
+    ``session_id`` (login_supersede_driver_app_only_enabled) is the login
+    session this chain belongs to; rotation carries it forward. Omitted, the
+    row is written exactly as before.
     """
     if raw is not None and not is_valid_proposed_refresh_token(raw):
         raise ValueError("proposed refresh token has an invalid shape")
@@ -209,6 +214,8 @@ async def issue_refresh_token(
     # would upgrade an old refresh racing a driver login into its new generation.
     if token_version is not None:
         row["token_version"] = int(token_version)
+    if session_id:
+        row["session_id"] = str(session_id)
 
     try:
         result = await db.insert_one("refresh_tokens", row)
@@ -771,6 +778,27 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         )
     except Exception as e:
         logger.error(f"reuse-cascade: audit_logs insert failed (user={user_id}): {e}")
+
+
+async def refresh_token_session_id(raw: str, *, user_id: Optional[str] = None) -> Optional[str]:
+    """The session id stored on the refresh-token row for ``raw``, if any.
+
+    Holding the raw refresh token proves the caller owns that chain, so logout
+    can tombstone the chain's own session without touching other devices.
+    With ``user_id``, a row belonging to anyone else answers None. Lookup
+    failures answer None (logout falls back to its current-session rule).
+    """
+    if not raw:
+        return None
+    try:
+        row = await db.find_one("refresh_tokens", {"token_hash": _hash_refresh_token(raw)})
+    except Exception:
+        logger.opt(exception=True).error("refresh_token_session_id lookup failed")
+        return None
+    if not row or (user_id is not None and str(row.get("user_id") or "") != str(user_id)):
+        return None
+    session_id = row.get("session_id")
+    return str(session_id) if session_id else None
 
 
 async def revoke_refresh_token(raw: str, *, reason: Optional[str] = None) -> bool:

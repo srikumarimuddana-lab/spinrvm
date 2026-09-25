@@ -563,6 +563,10 @@ class SettingsUpdateRequest(BaseModel):
     # status, just a log line + metric an admin can act on manually.
     corporate_kyb_reverification_enabled: Optional[bool] = None
     corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
+    # Migration 481. Kill switch (default true): KYB review / resubmit refuse
+    # to change a closed company's status and compare-and-set on the status
+    # read. False restores the old unconditional status write.
+    corporate_kyb_refuses_closed_company: Optional[bool] = None
     # Forced-upgrade gate (ACTION_ITEMS.md E3) — core/middleware.py's
     # ForcedUpgradeMiddleware rejects any request whose X-App-Version header
     # is below this with 426. Empty string (default) = enforcement off for
@@ -596,6 +600,13 @@ class SettingsUpdateRequest(BaseModel):
     # Migration 471. Android ride offers on the alarm-volume channel; read by
     # utils/ride_offer_ring.py when building offer payloads.
     ride_offer_alarm_channel_enabled: Optional[bool] = None
+    # Migration 474. True = only a driver-app login signs the account's other
+    # devices out; read by routes/auth.py _driver_app_only_sessions_enabled.
+    login_supersede_driver_app_only_enabled: Optional[bool] = None
+    # Migration 463. X8 lost-refresh-response recovery; read by routes/auth.py
+    # _accepted_refresh_proposal. Enable only after the X8 audit
+    # (docs/audit/2026-09-24-refresh-successor-commitment-security-note.md).
+    refresh_successor_commitment_enabled: Optional[bool] = None
     # Migration 467. Android Allow-all-the-time gate; served to the driver app
     # as always_location_required on /drivers/config.
     driver_always_location_gate_enabled: Optional[bool] = None

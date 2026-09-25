@@ -106,7 +106,7 @@ class TestTriggerEmergencyRideless:
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
-            patch("backend.routes.rides._deps.send_sms", send_sms_mock),
+            patch("backend.routes.rides._deps.send_sos_sms", send_sms_mock),
         ):
             result = await rides_mod.trigger_emergency_rideless(
                 body=body or _Req(),
@@ -220,7 +220,7 @@ class TestTriggerEmergencyRideless:
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
             patch("backend.routes.rides.safety.create_ticket_for_safety", ticket_mock),
         ):
             await rides_mod.trigger_emergency_rideless(
@@ -354,7 +354,7 @@ class TestTriggerEmergencyRideless:
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(side_effect=_send_sms)),
             patch(
                 "backend.routes.rides.safety.sos_contact_consent.is_suppressed",
                 AsyncMock(side_effect=_is_suppressed),
@@ -406,7 +406,7 @@ class TestTriggerEmergencyRideless:
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(side_effect=_send_sms)),
             patch("backend.routes.rides.safety.sos_contact_consent.is_suppressed", broken_is_suppressed),
         ):
             result = await rides_mod.trigger_emergency_rideless(

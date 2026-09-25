@@ -66,8 +66,8 @@ class _StripeEventsQuery:
         raise AssertionError(f"unexpected stripe_events operation: {self.operation!r}")
 
 
-def test_duplicate_claim_against_stripe_events_primary_key(pg_conn, monkeypatch):
-    monkeypatch.setattr(wallet_repo, "supabase", _StripeEventsPostgresClient(pg_conn.dsn))
+def test_duplicate_claim_against_stripe_events_primary_key(pg_conn, pg_dsn, monkeypatch):
+    monkeypatch.setattr(wallet_repo, "supabase", _StripeEventsPostgresClient(pg_dsn))
     event_id = f"evt_{uuid4()}"
 
     async def race_claims():

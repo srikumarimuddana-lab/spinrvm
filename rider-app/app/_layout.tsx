@@ -19,6 +19,9 @@ import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
+import { isNoDriversCancellation } from '../utils/noDriversSignal';
+import { offerNoDriversPrompt, raiseNoDriversPromptAfterResume } from '../store/noDriversStore';
+import { NoDriversSheetHost } from '../components/NoDriversSheetHost';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import { useDelayedReconnectWarning } from '../hooks/useDelayedReconnectWarning';
@@ -185,6 +188,9 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
     case 'ride_cancelled': {
       const rideState = useRideStore.getState();
       if (!shouldLeaveScreenForRideCancelled(ride_id, rideState.currentRide?.id, rideState._clearedRideId)) break;
+      // No driver accepted in time: explain it and offer Try again /
+      // Schedule over home (components/NoDriversSheetHost).
+      if (isNoDriversCancellation(data)) offerNoDriversPrompt(rideState.currentRide);
       router.replace('/(tabs)' as any);
       break;
     }
@@ -828,8 +834,18 @@ function RootLayout() {
       }
 
       try {
+        // Snapshot first: fetchActiveRide() clears a ride the server no longer
+        // reports as active, and /rides/active doesn't say why it ended.
+        const rideBefore = useRideStore.getState().currentRide;
         const result = await useRideStore.getState().fetchActiveRide();
-        if (!result?.active || !result.ride) return;
+        if (!result?.active || !result.ride) {
+          // The search ended for no drivers while the app was backgrounded:
+          // show the "No drivers available" sheet over home.
+          if (await raiseNoDriversPromptAfterResume(rideBefore)) {
+            router.replace('/(tabs)' as any);
+          }
+          return;
+        }
         const target = targetPathForRideStatus(result.ride.status);
         if (!target) return;
         if (target === '/ride-completed') {
@@ -1131,6 +1147,9 @@ function RootLayoutInner({
               absolutely-positioned SOS overlay — see
               store/safetySheetStore.ts. Same placement as ConfirmSheet/Toast. */}
           <SafetySheetHost />
+          {/* "No drivers available right now" after a no-match auto-cancel —
+              see store/noDriversStore.ts. */}
+          <NoDriversSheetHost />
           <Toast />
         </SafeAreaProvider>
       </GestureRootWrapper>

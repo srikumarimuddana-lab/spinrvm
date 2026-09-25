@@ -30,6 +30,7 @@ import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
+import { useNoDriversStore } from '../store/noDriversStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -235,6 +236,19 @@ function RideOptionsScreenContent() {
     min: new Date(Date.now() + 15 * 60000),
     max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
   }));
+  // "Schedule for later" on the no-drivers sheet (components/NoDriversSheetHost)
+  // lands here with the picker already open. One-shot: the request is consumed
+  // on mount, so a normal visit to this screen never opens it.
+  useEffect(() => {
+    if (!useNoDriversStore.getState().consumeScheduleOnArrival()) return;
+    // Mount-only (empty deps), so these setState calls can't retrigger it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScheduleBounds({
+      min: new Date(Date.now() + 15 * 60000),
+      max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+    setShowScheduleModal(true);
+  }, []);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
   // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main

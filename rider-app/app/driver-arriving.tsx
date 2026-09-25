@@ -27,6 +27,8 @@ import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
+import { offerNoDriversPrompt } from '../store/noDriversStore';
+import { isNoDriversCancellation } from '../utils/noDriversSignal';
 import { RideStatus } from '../constants/rideStatus';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
@@ -346,6 +348,13 @@ function DriverArrivingScreenContent() {
     } else if (status === 'completed') {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     } else if (status === 'cancelled') {
+      // No driver accepted in time (learned from the poll or a status event
+      // rather than the ride_cancelled message): raise the "No drivers
+      // available" sheet over home. Read the ride from the store, not the
+      // render closure, so this effect keeps its narrow deps. Snapshot it
+      // before clearRide() drops it.
+      const cancelledRide = useRideStore.getState().currentRide;
+      if (isNoDriversCancellation(cancelledRide)) offerNoDriversPrompt(cancelledRide);
       clearRide();
       router.replace('/(tabs)' as any);
     }

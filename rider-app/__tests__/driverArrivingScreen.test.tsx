@@ -193,6 +193,7 @@ jest.mock('../store/rideStore', () => ({
 
 import DriverArrivingScreen from '../app/driver-arriving';
 import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from '../app/_layout';
+import { useNoDriversStore } from '../store/noDriversStore';
 
 const flush = async () => {
   await Promise.resolve();
@@ -366,6 +367,46 @@ describe('DriverArrivingScreen', () => {
       await flush();
     });
     expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  // Phase 3 (2026-09-25): a no-match auto-cancel learned from the poll raises
+  // the "No drivers available" sheet; any other cancel still does not.
+  it('raises the no-drivers prompt when the ride on screen was auto-cancelled for no drivers', async () => {
+    useNoDriversStore.setState({ prompt: null, _shownRideId: null });
+    const searching = { ...RIDE_WITH_DRIVER, status: 'searching', driver_accepted_at: null };
+    mockRideState.currentRide = searching;
+    await renderScreen();
+    await act(async () => {
+      mockRideState = {
+        ...mockRideState,
+        currentRide: { ...searching, status: 'cancelled', cancellation_type: 'no_drivers_found' },
+      };
+      renderer!.update(<TrackBaseUrlContext.Provider value={mockTrackBaseUrl}><DriverArrivingScreen /></TrackBaseUrlContext.Provider>);
+      await flush();
+    });
+    expect(useNoDriversStore.getState().prompt).toEqual({
+      rideId: 'ride-1',
+      pickup: { address: '100 Main St', lat: 50.45, lng: -104.6 },
+      dropoff: { address: '200 Elm St', lat: 50.5, lng: -104.5 },
+    });
+    expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('does not raise the no-drivers prompt for a rider cancel', async () => {
+    useNoDriversStore.setState({ prompt: null, _shownRideId: null });
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    await renderScreen();
+    await act(async () => {
+      mockRideState = {
+        ...mockRideState,
+        currentRide: { ...RIDE_WITH_DRIVER, status: 'cancelled', cancellation_type: 'rider_cancel' },
+      };
+      renderer!.update(<TrackBaseUrlContext.Provider value={mockTrackBaseUrl}><DriverArrivingScreen /></TrackBaseUrlContext.Provider>);
+      await flush();
+    });
+    expect(useNoDriversStore.getState().prompt).toBeNull();
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
   });
 

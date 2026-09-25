@@ -10,7 +10,7 @@
 
 - Blast radius is **org-wide** — one compromised admin = every rider/driver exposed
 - Bulk operations are irreversible (mass suspend, mass refund)
-- Admin JWT is **fully trusted** (per CLAUDE.md) — claims not re-verified per request
+- Admin JWT role/email/modules claims are trusted, but the token itself is re-verified per request (JTI revocation, `admin_staff.is_active`, `token_version`, 30-min idle timeout — per CLAUDE.md)
 - Historical industry data: admin panels are the #1 source of breaches in SaaS
 
 ---
@@ -98,7 +98,7 @@
 | T-ID | Threat | Mitigation | Residual |
 |---|---|---|---|
 | AE-1 | Support-tier admin escalates to super-admin | Role-based guards on every endpoint (not just `is_admin`) | HIGH — verify per-role guards during admin audit |
-| AE-2 | Admin JWT not re-read from DB (per CLAUDE.md, fully trusted) | Short expiry (12h); MFA for sensitive ops | MEDIUM |
+| AE-2 | Admin JWT role/email/modules claims not re-read from DB per-field | Token re-verified per request (JTI revocation, `admin_staff.is_active`, `token_version`, 30-min idle timeout) + short expiry; MFA for sensitive ops | MEDIUM |
 | AE-3 | RBAC bypass via direct DB access | Service-role unreachable from browser | LOW |
 | AE-4 | Session fixation | Rotating session cookie on login | LOW — verify |
 

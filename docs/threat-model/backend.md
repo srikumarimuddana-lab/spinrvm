@@ -104,7 +104,7 @@ Trust zones:
 |---|---|---|---|
 | E-1 | Rider token accepted on driver-only endpoint | Role check re-reads from `users` table | LOW |
 | E-2 | IDOR: rider A reads rider B's rides | `WHERE rider_id = auth.uid()` + RLS | MEDIUM — needs runtime RLS verification |
-| E-3 | Admin role claim in JWT bypassed for non-admin | CLAUDE.md: admin JWT fully trusted, others re-read | LOW |
+| E-3 | Admin role claim in JWT bypassed for non-admin | Admin token re-verified per request (JTI revocation, `admin_staff.is_active`, `token_version`, idle timeout); rider/driver role always re-read from `users` | LOW |
 | E-4 | Corporate wallet siphon via crafted request | `corporate_wallet_apply_delta` function + RLS | MEDIUM — verify in D21 |
 | E-5 | Supabase direct-access bypasses API | RLS policies act as defense-in-depth | MEDIUM — RLS coverage audit pending |
 | E-6 | Webhook replay as administrative action | Stripe signature verification; idempotency via `stripe_events` | LOW |

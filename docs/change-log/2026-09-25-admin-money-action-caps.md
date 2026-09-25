@@ -8,7 +8,7 @@
 | Author | Claude Code |
 | Surface(s) | backend, admin-dashboard (disputes page notice only) |
 | Domain (Sentry tag) | admin (money path: payments) |
-| PR / commit link | branch `claude/fix-admin-money-action-caps` (local, not pushed). Round 1: `8d6e79e`, `00b3771`, `be63745`. Round 2 (reviewer fixes + owner decisions A/B): `415cecf`, `effeb82`, `b12e6d6`, `0c20940`, `29f1725`, `a35e65e`, `4bd8825`, `3894ca7`. Round 3 (prod schema + refund truth + dashboard notice): `e76679b`, `b518786`, `94a1091` |
+| PR / commit link | branch `claude/fix-admin-money-action-caps` (local, not pushed). Round 1: `8d6e79e`, `00b3771`, `be63745`. Round 2 (reviewer fixes + owner decisions A/B): `415cecf`, `effeb82`, `b12e6d6`, `0c20940`, `29f1725`, `a35e65e`, `4bd8825`, `3894ca7`. Round 3 (prod schema + refund truth + dashboard notice): `e76679b`, `b518786`, `94a1091`. Round 4 (money-auditor should-fixes): `f39fe9d`, `a192777` |
 | Related issue or gap ID | ROADMAP N23, finding ADMIN-OPS-001; cap/threshold values are founder decision E-F7; owner decisions (A) real dispute refunds behind a flag that ships off, (B) super_admin-only cap settings |
 
 ## 1. Issue / gap identified
@@ -91,6 +91,27 @@
   - a `logger.error` for manual follow-up.
 - **Dashboard notice.** `disputes/page.tsx::handleResolve` now reads the response. When `refund_issued === false` for approved or partial_refund, it shows the backend `message` in a destructive toast, using the page's existing `useToast` pattern, instead of closing silently.
 
+**Round 4 changes** (spinr-money-auditor SHOULD-FIX; round 2 was rated SAFE TO MERGE):
+
+- **Compare-and-set on the dispute resolve (`f39fe9d`).**
+  - **Problem.** Two concurrent resolves both passed the read-then-check "already resolved" guard. Both then wrote a `dispute_resolved` audit row, so the N23 cap double-counted.
+  - **Fix.** The final status write is now `update_one({"id": id, "status": {"$nin": ["resolved", "rejected"]}}, ...)`. If 0 rows match, it returns **409 "Dispute already resolved"** with no audit row and no rider push. This is the same pattern as ride acceptance's `{'status': 'searching'}` filter.
+  - **Chosen approach: finalize-time CAS, not claim-first.** With the flag on, a race loser may already have called Stripe. It uses the same deterministic idempotency key (`refund-dispute-{id}`), so Stripe either replays the winner's refund (same amount) or rejects a parameter mismatch with a 400, which surfaces as a 502. **No second refund is possible either way.**
+  - **Rejected alternative: claim-first.** This would CAS the status to `resolving`, call Stripe, then finalize, reverting on Stripe failure. It adds a new status value, which `disputes.status` has no CHECK constraint against (migration 10 is plain TEXT). But it also adds three problems:
+    1. a stuck `resolving` row if the process dies between claim and finalize, which would need a sweeper;
+    2. a revert path that can itself fail;
+    3. a new value the dashboard's status tabs and `admin_dispute_stats_rollup` don't know about.
+
+    It would buy nothing money-wise, because the idempotency key already prevents a duplicate refund. The finalize-time CAS also keeps the existing retry property: if the DB write fails after Stripe succeeds, the dispute stays open and a retry replays Stripe, then finalizes.
+  - **Test.** `test_concurrent_resolve_loser_gets_409_and_no_second_audit_row` runs two resolves against one simulated row. Both read it as open. The first finalizes; the second gets 409, with exactly 1 audit row and 1 push. Both Stripe calls carry the same idempotency key and amount, so the second is a replay. The test fails with the CAS reverted.
+  - **Edge case.** A dispute whose `status` is SQL NULL would never match `NOT IN` and would always get 409. `create_dispute` sets `open`, admin create sets `pending`, and the column defaults to `pending`, so NULL isn't reachable today.
+- **"Approve Full Refund" pre-fill (`a192777`).** This fixes the round 3 gap.
+  - Opening the resolve dialog pre-fills a visible, editable "Refund Amount ($)" input with the dispute's `original_fare`, for both `approved` and `partial_refund`.
+  - The same `getPartialRefundError` validation applies: the amount must be more than 0 and no more than the original fare.
+  - The amount is sent as `refund_amount`. `rejected` sends no amount.
+  - Nothing is defaulted server-side, and the `refund_issued: false` toast is kept.
+  - If `original_fare` is missing or 0 (old rows from before migration 477), the input starts empty and validation blocks submit until the admin enters an amount.
+
 ## 4. Risk & impact on existing functionality
 
 **Blast radius: backend admin money endpoints plus one admin route's handler and permission. Riders and drivers are unaffected while the flag is off.**
@@ -129,7 +150,10 @@
   - approving a refund marks the dispute resolved and issues no refund;
   - the API response says "Dispute resolved, but no refund was issued. Issue the refund manually in Stripe…";
   - the dashboard now shows that message as a toast titled "Dispute resolved, no refund issued" when the dialog closes (round 3). The same toast appears if Stripe returns a `failed` or `canceled` refund with the flag on.
-- **Pre-existing gap, not fixed here: "Approve Full Refund" never refunds.** For `approved`, the dashboard sends no `refund_amount`; it only sends one for `partial_refund`. The backend refunds only when `refund_amount` is set, so a full approval issues **no refund even with the flag on**. The new toast at least tells the admin. Fixing it means defaulting the refund to `original_fare` on approve, in either the dashboard or the backend. That is a money-behaviour decision and needs the owner's call.
+- **"Approve Full Refund" (fixed in round 4).**
+  - **Before:** it sent no amount, so no refund was ever made.
+  - **Now:** the amount field is pre-filled with the original fare, is editable, and is sent. The admin sees and can change the exact amount before submitting.
+  - **Concurrent resolves:** a second admin resolving the same dispute at the same moment gets "Dispute already resolved", shown inline in the dialog through the existing `resolveError` path.
 - **Internal admins, cap.** Once E-F7 values are set, an over-cap credit, debit or refund fails with "Daily admin money-action cap of $X reached … Nothing was moved…".
 - **Internal admins, settings.** A non-super-admin changing any of the three settings gets 403 "Only super admins can change <field>". Unchanged round-trips still save.
 - **Riders.** A dispute approved while the flag is off gets "Your dispute has been approved." with no refund claim. With the flag on, they get the same push as before plus a real refund.
@@ -202,6 +226,9 @@ elif wants_refund:
 - **Cap/threshold:** `UPDATE public.settings SET admin_money_daily_cap_per_admin = NULL, admin_money_alert_threshold = NULL WHERE id = 'app_settings';`. This has to be SQL, because the API drops None values.
 - **Routing change:** revert commit `29f1725`, which restores the `support.py` handler and its shadowing. No data migration is involved. Rows resolved in the meantime keep `resolution`/`resolved_by`.
 - **Dashboard toast:** revert `94a1091`. It is display-only.
+- **Round 4:**
+  - Revert `a192777` (the dashboard pre-fill). Full approvals then send no amount again.
+  - Revert `f39fe9d` (the CAS). It only narrows which writes land, and there is no data to remediate.
 - **Migration 477:** leave it in place; its columns are additive and harmless. Only drop them after reverting the code that writes them (rollback SQL is in its header).
 - **Schema** (only after reverting the code): `ALTER TABLE public.settings DROP COLUMN IF EXISTS admin_dispute_refunds_enabled, DROP COLUMN IF EXISTS admin_money_alert_threshold, DROP COLUMN IF EXISTS admin_money_daily_cap_per_admin;`
 
@@ -219,6 +246,11 @@ elif wants_refund:
   - Dashboard: `npm ci`, then **`npm run build` (Next.js production build) exited 0** with "Compiled successfully".
   - Dashboard tests: `npx vitest run src/app/dashboard/disputes/ src/__tests__/dashboard/pages.smoke.test.tsx src/app/dashboard/support` gave 38 passed across 3 files. The new `page.resolve.test.tsx` fails with the page change reverted.
   - `eslint` on the changed files: 0 errors, 3 pre-existing `set-state-in-effect` warnings.
+- [x] **Round 4:**
+  - Backend: 395 passed across 25 files (dispute, cap, support, settings, column guard, wallet, `test_admin_rbac`, `test_loguru_call_conventions`). The new race test fails without the CAS.
+  - Dashboard: `npx vitest run src/app/dashboard/disputes/ src/__tests__/dashboard/pages.smoke.test.tsx src/app/dashboard/support` gave 41 passed across 3 files (3 new pre-fill tests).
+  - **`npm run build` exited 0** ("Compiled successfully").
+  - `eslint`: 0 errors, 3 pre-existing warnings.
 - [x] `ruff check` and `ruff format --check` are clean, and the pre-commit hook ran on every commit (no `--no-verify`).
 - [x] **Blast-radius grep:**
   - every `/disputes/{id}/resolve` registration and dashboard caller;
@@ -234,7 +266,10 @@ elif wants_refund:
 - Migration 477 has not been applied anywhere. The drift test proves only that a migration declares every written key, not that production has run it.
 - The dashboard toast was not screenshotted or exercised in a real browser. It was covered by vitest with a mocked `useToast`, plus the production build.
 - Nothing ran against live Supabase or Stripe. The migration wasn't applied, Sentry was mocked, and there was no staging run.
-- **`pending` refunds.** A `pending` refund counts as issued; if Stripe later fails it, only the `charge.refund.updated` webhook would know. No webhook reconciliation of `refund_result` was added.
+- **Known follow-up: `pending` refunds.** A refund Stripe returns as `pending` counts as issued: `refund_issued=true`, it's counted by the cap, and the rider push says a refund was issued. If Stripe later fails it, nothing reconciles `refund_result`, the audit row or the cap total, because no `charge.refund.updated` handling updates disputes. The cap error only goes one way: it can only make the cap **stricter** (an unrefunded amount stays counted), never looser. The rider push would be wrong in that case, and the dispute would need manual follow-up. This is tracked as a follow-up, not fixed here.
+- **Round 4.**
+  - The CAS was tested against a simulated row, not a real Postgres `NOT IN` via PostgREST. `_apply_filters` compiles `$nin` to `.not_.in_`.
+  - The dashboard pre-fill was covered by vitest and the production build, not a real browser.
 - **Accepted gaps in the interim control:**
   - It's check-then-act, not a lock.
   - Wallet audit rows are written after the money moves, and `log_admin_action` swallows failures, which undercounts.

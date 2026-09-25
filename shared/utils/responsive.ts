@@ -47,6 +47,16 @@ export const FONT = {
 // ── Minimum touch target (Apple HIG = 44pt, Material = 48dp) ─────────────────
 export const MIN_TOUCH = 44;
 
+// ── OS text-size cap (accessibility) ─────────────────────────────────────────
+// Upper bound on the user's OS text-size setting for text in tight layouts
+// (fare lines, pills, stat blocks). Use `maxFontSizeMultiplier={MAX_FONT_SCALE}`
+// instead of `allowFontScaling={false}`, which ignores the setting entirely
+// (WCAG 2.1 SC 1.4.4). Separate from `createScaledFont` below, which scales by
+// screen width, not by the user's preference. 1.5x is a deliberate cap
+// (UX program decision D1), not WCAG's full 200% resize: it trades some
+// headroom for layouts that hold. Raise it only with a device check.
+export const MAX_FONT_SCALE = 1.5;
+
 // ── Dynamic font scaling ─────────────────────────────────────────────────────
 // Design baseline: 375dp (iPhone SE / standard Figma frame).
 // Scales linearly with screen width but dampened by a factor so fonts don't

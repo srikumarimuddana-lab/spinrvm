@@ -29,7 +29,7 @@ import { recordNonFatal } from '../utils/crashlytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
-import { useResponsive, SPACING } from '@shared/utils/responsive';
+import { useResponsive, SPACING, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
@@ -315,9 +315,9 @@ function PaymentConfirmScreenContent() {
             </View>
             <View style={styles.vehicleDetails}>
               <Text style={styles.vehicleName}>{selectedVehicle?.name}</Text>
-              <Text style={styles.vehicleDesc} allowFontScaling={false}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
+              <Text style={styles.vehicleDesc} maxFontSizeMultiplier={MAX_FONT_SCALE}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
             </View>
-            <Text style={styles.totalPrice} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
+            <Text style={styles.totalPrice} maxFontSizeMultiplier={MAX_FONT_SCALE}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
           </View>
 
           <View style={styles.routeContainer}>
@@ -523,7 +523,7 @@ function PaymentConfirmScreenContent() {
                 <Text style={styles.fareTotalLabel}>Estimated Total</Text>
                 <Text style={styles.fareToggleHint}>{fareExpanded ? 'Hide details' : 'View fare details'}</Text>
               </View>
-              <Text style={styles.fareTotalValue} allowFontScaling={false}>
+              <Text style={styles.fareTotalValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                 ${totalFare.toFixed(2)}
               </Text>
               <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: SPACING.sm }}>
@@ -548,7 +548,7 @@ function PaymentConfirmScreenContent() {
                         </Text>
                       )}
                       {line.amount != null ? (
-                        <Text style={[styles.fareValue, line.type === 'modifier' && { color: colors.error }]} allowFontScaling={false}>
+                        <Text style={[styles.fareValue, line.type === 'modifier' && { color: colors.error }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                           ${parseFloat(String(line.amount)).toFixed(2)}
                         </Text>
                       ) : (
@@ -560,7 +560,7 @@ function PaymentConfirmScreenContent() {
                 {appliedPromo && promoDiscount > 0 && (
                   <View style={[styles.fareRow, { marginTop: 2 }]}>
                     <Text style={[styles.fareLabel, { color: colors.success }]}>Promo ({appliedPromo.code})</Text>
-                    <Text style={[styles.fareValue, { color: colors.success }]} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
+                    <Text style={[styles.fareValue, { color: colors.success }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>-${promoDiscount.toFixed(2)}</Text>
                   </View>
                 )}
               </View>
@@ -597,7 +597,7 @@ function PaymentConfirmScreenContent() {
         {scheduledTime && (
           <View style={styles.scheduledBadge}>
             <Ionicons name="calendar-outline" size={16} color={colors.primary} />
-            <Text style={styles.scheduledText} allowFontScaling={false}>
+            <Text style={styles.scheduledText} maxFontSizeMultiplier={MAX_FONT_SCALE}>
               Scheduled: {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
               at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
             </Text>

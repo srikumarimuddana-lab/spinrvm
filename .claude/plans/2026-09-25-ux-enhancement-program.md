@@ -35,7 +35,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 1: accessibility floor and quick wins (low risk)
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W1.1a | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
+| W1.1a `[~]` | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
 | W1.1b | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
 | W1.2 | `aria-sort` on `SortableHead`, sticky `thead`, `aria-label` on 14 unlabelled search inputs | admin | none (no visible change at rest) | tests; axe; baselines unchanged |
 | W1.3 | Admin motion: `MotionConfig reducedMotion="user"`, a global `prefers-reduced-motion` rule, and an exit animation on the alert feed | admin | none | tests; baselines unchanged |
@@ -96,3 +96,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ## Progress log
 
 - 2026-09-25: #5829 research doc, #5830 Reduce Motion for loops, #5832 test time-bomb fix, #5836 scorecard doc. Plan written.
+- 2026-09-25: #5836 merged (scorecard and plan). W1.1a opened: rider-app text follows the OS text size up to 1.5×.

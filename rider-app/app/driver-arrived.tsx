@@ -25,7 +25,7 @@ import { RiderSOS } from '../components/RiderSOS';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useTranslation } from '../i18n';
 import { fetchDirectionsRoute } from '@shared/api/directions';
 import { DirectionsProxyEnabledContext } from './_layout';
@@ -312,7 +312,7 @@ function DriverArrivedScreenContent() {
           </TouchableOpacity>
           <View style={styles.arrivedChip}>
             <View style={styles.pulseGreen} />
-            <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
+            <Text style={styles.arrivedChipText} maxFontSizeMultiplier={MAX_FONT_SCALE}>Driver has arrived</Text>
           </View>
           <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
         </View>
@@ -345,7 +345,7 @@ function DriverArrivedScreenContent() {
               <View style={styles.otpDigits}>
                 {pickupOtp.split('').map((d, i) => (
                   <View key={i} style={styles.otpBox}>
-                    <Text style={styles.otpNum} allowFontScaling={false}>{d}</Text>
+                    <Text style={styles.otpNum} maxFontSizeMultiplier={MAX_FONT_SCALE}>{d}</Text>
                   </View>
                 ))}
               </View>
@@ -566,7 +566,9 @@ function createStyles(colors: ThemeColors) {
     otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
     otpDigits: { flexDirection: 'row', gap: 10, marginBottom: 12 },
     otpBox: {
-      width: 52, height: 60, backgroundColor: 'rgba(255,255,255,0.18)',
+      // min*, not fixed: the digit scales with OS text size (MAX_FONT_SCALE),
+      // so the box grows with it instead of clipping.
+      minWidth: 52, minHeight: 60, backgroundColor: 'rgba(255,255,255,0.18)',
       borderRadius: 14, justifyContent: 'center', alignItems: 'center',
       borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
     },

@@ -140,7 +140,12 @@ export default function AddressesScreen() {
                 // Non-null: isGeocodeResultValid above already confirmed coords resolved.
                 lat: coords!.lat,
                 lng: coords!.lng,
-                icon: 'home',
+                // Untyped: the backend keeps one row per rider typed "home"/"work"
+                // and replaces the previous one, so tagging every driver
+                // address "home" would overwrite the last save. "location"
+                // lets the label decide (a label of exactly "Home"/"Work"
+                // still counts). Rendering is unchanged — see the icon below.
+                icon: 'location',
             });
             setShowAddModal(false);
             setNewAddress({ name: '', address: '' });

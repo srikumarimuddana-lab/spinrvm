@@ -29,9 +29,7 @@ jest.mock('../../utils/backgroundLocation', () => ({
 
 // Platform.OS is 'ios' under jest-expo's default preset, which is the branch
 // that skips Notifee — keeping this suite on the persist + republish path.
-jest.mock('@notifee/react-native', () => ({ default: { onBackgroundEvent: jest.fn() } }), {
-  virtual: true,
-});
+jest.mock('@notifee/react-native', () => ({ default: { onBackgroundEvent: jest.fn() } }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock() calls above
 import {

@@ -40,6 +40,7 @@ from routes.admin.settings import SettingsUpdateRequest
 KNOWN_SETTINGS_COLUMNS = frozenset(
     {
         "admin_command_palette_enabled",
+        "admin_dispute_refunds_enabled",
         "admin_money_alert_threshold",
         "admin_money_daily_cap_per_admin",
         "admin_theme_v2_enabled",

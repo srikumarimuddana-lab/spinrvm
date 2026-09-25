@@ -173,9 +173,15 @@ async def test_dispute_refund_flag_off_records_resolution_without_refund(resolut
     refund_create.assert_not_called()
     assert result["refund_issued"] is False
     assert "no refund was issued" in result["message"].lower()
-    assert result["refund"] == {"status": "not_issued", "reason": "admin_dispute_refunds_disabled"}
+    assert result["refund"] == {
+        "status": "not_issued",
+        "reason": "admin_dispute_refunds_disabled",
+        "approved_amount": "10.00",
+    }
     update_one.assert_awaited_once()
-    assert update_one.await_args.args[2]["status"] == "resolved"
+    updates = update_one.await_args.args[2]
+    assert updates["status"] == "resolved"
+    assert updates["refund_amount"] == 0  # not summed into total_refunded
     details = audit.await_args.args[4]
     assert details["refund_issued"] is False
     assert "has been issued" not in push.await_args.args[2]

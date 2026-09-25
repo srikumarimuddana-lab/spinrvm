@@ -272,7 +272,11 @@ async def admin_resolve_dispute(
         logger.warning(
             "[REFUND] admin_dispute_refunds_enabled is off: dispute %s resolved with no refund issued", dispute_id
         )
-        refund_result = {"status": "not_issued", "reason": "admin_dispute_refunds_disabled"}
+        refund_result = {
+            "status": "not_issued",
+            "reason": "admin_dispute_refunds_disabled",
+            "approved_amount": str(req.refund_amount),
+        }
     elif wants_refund:
         # N23: per-admin daily cap (403, no Stripe call) + large-refund alert.
         # Enforced on the manual_required path below too — the admin still
@@ -330,7 +334,10 @@ async def admin_resolve_dispute(
     update_data: Dict[str, Any] = {
         "status": "resolved" if req.resolution != "rejected" else "rejected",
         "resolution": req.resolution,
-        "refund_amount": req.refund_amount or 0,
+        # Flag off: nothing was refunded, so keep refund_amount (summed as
+        # total_refunded by admin_dispute_stats_rollup) at 0; the approved
+        # amount is in refund_result for the manual refund.
+        "refund_amount": 0 if wants_refund and not refunds_enabled else (req.refund_amount or 0),
         "admin_note": req.admin_note or "",
         "resolved_at": datetime.now(timezone.utc).isoformat(),
         # F-32: carried over from support.py's removed duplicate handler.

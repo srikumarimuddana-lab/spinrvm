@@ -79,6 +79,15 @@ There was no global Reduce Motion rule; animation came piecemeal from Tailwind u
 - [x] **Typecheck:** `tsc --noEmit` passes.
 - [x] **Production build:** `npm run build` succeeds.
 - [x] **Lint:** ESLint on the touched files is clean.
+- [x] **Accessibility review:** `spinr-accessibility-reviewer` ran on the diff (code-read only). Verdict: likely compliant with WCAG 2.1 SC 2.3.3.
+  - **Blocker:** none.
+  - **Confirmed:**
+    - The rule reaches `animate-pulse` skeletons, the Radix dialog, sheet, alert-dialog and toast enter/exit animations, and `transition-*` utilities.
+    - Using 0.01 ms rather than `animation: none` keeps Radix unmounting on `animationend`. No app code listens for `animationend` or `transitionend`.
+    - The alert-feed exit really runs: rows sit inside `AnimatePresence` with stable ids, on "Clear all" and when the 50-row cap drops the oldest.
+    - `/track`'s inline car-heading transition snaps instead of tweening, and nothing waits on it.
+  - **Should-fix, checked and kept as is:** the pulsing dot beside "Live Ride Monitoring" (`animate-ping`, the only use in the app) stops pulsing and shows as a plain dot. It is decorative; the Radio icon and the heading text carry "live". Stopping the pulse is what Reduce Motion asks for.
+  - **Nit, not changed:** the `::before`/`::after` part of the selector also applies inside a spinner. No spinner animates a pseudo-element (all are Lucide `Loader2`), so it has no effect today.
 
 ## 10. What was NOT verified
 

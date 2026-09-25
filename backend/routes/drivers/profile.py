@@ -101,6 +101,10 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
         # Migration 467, default off: Android must grant Allow all the time to
         # go or stay online. False on a settings read failure too.
         "always_location_required": app_settings.get("driver_always_location_gate_enabled") is True,
+        # Migration 482, default off: play the ride-offer tone through the
+        # car speakers while Android Auto is connected. False on a settings
+        # read failure too.
+        "android_auto_offer_tone_enabled": app_settings.get("android_auto_offer_tone_enabled") is True,
     }
 
 

@@ -133,7 +133,13 @@ class TestGstPstLinesReconcile:
             {"label": "PST (6.0%)", "amount": 0.06, "type": "tax"},
         ]
         ride = _ride(fare_breakdown_snapshot={"lines": lines}, tip_amount=0.3)
-        assert sum([0.10] * 10) != 1.0  # guard: float drift on ten 0.10s
+        # Guard: ten 0.10s drift when added one at a time as floats. Use an
+        # explicit loop, not sum(): Python 3.12+'s sum() compensates for
+        # rounding and returns exactly 1.0, which made this guard fail in CI.
+        drift = 0.0
+        for _ in range(10):
+            drift += 0.10
+        assert drift != 1.0
         r = await _receipt(mock_supabase_client, ride, settings={"fare_lock_enabled": True})
         assert r["fare_locked"] is True
         tip = [ln for ln in r["fare_breakdown"] if ln["type"] == "tip"]

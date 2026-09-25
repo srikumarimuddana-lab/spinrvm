@@ -284,6 +284,27 @@ async def _resolve_regulatory_defaults(service_area_id) -> tuple:
     return authority, region
 
 
+async def _instant_payout_area_verdict(driver: dict) -> tuple:
+    """``(service_area_row, refusal)`` for instant payout (ROADMAP N22).
+
+    The one area rule shared by ``request_instant_payout``'s 403 gate
+    (payouts.py) and ``GET /drivers/balance``'s ``instant_payout_available``
+    flag (earnings.py), so the two cannot drift apart again. ``refusal`` is
+    None when instant payout is allowed, else:
+      - ``"no_service_area"``: no service_area_id, or one that matches no row
+        (fails closed — a driver can write any id via PUT /drivers/me).
+      - ``"disabled_in_area"``: the per-area kill switch is off (migration 314).
+    DB errors propagate; each caller decides how to fail closed. The daily
+    cap is NOT part of this verdict — it is per-request, not per-driver."""
+    sa_id = driver.get("service_area_id")
+    sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1) if sa_id else []
+    if not sa_rows:
+        return None, "no_service_area"
+    if sa_rows[0].get("instant_payout_enabled") is False:
+        return sa_rows[0], "disabled_in_area"
+    return sa_rows[0], None
+
+
 async def _encrypt_driver_pii(payload: dict) -> dict:
     """Encrypt vault PII fields in a write payload before sending to the DB.
 

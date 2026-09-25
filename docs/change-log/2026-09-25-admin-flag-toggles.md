@@ -30,7 +30,7 @@ Two feature switches had no dashboard control. `destination_mode_enabled` (migra
   - Saved-place shortcuts (riders): `checked={saved_place_shortcuts_enabled !== false}`, so it defaults on.
 - The switch is **not** added to `AppSettings` (`backend/schemas.py`). This is deliberate:
   - The dashboard saves the whole settings object it got from GET.
-  - If `AppSettings` defaulted this key, GET would return it before 484 is applied. Every save would then write a column that doesn't exist yet: PostgREST PGRST204, and the whole save fails with a 500.
+  - If `AppSettings` defaulted this key, GET would return it before 484 is applied. Every save would then write a column that doesn't exist yet: PostgREST PGRST204, and the whole save fails with a 503 (`DatabaseError`; the PostgREST error is logged server-side).
   - Left out of `AppSettings`, the key appears in GET only once the column exists. Before that, it is sent only if an admin actually flips that one switch.
 
 **Alternative considered:** put both switches in the existing "Kill Switches" card. Rejected because that card says "All default on", and destination mode defaults off. A separate card keeps the copy accurate.
@@ -49,7 +49,7 @@ Two feature switches had no dashboard control. `destination_mode_enabled` (migra
   - The change is limited to `admin-dashboard/src/app/dashboard/settings/page.tsx`.
   - It adds new JSX only, inside the Operations `TabsContent`. The shared `update()` helper and the save path are unchanged.
   - No shared component was modified.
-- **Deploy-order risk:** until migration 484 is applied, flipping the Saved-place shortcuts switch and saving returns a 500. Nothing is written, and the admin sees the save-error toast. Saves that don't touch that switch are unaffected. Fix: apply 484 before telling admins the toggle exists.
+- **Deploy-order risk:** until migration 484 is applied, flipping the Saved-place shortcuts switch and saving returns a 503 ("Database operation failed"; the underlying PGRST204 is logged at ERROR server-side). Nothing is written, and the admin sees the save-error toast. This matches `destination_mode_enabled` (migration 482), which shipped with the same behaviour. Saves that don't touch that switch are unaffected. Fix: apply 484 before telling admins the toggle exists.
 - **Visual regression:**
   - The `dashboard-settings` Playwright baseline captures `/dashboard/settings` full-page on the **default tab (Integrations)**.
   - Radix `TabsContent` does not mount inactive tabs, so the Operations card is not in the captured DOM.

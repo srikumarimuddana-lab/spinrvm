@@ -260,6 +260,31 @@ def _exclude_rider_owned_candidates(ride: dict, candidates: list[dict]) -> list[
     return kept
 
 
+# A ride accumulates at most max_simultaneous_offers (<= 10) rows per dispatch
+# attempt, so this is far above any real count and only bounds the read.
+_OFFERED_DRIVER_ROW_CAP = 1000
+
+
+async def _already_offered_driver_ids(ride_id: str) -> set:
+    """Drivers holding any ride_offers row for this ride, whatever its status.
+
+    ride_offers is UNIQUE (ride_id, driver_id) (migration 100), so a ride can
+    never be offered to the same driver twice. The Redis offer-skip key keeps
+    those drivers out of the pool, but it lasts 300 s and fails open when Redis
+    is down. A driver who gets back in then makes the PostgREST claim path's
+    batch ride_offers insert fail, which releases every driver claimed in that
+    round and raises, on every retry. This read is the durable filter; it uses
+    the ride_offers(ride_id) index.
+    """
+    rows = await _deps.db_supabase.get_rows(
+        "ride_offers",
+        {"ride_id": ride_id},
+        columns="driver_id",
+        limit=_OFFERED_DRIVER_ROW_CAP,
+    )
+    return {r["driver_id"] for r in rows or [] if r.get("driver_id")}
+
+
 # Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
 # ceiling, same 150 figure) — not imported from there to avoid a new
 # cross-module dependency on a private constant for a single int.
@@ -771,6 +796,27 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}"
                 )
 
+            # Drivers already offered this ride, from the DB — covers an expired
+            # or unreadable Redis skip key. See _already_offered_driver_ids. A
+            # failed read keeps today's behaviour (Redis filter only), loudly.
+            try:
+                _offered_ids: set = await _already_offered_driver_ids(ride_id)
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[DISPATCH] already-offered lookup failed for ride {} — using the Redis skip filter only",
+                    ride_id,
+                )
+                _offered_ids = set()
+            if _offered_ids:
+                _before_offered = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d["id"] not in _offered_ids]
+                if len(all_drivers) != _before_offered:
+                    logger.info(
+                        "[DISPATCH] skipped {} driver(s) already offered ride {} (DB)",
+                        _before_offered - len(all_drivers),
+                        ride_id,
+                    )
+
             # Subscription guard: if the ride's service area requires a Spinr Pass,
             # filter out candidates without an active subscription.  One batch IN
             # query — no N+1 per driver.  Fails open on DB error so a transient fault
@@ -1027,6 +1073,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 logger.warning(
                                     "[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc
                                 )
+                        # Same durable already-offered filter as the primary pool.
+                        if _offered_ids:
+                            _casc_pool = [d for d in _casc_pool if d["id"] not in _offered_ids]
                         # Fix 2: apply subscription filter to cascade pool when the service area
                         # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                         if _sub_required and _casc_pool:

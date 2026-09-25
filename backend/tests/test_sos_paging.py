@@ -257,7 +257,7 @@ async def _trigger_emergency(page_on_call_mock):
             AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-        patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+        patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
         patch("backend.routes.rides.safety.notify_safety_team", AsyncMock(return_value={})),
         patch("backend.routes.rides.safety.page_sos_on_call", page_on_call_mock),
     ):

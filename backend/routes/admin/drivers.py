@@ -1781,34 +1781,27 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     PGRST204 ("Could not find the 'email' column of 'drivers'") -> 500.
 
     Optimistic concurrency (CONCURRENCY-001): an optional top-level
-    ``expected_updated_at`` may be included in the request body — the
-    ``drivers.updated_at`` value the admin's edit form was loaded with
-    (``backend/sql/02_add_updated_at.sql`` added the column with
-    ``DEFAULT now()``; it has no trigger, so it is bumped by application
-    code only — this handler is one of several call sites that do so). If
-    given, the write is rejected with 409 when the row has since changed
-    (another admin edited it first); the driver row's own current
-    ``updated_at`` is unaffected by the 409 so the caller can reload and
-    retry. If omitted, behaviour is unchanged from before this field
-    existed. It is never itself written as a driver field (it is not in
-    `allowed` below).
+    ``expected_admin_edited_at`` may be included in the request body -- the
+    ``drivers.admin_edited_at`` value the admin's edit form was loaded with
+    (``null`` for a driver no admin has edited since migration 488). When the
+    key is present the drivers write is filtered on that value and rejected
+    with 409 if another admin saved first. When absent, behaviour is as
+    before this field existed.
 
-    Known limitation: ``updated_at`` is a whole-row freshness marker, not an
-    "admin edited this" marker — it is also bumped by the driver's own app
-    (location pings while online, coalesced to ~1 write/3s per
-    docs/change-log/2026-08-27-driver-location-marker-write-gate.md; also
-    touched by utils/stale_intent_reconciler.py for is_online rows). Editing
-    a *currently online* driver's profile can therefore hit a false-positive
-    409 from that driver's own traffic, not another admin's edit — this is a
-    real gap, not covered by the current fix. Editing an offline/pending
-    driver (the common case: onboarding/compliance review) is unaffected,
-    since nothing else writes to an offline driver's row on a comparable
-    cadence. A follow-up that locks on a dedicated admin-edit-only timestamp
-    column instead of the shared `updated_at` would close this gap.
+    ``admin_edited_at`` (migration 488) is written only by this handler, so a
+    driver's own traffic cannot trip the lock. ``updated_at`` is NOT usable
+    for this: location pings (~1 write/3s while online) and
+    utils/stale_intent_reconciler.py bump it, which made every edit of an
+    online driver a false 409. Every save through this handler stamps
+    ``admin_edited_at``, with or without the lock, so older dashboard builds
+    still move the marker other admins compare against.
     """
-    expected_updated_at = updates.get("expected_updated_at")
-    if expected_updated_at is not None and not isinstance(expected_updated_at, str):
-        raise HTTPException(status_code=400, detail="expected_updated_at must be an ISO-8601 timestamp string")
+    lock_requested = "expected_admin_edited_at" in updates
+    expected_admin_edited_at = updates.get("expected_admin_edited_at")
+    if expected_admin_edited_at is not None and not isinstance(expected_admin_edited_at, str):
+        raise HTTPException(
+            status_code=400, detail="expected_admin_edited_at must be an ISO-8601 timestamp string or null"
+        )
 
     # Fields that live on the `users` account row.
     user_fields = {"first_name", "last_name", "email", "phone", "gender"}
@@ -1918,13 +1911,14 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         )
 
     try:
-        if expected_updated_at is not None:
+        edited_at = datetime.now(timezone.utc).isoformat()
+        if lock_requested:
             # Optimistic-lock path: check the drivers row BEFORE the users
             # row so a rejected edit never leaves a users-table change landed
             # while the driver-row half 409s (avoids a partial write).
             #
             # Atomic compare-and-write: filter on the caller's expected
-            # `updated_at` rather than reading, comparing, then writing
+            # `admin_edited_at` (None compiles to IS NULL) rather than reading, comparing, then writing
             # separately, so a concurrent edit landing in between cannot slip
             # past the check (read-then-write would race here). Done even
             # when driver_updates is empty (an email/gender-only edit) so the
@@ -1937,12 +1931,13 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             # write, same as the self-serve profile-update and bulk-import
             # paths.
             driver_payload = await _encrypt_driver_pii(driver_updates)
-            driver_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            driver_payload["admin_edited_at"] = edited_at
+            driver_payload["updated_at"] = edited_at
             write_result = await db_supabase.update_one(
-                "drivers", {"id": driver_id, "updated_at": expected_updated_at}, driver_payload
+                "drivers", {"id": driver_id, "admin_edited_at": expected_admin_edited_at}, driver_payload
             )
             if write_result is None:
-                # 0 rows matched: either the row is gone or updated_at moved.
+                # 0 rows matched: either the row is gone or admin_edited_at moved.
                 # Re-read to tell those apart rather than assuming a conflict.
                 current = await db_supabase.get_driver_by_id(driver_id)
                 if not current:
@@ -1960,8 +1955,11 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             # not a stale mirror.
             if user_updates and user_id:
                 await db_supabase.update_one("users", {"id": user_id}, user_updates)
-            if driver_updates:
-                await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(driver_updates))
+            # Stamp admin_edited_at even for a users-only edit so a lock taken
+            # by another admin's newer dashboard still sees this save.
+            driver_payload = await _encrypt_driver_pii(driver_updates) if driver_updates else {}
+            driver_payload["admin_edited_at"] = edited_at
+            await db_supabase.update_one("drivers", {"id": driver_id}, driver_payload)
     except HTTPException:
         raise
     except Exception as e:

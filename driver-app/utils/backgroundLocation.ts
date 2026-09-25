@@ -570,6 +570,25 @@ export async function isBackgroundLocationRunning(): Promise<boolean> {
   }
 }
 
+/**
+ * Android "Allow all the time" / iOS "Always". Foreground ("while using")
+ * is requested first because Android will not offer the always option until
+ * that grant exists. Returns false when the driver stops at while-using or
+ * denies the prompt.
+ */
+export async function requireAlwaysLocationPermission(): Promise<boolean> {
+  let foreground = await Location.getForegroundPermissionsAsync();
+  if (foreground.status !== 'granted') {
+    foreground = await Location.requestForegroundPermissionsAsync();
+  }
+  if (foreground.status !== 'granted') return false;
+  let background = await Location.getBackgroundPermissionsAsync();
+  if (background.status !== 'granted') {
+    background = await Location.requestBackgroundPermissionsAsync();
+  }
+  return background.status === 'granted';
+}
+
 export async function startBackgroundLocation(
   config?: BgLocationConfig,
   canStart: () => boolean = () => true,
@@ -592,6 +611,22 @@ export async function startBackgroundLocation(
     return false;
   }
 
+  // "While using the app" is not enough. A closed driver app has no heartbeat
+  // and drops out of dispatch. Android's Allow all the time is
+  // ACCESS_BACKGROUND_LOCATION; iOS's Always is the same grant.
+  let { status } = await Location.getBackgroundPermissionsAsync();
+  if (status !== 'granted') {
+    const res = await Location.requestBackgroundPermissionsAsync();
+    status = res.status;
+  }
+  if (status !== 'granted') {
+    console.warn('[BgLocation] Allow all the time is required');
+    if (await Location.hasStartedLocationUpdatesAsync(TASK_NAME).catch(() => false)) {
+      await stopBackgroundLocation().catch(() => {});
+    }
+    return false;
+  }
+
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
     // Foreground resume reaches this path even without a GPS callback. Reapply
@@ -603,16 +638,6 @@ export async function startBackgroundLocation(
   // Permission flow stays OUTSIDE the arbiter lock: the request can hold a
   // system dialog open for minutes, and holding the lock through it would
   // starve go-offline/AA transitions into the bounded-wait timeout.
-  let { status } = await Location.getBackgroundPermissionsAsync();
-  if (status !== 'granted') {
-    const res = await Location.requestBackgroundPermissionsAsync();
-    status = res.status;
-  }
-  if (status !== 'granted') {
-    console.warn('[BgLocation] Background permission not granted');
-    return false;
-  }
-
   return runExclusive('bg-start', async () => {
     // A resume or permission wait may outlive its online/account lifecycle.
     if (await isSessionEnded() || !canStart()) return false;

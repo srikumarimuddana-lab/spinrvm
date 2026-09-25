@@ -27,16 +27,21 @@ The locks were added defensively to stop large system fonts from breaking tight 
 ## 3. Fix / remediation
 
 - **Shared cap:** added `MAX_FONT_SCALE = 1.5` to `shared/utils/responsive.ts`, one shared cap per decision D1.
-- **Replaced locks:** 28 of the 30 locked sites now use `maxFontSizeMultiplier={MAX_FONT_SCALE}`. Text grows with the setting up to 1.5×.
-- **Kept one exception:** the 56 pt circular ETA badge in `ride-in-progress.tsx` keeps its lock (2 sites, number and unit), documented with a `font-scale-lock:` comment. Its fixed 22 pt line height would clip larger digits, and the same ETA is shown at scalable size in the trip-stats row.
-- **Regression guard:** `rider-app/__tests__/fontScalingLock.test.ts` fails on any new unexplained lock in `rider-app/app` or `rider-app/components`.
+- **Replaced locks:** 26 of the 30 locked sites now use `maxFontSizeMultiplier={MAX_FONT_SCALE}`. Text grows with the setting up to 1.5×.
+- **Kept exceptions (4 sites),** each documented with a `font-scale-lock:` comment:
+  - **ETA badge** (2 sites, number and unit): the 56 pt circular badge in `ride-in-progress.tsx`. Its fixed 22 pt line height would clip larger digits, and the same ETA is shown at scalable size in the trip-stats row.
+  - **Splash text** (2 sites, tagline and provenance): the splash is decorative and shown for about two seconds, and its fixed line height is tuned to stop descender clipping.
+- **Layouts that grow instead of clipping:**
+  - The pickup PIN and OTP boxes use `minWidth`/`minHeight` instead of fixed sizes. They are identical at default text size and grow with the digit.
+  - The ride-completed fare row wraps, so the payment badge drops below a large total.
+- **Regression guard:** `rider-app/__tests__/fontScalingLock.test.ts` fails on any new unexplained lock in `rider-app/app` or `rider-app/components`. It also catches spacing variants such as `{ false }`.
 
 ## 4. Risk & impact on existing functionality
 
 - **Blast radius: single surface (rider-app), display only.**
   - No state, network, money arithmetic or ride-state logic changes.
   - Fare values are unchanged; only the maximum rendered size of existing strings changes.
-- **Default text size: no change.** `maxFontSizeMultiplier` only matters once the OS scale exceeds 1.0.
+- **Default text size: no change.** `maxFontSizeMultiplier` only matters once the OS scale exceeds 1.0. The `min*` box sizes equal the old fixed sizes. The fare-row wrap only triggers when the content no longer fits on one line.
 - **Layout risk, for riders with enlarged text:** text on these screens can now grow by up to 50%. Tight rows (fare breakdown lines, pills, the payment-confirm total) could wrap or truncate at the largest settings.
   - The 1.5× cap bounds this, instead of the unbounded growth that a plain removal of the lock would allow.
   - The accessibility reviewer was asked to check each site's container styles.
@@ -57,11 +62,11 @@ The locks were added defensively to stop large system fonts from breaking tight 
 | `shared/utils/responsive.ts` | New `MAX_FONT_SCALE = 1.5` | One shared cap (D1) |
 | `rider-app/app/ride-in-progress.tsx` | 5 locks → cap; ETA badge keeps a justified lock | Fare, ETA and trip stats scale |
 | `rider-app/app/payment-confirm.tsx` | 6 locks → cap | Fare total and breakdown scale |
-| `rider-app/app/ride-completed.tsx` | 4 locks → cap | Trip total and stats scale |
-| `rider-app/app/driver-arriving.tsx` | 3 locks → cap | ETA, plate and PIN scale |
-| `rider-app/app/driver-arrived.tsx` | 2 locks → cap | Arrived chip and PIN scale |
+| `rider-app/app/ride-completed.tsx` | 4 locks → cap; fare row wraps | Trip total and stats scale without overflow |
+| `rider-app/app/driver-arriving.tsx` | 3 locks → cap; PIN box uses min size | ETA, plate and PIN scale; the box grows instead of clipping |
+| `rider-app/app/driver-arrived.tsx` | 2 locks → cap; OTP box uses min size | Arrived chip and PIN scale; the box grows instead of clipping |
 | `rider-app/app/(tabs)/activity.tsx` | 4 locks → cap | History fare and status scale |
-| `rider-app/components/BrandSplash.tsx` | 2 locks → cap | Splash tagline scales |
+| `rider-app/components/BrandSplash.tsx` | Existing locks kept, now justified | Fixed line height tuned against descender clipping |
 | `rider-app/__tests__/fontScalingLock.test.ts` | New static guard | Stops unexplained locks returning |
 
 ## 7. Before / after
@@ -86,13 +91,22 @@ The locks were added defensively to stop large system fonts from breaking tight 
 
 ## 9. Verification performed
 
-- [x] **Guard test:** `fontScalingLock.test.ts` passes with the change. Against the pre-change code it lists 30 violations, so it tests the change, not itself.
+- [x] **Guard test:** `fontScalingLock.test.ts` passes with the change. Against the pre-change code it lists 30 violations, so it tests the change, not itself. After the review fixes it caught its own too-narrow comment window, which is now 6 lines.
 - [x] **Screen tests:** the 7 affected rider screen suites pass (activity, driverArrived, driverArriving, paymentConfirm, rideCompleted, rideInProgress, BrandSplash), 287 tests.
 - [x] **Typecheck:** `tsc --noEmit` passes in rider-app and driver-app.
 - [x] **Lint:** ESLint on the touched files reports the same result before and after: 1 error and 406 warnings, all pre-existing. The error is on `BrandSplash.tsx` line 107, which this change did not touch.
 - [x] **Blast radius:** grepped every lock site, and `MAX_FONT_SCALE` has no other consumers.
 - [x] **Feature flag:** none; justified in §8.
-- [ ] **Accessibility review:** `spinr-accessibility-reviewer` is running on the diff. Its outcome will be recorded here before merge.
+- [x] **Accessibility review:** `spinr-accessibility-reviewer` ran on the diff (code-read only).
+  - **Blocker:** none.
+  - **Should-fix, all three fixed:**
+    - the splash's fixed line height would clip at 1.5× (lock restored and justified)
+    - the PIN and OTP boxes were tight at 1.5× (now minimum sizes)
+    - the ride-completed fare row could not wrap (now wraps)
+  - **Nits:**
+    - the guard now catches spacing variants
+    - the `MAX_FONT_SCALE` comment now says 1.5× is a cap, not WCAG's full 200%
+    - extending the guard to `shared/` is deferred to W1.1b, because `shared/components/SOSButton.tsx` has an existing lock that belongs to that PR.
 
 ## 10. What was NOT verified
 

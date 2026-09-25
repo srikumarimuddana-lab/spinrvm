@@ -86,7 +86,7 @@ export default function FlagsTab() {
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
-                    <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
+                    <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input aria-label="Search flags" placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
                     <Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="rider">Riders</SelectItem><SelectItem value="driver">Drivers</SelectItem></SelectContent></Select>
                     <ServiceAreaFilter value={areaFilter} onChange={setAreaFilter} areas={areas} />
                 </div>

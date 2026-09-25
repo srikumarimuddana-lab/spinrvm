@@ -372,6 +372,7 @@ export default function TicketListPage() {
                             value={refine}
                             onChange={(e) => setRefine(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+                            aria-label="Search all tickets"
                             placeholder="Search all tickets: # / subject / contact…"
                             className="w-64 pl-8"
                         />

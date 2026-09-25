@@ -256,6 +256,27 @@ describe('driverStore — ride state machine', () => {
     expect(useDriverStore.getState().acceptNetworkHold).toBe(false);
   });
 
+  test('countdown reaching 0 auto-declines with reason offer_expired', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide());
+    mockApi.post.mockResolvedValueOnce({ data: {} } as any);
+
+    await act(async () => {
+      useDriverStore.getState().setCountdown(0);
+    });
+
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/decline', { reason: 'offer_expired' });
+    expect(useDriverStore.getState().rideState).toBe('idle');
+  });
+
+  test('countdown does not auto-decline while an accept is in flight', async () => {
+    useDriverStore.getState().setIncomingRide(makeMockRide());
+    useDriverStore.setState({ acceptNetworkHold: true });
+
+    useDriverStore.getState().setCountdown(0);
+
+    expect(mockApi.post).not.toHaveBeenCalled();
+  });
+
   test('drops an expired uncertain offer without sending a decline', async () => {
     useDriverStore.getState().setIncomingRide(makeMockRide({ offer_expires_at: '2000-01-01T00:00:00Z' }));
     mockApi.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error' });

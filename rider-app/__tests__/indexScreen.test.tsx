@@ -72,7 +72,7 @@ async function renderScreen() {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useAuthStore.setState({ isInitialized: false, token: null, user: null });
+  useAuthStore.setState({ isInitialized: false, token: null, user: null, sessionRecoverable: false, initialize: jest.fn() });
   mockHydrateActiveRide.mockResolvedValue(undefined);
   mockFetchActiveRide.mockResolvedValue({ active: false });
   mockApiGet.mockResolvedValue({ data: { needs_notice: false } });
@@ -95,6 +95,16 @@ describe('Index (rider-app cold start routing)', () => {
     useAuthStore.setState({ isInitialized: true, token: null, user: null });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not route to /login while a failed refresh can still be retried', async () => {
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    useAuthStore.setState({
+      isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize,
+    } as any);
+    await renderScreen();
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(initialize).toHaveBeenCalled();
   });
 
   it('routes to /profile-setup when the profile is incomplete', async () => {

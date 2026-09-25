@@ -463,6 +463,26 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     expect(SecureStore.deleteItemAsync).not.toHaveBeenCalled();
   });
 
+  it.each(['App Check token required', 'Invalid App Check token'])(
+    'keeps the session when refresh is rejected for %s',
+    async (detail) => {
+      useAuthStore.setState({ refreshToken: 'live-token', token: 'old-access' });
+      mockSecureStoreBacking['refresh_token'] = 'live-token';
+      mockPost.mockRejectedValueOnce({
+        status: 401,
+        ok: false,
+        json: async () => ({ detail }),
+      });
+
+      const ok = await useAuthStore.getState().refreshTokens();
+
+      expect(ok).toBe(false);
+      expect(useAuthStore.getState().token).toBe('old-access');
+      expect(mockSecureStoreBacking['refresh_token']).toBe('live-token');
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('keeps the session on a transient (5xx) refresh failure', async () => {
     useAuthStore.setState({ refreshToken: 'live-token', token: 'old-access' });
     mockSecureStoreBacking['refresh_token'] = 'live-token';

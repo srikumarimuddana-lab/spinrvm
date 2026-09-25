@@ -1,18 +1,50 @@
-import React, { useEffect } from 'react';
-import { View } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { ActivityIndicator, AppState, AppStateStatus, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 
+const RETRY_INTERVAL_MS = 5000;
+
 export default function Index() {
   const router = useRouter();
-  const { isInitialized, token, user } = useAuthStore();
+  const { isInitialized, token, user, sessionRecoverable, initialize } = useAuthStore();
   const { colors } = useTheme();
+  const retryingRef = useRef(false);
+
+  // App Check (and other transient refresh failures) leave the 30-day login
+  // in secure storage and set sessionRecoverable. Sending the rider to
+  // /login here is the logout they see after the app has been in the background.
+  const retryAuth = useCallback(async () => {
+    if (retryingRef.current) return;
+    if (!useAuthStore.getState().sessionRecoverable) return;
+    retryingRef.current = true;
+    try {
+      await initialize();
+    } finally {
+      retryingRef.current = false;
+    }
+  }, [initialize]);
+
+  useEffect(() => {
+    if (!sessionRecoverable) return;
+    void retryAuth();
+    const id = setInterval(retryAuth, RETRY_INTERVAL_MS);
+    const onAppState = (state: AppStateStatus) => {
+      if (state === 'active') void retryAuth();
+    };
+    const sub = AppState.addEventListener('change', onAppState);
+    return () => {
+      clearInterval(id);
+      sub.remove();
+    };
+  }, [sessionRecoverable, retryAuth]);
 
   useEffect(() => {
     if (!isInitialized) return;
+    if (sessionRecoverable) return;
 
     (async () => {
       const hasProfileData = !!(user?.first_name && user?.last_name && user?.email);
@@ -71,9 +103,13 @@ export default function Index() {
       );
     })();
     // router is expo-router's stable singleton.
-  }, [isInitialized, token, user, router]);
+  }, [isInitialized, token, user, router, sessionRecoverable]);
 
   // Transparent pass-through — BrandSplash (in _layout.tsx) is the only
   // branded loading screen. This screen just routes; it has no visual chrome.
-  return <View style={{ flex: 1, backgroundColor: colors.background }} />;
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }}>
+      {sessionRecoverable ? <ActivityIndicator color={colors.primary} accessibilityLabel="Reconnecting" /> : null}
+    </View>
+  );
 }

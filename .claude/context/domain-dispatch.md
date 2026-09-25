@@ -45,11 +45,12 @@ Source: `routes/rides/matching.py` (`match_driver_to_ride`, `_dispatch_retry`,
   TTL, so they are not offered **this ride** again for 300 s. This is why the
   search window is capped at 300 s: `ride_offers` is `UNIQUE(ride_id, driver_id)`
   (migration 100), and a re-offer after the key expires fails the bulk insert.
-- Not yet wired, flags exist and default **off** (settings migrations 466, 467,
-  469; plan `.claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md`):
-  `offer_expired_decline_as_miss_enabled`, `dispatch_reoffer_enabled` (+
-  `dispatch_decline_reoffer_after_seconds`, `dispatch_max_offers_per_driver_per_ride`),
-  `dispatch_expanded_radius_enabled` (+ `_after_seconds`, `_multiplier`, `_max_km`).
+- Flags that default **off** (settings migrations 466, 469; plan
+  `.claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md`):
+  `offer_expired_decline_as_miss_enabled` (countdown auto-decline counts as a
+  miss) and `dispatch_expanded_radius_enabled` (+ `_after_seconds`,
+  `_multiplier`, `_max_km`). Re-offering a ride to a driver who declined it is
+  **not possible** while `ride_offers` keeps `UNIQUE(ride_id, driver_id)`.
 
 ## Race conditions to guard
 

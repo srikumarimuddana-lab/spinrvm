@@ -37,7 +37,7 @@ All three now read `settings.ride_search_timeout_seconds` through the cached `ge
   - the configurable window;
   - the flags from migrations 466/467/469, which exist but default off.
 
-**Why the clamp tops out at 300 s, not 600 s.** `ride_offers` has `UNIQUE(ride_id, driver_id)` (migration 100), and the `spinr:offer_skip` key lasts 300 s. In a search longer than about 300 s, a driver who was already offered the ride can be ranked again. On the default PostgREST claim path, the bulk `ride_offers` insert then fails, releases every claimed driver and raises, and the ride stalls. The coordinator is changing migration 468's CHECK and `SettingsUpdateRequest` to `le=300` on main. This change does not touch those files. The code clamps to 300 on its own, so a stray higher DB value cannot reach dispatch.
+**Why the clamp tops out at 300 s, not 600 s.** `ride_offers` has `UNIQUE(ride_id, driver_id)` (migration 100), and the `spinr:offer_skip` key lasts 300 s. In a search longer than about 300 s, a driver who was already offered the ride can be ranked again. On the default PostgREST claim path, the bulk `ride_offers` insert then fails, releases every claimed driver and raises, and the ride stalls. Migration 468's CHECK and `SettingsUpdateRequest` enforce `le=300` too (`110269c`). The code clamps to 300 on its own as well.
 
 **Scheduled rides are unchanged.**
 - `utils/scheduled_rides.py` still calls `ride_search_timeout(ride_id)` with the 300 s default. That path never reads the setting.
@@ -87,6 +87,7 @@ Behaviour to know about:
 
 | File path | What changed | Why |
 |---|---|---|
+| `backend/migrations/468_settings_ride_search_timeout.sql` | New `settings.ride_search_timeout_seconds INT NOT NULL DEFAULT 300`, `CHECK BETWEEN 90 AND 300` (commits `e231a0a`, `110269c`); admin field in `backend/routes/admin/settings.py` with `ge=90, le=300` | The setting itself; 300 cap for the UNIQUE(ride_id, driver_id) reason above |
 | `backend/routes/rides/matching.py` | New `_ride_search_timeout_seconds()` (read + clamp 90–300 + fallback) and `_max_dispatch_attempts()`. `_dispatch_retry` derives its cap from the window. `ride_search_timeout` accepts `timeout_seconds=None` and keeps a 300 s scheduled grace. | One source for the timer and the retry cap |
 | `backend/routes/rides/booking.py` | Spawn site passes `timeout_seconds=None` for non-scheduled rides | On-demand rides use the setting; scheduled rides don't |
 | `backend/utils/stuck_ride_sweeper.py` | New `_search_timeout_seconds()`. The claim uses separate on-demand and scheduled cutoffs. | The durable backstop cancels at the same time as the timer; scheduled rides unchanged |
@@ -185,7 +186,7 @@ No deploy needed: `UPDATE settings SET ride_search_timeout_seconds = 300;` (or s
 - The new sweeper `or=(and(...),and(...))` filter was not run against real PostgREST or Supabase. Its shape follows an existing nested-`and` use in `routes/rides/queries.py`, and the timestamp format is the same `+00:00` ISO string the old filter already used.
 - No staging run, no `mock_supabase_client` end-to-end dispatch dry run, and no `spinr-dispatch-reviewer` pass yet. The plan requires the dispatch-reviewer pass before merge.
 - The rider-app behaviour on the earlier cancel was not exercised. The rider app has no visual-regression tooling; the jump-to-home behaviour comes from the plan, not from a device.
-- This worktree's migration 468 still says `CHECK BETWEEN 90 AND 600`. The coordinator is changing it (and `SettingsUpdateRequest`) to ≤ 300 on main. Until that lands, an admin could store 301–600, and the code would silently clamp it to 300. The value is clamped without an error log because it is a valid integer.
+- Migration 468's CHECK and `SettingsUpdateRequest` are both `90..300` on this branch (`110269c`), so a value above 300 cannot be stored; the code clamp is a second guard.
 
 ## 10. Sign-off
 

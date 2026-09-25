@@ -28,6 +28,7 @@ import { formatDate } from "@/lib/utils";
 import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
 import { getPartialRefundError } from "@/lib/disputeResolutionSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 import ChargebacksTab from "./chargebacks-tab";
 
 // dark:text-[#ff453a] on "open" — text-destructive alone is only 3.7:1 on
@@ -61,6 +62,7 @@ interface DisputeStats {
 
 export default function DisputesPage() {
   const { allowed } = useRequireModule("support");
+  const { toast } = useToast();
   const [disputes, setDisputes] = useState<any[]>([]);
   const [stats, setStats] = useState<DisputeStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,11 +142,21 @@ export default function DisputesPage() {
 
     setResolving(true);
     try {
-      await resolveDispute(selected.id, {
+      const result = await resolveDispute(selected.id, {
         resolution,
         refund_amount: refundAmount ? Number(refundAmount) : undefined,
         admin_note: adminNote || undefined,
       });
+      // N23: with admin_dispute_refunds_enabled off (or a failed Stripe
+      // refund) the dispute is resolved but no money moves. Say so instead of
+      // closing the dialog as if the refund went through.
+      if (result?.refund_issued === false && (resolution === "approved" || resolution === "partial_refund")) {
+        toast({
+          title: "Dispute resolved, no refund issued",
+          description: result?.message || "No refund was issued. Issue the refund manually in Stripe.",
+          variant: "destructive",
+        });
+      }
       setSelected(null);
       setResolution("approved");
       setRefundAmount("");

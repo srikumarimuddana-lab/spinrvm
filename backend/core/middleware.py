@@ -145,6 +145,9 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # device that can't mint an App Check token on resume was signed out
     # (production audit_logs + PR #5777, 2026-09-25). Rate limit, rotation and
     # reuse detection in routes/auth.py still apply.
+    # Prefix safety: matching is startswith, and POST /auth/refresh is the only
+    # route under this prefix. A new /auth/refresh* route inherits the
+    # exemption, so name it differently or narrow this entry first.
     "/api/v1/auth/refresh",
     # Public trip-share tracking page. track.spinr.ca is a browser surface (the
     # Next.js page a rider's chosen contacts open from an SMS/push link), so

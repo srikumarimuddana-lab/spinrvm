@@ -43,10 +43,12 @@ _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
 #   contacts per trigger -- MAX_EMERGENCY_CONTACTS): 4 workers covers one
 #   fan-out in a single round trip; the 28-deep queue holds ~10 concurrent
 #   SOS triggers, far beyond anything seen, before failing fast.
-# - OTP (send_otp_sms: one SMS per /auth/send-otp, rate-limited 6/min per
-#   client): 4 workers ~= 4+ sends/s at a sub-second Twilio round trip, far
-#   above organic login volume; the small queue absorbs a burst, past that a
-#   send fails fast and the rider is told to retry.
+# - OTP (send_otp_sms: one SMS per /auth/send-otp). The 6/min limiter is per
+#   IP, so a login burst after an outage -- many users, many IPs -- is not
+#   bounded by it: 8 workers ~= 16 sends/s at a ~0.5 s round trip, and the
+#   64 slots drain in ~4 s, inside the 15 s wait. Past that a send fails fast
+#   and the rider is told to retry. Threads are created lazily, so the extra
+#   headroom costs nothing while idle.
 # - Everything else via send_sms. The bulk caller is admin cloud messaging
 #   (routes/admin/messaging.py _fan_out): asyncio.Semaphore(50) per broadcast,
 #   each recipient's SMS awaited in turn, so <= 50 in flight per broadcast;
@@ -59,7 +61,7 @@ _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
 #   ~8 s at a healthy ~0.5 s Twilio round trip, inside the 15 s wait; a deeper
 #   queue than the workers can drain would just turn into TimeoutErrors.
 _SOS_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=28, thread_name_prefix="spinr-sms-sos")
-_OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=8, thread_name_prefix="spinr-sms-otp")
+_OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=8, queue_size=56, thread_name_prefix="spinr-sms-otp")
 _SMS_EXECUTOR = BoundedExecutor(max_workers=16, queue_size=240, thread_name_prefix="spinr-sms")
 _SMS_POOLS = {"sos": _SOS_SMS_EXECUTOR, "otp": _OTP_SMS_EXECUTOR, "general": _SMS_EXECUTOR}
 # Sentry `domain` tag for a saturated pool's error log (general is mixed-use).

@@ -343,6 +343,28 @@ class TestSMSBoundedExecutor:
             release.set()
 
     @pytest.mark.asyncio
+    async def test_otp_login_burst_after_outage_is_not_rejected(self):
+        """The /send-otp limiter is per IP, so a post-outage login burst across
+        many users can exceed the old 12-slot OTP pool. With Twilio healthy,
+        a 60-send burst must be fully admitted (pool is 8 workers + 56 queue)."""
+        import backend.sms_service as sms_mod
+
+        assert sms_mod._OTP_SMS_EXECUTOR._max_workers == 8
+        assert _capacity(sms_mod._OTP_SMS_EXECUTOR) == 64
+
+        def _create(**_kwargs):
+            time.sleep(0.02)  # healthy Twilio round trip, scaled down
+            return MagicMock(sid="SM-otp")
+
+        with patch("twilio.http.http_client.TwilioHttpClient"), patch("twilio.rest.Client") as mock_client_cls:
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            results = await asyncio.gather(
+                *(sms_mod.send_otp_sms(f"+1306555{i:04d}", "123456", **_TWILIO_KW) for i in range(60))
+            )
+
+        assert [r for r in results if not r["success"]] == []
+
+    @pytest.mark.asyncio
     async def test_saturation_metrics_preregistered_and_tagged_by_domain(self):
         """Every pool's counter/gauge exists at 0 from import (alert rules
         never see a missing series), and a saturated SOS / OTP pool's error

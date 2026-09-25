@@ -1947,6 +1947,12 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
                 message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
                 action_hint="Sign in again",
             )
+        # verdict == "no_match": this parent hasn't been committed-replayed
+        # before (the normal case for every first-time refresh). Clear the
+        # client-supplied value now so it can never reach issue_refresh_token
+        # as `raw` below -- only the recover branch above (a server-committed
+        # successor, not client-chosen bytes) may ever populate that kwarg.
+        proposed = None
 
     row = await lookup_refresh_token(refresh_token_from_cookie)
     if not row:

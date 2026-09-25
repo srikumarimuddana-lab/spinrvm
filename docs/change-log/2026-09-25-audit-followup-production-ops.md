@@ -138,3 +138,15 @@
 | **Rollback plan** | Behaviour: `UPDATE settings SET corporate_kyb_refuses_closed_company = false WHERE id = 'app_settings';`. Schema: drop the column after reverting the code, then delete the tracking row. |
 | **Verification performed** | The flag reads `true`, and the tracking row checksum matches the file on `main`. |
 | **What was NOT verified** | An admin settings save round-trip with the new field was not run through the UI. |
+
+## 12. Applied migration 482 (`destination_mode_enabled`, merged in #5813)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5813 merged at about 18:37 UTC. Until its column exists, destination mode is off through the code default (`app_settings.get("destination_mode_enabled") is True`), but admins cannot switch it on without a code change. |
+| **Fix/remediation** | Owner-approved at about 18:41 UTC. Ran the merged file's statements verbatim (`ADD COLUMN IF NOT EXISTS … BOOLEAN NOT NULL DEFAULT FALSE`, plus its `COMMENT`) in one transaction, with the tracking row inserted: checksum `2c5b099e…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`, `applied_at` 18:42:41 UTC. |
+| **Risk & impact** | Additive. It adds a metadata-only constant default on the one-row `settings` table. Behaviour is unchanged: the feature was already off through the code default, and 0 drivers had `destination_mode` true before the apply. |
+| **User experience effect** | None. Drivers on the new build still see destination mode hidden, and old builds still get the 409 on save. |
+| **Rollback plan** | Behaviour: `UPDATE settings SET destination_mode_enabled = true WHERE id = 'app_settings';` (no deploy). Schema: drop the column after reverting the code, then delete the tracking row. |
+| **Verification performed** | Before the apply: column absent, no tracking row, 0 drivers in destination mode. After: `settings.destination_mode_enabled = false` for `app_settings`, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | The deployed backend was not observed reading the new column (the settings cache has a 60 s TTL). No live offer was placed after the apply. Fly.io (the primary host) was not inspected. |

@@ -126,8 +126,9 @@ The alternative, an `app_settings` flag, was rejected: it would add remote-confi
 ## 9. Verification performed
 
 **Tests**
-- [x] New tests: 16 across 6 files.
-- [x] The 4 new "Reduce Motion on" tests (SkeletonBox, DriverIdlePanel, both CarMarker copies) were run against the pre-change code and failed, then pass with the change. The SafetyOverlay test pair was run the same way. So they test the change, not just the mocks.
+- [x] New tests: 20 across 6 files. Every consumer has both a "Reduce Motion on at mount" test and a "turned on mid-session stops the running loop" test.
+- [x] Every "Reduce Motion on" and mid-session test was run against the pre-change code and failed, then passes with the change. So they test the change, not just the mocks.
+- [x] The CarMarker mid-session tests use a stateful hook mock, because `CarMarker` is `React.memo`-wrapped. A plain-value mock plus `rerender` with equal props is skipped by `memo` and never reaches the effect. The real hook updates via internal state, which `memo` cannot skip; the stateful mock follows that same path.
 - [x] Existing suites re-run and passing:
 
   | App | Suites |
@@ -143,7 +144,13 @@ The alternative, an `app_settings` flag, was rejected: it would add remote-confi
 **Review and conventions**
 - [x] Blast-radius grep done (consumers listed in §4).
 - [x] Fork registry (`docs/known-forks.md`) checked: both CarMarker copies changed in one commit.
-- [ ] `spinr-accessibility-reviewer` run against the diff — in progress; outcome to be recorded here before merge.
+- [x] `spinr-accessibility-reviewer` run against the diff (code-read only). Outcome:
+  - **Blocker:** none.
+  - **Should-fix:** mid-session tests were missing for 3 of 4 consumers. Fixed: now present for all 4.
+  - **Should-fix, accepted as a documented tradeoff:** see §10 (WCAG 2.2.2 and the first-frame flash).
+  - **Nits left as is:**
+    - `AiAuroraBackground.tsx` still carries its own inline copy of the hook logic. Migrating it is DRY-only and outside this PR's surgical scope.
+    - `SafetyOverlay`'s Reduce Motion branch returns no cleanup. There is nothing to clean up.
 - [x] Feature flag: not used; justification in §8.
 
 ## 10. What was NOT verified
@@ -152,3 +159,5 @@ The alternative, an `app_settings` flag, was rejected: it would add remote-confi
 - **No visual regression tooling.** rider-app and driver-app have none, so the resting states (e.g. the CarMarker pulse layer at opacity 0.4 over the static ring) were not screenshotted.
 - **iOS vs Android setting.** On Android the OS "Remove animations" setting feeds `isReduceMotionEnabled`. Whether a given Android OEM build fires `reduceMotionChanged` live was not verified. If it doesn't, the change still applies on the next mount.
 - **No production build.** No EAS/native build was run. The change adds no native dependency; it uses RN's built-in `AccessibilityInfo`.
+- **WCAG 2.1 SC 2.2.2 (Pause, Stop, Hide).** The SC asks for an in-content way to pause auto-moving content that runs longer than 5 s. This change relies on the OS Reduce Motion setting, the accepted mobile-platform substitute, rather than adding an in-app pause control. It is a documented tradeoff, not an assumed pass.
+- **First-frame flash.** A user who already has Reduce Motion on may see each pulse start briefly on mount, because the hook returns `false` until the async OS read resolves. The previous one-shot gating had the same tradeoff; this change does not make it worse.

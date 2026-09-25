@@ -1004,7 +1004,7 @@ def build_cards(b, logo):
             "always in view.",
             scr_earnings(), logo, [
                 ("left", 0.52, ic("cash"), "Paid every Sunday", "Automatic weekly deposits"),
-                ("right", 0.81, ic("chart"), "T4A-ready", "Tax docs at year end"),
+                ("right", 0.755, ic("chart"), "T4A-ready", "Tax docs at year end"),
             ]), CREAM),
         ("07-rider-pin", light_card(
             b, "The right rider,<br>every <em>time</em>",

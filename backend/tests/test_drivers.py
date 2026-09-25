@@ -443,9 +443,9 @@ class TestRegisterDriverName:
         # and the display name falls back to the phone.
         driver = await self._run_register(
             body={},
-            current_user={"id": "u3", "phone": "+13062929175"},
+            current_user={"id": "u3", "phone": "+13065550193"},
         )
         assert driver["first_name"] is None
         assert driver["last_name"] is None
-        assert driver["name"] == "+13062929175"
+        assert driver["name"] == "+13065550193"
         assert driver["name"] != "Driver"

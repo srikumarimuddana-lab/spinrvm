@@ -170,3 +170,53 @@ Supporting objections:
 | A-1 | ADR-005 (Dual auth: Firebase ID token + short-lived **HS256** JWT; admin revocation by `JWT_SECRET` rotation) | Card 6 says **KEEP** "the custom-JWT model (ADR-005)" while replacing ADR-005's algorithm and its admin-revocation mechanism. Changing a recorded decision needs a superseding ADR, which the card never mentions. Card 6 also says "HS256 was chosen when there was one process (ADR-005)", but ADR-005 does not say that. Its Decision section explicitly designs for **cross-replica** revocation (Redis session mirroring). The rationale attributed to the ADR is unsupported. |
 | A-2 | ADR-005 vs CLAUDE.md (not the blueprint's error, noted for the synthesizer) | ADR-005 gives admin tokens 12 h. CLAUDE.md "Token lifetimes" says 1 h. The blueprint's drift row 6 covers admin trust, not lifetime. |
 | — | ADR-001, -004, -007, -010, -011, -012, -014, -016 | No conflict found. The blueprint states or respects each, and card 2's trail-based completion correctly waits on ADR-016's sign-offs. |
+
+### 2.4 Blueprint vs the synthesis files on disk
+
+When this pass started and again when §2 was written (last mtime 2026-09-25 02:37), `EXECUTIVE_SUMMARY.md`, `ROADMAP.md`, `05-escalations.md` and `06-operating-model.md` held only a heading and a "draft in progress" line, three lines each. There is no content to contradict yet. §7 records a final re-check. **The synthesizer should check its own drafts against §5 before publishing**, above all for:
+- trip PIN as a gap;
+- the money guard described as covering all writers;
+- "8 pending incl. RLS enable";
+- the top-5 order.
+
+---
+
+## §3 Unsupported or overstated claims
+
+Each row gives what the blueprint says, its label as corrected here, and the evidence that would support or settle it.
+
+| # | Claim (location) | Corrected label | What would support it |
+|---|---|---|---|
+| U-1 | The money guard "sees all" writers (card 3, §5.3 exit criterion) | **Refuted** (VERIFIED) | A generated write-site inventory per registered money column, covering `_base.py` helpers, direct `.table()` writes and RPC argument builders, with 100 % coverage. |
+| U-2 | "No trip PIN" (cards 2, 8; §8 "absence claims ... INFERRED") | **Refuted** (VERIFIED) | None. Replace with the two residual gaps in §1.1. |
+| U-3 | "HS256 was chosen when there was one process (ADR-005)" (card 6) | **Unsupported** | A sentence in ADR-005 or its history saying so. The ADR text says otherwise. |
+| U-4 | "A leaked replica env no longer mints super-admin tokens" (card 6) | **INFERRED false under the stated architecture** | A design where the private key lives only in an issuer that does not serve general traffic, with the cost of that new unit stated. |
+| U-5 | "They would build *this* system"; "could not copy the 0 % fare"; "a 30 %-take incumbent structurally cannot" (§7) | **ASSUMED** | Primary sources on incumbent pricing and disclosure practice in Canada, fetched and cited. Without them, drop the sentences. |
+| U-6 | "The one genuinely defensible edge" (card 4) | **INFERRED** at best | Evidence that drivers value per-ride cost transparency (a driver survey or pilot), and a check of what incumbents already disclose. |
+| U-7 | Six FLOAT8 `rides` columns from `08_complete_schema.sql` (H2) | 3 VERIFIED / 3 **INFERRED** | `information_schema.columns` read on production (§9 Q2's owner). |
+| U-8 | DISPATCH-001 first step's blast radius, "must ignore an unknown type" (card 1) | **Misdescribed** (VERIFIED) | See §1.3. The real effect depends on which message type is sent. |
+| U-9 | Top-5 #5 "closes the six *process* families" | **Overstated** | HIST-014 is outside the repo's power (C21, blueprint's own §1), HIST-007 has no step in any card, and HIST-013 needs C21 too. "Reduces" is supportable; "closes" is not. |
+| U-10 | `ride_status_events` gives "the regulator persona a queryable trail" (H1, top-5 #1) | **ASSUMED** | A cited SK or insurer obligation for a transition log. The insurance-period table is the required trail and already exists. |
+| U-11 | "Cost M, risk low with shadow" for top-5 #1 | **Understated** | A calendar estimate from §5.3's windows (≈ 13 sites × 21 days serial). |
+| U-12 | "Rollback: revert" on rider-app/driver-app steps (cards 2, 17) | **Incomplete** | OTA republish semantics (§1.3). |
+| U-13 | Card 18 "timestamp prefixes" as the fix for HIST-006's duplicates | **Overstated need** | CHECK B already hard-fails same-PR and merge-base collisions, and `migration-duplicate-nightly.yml` already catches the cross-PR race the morning after against a known-duplicates baseline. A case for timestamps needs a post-CHECK-B collision that both missed. |
+| U-14 | "Zero forced logouts" as the asymmetric-JWT exit criterion (§5.3) | **Unmeasurable as written** | A metric such as `spinr_auth_token_verify_failed_total{reason}` that exists before the rollout. |
+
+---
+
+## §4 Scope creep: cut, or move to Later
+
+| Item (card) | Action | Why |
+|---|---|---|
+| Trip PIN build and the `trip_pin_enabled` pilot (cards 2, 8; §5.1 B "Later"; §5.3) | **Cut** | It already exists as the pickup OTP (§1.1). Keep only the two residual checks. |
+| Asymmetric JWT, ES256 mint and JWKS (card 6 steps 5–8, §5.3 row) | **Move to Later**, and write a superseding ADR first | The claimed benefit needs a separate issuer (§2.1 I-10). The card's own "Simpler" option gets most of the value for S effort: a separate `OTP_PEPPER`, a separate rate-limiter decode key, and `kid`-tagged dual HS256 secrets so rotation is not a global logout. |
+| Migrating all ~13 status-write sites through `transition_ride_status()` (card 1 steps 4–5, top-5 #1) | **Move to Later**; keep only the additive table and helper for *new* sites and sites already being edited | About nine months of serial windows (§1.6) to close one MEDIUM (DISPATCH-001) whose fix is a single send. §6 below re-ranks this delta. |
+| Timestamp migration prefixes (card 18 step 5) | **Cut** | Existing guards cover new collisions (U-13). It is a convention change across CLAUDE.md, `backend/migrations/CLAUDE.md` and CHECK B for no demonstrated residual defect. |
+| Per-service-area flag targeting (H7, M) | **Later** | No finding shows a flag that needed per-area rollout and could not get it. `service_areas` already carries per-area switches (for example `instant_payout_enabled`). |
+| `service_areas.rules` JSON ruleset (card 10 step 7) and `compliance/obligations.yaml` generators (card 18 step 9) | **Later** | Useful for province two, and speculative for two cities. The timezone default (card 10 step 6) is the only rule with recurring defects (HIST-016); do that alone. |
+| Generated vendor, DPA and subprocessor docs from a registry (card 13 step 7) | **Later** | Fix the three wrong rows by hand first (INT-003 as corrected). Generate once there are more than a handful of changes per quarter. |
+| Driver cost-stack disclosure (card 4 step 6) and duty-of-care corporate SKU (card 5 step 6) | **Later**, gated on the founder model memo | Both depend on a pricing model that does not exist yet (STRAT-001/-002). |
+| Three new reviewer agents (cards 10, 11, 17) | **Cut**; extend existing charters | Staffing (§1.8). |
+| 55-route `load_ride_for()` refactor (card 6 step 3) | **Keep the helper and the static test; refactor only routes being touched** | A mechanical 55-route change touches rides, auth and payments files across several tracks at once. The static test (warn, then block for *new* routes) gets the recurrence protection. |
+| Law-enforcement request tooling (card 8 step 8) and damage-fee flow (card 8 step 7) | **Later** (already), confirm no Next slot | A new money surface and a process with no volume evidence. |
+| Envelope encryption with a Canadian KMS (card 18 step 10) | **Keep Later**; keep "run the rotation runbook on a branch" Now | Correctly scoped already. Listed so it is not pulled forward. |

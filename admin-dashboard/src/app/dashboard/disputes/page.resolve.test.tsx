@@ -70,6 +70,36 @@ describe("DisputesPage resolve — refund_issued notice", () => {
     });
   });
 
+  it("pre-fills Approve Full Refund with the original fare and sends it", async () => {
+    resolveDispute.mockResolvedValue({ success: true, resolution: "approved", refund_issued: true });
+    render(<DisputesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve" }));
+    const amount = screen.getByLabelText("Refund Amount ($)") as HTMLInputElement;
+    expect(amount.value).toBe("20.00");
+    fireEvent.click(screen.getByRole("button", { name: "Submit Resolution" }));
+    await waitFor(() => expect(resolveDispute).toHaveBeenCalledTimes(1));
+    expect(resolveDispute.mock.calls[0][1]).toMatchObject({ resolution: "approved", refund_amount: 20 });
+  });
+
+  it("lets the admin edit the pre-filled amount", async () => {
+    resolveDispute.mockResolvedValue({ success: true, resolution: "approved", refund_issued: true });
+    render(<DisputesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve" }));
+    fireEvent.change(screen.getByLabelText("Refund Amount ($)"), { target: { value: "12.50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit Resolution" }));
+    await waitFor(() => expect(resolveDispute).toHaveBeenCalledTimes(1));
+    expect(resolveDispute.mock.calls[0][1].refund_amount).toBe(12.5);
+  });
+
+  it("blocks a full-approval amount above the original fare", async () => {
+    render(<DisputesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve" }));
+    fireEvent.change(screen.getByLabelText("Refund Amount ($)"), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit Resolution" }));
+    expect(await screen.findByText("Refund cannot exceed the original fare of $20.00")).toBeTruthy();
+    expect(resolveDispute).not.toHaveBeenCalled();
+  });
+
   it("stays quiet when the refund was issued", async () => {
     resolveDispute.mockResolvedValue({ success: true, resolution: "approved", refund_issued: true });
     await resolveOpenDispute();

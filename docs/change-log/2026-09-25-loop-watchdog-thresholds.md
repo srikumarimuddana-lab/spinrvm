@@ -248,3 +248,30 @@ written or read differently.
   already proves the alert-posting mechanism works end-to-end for a
   representative loop; this change was verified against that same proven
   mechanism, not re-proven from scratch.
+
+## Addendum: progress heartbeats after reviewer pass
+
+The `spinr-realtime-reliability-reviewer` pass found no blockers. It raised two SHOULD-FIX items, and both are fixed in this PR:
+
+| File | What changed | Why |
+|---|---|---|
+| `backend/utils/t4a_annual_job.py` | Calls `_record_heartbeat(_LOOP_NAME)` once per driver in both `_run_issuance` loops. | The loop heartbeat fired only after the whole annual batch. A long but healthy batch would therefore read as stale against the 10-minute threshold, on the one day the job matters. |
+| `backend/utils/auto_payout.py` | Calls `_record_heartbeat("auto_payout (1h, Sundays)")` once per driver in `run_weekly_auto_payout`. | Same pattern: a long Sunday batch could exceed the 3 h threshold. **Money file, but no payout, Stripe or eligibility logic changed.** The only addition is an in-process heartbeat timestamp (a dict write under a lock). |
+| `backend/utils/loop_monitor.py` | Corrected both threshold comments. | The earlier auto_payout comment wrongly said its heartbeat was independent of the batch runtime. |
+
+**Before/after (auto_payout):**
+```python
+# before
+for driver in drivers:
+    driver_id = driver["id"]
+# after
+for driver in drivers:
+    _record_heartbeat("auto_payout (1h, Sundays)")  # progress only
+    driver_id = driver["id"]
+```
+
+**Verification:** 132 tests passed. They cover the T4A job, the threshold coverage, the watchdog coverage, the loop monitor, loop alerts, and every `tests/*auto_payout*` file. `ruff check` and `ruff format --check` are clean.
+
+**Not verified:** a real Sunday payout batch, or a real annual T4A batch, at production driver counts.
+
+**Out of scope, noted for follow-up:** `auto_payout`'s leader lock TTL is `interval * 0.85` (about 51 min). A batch running longer than that could let a second replica take the lock. Payout idempotency should prevent double transfers, but this was not verified here.

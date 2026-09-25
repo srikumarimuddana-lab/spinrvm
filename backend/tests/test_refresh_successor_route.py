@@ -50,6 +50,9 @@ def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
         "issue": patch.object(auth, "issue_refresh_token", AsyncMock(return_value=("rotated", "row-2", expires))),
         "jwt": patch.object(auth, "create_jwt_token", return_value="access"),
         "metric": patch.object(auth, "_metric_inc", MagicMock()),
+        # login_supersede_driver_app_only_enabled has its own reader; stub it so
+        # "settings" above counts only the X8 flag these tests are about.
+        "sessions": patch.object(auth, "_driver_app_only_sessions_enabled", AsyncMock(return_value=False)),
     }
 
 

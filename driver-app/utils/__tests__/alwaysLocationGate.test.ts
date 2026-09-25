@@ -62,6 +62,13 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 // which needs the real Platform and StyleSheet.
 jest.spyOn(Linking, 'openSettings').mockImplementation(() => mockOpenSettings());
 
+// Expo installs `fetch` as a lazy global that loads its implementation on first
+// read. Nothing in this suite reads it, so the first read would be Jest 30's
+// post-suite globals cleanup, which runs outside test scope and fails the whole
+// suite ("import a file outside of the scope of the test code"). jest.setup.js
+// pre-reads the other Expo lazy globals but not fetch, so give it a plain value.
+Object.defineProperty(globalThis, 'fetch', { value: jest.fn(), configurable: true, writable: true });
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockBgPermission = 'denied';

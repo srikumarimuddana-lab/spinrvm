@@ -91,6 +91,9 @@ def _patch_redis_asyncio_module(monkeypatch, fake_aioredis):
 
     monkeypatch.setitem(sys.modules, "redis.asyncio", fake_aioredis)
     monkeypatch.setattr(redis_pkg, "asyncio", fake_aioredis, raising=False)
+    # _get_redis also does `from redis.asyncio.retry import Retry`; a MagicMock
+    # is not a package, so that submodule must be stubbed too.
+    monkeypatch.setitem(sys.modules, "redis.asyncio.retry", fake_aioredis.retry)
 
 
 @pytest.mark.anyio

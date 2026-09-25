@@ -1225,7 +1225,7 @@ class TestGetRedisDirect:
                 redis_mod.asyncio = mock_aioredis
             with (
                 patch.dict(os.environ, {"REDIS_URL": "redis://newhost:6379"}),
-                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis}),
+                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis, "redis.asyncio.retry": mock_aioredis.retry}),
             ):
                 result = asyncio.run(rc._get_redis())
         finally:
@@ -1255,7 +1255,7 @@ class TestGetRedisDirect:
                 redis_mod.asyncio = mock_aioredis
             with (
                 patch.dict(os.environ, {"REDIS_URL": "redis://badhost:6379"}),
-                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis}),
+                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis, "redis.asyncio.retry": mock_aioredis.retry}),
             ):
                 result = asyncio.run(rc._get_redis())
         finally:

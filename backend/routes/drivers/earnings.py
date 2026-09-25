@@ -25,6 +25,7 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     _d,
+    _instant_payout_area_verdict,
     _money_str,
     _ride_income,
     _ride_tax,
@@ -289,12 +290,26 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         (_d(p.get("amount") or 0) for p in payout_rows if _is_paid_previous_app_row(p)), Decimal("0")
     )
 
-    instant_payout_available = True
-    sa_id = driver.get("service_area_id")
-    if sa_id:
-        sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1)
-        if sa_rows and sa_rows[0].get("instant_payout_enabled") is False:
-            instant_payout_available = False
+    # Same verdict as request_instant_payout's 403 gate (ROADMAP N22): no
+    # service area, an unresolvable one, or the per-area kill switch off all
+    # mean "not available". The daily cap is deliberately NOT mirrored — this
+    # flag says the feature is open to the driver, not that they have cap
+    # room left today.
+    try:
+        _sa, refusal = await _instant_payout_area_verdict(driver)
+        instant_payout_available = refusal is None
+    except Exception as e:
+        # Report false rather than 503: this advisory flag must not take down
+        # the balance (read by the payout screen, account deletion and both
+        # payout endpoints), and false is the verdict the gate would reach —
+        # its own lookup fails the same way. Logged at error, never silent.
+        original = e.details.get("original") if isinstance(getattr(e, "details", None), dict) else None
+        logger.error(
+            f"instant_payout_available: service-area lookup failed, reporting false: {e!r} (original={original!r})",
+            exc_info=True,
+            extra={"driver_id": driver.get("id"), "service_area_id": driver.get("service_area_id")},
+        )
+        instant_payout_available = False
 
     return {
         # total_earnings = ride income + tax + incentives + cancel fees +

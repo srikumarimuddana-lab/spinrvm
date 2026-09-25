@@ -84,6 +84,7 @@ export {
     emailDriverStatement,
     getDriverStats,
     updateDriver,
+    DriverConflictError,
     generateDecalPdf,
 } from "./api/drivers";
 export type {

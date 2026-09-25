@@ -436,7 +436,7 @@ export function SOSButton({
             below already spells out what happened. Geometry is unchanged —
             still a 44px circle — so no map layout shifts. */}
         {!isLarge && !sending && !triggered && !failed ? (
-          // allowFontScaling={false}: the circle is a fixed 44px, so an OS
+          // font-scale-lock: the circle is a fixed 44px, so an OS
           // text-scale setting would clip or overflow the wordmark. The icon
           // this replaced used a fixed numeric size and was immune, so the
           // swap would otherwise have quietly introduced an a11y-setting

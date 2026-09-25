@@ -6,14 +6,19 @@
  * tight layouts instead. A genuine exception must say why in a comment
  * containing `font-scale-lock:` within the 6 lines above the prop.
  *
- * Covers rider-app/app and rider-app/components (clean-sheet finding
- * UXA11Y-001; docs/audit/2026-09-25-ux-scorecard-world-class-minimal.md).
+ * Covers driver-app (app, components, lib) and shared/components. The
+ * rider-app copy of this guard covers rider-app.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 
-const ROOT = path.resolve(__dirname, '..');
-const DIRS = ['app', 'components'];
+const APP_ROOT = path.resolve(__dirname, '..');
+const DIRS = [
+  path.join(APP_ROOT, 'app'),
+  path.join(APP_ROOT, 'components'),
+  path.join(APP_ROOT, 'lib'),
+  path.resolve(APP_ROOT, '..', 'shared', 'components'),
+];
 // allowFontScaling={false}, or a multiplier of 1, which locks text the same way.
 const LOCK = /allowFontScaling\s*=\s*\{\s*false\s*\}|maxFontSizeMultiplier\s*=\s*\{\s*1(\.0*)?\s*\}/;
 const JUSTIFICATION = 'font-scale-lock:';
@@ -32,13 +37,13 @@ function listTsx(dir: string): string[] {
 describe('OS text-size setting is respected', () => {
   it('has no unexplained allowFontScaling={false}', () => {
     const violations: string[] = [];
-    for (const file of DIRS.flatMap((d) => listTsx(path.join(ROOT, d)))) {
+    for (const file of DIRS.flatMap(listTsx)) {
       const lines = fs.readFileSync(file, 'utf8').split('\n');
       lines.forEach((line, i) => {
         if (!LOCK.test(line)) return;
         const context = lines.slice(Math.max(0, i - 6), i + 1).join('\n');
         if (!context.includes(JUSTIFICATION)) {
-          violations.push(`${path.relative(ROOT, file)}:${i + 1}`);
+          violations.push(path.relative(path.resolve(APP_ROOT, '..'), file) + ':' + (i + 1));
         }
       });
     }

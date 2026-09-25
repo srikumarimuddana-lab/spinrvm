@@ -35,8 +35,8 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 1: accessibility floor and quick wins (low risk)
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W1.1a `[~]` | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
-| W1.1b | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
+| W1.1a `[x]` | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
+| W1.1b `[~]` | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
 | W1.2 | `aria-sort` on `SortableHead`, sticky `thead`, `aria-label` on 14 unlabelled search inputs | admin | none (no visible change at rest) | tests; axe; baselines unchanged |
 | W1.3 | Admin motion: `MotionConfig reducedMotion="user"`, a global `prefers-reduced-motion` rule, and an exit animation on the alert feed | admin | none | tests; baselines unchanged |
 | W1.4 | `/track`: honour Reduce Motion, plus a public "link expired or invalid" state instead of "Go to Dashboard" | web | none | tests; manual check |
@@ -97,3 +97,8 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 
 - 2026-09-25: #5829 research doc, #5830 Reduce Motion for loops, #5832 test time-bomb fix, #5836 scorecard doc. Plan written.
 - 2026-09-25: #5836 merged (scorecard and plan). W1.1a opened: rider-app text follows the OS text size up to 1.5×.
+- 2026-09-25: W1.1a merged (#5837, rider). W1.1b split into three PRs, since the driver panels overlay the map and animate between fixed heights:
+  - #5838 merged: trip panels.
+  - #5840 merged: top bar and HUD.
+  - W1.1b-3 opened: offer card, turn banner, justified locks, driver guard. It also fixes SOS being partly hidden under the turn banner, using the placement you chose ("move SOS below banner").
+- Follow-up found in #5840: `shared/store/locationStore.ts:121` (`createJSONStorage(() => Platform.OS === 'web' ? localStorage : AsyncStorage)`) type-checks differently depending on which files are in the driver-app program. Adding one new test file turned it into a TS error. An explicit storage type would remove the fragility. Not yet scheduled.

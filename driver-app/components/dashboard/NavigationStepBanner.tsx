@@ -4,7 +4,7 @@ import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SPACING } from '@shared/utils/responsive';
+import { SPACING, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import type { NavigationStep } from '@shared/utils/navigationSteps';
 
 /**
@@ -43,6 +43,21 @@ export function iconForManeuver(maneuver: string | null): keyof typeof Ionicons.
 
 /** "80 m" under 1km (rounded to nearest 10m to avoid a jittery readout as
  * GPS fixes arrive), "1.2 km" at or above it. */
+/**
+ * Top offset for the SOS button during a ride. Its default slot
+ * (insetsTop + 56) sits under the turn-by-turn banner, which is drawn above it,
+ * so while a step shows (and its height is known) SOS moves just below the
+ * banner. It never moves above its default slot.
+ */
+export const SOS_DEFAULT_OFFSET = 56;
+export const NAV_BANNER_TOP_OFFSET = 8;
+const SOS_GAP_BELOW_BANNER = 8;
+export function sosTopOffset(insetsTop: number, bannerShown: boolean, bannerHeight: number): number {
+  const base = insetsTop + SOS_DEFAULT_OFFSET;
+  if (!bannerShown || bannerHeight <= 0) return base;
+  return Math.max(base, insetsTop + NAV_BANNER_TOP_OFFSET + bannerHeight + SOS_GAP_BELOW_BANNER);
+}
+
 export function formatManeuverDistance(distanceMeters: number): string {
   const m = Math.max(0, distanceMeters);
   if (m >= 1000) return `${(m / 1000).toFixed(1)} km`;
@@ -53,12 +68,17 @@ interface NavigationStepBannerProps {
   step: NavigationStep;
   distanceToManeuverMeters: number;
   topOffset: number;
+  /** Reports the banner's rendered height, so the screen can place the SOS
+   *  button below it instead of underneath it (the height grows with the OS
+   *  text size). */
+  onHeightChange?: (height: number) => void;
 }
 
 export const NavigationStepBanner: React.FC<NavigationStepBannerProps> = ({
   step,
   distanceToManeuverMeters,
   topOffset,
+  onHeightChange,
 }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -67,6 +87,7 @@ export const NavigationStepBanner: React.FC<NavigationStepBannerProps> = ({
   return (
     <View
       style={[styles.banner, { top: topOffset }]}
+      onLayout={onHeightChange ? (e) => onHeightChange(e.nativeEvent.layout.height) : undefined}
       pointerEvents="none"
       accessibilityRole="text"
       accessibilityLabel={`${step.instruction}, in ${distanceLabel}`}
@@ -75,10 +96,13 @@ export const NavigationStepBanner: React.FC<NavigationStepBannerProps> = ({
         <Ionicons name={iconForManeuver(step.maneuver)} size={26} color="#fff" />
       </View>
       <View style={styles.textWrap}>
-        <Text style={styles.instruction} numberOfLines={1} allowFontScaling={false}>
+        {/* Two lines, not one: a long instruction ("…then keep right toward …")
+            stays readable, especially at larger OS text sizes. The SOS button
+            follows the banner's height (onHeightChange). */}
+        <Text style={styles.instruction} numberOfLines={2} maxFontSizeMultiplier={MAX_FONT_SCALE}>
           {step.instruction}
         </Text>
-        <Text style={styles.distance} allowFontScaling={false}>
+        <Text style={styles.distance} maxFontSizeMultiplier={MAX_FONT_SCALE}>
           {distanceLabel}
         </Text>
       </View>

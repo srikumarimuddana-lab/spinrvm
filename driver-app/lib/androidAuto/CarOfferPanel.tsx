@@ -129,6 +129,10 @@ export function CarOfferPanel({ card }: { card: TripCard }): React.ReactElement 
             <Text style={styles.moneyLabel} numberOfLines={1}>
               YOUR EARNINGS
             </Text>
+            {/* font-scale-lock: Android Auto surface. React Native applies the
+                phone's text-size setting here, not the car's; the 46pt hero is
+                already car-sized and larger would crush the route column. The
+                same amount is in the host-drawn offer alert title. */}
             <Text style={styles.moneyHero} numberOfLines={1} allowFontScaling={false}>
               {card.totalEarningsLabel ?? '—'}
             </Text>

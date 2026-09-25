@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Button } from '@shared/components/Button';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 import { showAlert } from '../AlertDialog';
 
@@ -270,8 +270,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             ) : null}
                         </View>
                         <View style={[styles.timerCircle, { borderColor: timerColor }]}>
-                            <Text style={[styles.timerText, { color: timerColor }]}>{countdownSeconds}</Text>
-                            <Text style={[styles.timerUnit, { color: timerColor }]}>s</Text>
+                            <Text style={[styles.timerText, { color: timerColor }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>{countdownSeconds}</Text>
+                            <Text style={[styles.timerUnit, { color: timerColor }]} maxFontSizeMultiplier={MAX_FONT_SCALE}>s</Text>
                         </View>
                     </View>
 
@@ -309,8 +309,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         <View style={styles.earningsHero}>
                             <View style={styles.earningsLeft}>
                                 <View style={styles.earningsRow}>
-                                    <Text style={styles.earningsDollar}>{fareMissing ? '' : '$'}</Text>
-                                    <Text style={styles.earningsAmount} allowFontScaling={false}>
+                                    <Text style={styles.earningsDollar} maxFontSizeMultiplier={MAX_FONT_SCALE}>{fareMissing ? '' : '$'}</Text>
+                                    <Text style={styles.earningsAmount} maxFontSizeMultiplier={MAX_FONT_SCALE}>
                                         {fareMissing ? '—' : totalEarnings.toFixed(2)}
                                     </Text>
                                 </View>
@@ -675,6 +675,10 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             alignItems: 'center',
             justifyContent: 'center',
             gap: 16,
+            // Wraps the trip metrics below a large (OS-scaled) amount instead
+            // of letting the card's overflow:hidden cut them off.
+            flexWrap: 'wrap',
+            rowGap: SPACING.sm,
         },
         earningsLeft: {
             alignItems: 'center',

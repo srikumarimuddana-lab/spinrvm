@@ -93,6 +93,11 @@ jest.mock('../../../utils/crashlytics', () => ({
   recordNonFatal: (...a: unknown[]) => mockRecordNonFatal(...a),
 }));
 
+const mockSetCarOfferToneEnabled = jest.fn();
+jest.mock('../carOfferRing', () => ({
+  setCarOfferToneEnabled: (...a: unknown[]) => mockSetCarOfferToneEnabled(...a),
+}));
+
 let mockAppStateCb: ((s: string) => void) | null = null;
 const mockRemoveAppState = jest.fn();
 jest.mock('react-native', () => ({
@@ -473,6 +478,49 @@ describe('lifecycle', () => {
     await startCarSession();
     stopCarSession();
     expect(mockUnsubDispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('android_auto_offer_tone_enabled (migration 482)', () => {
+  it('turns the car offer tone on when the config says exactly true', async () => {
+    mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20, android_auto_offer_tone_enabled: true } });
+    await startCarSession();
+    expect(mockSetCarOfferToneEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it.each([[undefined], [false], ['true']])('treats %s as off', async (value) => {
+    mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20, android_auto_offer_tone_enabled: value } });
+    await startCarSession();
+    expect(mockSetCarOfferToneEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves the flag alone when the config fetch fails', async () => {
+    mockApiGet.mockRejectedValue(new Error('500'));
+    await startCarSession();
+    expect(mockSetCarOfferToneEnabled).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the config every 5th refresh tick, so the kill switch reaches a plugged-in car', async () => {
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockApiGet.mockClear();
+      mockSetCarOfferToneEnabled.mockClear();
+      mockApiGet.mockResolvedValue({ data: { android_auto_offer_tone_enabled: false } });
+
+      for (let tick = 1; tick <= 4; tick++) {
+        jest.advanceTimersByTime(60_000);
+        await settle();
+      }
+      expect(mockApiGet).not.toHaveBeenCalledWith('/drivers/config');
+
+      jest.advanceTimersByTime(60_000);
+      await settle();
+      expect(mockApiGet).toHaveBeenCalledWith('/drivers/config');
+      expect(mockSetCarOfferToneEnabled).toHaveBeenCalledWith(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

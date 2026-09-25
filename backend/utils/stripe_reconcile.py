@@ -173,7 +173,10 @@ _CHECK_NAMES = ("orphan_hold", "cancelled_captured", "stuck_reserved_payout")
 _STUCK_RESERVED_PAYOUT_AFTER = timedelta(hours=1)
 _STUCK_RESERVED_PAYOUT_LIMIT = 500
 _STUCK_RESERVED_METRIC = "spinr_payment_stuck_reserved_payouts_total"
-_PAYOUT_TYPES = ("standard", "instant", "auto")
+# Auto payouts are excluded: utils/auto_payout.sweep_stale_reserved already
+# retries or escalates stale reserved auto rows hourly, and an escalated auto
+# row stays 'reserved', so including it here would re-log it every day.
+_PAYOUT_TYPES = ("standard", "instant")
 
 # Pre-register every series at 0 in EVERY process at import. The counters are
 # in-process and render with a worker_pid label, so without this a series
@@ -184,7 +187,7 @@ for _o in _CC_ALERT_OUTCOMES:
 metrics.inc(_ORPHAN_HOLD_METRIC, by=0)
 for _c in _CHECK_NAMES:
     metrics.inc(_CHECK_FAILED_METRIC, {"check": _c}, by=0)
-for _t in _PAYOUT_TYPES:
+for _t in (*_PAYOUT_TYPES, "other"):
     metrics.inc(_STUCK_RESERVED_METRIC, {"payout_type": _t}, by=0)
 
 
@@ -623,7 +626,11 @@ async def _reconcile_stuck_reserved_payouts() -> Optional[List[Dict[str, Any]]]:
         rows = (
             await db_supabase.get_rows(
                 "payouts",
-                {"status": "reserved", "created_at": {"$lt": cutoff.isoformat()}},
+                {
+                    "status": "reserved",
+                    "payout_type": {"$in": list(_PAYOUT_TYPES)},
+                    "created_at": {"$lt": cutoff.isoformat()},
+                },
                 columns="id,driver_id,payout_type,status,created_at",
                 order="created_at",
                 limit=_STUCK_RESERVED_PAYOUT_LIMIT,
@@ -655,6 +662,8 @@ async def _reconcile_stuck_reserved_payouts() -> Optional[List[Dict[str, Any]]]:
         if created and not _is_older_than(created, cutoff):
             continue  # still in flight
         payout_type = row.get("payout_type")
+        if payout_type == "auto":
+            continue  # owned by auto_payout.sweep_stale_reserved
         idem = _payout_transfer_idempotency_key(row["id"], payout_type)
         discrepancies.append(
             {
@@ -673,7 +682,7 @@ async def _reconcile_stuck_reserved_payouts() -> Optional[List[Dict[str, Any]]]:
             row.get("driver_id"),
             payout_type,
             created,
-            idem or "n/a (auto: search Transfers by metadata.payout_id)",
+            idem or "n/a",
             extra={"domain": "payments", "driver_id": row.get("driver_id")},
         )
         label = payout_type if payout_type in _PAYOUT_TYPES else "other"

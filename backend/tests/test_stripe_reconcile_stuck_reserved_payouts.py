@@ -77,17 +77,39 @@ async def test_stale_reserved_row_is_flagged_with_idempotency_key(mock_supabase_
 
 
 async def test_metric_incremented_per_stuck_row_by_payout_type(mock_supabase_client):
-    _serve(mock_supabase_client, [_payout("p1", payout_type="instant"), _payout("p2", payout_type="auto")])
+    _serve(mock_supabase_client, [_payout("p1", payout_type="instant"), _payout("p2", payout_type="standard")])
 
     with patch.object(sr, "metrics") as m:
         out = await sr._reconcile_stuck_reserved_payouts()
 
     assert len(out) == 2
     m.inc.assert_any_call(sr._STUCK_RESERVED_METRIC, {"payout_type": "instant"})
-    m.inc.assert_any_call(sr._STUCK_RESERVED_METRIC, {"payout_type": "auto"})
+    m.inc.assert_any_call(sr._STUCK_RESERVED_METRIC, {"payout_type": "standard"})
     assert sr._STUCK_RESERVED_METRIC == "spinr_payment_stuck_reserved_payouts_total"
-    # Auto rows use attempt-scoped keys; no single key is claimed for them.
-    assert out[1]["stripe_idempotency_key"] is None
+    assert out[1]["stripe_idempotency_key"] == "payout-transfer-p2"
+
+
+async def test_auto_rows_are_left_to_the_auto_payout_sweep(mock_supabase_client):
+    # auto_payout.sweep_stale_reserved retries/escalates stale auto rows hourly,
+    # and an escalated auto row stays 'reserved'; re-flagging it daily is noise.
+    _serve(mock_supabase_client, [_payout("a1", payout_type="auto", hours_ago=72)])
+
+    with patch.object(sr, "metrics") as m:
+        out = await sr._reconcile_stuck_reserved_payouts()
+
+    assert out == []
+    m.inc.assert_not_called()
+    mock_supabase_client.table.return_value.in_.assert_any_call("payout_type", ["standard", "instant"])
+
+
+async def test_unexpected_payout_type_is_labelled_other(mock_supabase_client):
+    _serve(mock_supabase_client, [_payout("x1", payout_type="mystery")])
+
+    with patch.object(sr, "metrics") as m:
+        out = await sr._reconcile_stuck_reserved_payouts()
+
+    assert len(out) == 1
+    m.inc.assert_called_once_with(sr._STUCK_RESERVED_METRIC, {"payout_type": "other"})
 
 
 async def test_fresh_reserved_row_is_not_flagged(mock_supabase_client):

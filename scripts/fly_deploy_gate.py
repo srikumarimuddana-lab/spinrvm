@@ -16,6 +16,9 @@ class GateDenied(RuntimeError):
 class GateResult:
     ready: bool
     pending: tuple[str, ...] = ()
+    # Set when main no longer points at the SHA under test. Nothing is deployed;
+    # the deploy run for the newer main commit owns the deploy (newest wins).
+    superseded_by: str | None = None
 
 
 REQUIRED_WORKFLOWS = {
@@ -27,6 +30,7 @@ REQUIRED_WORKFLOWS = {
     },
 }
 PRODUCTION_HEALTH_URL = "https://spinr-backend-yyz.fly.dev"
+DEPLOY_WORKFLOW_FILE = "deploy-fly.yml"
 
 
 def evaluate_deploy_evidence(*, expected_sha, repository, current_main_sha, runs, jobs_by_run, required_workflows):
@@ -82,9 +86,28 @@ def validate_probe_config(health_url, metrics_token):
         raise GateDenied("METRICS_AUTH_TOKEN is required for the served-SHA check")
 
 
-def wait_for_deploy_evidence(*, expected_sha, repository, fetch_runs, fetch_jobs, read_main_sha, required_workflows, max_attempts=50, sleep=None):
-    """Poll required Actions evidence and verify main again after it passes."""
+def _superseded_by(expected_sha, read_main_sha):
+    """Return the newer main SHA if main has moved past expected_sha, else None."""
+    main_sha = read_main_sha()
+    if not main_sha:
+        raise GateDenied("unable to read current main")
+    return None if main_sha == expected_sha else main_sha
+
+
+def wait_for_deploy_evidence(*, expected_sha, repository, fetch_runs, fetch_jobs, read_main_sha, has_deploy_run, required_workflows, max_attempts=50, sleep=None):
+    """Poll required Actions evidence for expected_sha while it is still main.
+
+    main is re-read on every poll, after the evidence snapshot. Once main has
+    advanced, this run never authorizes a deploy, whether its own evidence was
+    pending, passed or failed (a newer push cancels queued/in-progress CI for
+    this SHA). It returns ``superseded_by`` only once ``has_deploy_run`` shows
+    a deploy run exists for the newer main SHA; that run is serialized after
+    this one by the workflow's concurrency group and owns the deploy. If no
+    such run appears (e.g. a ``[skip ci]`` push), it keeps polling and is
+    finally denied, so a skipped deploy is never silently green.
+    """
     sleep = sleep or time.sleep
+    orphaned_main = None
     for attempt in range(max_attempts):
         runs = fetch_runs(expected_sha)
         jobs_by_run = {}
@@ -94,25 +117,32 @@ def wait_for_deploy_evidence(*, expected_sha, repository, fetch_runs, fetch_jobs
                 run = max(candidates, key=lambda item: int(item.get("id", 0)))
                 if run.get("status") == "completed":
                     jobs_by_run[run.get("id")] = fetch_jobs(run.get("id"))
-        result = evaluate_deploy_evidence(
-            expected_sha=expected_sha,
-            repository=repository,
-            current_main_sha=expected_sha,
-            runs=runs,
-            jobs_by_run=jobs_by_run,
-            required_workflows=required_workflows,
-        )
-        if result.ready:
-            return evaluate_deploy_evidence(
+        try:
+            result = evaluate_deploy_evidence(
                 expected_sha=expected_sha,
                 repository=repository,
-                current_main_sha=read_main_sha(),
+                current_main_sha=expected_sha,
                 runs=runs,
                 jobs_by_run=jobs_by_run,
                 required_workflows=required_workflows,
             )
+        except GateDenied:
+            result = None
+            newer = _superseded_by(expected_sha, read_main_sha)
+            if not newer:
+                raise
+        else:
+            newer = _superseded_by(expected_sha, read_main_sha)
+        orphaned_main = newer
+        if newer:
+            if has_deploy_run(newer):
+                return GateResult(ready=False, superseded_by=newer)
+        elif result.ready:
+            return result
         if attempt + 1 < max_attempts:
             sleep(60)
+    if orphaned_main:
+        raise GateDenied(f"main advanced to {orphaned_main} but no deploy run exists for it; nothing will deploy it")
     raise GateDenied("timed out waiting for required CI evidence")
 
 
@@ -133,9 +163,22 @@ def _fetch_jobs(repository, run_id):
     return _gh_json(f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100")
 
 
+def _has_deploy_run(repository, sha):
+    endpoint = f"repos/{repository}/actions/workflows/{DEPLOY_WORKFLOW_FILE}/runs?head_sha={sha}&branch=main&event=push&per_page=1"
+    return int(_gh_json(endpoint).get("total_count") or 0) > 0
+
+
 def _read_main_sha(repository):
     data = _gh_json(f"repos/{repository}/git/ref/heads/main")
     return (data.get("object") or {}).get("sha")
+
+
+def _write_output(name, value):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        raise GateDenied("GITHUB_OUTPUT is unavailable; cannot hand the gate decision to the deploy job")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"{name}={value}\n")
 
 
 def main():
@@ -162,14 +205,23 @@ def main():
             fetch_runs=lambda sha: _fetch_runs(repository, sha),
             fetch_jobs=lambda run_id: _fetch_jobs(repository, run_id),
             read_main_sha=lambda: _read_main_sha(repository),
+            has_deploy_run=lambda sha: _has_deploy_run(repository, sha),
             required_workflows=REQUIRED_WORKFLOWS,
         )
+        if not result.ready and not result.superseded_by:
+            raise GateDenied("gate returned neither a pass nor a supersede")
+        _write_output("deploy", "true" if result.ready else "false")
     except GateDenied as exc:
         print(f"Fly deploy gate denied: {exc}", file=sys.stderr)
         return 1
+    if result.superseded_by:
+        print(
+            f"::notice title=Fly deploy superseded::main advanced from {expected_sha} to "
+            f"{result.superseded_by}; nothing deployed. The deploy run for the newer commit owns the deploy."
+        )
+        return 0
     print(f"Fly deploy gate passed for {repository}@{expected_sha}.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

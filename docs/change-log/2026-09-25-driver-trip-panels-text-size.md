@@ -37,11 +37,11 @@ The same defensive pattern as rider-app (#5837): scaling was disabled outright i
 
 | Element | Change |
 |---|---|
-| Earnings box | Bounded to 45% width |
+| Earnings box | Bounded to 50% width |
 | Bonus breakdown | May wrap to 2 lines |
 | PIN title | Can shrink beside its icon |
-| Primary and secondary action buttons | `minHeight` (same 52/50) instead of a fixed height, plus spacing-token padding; labels shrink and centre |
-| Fare labels | Can shrink |
+| Primary and secondary action buttons | `minHeight` (same 52/50) instead of a fixed height, plus vertical spacing-token padding only; labels shrink and centre |
+| Fare labels and values | Labels can shrink; values get the same cap |
 | Cancel sheet | Capped at 92% of the screen, with a shrinking list |
 
 **Also:** corrected two rider-app `font-scale-lock:` comments from #5837 that gave a wrong reason (see §7).
@@ -54,7 +54,8 @@ The same defensive pattern as rider-app (#5837): scaling was disabled outright i
 - **Scaling props:** no change. `maxFontSizeMultiplier` only matters above 1.0×.
 - **`minHeight` with padding:** renders the same as before, because content plus padding is shorter than the minimum.
 - **`flexShrink`:** only matters when content no longer fits.
-- **Needs a device check:** the 45% bound on the earnings box. At default size the figure is far narrower than 45% of the panel. A reviewer was asked to confirm there is no truncation on a 320dp screen.
+- **Needs a device check:** the 50% bound on the earnings box. At default size the figure is far narrower than half the panel; 50% rather than 45% leaves room for a large bonus line on a 320dp screen.
+- **Horizontal padding:** none was added to the action buttons. Horizontal padding would narrow the label area at every text size and could make a long label wrap even at default size.
 
 **Consumers:**
 - `ActiveRidePanel`, `TripCompletedPanel` and `CancelReasonSheet` are used on the driver dashboard only. Their existing tests (6 suites) pass.
@@ -73,7 +74,7 @@ The same defensive pattern as rider-app (#5837): scaling was disabled outright i
 | File path | What changed | Why |
 |---|---|---|
 | `driver-app/components/dashboard/ActiveRidePanel.tsx` | 21 locks → cap; earnings and PIN digit capped; box, title and button layout tweaks | In-trip text scales without clipping |
-| `driver-app/components/dashboard/TripCompletedPanel.tsx` | 10 locks → cap; fare label can shrink | Trip summary scales |
+| `driver-app/components/dashboard/TripCompletedPanel.tsx` | 10 locks → cap; fare label can shrink; fare values capped | Trip summary scales consistently |
 | `driver-app/components/CancelReasonSheet.tsx` | 5 locks → cap; sheet max height with a shrinking list | Title stays on screen |
 | `rider-app/app/ride-in-progress.tsx` | Comment only | Corrects the lock reason |
 | `rider-app/components/BrandSplash.tsx` | Comment only | Corrects the lock reason |
@@ -88,7 +89,7 @@ actionPrimary: { flexDirection: 'row', height: 52, ... }
 
 ```tsx
 // After
-actionPrimary: { flexDirection: 'row', minHeight: 52, paddingVertical: SPACING.sm, paddingHorizontal: SPACING.md, ... }
+actionPrimary: { flexDirection: 'row', minHeight: 52, paddingVertical: SPACING.sm, ... }
 <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.statusText}>...</Text>
 ```
 
@@ -116,10 +117,17 @@ The two locks stay for their real reasons: the ETA badge is a fixed 56 pt circle
 **Research and review**
 - [x] Each site was classified by a read-only analysis of its container styles before editing: 31 needed only the cap, 20 needed a layout tweak, and 5 stay locked in later PRs.
 - [x] React Native `lineHeight` behaviour was verified in the installed RN source, not assumed.
-- [ ] `spinr-accessibility-reviewer` on the diff: running. The outcome will be recorded before merge.
+- [x] `spinr-accessibility-reviewer` ran on the diff (code-read only).
+  - **Blocker:** none.
+  - **Should-fix, handled:**
+    - Removed the action buttons' horizontal padding. It changed the label width at default size.
+    - Loosened the earnings bound from 45% to 50%. At 45% a large bonus line could wrap at default size on a 320dp screen.
+    - Kept the PIN digit box as is, flagged for the device check. The digit was unbounded before and is now capped; at maximum size on a narrow phone it may touch the box border, with no hard clip because overflow is visible.
+  - **Nit, fixed:** the fare values are now capped like their labels.
+  - **Confirmed:** no handler or ride-flow logic changed, and the cancel-sheet shrink pattern is correct.
 
 ## 10. What was NOT verified
 
 - **No device testing.** Nothing was run at a large OS text size; driver-app has no visual-regression tooling. Layout at 1.5× was reasoned about from the styles.
-- **Needs a person:** a device pass at the largest text size on the active-ride panel (PIN entry and action buttons) and the trip summary, in English and French.
+- **Needs a person:** a device pass at the largest text size on the active-ride panel (PIN entry and action buttons) and the trip summary, in English and French. Include the PIN digit box on a narrow (~320dp) phone.
 - **Other driver surfaces:** driver-app has no guard test yet, and the remaining driver locks (top bar, idle panel, navigation banner, offer card, SOS, Android Auto, splash) are W1.1b-2 and W1.1b-3.

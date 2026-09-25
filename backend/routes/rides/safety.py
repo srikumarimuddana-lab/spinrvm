@@ -411,7 +411,7 @@ async def trigger_emergency(
 
         _sms_results = await asyncio.gather(
             *(
-                _deps.send_sms(
+                _deps.send_sos_sms(
                     c["phone"],
                     sms_body,
                     twilio_sid=(sms_settings.get("twilio_account_sid", "") if sms_settings else ""),
@@ -851,7 +851,7 @@ async def trigger_emergency_rideless(
 
         _sms_results = await asyncio.gather(
             *(
-                _deps.send_sms(
+                _deps.send_sos_sms(
                     c["phone"],
                     sms_body,
                     twilio_sid=(sms_settings.get("twilio_account_sid", "") if sms_settings else ""),

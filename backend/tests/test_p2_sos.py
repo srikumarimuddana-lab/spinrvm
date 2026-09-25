@@ -117,7 +117,7 @@ class TestTriggerEmergency:
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", settings_mock),
-            patch("backend.routes.rides._deps.send_sms", send_sms_mock),
+            patch("backend.routes.rides._deps.send_sos_sms", send_sms_mock),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -263,7 +263,7 @@ class TestTriggerEmergency:
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
             patch("backend.routes.rides._deps.send_push_notification", push_mock),
         ):
             await rides_mod.trigger_emergency(
@@ -301,7 +301,7 @@ class TestTriggerEmergency:
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Driver"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
             patch("backend.routes.rides._deps.send_push_notification", push_mock),
         ):
             await rides_mod.trigger_emergency(
@@ -333,7 +333,7 @@ class TestTriggerEmergency:
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
             patch("backend.routes.rides.safety.create_ticket_for_safety", ticket_mock),
         ):
             await rides_mod.trigger_emergency(
@@ -632,7 +632,7 @@ class TestSOSIdempotency:
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(side_effect=_send_sms)),
         ):
             result = await rides_mod.trigger_emergency(ride_id=RIDE_ID, body=body, current_user={"id": RIDER_ID})
         # Filter to the incident rows: trigger_emergency also inserts via the
@@ -734,7 +734,7 @@ class TestSOSIdempotencyFailureRecovery:
                 AsyncMock(return_value={"first_name": "T", "last_name": "U"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID, body=_ReqWithKey(), current_user={"id": RIDER_ID}
@@ -795,7 +795,7 @@ class TestSOSMalformedKeyFailsOpen:
                 AsyncMock(return_value={"first_name": "T", "last_name": "U"}),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides._deps.send_sos_sms", AsyncMock(return_value={"success": True})),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID, body=_BadKeyReq(), current_user={"id": RIDER_ID}

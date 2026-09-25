@@ -37,7 +37,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 |---|---|---|---|---|
 | W1.1a `[x]` | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
 | W1.1b `[~]` | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
-| W1.2 | `aria-sort` on `SortableHead`, sticky `thead`, `aria-label` on 14 unlabelled search inputs | admin | none (no visible change at rest) | tests; axe; baselines unchanged |
+| W1.2 `[~]` | `aria-sort` on `SortableHead` and `aria-label` on 15 unlabelled search inputs. **Sticky `thead` moved to W5.5:** tables sit inside horizontal-scroll containers, which stop `position: sticky` from following the page scroll, so it needs a table-layout change | admin | none (no visible change) | tests; build; baselines unchanged |
 | W1.3 | Admin motion: `MotionConfig reducedMotion="user"`, a global `prefers-reduced-motion` rule, and an exit animation on the alert feed | admin | none | tests; baselines unchanged |
 | W1.4 | `/track`: honour Reduce Motion, plus a public "link expired or invalid" state instead of "Go to Dashboard" | web | none | tests; manual check |
 
@@ -69,6 +69,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | W5.1 | Command palette routes derived from the sidebar config (one source), plus a `?` shortcut sheet | admin | existing `admin_command_palette_enabled` (flip `[H]`) | tests |
 | W5.2 | Saved filter views (per admin, browser-local) on Rides and Drivers | admin | none | tests |
 | W5.3 | Shared `EmptyState` component; pollers pause while the tab is hidden and refresh on focus | admin | none | tests |
+| W5.5 | Sticky table headers. Needs the table scroll container restructured (or `thead` sticky inside a vertically scrolling table wrapper) without changing baselined pages | admin | none | baselines, which may need re-capture `[H]` |
 | W5.4 | Bulk actions on Drivers. **Needs scoping:** backend bulk endpoints plus RBAC review. Proposal first, not code | admin + backend | proposal | `spinr-admin-rbac-reviewer` |
 
 ### Wave 6: Quiet Console and a consistent public brand

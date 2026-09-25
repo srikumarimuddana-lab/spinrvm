@@ -125,7 +125,12 @@ async def test_successful_go_returns_snapshot_for_the_presented_session():
             availability_reason="go_online",
             last_contact_at=NOW.isoformat(),
             ready_until=(NOW + timedelta(minutes=60)).isoformat(),
-        )
+        ),
+        # F2-8b: session/controller checks use current_session_id from the
+        # snapshot -- must match the presented session for this to be the
+        # "same session went online" happy path, not a stale-controller
+        # reconcile.
+        current_session_id="presented-session",
     )
     with (
         patch.object(
@@ -163,7 +168,7 @@ async def test_snapshot_requires_scoped_contact_gps_and_fresh_durable_marker():
         ready_until=(NOW + timedelta(minutes=60)).isoformat(),
         location_captured_at=NOW.isoformat(),
     )
-    raw = _raw(driver=driver)
+    raw = _raw(driver=driver, current_session_id="session-1")
     evidence = {
         "contact_valid_until": NOW + timedelta(seconds=20),
         "location_valid_until": NOW + timedelta(seconds=20),
@@ -189,7 +194,7 @@ async def test_snapshot_does_not_ready_with_fresh_redis_and_stale_stored_coordin
         ready_until=(NOW + timedelta(minutes=60)).isoformat(),
         location_captured_at=(NOW - timedelta(seconds=61)).isoformat(),
     )
-    raw = _raw(driver=driver)
+    raw = _raw(driver=driver, current_session_id="session-1")
     with (
         patch.object(service.driver_availability_repo, "get_driver_availability_snapshot", AsyncMock(return_value=raw)),
         patch("backend.utils.driver_presence.get_scoped_driver_presence", AsyncMock()),

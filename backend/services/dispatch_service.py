@@ -17,10 +17,17 @@ push / asyncio.create_task machinery in the tests.
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# C136: destination ("heading home") mode auto-expires this long after the
+# driver sets it. Single source of truth — imported by
+# routes/drivers/profile.py when stamping destination_expires_at. Deliberately
+# a code constant, NOT an app_settings column: an unapplied settings column
+# 500s the whole admin settings save (PGRST204).
+DESTINATION_MODE_TTL = timedelta(hours=2)
 
 try:
     from ..geo_utils import calculate_distance
@@ -157,6 +164,35 @@ def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     return True
 
 
+def is_destination_mode_active(driver: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
+    """C136: is this driver's destination ("heading home") filter live right now?
+
+    True only when ALL hold: ``destination_mode`` is truthy, both destination
+    coords are present, and ``destination_expires_at`` parses to a moment
+    strictly after ``now``. A NULL / missing / unparseable expiry counts as
+    expired — so rows that pre-date migration 465 (or a candidate select that
+    forgot the column) stop filtering rather than filtering forever.
+
+    Used by both ``GET /drivers/destination`` (the ``active`` flag) and the
+    dispatch filter, so the app and dispatch can never disagree.
+    """
+    if not driver or not driver.get("destination_mode"):
+        return False
+    if driver.get("destination_lat") is None or driver.get("destination_lng") is None:
+        return False
+    raw = driver.get("destination_expires_at")
+    if not isinstance(raw, (str, datetime)):
+        return False
+    expires_at = parse_iso_utc(raw)
+    if expires_at is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return expires_at > now
+
+
 def _ride_brings_driver_closer_to_destination(driver: Dict[str, Any], ride: Dict[str, Any]) -> bool:
     """
     For destination-mode drivers, gate offers so we only forward rides
@@ -171,15 +207,17 @@ def _ride_brings_driver_closer_to_destination(driver: Dict[str, Any], ride: Dict
     than the driver's current position is. The 5% buffer absorbs short
     cross-traffic rides that technically reduce great-circle distance
     by a few meters but don't actually progress the driver home.
+
+    C136: the gate only applies while destination mode is *active* (see
+    ``is_destination_mode_active``) — flag on, coords present, and a
+    ``destination_expires_at`` in the future. Expired / NULL / missing /
+    unparseable expiry, or missing coords, fail open (no filter) so the
+    driver still gets offers rather than going invisible.
     """
-    if not driver.get("destination_mode"):
+    if not is_destination_mode_active(driver):
         return True
     dest_lat = driver.get("destination_lat")
     dest_lng = driver.get("destination_lng")
-    if dest_lat is None or dest_lng is None:
-        # destination_mode flag set but no coords stored — fail open so
-        # the driver still gets offers rather than going invisible.
-        return True
     dropoff_lat = ride.get("dropoff_lat")
     dropoff_lng = ride.get("dropoff_lng")
     if dropoff_lat is None or dropoff_lng is None:
@@ -218,7 +256,9 @@ def filter_and_rank_drivers(
     any other way (a future RPC, a cached list, a hand-built fixture) is still
     gated. ``is_wav`` is double-checked the same way for the same reason.
 
-    No side effects. Safe to call from tests with hand-built dicts.
+    Side effects: one structured ``logger.info`` per call (dispatch candidate
+    exclusion counts) and ``spinr_dispatch_candidate_excluded_total`` metric
+    increments. Safe to call from tests with hand-built dicts.
     """
     # Match against the road-snapped pickup the driver will actually navigate to
     # (pickup_nav_*) when present — for a pin dropped inside a mall/airport the
@@ -230,27 +270,68 @@ def filter_and_rank_drivers(
 
     wav_required = bool(ride.get("requires_wav"))
 
+    exclusion_counts: Dict[str, int] = {
+        "undispatchable": 0,
+        "rating": 0,
+        "service_area": 0,
+        "wav": 0,
+        "destination": 0,
+        "radius": 0,
+    }
+    destination_excluded_driver_ids: List[str] = []
+
     result: List[Tuple[Dict[str, Any], float]] = []
     for d in candidate_drivers:
         if not _is_dispatchable_driver(d):
+            exclusion_counts["undispatchable"] += 1
             continue
         if needs_rating and float(d.get("rating") or 5.0) < min_rating:
+            exclusion_counts["rating"] += 1
             continue
         # Driver approval is per service area — proximity is not authorisation.
         if not driver_area_allowed(d.get("service_area_id"), allowed_area_ids, allow_unassigned=allow_unassigned_area):
+            exclusion_counts["service_area"] += 1
             continue
         # Saskatchewan Transportation Act s.22: when the rider requests a WAV,
         # only match drivers whose vehicle has an approved wheelchair lift/ramp.
         if wav_required and not d.get("is_wav"):
+            exclusion_counts["wav"] += 1
             continue
         # P2 destination filter: drivers in destination_mode only see offers
         # whose dropoff brings them closer to their preferred destination.
-        # No-op when destination_mode is False or coords are missing.
+        # No-op when destination_mode is False, coords are missing, or the
+        # destination has expired (C136, DESTINATION_MODE_TTL).
         if not _ride_brings_driver_closer_to_destination(d, ride):
+            exclusion_counts["destination"] += 1
+            driver_id = d.get("id")
+            if driver_id is not None:
+                destination_excluded_driver_ids.append(str(driver_id))
             continue
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])
         if dist_km <= search_radius_km:
             result.append((d, dist_km))
+        else:
+            exclusion_counts["radius"] += 1
+
+    logger.info(
+        "dispatch candidate exclusions ride_id=%s undispatchable=%d rating=%d service_area=%d wav=%d destination=%d radius=%d",
+        ride.get("id"),
+        exclusion_counts["undispatchable"],
+        exclusion_counts["rating"],
+        exclusion_counts["service_area"],
+        exclusion_counts["wav"],
+        exclusion_counts["destination"],
+        exclusion_counts["radius"],
+        extra={
+            "ride_id": ride.get("id"),
+            "exclusion_counts": dict(exclusion_counts),
+            "destination_excluded_driver_ids": destination_excluded_driver_ids,
+        },
+    )
+    for reason, count in exclusion_counts.items():
+        if count > 0:
+            _metric_inc("spinr_dispatch_candidate_excluded_total", labels={"reason": reason}, by=count)
+
     return result
 
 

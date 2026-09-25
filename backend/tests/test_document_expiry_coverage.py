@@ -95,6 +95,7 @@ class TestCheckExpiringDocuments:
 
     @pytest.mark.anyio
     async def test_expired_legacy_document_suspends_and_notifies(self, monkeypatch):
+        from backend.services import driver_availability_service
         from backend.utils import document_expiry
 
         now = datetime.now(timezone.utc)
@@ -110,6 +111,13 @@ class TestCheckExpiringDocuments:
         monkeypatch.setattr(document_expiry.manager, "disconnect", disconnect)
         push = AsyncMock()
         monkeypatch.setattr(document_expiry, "send_push_notification", push)
+        # This test is pinning the legacy (v1) path -- driver_availability_v2_enabled()
+        # makes its own db_supabase.get_rows call, which would otherwise consume
+        # a slot from the 2-item side_effect list above (meant only for the
+        # drivers page + driver_documents page) and exhaust it early.
+        monkeypatch.setattr(
+            driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=False)
+        )
 
         await document_expiry.check_expiring_documents()
 
@@ -163,6 +171,7 @@ class TestCheckExpiringDocuments:
 
     @pytest.mark.anyio
     async def test_clear_presence_failure_does_not_block_suspension_push(self, monkeypatch):
+        from backend.services import driver_availability_service
         from backend.utils import document_expiry
 
         now = datetime.now(timezone.utc)
@@ -175,6 +184,9 @@ class TestCheckExpiringDocuments:
         monkeypatch.setattr(document_expiry.manager, "disconnect", MagicMock())
         push = AsyncMock()
         monkeypatch.setattr(document_expiry, "send_push_notification", push)
+        monkeypatch.setattr(
+            driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=False)
+        )
 
         await document_expiry.check_expiring_documents()
         push.assert_awaited_once()
@@ -349,6 +361,7 @@ class TestCheckExpiringDocuments:
     async def test_driver_documents_table_expired_entry_triggers_suspension(self, monkeypatch):
         """A doc in the driver_documents table (not a legacy field) that's
         already expired must also trigger suspension."""
+        from backend.services import driver_availability_service
         from backend.utils import document_expiry
 
         now = datetime.now(timezone.utc)
@@ -366,6 +379,9 @@ class TestCheckExpiringDocuments:
         monkeypatch.setattr(document_expiry, "clear_presence", AsyncMock())
         monkeypatch.setattr(document_expiry.manager, "disconnect", MagicMock())
         push = AsyncMock()
+        monkeypatch.setattr(
+            driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=False)
+        )
         monkeypatch.setattr(document_expiry, "send_push_notification", push)
 
         await document_expiry.check_expiring_documents()

@@ -8,6 +8,7 @@ deliberately out of scope for DispatchService (see the module docstring).
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,14 +19,24 @@ sys.path.insert(
 )
 
 from services.dispatch_service import (  # noqa: E402
+    DESTINATION_MODE_TTL,
     DispatchService,
     _is_dispatchable_driver,
     dispatch_geo_bounds,
     filter_and_rank_drivers,
+    is_destination_mode_active,
     select_driver_by_algorithm,
 )
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
+
+
+def _future_iso(hours: float = 1.0) -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+
+
+def _past_iso(hours: float = 1.0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
 class TestDispatchGeoBounds:
@@ -199,6 +210,7 @@ class TestFilterAndRankDrivers:
                 "destination_mode": True,
                 "destination_lat": 52.5,
                 "destination_lng": -106.0,
+                "destination_expires_at": _future_iso(),
             }
         ]
         ride = self._ride_with_dropoff(52.3, -106.0)
@@ -219,6 +231,7 @@ class TestFilterAndRankDrivers:
                 "destination_mode": True,
                 "destination_lat": 52.5,
                 "destination_lng": -106.0,
+                "destination_expires_at": _future_iso(),
             }
         ]
         ride = self._ride_with_dropoff(51.5, -106.0)
@@ -243,6 +256,210 @@ class TestFilterAndRankDrivers:
         ride = self._ride_with_dropoff(53.0, -106.0)
         out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
         assert len(out) == 1
+
+    # ── C136: destination mode auto-expires ──────────────────────────
+    # A wrong-direction ride is filtered ONLY while the destination is
+    # active (future destination_expires_at). Expired / NULL / missing /
+    # unparseable expiry must fail open (no filter) so a stale "heading
+    # home" from days ago can't silently starve the driver of offers.
+
+    def _wrong_direction_driver(self, **overrides):
+        d = {
+            "id": "d1",
+            "user_id": "u1",
+            "lat": 52.0,
+            "lng": -106.0,
+            "rating": 5.0,
+            "destination_mode": True,
+            "destination_lat": 52.5,
+            "destination_lng": -106.0,
+        }
+        d.update(overrides)
+        return d
+
+    def test_destination_active_future_expiry_still_filters(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at=_future_iso())]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert out == []
+
+    def test_destination_expired_does_not_filter(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at=_past_iso())]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_destination_null_expiry_does_not_filter(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at=None)]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_destination_missing_expiry_key_does_not_filter(self):
+        # Legacy row / column not selected: no key at all.
+        drivers = [self._wrong_direction_driver()]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_destination_unparseable_expiry_does_not_filter(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at="not-a-date")]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    # ── C136 T3: exclusion observability ─────────────────────────────
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_wrong_direction_destination_exclusion_logged_and_metered(self, mock_logger, mock_metric_inc):
+        driver = self._wrong_direction_driver(id="drv-dest-42", destination_expires_at=_future_iso())
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        ride["id"] = "ride-99"
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        assert out == []
+
+        mock_logger.info.assert_called_once()
+        assert "dispatch candidate exclusions" in mock_logger.info.call_args[0][0]
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["destination"] == 1
+        assert extra["destination_excluded_driver_ids"] == ["drv-dest-42"]
+
+        dest_metric = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total" and c[1].get("labels") == {"reason": "destination"}
+        ]
+        assert len(dest_metric) == 1
+        assert dest_metric[0][1]["by"] == 1
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_expired_destination_not_counted_as_destination_exclusion(self, mock_logger, mock_metric_inc):
+        driver = self._wrong_direction_driver(destination_expires_at=_past_iso())
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["destination"] == 0
+        assert extra["destination_excluded_driver_ids"] == []
+        dest_metrics = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total"
+            and c[1].get("labels", {}).get("reason") == "destination"
+        ]
+        assert dest_metrics == []
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_outside_radius_counted_as_radius_not_destination(self, mock_logger, mock_metric_inc):
+        drivers = [self._driver("d_far", lat=53.0, lng=-106.0)]
+        ride = self._ride()
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 1.0)
+        assert out == []
+
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["radius"] == 1
+        assert extra["exclusion_counts"]["destination"] == 0
+
+        radius_metric = [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total" and c[1].get("labels") == {"reason": "radius"}
+        ]
+        assert len(radius_metric) == 1
+        assert radius_metric[0][1]["by"] == 1
+
+    @patch("services.dispatch_service.logger")
+    def test_filter_results_unchanged_by_exclusion_observability(self, mock_logger):
+        drivers = [
+            self._driver("d_near", lat=52.0, lng=-106.0, rating=5.0),
+            self._driver("d_low", rating=3.0),
+            self._wrong_direction_driver(id="d_dest", destination_expires_at=_future_iso()),
+        ]
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "rating_based", 4.0, 10.0)
+        assert [t[0]["id"] for t in out] == ["d_near"]
+        assert out[0][1] == 0.0
+
+
+class TestIsDestinationModeActive:
+    NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+
+    def _d(self, **kw):
+        d = {
+            "destination_mode": True,
+            "destination_lat": 52.5,
+            "destination_lng": -106.0,
+            "destination_expires_at": (self.NOW + timedelta(minutes=30)).isoformat(),
+        }
+        d.update(kw)
+        return d
+
+    def test_ttl_is_two_hours(self):
+        assert DESTINATION_MODE_TTL == timedelta(hours=2)
+
+    def test_active_when_all_present_and_future(self):
+        assert is_destination_mode_active(self._d(), now=self.NOW) is True
+
+    def test_z_suffix_parsed(self):
+        assert is_destination_mode_active(self._d(destination_expires_at="2026-09-24T13:00:00Z"), now=self.NOW) is True
+
+    def test_inactive_when_flag_off(self):
+        assert is_destination_mode_active(self._d(destination_mode=False), now=self.NOW) is False
+
+    def test_inactive_when_coords_missing(self):
+        assert is_destination_mode_active(self._d(destination_lat=None), now=self.NOW) is False
+        assert is_destination_mode_active(self._d(destination_lng=None), now=self.NOW) is False
+
+    def test_inactive_when_expired(self):
+        assert (
+            is_destination_mode_active(
+                self._d(destination_expires_at=(self.NOW - timedelta(seconds=1)).isoformat()), now=self.NOW
+            )
+            is False
+        )
+
+    def test_inactive_exactly_at_expiry(self):
+        assert is_destination_mode_active(self._d(destination_expires_at=self.NOW.isoformat()), now=self.NOW) is False
+
+    def test_inactive_when_expiry_null_missing_or_garbage(self):
+        assert is_destination_mode_active(self._d(destination_expires_at=None), now=self.NOW) is False
+        d = self._d()
+        d.pop("destination_expires_at")
+        assert is_destination_mode_active(d, now=self.NOW) is False
+        assert is_destination_mode_active(self._d(destination_expires_at="garbage"), now=self.NOW) is False
+        assert is_destination_mode_active(self._d(destination_expires_at=12345), now=self.NOW) is False
+
+    def test_none_driver(self):
+        assert is_destination_mode_active(None, now=self.NOW) is False
+        assert is_destination_mode_active({}, now=self.NOW) is False
+
+
+class TestCandidateColumnsIncludeDestinationExpiry:
+    """C136 guard: every drivers candidate select must fetch
+    destination_expires_at, otherwise the expiry gate sees a missing key and
+    silently turns the destination filter OFF for every driver."""
+
+    def test_all_candidate_column_strings_include_expiry(self):
+        import re
+
+        backend = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # estimates.py also selects destination_lat/lng but never applies the
+        # destination filter (rider-side "cars available" count), so it is
+        # deliberately NOT in this list — adding the column there would only
+        # widen the pre-migration-465 400 blast radius to the estimate screen.
+        targets = [
+            os.path.join(backend, "routes", "rides", "matching.py"),
+            os.path.join(backend, "services", "dispatch_candidates.py"),
+        ]
+        found = 0
+        for path in targets:
+            src = open(path, encoding="utf-8").read()
+            # Collapse implicit string concatenation so multi-line literals match.
+            flat = re.sub(r'"\s*\n\s*"', "", src)
+            for m in re.finditer(r'"([^"\n]*destination_lat,destination_lng[^"\n]*)"', flat):
+                found += 1
+                assert "destination_expires_at" in m.group(1), f"{os.path.basename(path)}: {m.group(1)}"
+        # matching.py x2, dispatch_candidates.py x1
+        assert found >= 3
 
 
 class TestSelectDriverByAlgorithm:

@@ -49,6 +49,7 @@ import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
 import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
+import { DestinationModeBanner } from '../../../components/DestinationModeBanner';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import { useNotifications } from '@shared/hooks/queries';
@@ -1771,13 +1772,27 @@ function DriverDashboard() {
         </View>
       )}
 
-      {/* Forecast strip — next 6h demand timeline (HM-23) */}
-      {rideState === 'idle' && heatmapIsV2 && (
-        <View style={{ position: 'absolute', top: insets.top + 68, left: 16, right: 16, zIndex: 55 }}>
-          <ForecastStrip
-            forecast={heatmapForecast}
-            visible={heatmapForecast.length > 0}
-          />
+      {/* Under-top-bar column: destination-mode banner (C136 T2) stacked above
+          the forecast strip (HM-23) so the two never overlap.
+          The banner is shown whenever destination mode is active while the
+          driver is idle — online OR offline. Offline too, deliberately: a
+          driver who forgot it is on should see it before tapping "Go online",
+          and it is the one thing silently zeroing their offers. Hidden during
+          an offer/active ride only to keep the nav banner + ride panels clear;
+          it remounts (and re-fetches) when the trip ends. The banner itself
+          fetches on mount + on every tab focus and renders nothing when off. */}
+      {rideState === 'idle' && (
+        <View
+          style={{ position: 'absolute', top: insets.top + 68, left: 16, right: 16, zIndex: 55, gap: SPACING.xs }}
+          pointerEvents="box-none"
+        >
+          <DestinationModeBanner />
+          {heatmapIsV2 && (
+            <ForecastStrip
+              forecast={heatmapForecast}
+              visible={heatmapForecast.length > 0}
+            />
+          )}
         </View>
       )}
 

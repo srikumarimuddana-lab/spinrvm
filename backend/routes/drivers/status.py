@@ -90,6 +90,41 @@ async def _change_availability_status(user_id: str, command: dict, token_session
         ) from exc
 
 
+# C136: the payload that ends destination ("heading home") mode. Written on
+# every go-offline: the legacy path (same write as went_offline_at) and the v2
+# path (after the availability service confirms the go_offline transition).
+_DESTINATION_MODE_CLEARED: dict = {
+    "destination_mode": False,
+    "destination_address": None,
+    "destination_lat": None,
+    "destination_lng": None,
+    "destination_set_at": None,
+    "destination_expires_at": None,
+}
+
+
+async def _clear_destination_mode_after_v2_offline(driver_id: str) -> None:
+    """C136: v2 go_offline goes through the availability service, which never
+    touches destination columns, so clear them here once it has succeeded.
+
+    A failure does NOT fail the go-offline: the driver is already offline, and
+    returning an error would make the app retry a transition that landed. It is
+    logged at ERROR with the underlying cause, and DESTINATION_MODE_TTL (2h)
+    still bounds how long a stale destination can filter offers.
+    """
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, dict(_DESTINATION_MODE_CLEARED))
+    except Exception as exc:
+        details = getattr(exc, "details", None)
+        original = details.get("original") if isinstance(details, dict) else None
+        logger.error(
+            "C136: failed to clear destination mode after v2 go_offline driver_id=%s: %s original=%r",
+            driver_id,
+            exc,
+            original,
+        )
+
+
 async def _finish_v2_status(result: dict, driver_id: str, token_session_id: str | None = None) -> dict:
     code = result.get("code")
     if code != "OK":
@@ -411,7 +446,14 @@ async def update_driver_status(
                 {"action": v2_action, "online_epoch": v2_epoch, "request_id": v2_request_id},
                 token_session_id,
             )
-            return await _finish_v2_status(result, driver_id, token_session_id)
+            response = await _finish_v2_status(result, driver_id, token_session_id)
+            # _finish_v2_status raises on any non-OK code, so reaching here
+            # means the transition landed. Only an explicit end-of-shift
+            # go_offline clears it; stop_requests (a pause) keeps the
+            # destination, still bounded by its 2h TTL.
+            if v2_action == "go_offline":
+                await _clear_destination_mode_after_v2_offline(driver_id)
+            return response
 
     # CR-4104 / A34 dual-run cutover guard: block go-online for a
     # legacy-imported driver an operator has confirmed is still active on
@@ -1137,6 +1179,13 @@ async def update_driver_status(
             _intent_payload["went_online_at"] = _now_iso
         else:
             _intent_payload["went_offline_at"] = _now_iso
+            # C136: going offline ends "heading home" — clear destination mode
+            # in this same write so a driver who logs back in hours later isn't
+            # silently filtered by a stale destination. Only on the offline
+            # flip; going online never touches these columns. If migration 465
+            # is not applied yet, the PGRST204 minimal-retry below drops this
+            # (it retries with _base only) and the offline flip still lands.
+            _intent_payload.update(_DESTINATION_MODE_CLEARED)
     _payload = {**_base, **_intent_payload}
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
@@ -1154,7 +1203,15 @@ async def update_driver_status(
         _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
         _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
         _missing_intent = any(
-            col in _combined for col in ("last_status_changed_at", "went_online_at", "went_offline_at", "pgrst204")
+            col in _combined
+            for col in (
+                "last_status_changed_at",
+                "went_online_at",
+                "went_offline_at",
+                "destination_set_at",
+                "destination_expires_at",
+                "pgrst204",
+            )
         )
         if _missing_intent:
             logger.warning(

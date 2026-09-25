@@ -79,8 +79,14 @@ export function SortableHead({
 }) {
     const active = sort.key === column;
     const Icon = !active ? ChevronsUpDown : sort.dir === "asc" ? ChevronUp : ChevronDown;
+    // aria-sort on the header cell lets screen readers announce the current
+    // sort ("sorted ascending"), which the chevron icon alone does not.
+    const ariaSort = !active ? "none" : sort.dir === "asc" ? "ascending" : "descending";
     return (
-        <TableHead className={cn(align === "right" && "text-right", align === "center" && "text-center", className)}>
+        <TableHead
+            aria-sort={ariaSort}
+            className={cn(align === "right" && "text-right", align === "center" && "text-center", className)}
+        >
             <button
                 type="button"
                 onClick={() => onSort(column)}

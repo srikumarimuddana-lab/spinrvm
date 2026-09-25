@@ -32,7 +32,9 @@ All of this sits behind new `settings.login_supersede_driver_app_only_enabled` (
 With the flag on:
 - **Who owns the account's session** (`_login_session_policy`): only a login from the driver app (`X-App-Platform: driver`) writes `users.current_session_id` and signs the account's other devices out. So does a login the driver single-session rollout owns. Rider-app, company-portal and header-less logins do neither. `current_session_id` becomes "the driver's session".
 - **Per-login session ids:** every login stores its own session id on its refresh-token row. Rotation carries it forward, and refreshed access tokens use it (`_chain_session_id_for_rotation`, `_build_refresh_response(session_id=...)`; the X8 recover path uses the successor's id).
-- **Legacy chains** adopt an id on their first rotation. A rider-app device gets a fresh id. Any other device keeps `current_session_id`, the id its tokens already carry, so a driver's availability controller binding survives mid-shift.
+- **Legacy chains** adopt an id on their first rotation. Only an explicit driver-app request (`X-App-Platform: driver`) keeps `current_session_id`, the id its tokens already carry, so a driver's availability controller binding survives mid-shift. Every other device (rider app, headerless older builds, company portal) gets a fresh id (Codex review: a headerless rider adopting the driver's id could later tombstone it). The driver app's background location refresh now sends `X-App-Platform: driver` explicitly; the foreground and Android Auto already did.
+- **Unreadable settings** make the flag reader return a retryable 503 instead of "off" (Codex review). Treating it as off while the flag is on would silently restore the destructive shared-session login.
+- **Logout is scoped to the app signing out** (Codex review, `shared/auth/appSurface.ts`, set by `setAppIdentity`). Only the driver app takes the driver offline, and each app sends its own `client_type`, so only that app's push token is detached.
 - **Logout** also tombstones the token's own session id when the refresh token being signed out carries that same id. Holding it proves the device owns that chain. The old "equals `current_session_id`" rule stays.
 
 With the flag off, every call is exactly as before; the `session_id` kwarg is omitted.
@@ -47,6 +49,8 @@ This matches Uber and Lyft: rider and driver apps sign in independently, and onl
 - **Mutually exclusive with `driver_single_session_enabled`.** That rollout's `begin_driver_session` RPC runs on every driver-account login and revokes the account's rider and driver refresh tokens. If both flags are on, this flag is ignored (logged at error) and single-session wins, enforced in `_driver_app_only_sessions_enabled`. It is `false` in production.
 - **Transition when the flag is switched on (accepted, bounded; needs sign-off).** A legacy driver chain (no `session_id`) adopts `users.current_session_id` on its first rotation. That is the id its tokens already carry, so availability binding survives. If the last login before the flip was a rider-app login, that id is shared with that rider device's in-flight access token. Until that token expires (≤ access-token TTL, ~15 min), a logout from it can still tombstone the shared id: exactly today's behaviour, and never worse than flag-off. After that the rider chain rotates to a fresh id and the collision is gone. Forcing every device to re-login at the flip was the alternative, rejected as more disruptive than the ≤15-minute window it removes.
 - **Trust in `X-App-Platform` (security trade-off; needs sign-off).** It is client-supplied. It decides only whether a login takes over the driver session and signs others out; session ids are always server-generated. Today any new login kicks every other device, which is an unintended takeover signal. With the flag on, an attacker who already holds valid credentials can log in without displacing the real driver by omitting the header or sending `rider`. That is inherent to independent rider/driver sessions (Uber's model). New-device alerts (`_alert_if_new_device`) remain the takeover signal and should be extended to driver logins as a follow-up. Logout's own-chain rule also checks that the presented refresh token belongs to the logged-in user.
+- **Rollout prerequisite:** enable the flag only after the driver build whose background refresh sends `X-App-Platform: driver` is widely installed. On an older driver build, a background refresh of a legacy chain now gets a fresh id. That leaves the driver's tokens out of step with `current_session_id`, and availability then treats the session as superseded.
+- **Logout surface scoping** is client-side and not flagged. It applies to new builds regardless of the flag. With the flag off, a rider-app login already signs the driver out and takes them offline, so skipping the go-offline on rider-app logout changes nothing observable.
 - **Extra reads:** one settings read per login/refresh/logout (60s in-process cache). One `refresh_tokens` lookup per logout when the flag is on.
 - No interaction with ride state transitions, money, or insurance-period rows.
 
@@ -68,7 +72,10 @@ Nothing changes until the flag is switched on. There is no copy change.
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Snapshot entry | Drift guard maintenance |
 | `backend/routes/auth.py` | Session policy helpers; four login paths; refresh rotate/recover; logout own-session tombstone | The behaviour change |
 | `backend/utils/refresh_tokens.py` | `issue_refresh_token(session_id=)`, `refresh_token_session_id()` | Store/read the chain's session id |
-| `backend/tests/test_login_supersede_driver_app_only.py` | Policy matrix, rotation id rules, refresh mint, reactivation ownership, logout rules, storage | Pin each rule |
+| `backend/tests/test_login_supersede_driver_app_only.py` | Policy matrix, rotation id rules, refresh mint, reactivation ownership, logout rules, storage, unreadable flag = 503 | Pin each rule |
+| `shared/auth/appSurface.ts`, `shared/api/client.ts`, `shared/store/authStore.ts` | App surface recorded at startup; logout skips go-offline in the rider app and sends `client_type` | Rider-app logout must not take a signed-in driver offline or detach the driver app's pushes |
+| `driver-app/utils/backgroundAuth.ts` | `X-App-Platform: driver` on background refresh | Keep the driver's session id on legacy chains |
+| `driver-app/__tests__/store/authStore.initialize.test.ts` | Rider-app vs driver-app logout side effects | Pin the surface scoping |
 
 ## 7. Before / after
 
@@ -106,5 +113,6 @@ session_id = session_id or user.get("current_session_id") or ""   # chain's own 
 
 - No staging or real-device run.
 - I did not run the real-Postgres availability-v2 tests (`driver-availability-db.yml`); the driver-session interaction was reasoned from `driver_availability_service.py`.
-- Background driver refreshes send no `X-App-Platform`. On a legacy chain they adopt `current_session_id`, the same id the driver's tokens already carry.
+- Older driver builds' background refreshes send no `X-App-Platform`, so see the rollout prerequisite in §4.
+- Whether `rider-app` hydrates `driver` for dual-role accounts on every path. The logout scoping holds either way.
 - The 12 remaining real-Postgres failures from #5770 (controller rebind on re-login) are a separate, not-yet-built dispatch feature. They are not addressed here.

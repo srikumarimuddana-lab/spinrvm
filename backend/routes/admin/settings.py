@@ -567,8 +567,12 @@ class SettingsUpdateRequest(BaseModel):
     # utils/ride_offer_ring.py when building offer payloads.
     ride_offer_alarm_channel_enabled: Optional[bool] = None
     # Migration 474. True = only a driver-app login signs the account's other
-    # devices out; read by routes/auth.py _login_supersedes_other_devices.
+    # devices out; read by routes/auth.py _driver_app_only_sessions_enabled.
     login_supersede_driver_app_only_enabled: Optional[bool] = None
+    # Migration 463. X8 lost-refresh-response recovery; read by routes/auth.py
+    # _accepted_refresh_proposal. Enable only after the X8 audit
+    # (docs/audit/2026-09-24-refresh-successor-commitment-security-note.md).
+    refresh_successor_commitment_enabled: Optional[bool] = None
     # Migration 467. Android Allow-all-the-time gate; served to the driver app
     # as always_location_required on /drivers/config.
     driver_always_location_gate_enabled: Optional[bool] = None

@@ -3,6 +3,7 @@ import { messageForSentinel } from '../errors/sentinelMessages';
 import SpinrConfig from '../config/spinr.config';
 import { addBreadcrumb } from '../services/errorReporting';
 import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
+import { setAppSurface } from '../auth/appSurface';
 
 
 const API_URL = SpinrConfig.backendUrl;
@@ -302,6 +303,7 @@ let _appIdentity: { platform: 'rider' | 'driver'; version: string } | null = nul
 
 export function setAppIdentity(platform: 'rider' | 'driver', version: string): void {
   _appIdentity = { platform, version };
+  setAppSurface(platform);
 }
 
 function appVersionHeader(): Record<string, string> {

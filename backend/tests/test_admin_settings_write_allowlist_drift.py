@@ -149,6 +149,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "referral_payout_velocity_cap_per_day",
         "referral_reward_amount",
         "referral_rides_required",
+        "refresh_successor_commitment_enabled",
         "require_driver_subscription",
         "resend_api_key",
         "resend_from_email",

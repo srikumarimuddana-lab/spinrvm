@@ -7,6 +7,7 @@ import { isAppCheckRejection, rejectionBody } from '../auth/appCheckRejection';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
 import { withSessionLock, sessionKeychainOptions, SESSION_GENERATION_KEY } from '../auth/sessionLock';
 import { clearRefreshProposal, refreshProposalFor, REFRESH_PROPOSAL_KEY } from '../auth/refreshProposal';
+import { getAppSurface } from '../auth/appSurface';
 import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -810,8 +811,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // lock open, deadlocking any operation queued behind this logout (e.g. a
     // fresh setTokens() from a new login racing a slow prior logout).
     // Swallow errors either way — a flaky network must not block sign-out.
+    // Only the driver app takes the driver offline: a dual-role account signed
+    // in to both apps keeps driving when it signs out of the rider app.
+    const surface = getAppSurface();
     const goOffline =
-      liveCredential && driver?.id
+      liveCredential && driver?.id && surface !== 'rider'
         ? api.put(`/drivers/${driver.id}/status`, { is_online: false }).catch((error) => {
             if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
           })
@@ -852,7 +856,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           //
           // Read the winning rotation from storage while holding the session lock.
           const currentRefreshToken = (await storage.getItem('refresh_token')) ?? get().refreshToken;
-          await api.post('/auth/logout', currentRefreshToken ? { refresh_token: currentRefreshToken } : {});
+          const logoutBody: { refresh_token?: string; client_type?: string } =
+            currentRefreshToken ? { refresh_token: currentRefreshToken } : {};
+          // Tells the server which app's push token to detach (dual-role accounts).
+          if (surface) logoutBody.client_type = surface;
+          await api.post('/auth/logout', logoutBody);
         } catch (error) {
           // Best-effort: the local session still ends. A failure here leaves the
           // refresh token live until its own expiry, which is the pre-existing

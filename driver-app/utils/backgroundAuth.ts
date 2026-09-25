@@ -62,7 +62,13 @@ export function createBackgroundTokenProvider(): () => Promise<string | null> {
           const proposal = await refreshProposalFor(candidate);
           const response = await withStepDeadline(fetch(`${SpinrConfig.backendUrl}/api/v1/auth/refresh`, {
             method: 'POST', signal: controller.signal, credentials: 'omit',
-            headers: { 'Content-Type': 'application/json', ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}) },
+            // X-App-Platform: this chain belongs to the driver app (per-login
+            // sessions keep the driver's session id only for driver requests).
+            headers: {
+              'Content-Type': 'application/json',
+              'X-App-Platform': 'driver',
+              ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}),
+            },
             body: JSON.stringify(proposal
               ? { refresh_token: candidate, proposed_refresh_token: proposal }
               : { refresh_token: candidate }),

@@ -2162,14 +2162,17 @@ def _chain_session_id_for_rotation(row: dict, user: dict, request: Request) -> s
     """Session id a rotated refresh chain carries forward.
 
     A chain minted with per-login sessions keeps its own id. A legacy chain
-    (no session_id) adopts one on its first rotation: a rider-app device gets a
-    fresh id, so its logout can never tombstone the driver's session; any other
-    device keeps users.current_session_id, the id its tokens already carry, so
-    a driver's availability controller binding survives the switch.
+    (no session_id) adopts one on its first rotation. Only an explicit
+    driver-app request (``X-App-Platform: driver``, sent by the foreground app,
+    Android Auto and the background location task) keeps
+    users.current_session_id, the id its tokens already carry, so the driver's
+    availability controller binding survives the switch. Every other device
+    (rider app, headerless older builds, company portal) gets a fresh id, so
+    its logout can never tombstone the driver's session.
     """
     if row.get("session_id"):
         return str(row["session_id"])
-    if request.headers.get("X-App-Platform") != "rider" and user.get("current_session_id"):
+    if request.headers.get("X-App-Platform") == "driver" and user.get("current_session_id"):
         return str(user["current_session_id"])
     return str(uuid.uuid4())
 
@@ -2471,7 +2474,11 @@ LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG = "login_supersede_driver_app_only_enabled"
 
 
 async def _driver_app_only_sessions_enabled() -> bool:
-    """The flag; unreadable counts as off (today's shared-session behaviour).
+    """The flag. Unreadable settings are a retryable 503, not "off".
+
+    Falling back to off would silently restore shared-session behaviour while
+    the flag is on: a rider login would overwrite current_session_id, revoke
+    the driver's session and take the driver offline.
 
     Mutually exclusive with driver_single_session_enabled: that rollout's
     begin_driver_session RPC runs on every driver-account login and revokes
@@ -2480,11 +2487,14 @@ async def _driver_app_only_sessions_enabled() -> bool:
     """
     try:
         app_settings = await get_app_settings()
-    except Exception:
-        logger.error(
-            "login: could not read %s; treating it as off", LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG, exc_info=True
-        )
-        return False
+    except Exception as exc:
+        logger.error("auth: could not read %s", LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG, exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from exc
     app_settings = app_settings or {}
     if app_settings.get(LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG) is not True:
         return False

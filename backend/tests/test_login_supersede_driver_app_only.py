@@ -72,11 +72,16 @@ async def test_login_session_policy(settings, platform, driver_session_enabled, 
 
 
 @pytest.mark.asyncio
-async def test_unreadable_flag_is_off():
+async def test_unreadable_flag_is_a_retryable_503_not_off():
+    """Treating it as off would restore the destructive shared-session login
+    (driver signed out and taken offline) while the flag is on."""
     from backend.routes.auth import _login_session_policy
+    from backend.utils.error_handling import SpinrException
 
     with patch("backend.routes.auth.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))):
-        assert await _login_session_policy(_request("rider"), False) == (False, True)
+        with pytest.raises(SpinrException) as caught:
+            await _login_session_policy(_request("rider"), False)
+    assert caught.value.status_code == 503
 
 
 # ── refresh chains ───────────────────────────────────────────────────────────
@@ -88,14 +93,14 @@ def test_chain_session_id_for_rotation():
     user = {"current_session_id": "driver-session"}
     # A chain that already has its id keeps it, whatever the shared column says.
     assert _chain_session_id_for_rotation({"session_id": "own"}, user, _request("rider")) == "own"
-    # Legacy chain on a driver (or unidentified) device keeps the id its tokens
+    # Legacy chain on an explicit driver-app request keeps the id its tokens
     # already carry, so the availability controller binding survives.
     assert _chain_session_id_for_rotation({}, user, _request("driver")) == "driver-session"
-    assert _chain_session_id_for_rotation({}, user, _request(None)) == "driver-session"
-    # Legacy chain on a rider device gets its own id: its logout must not
-    # tombstone the driver's session.
-    rider_sid = _chain_session_id_for_rotation({}, user, _request("rider"))
-    assert rider_sid != "driver-session" and uuid.UUID(rider_sid)
+    # Any other legacy chain (rider app, headerless build, company portal) gets
+    # its own id: its logout must not tombstone the driver's session.
+    for platform in ("rider", None):
+        sid = _chain_session_id_for_rotation({}, user, _request(platform))
+        assert sid != "driver-session" and uuid.UUID(sid)
     assert uuid.UUID(_chain_session_id_for_rotation({}, {"current_session_id": None}, _request("driver")))
 
 

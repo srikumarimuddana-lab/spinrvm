@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     # secret); its password strength is enforced at startup instead.
     # Set false only in local dev where repeated logins make TOTP painful.
     ADMIN_MFA_ENFORCED: bool = True
+    # SEC-A2-003: what the admin per-JTI revocation denylist check does when
+    # Redis errors. False (default, today's behaviour) = fail OPEN — the token
+    # is accepted, the error is logged + counted, and DB token_version still
+    # enforces logout-all. True = fail CLOSED — the request gets a 503, so a
+    # single-session-revoked admin token cannot be used during a Redis outage,
+    # at the cost of every admin getting 503s for the outage's duration.
+    # Admin tokens only; rider/driver paths never read this.
+    ADMIN_REVOCATION_FAIL_CLOSED: bool = False
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 

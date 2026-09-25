@@ -294,13 +294,33 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
         # account-active check also still runs. Worst case during an outage: a
         # single explicitly-revoked token stays usable until it expires. Logged
         # loudly so the degraded decision is auditable.
+        #
+        # SEC-A2-003: settings.ADMIN_REVOCATION_FAIL_CLOSED (default False)
+        # flips this one check to fail CLOSED — 503 so the client retries,
+        # never 401, which would make the dashboard discard a token that is
+        # probably still valid. Read per request so tests and a restart pick
+        # it up; it is a plain attribute read, no I/O.
         try:
             _jti_revoked = await redis_get(f"admin:revoked:{jti}")
         except Exception as _revoke_err:
-            logger.error(
-                "[auth] admin revocation denylist unreachable (Redis down) — "
-                f"failing OPEN for jti={jti}; DB token_version still enforced: {_revoke_err}"
+            _fail_closed = bool(settings.ADMIN_REVOCATION_FAIL_CLOSED)
+            # loguru: traceback via .opt(exception=True), Sentry domain tag via
+            # .bind() — same shape as the idle-touch branches below.
+            logger.bind(domain="auth", user_id=user_id).opt(exception=True).error(
+                "[auth] admin revocation denylist unreachable (Redis down) — failing {} for jti={}; "
+                "DB token_version still enforced: {}",
+                "CLOSED (503)" if _fail_closed else "OPEN",
+                jti,
+                _revoke_err,
             )
+            _metric_inc(
+                "spinr_auth_revocation_check_error_total",
+                {"outcome": "fail_closed" if _fail_closed else "fail_open"},
+            )
+            if _fail_closed:
+                raise HTTPException(
+                    status_code=503, detail="Sign-in is temporarily unavailable. Please try again."
+                ) from _revoke_err
             _jti_revoked = None
         if _jti_revoked:
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")

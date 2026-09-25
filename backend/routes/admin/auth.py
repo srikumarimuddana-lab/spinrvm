@@ -20,6 +20,7 @@ try:
         bump_env_admin_token_version,
         get_env_admin_token_version,
     )
+    from ...utils.metrics import inc as _metric_inc
     from ...utils.password import hash_password, verify_password
     from ...utils.rate_limiter import default_limiter as limiter
     from ...utils.rate_limiter import get_real_client_ip
@@ -46,6 +47,7 @@ except ImportError:
         bump_env_admin_token_version,
         get_env_admin_token_version,
     )
+    from utils.metrics import inc as _metric_inc
     from utils.password import hash_password, verify_password
     from utils.rate_limiter import default_limiter as limiter
     from utils.rate_limiter import get_real_client_ip
@@ -969,16 +971,33 @@ async def _require_staff_from_token(
     # logged-out (or stolen-then-revoked) admin token must not be able to
     # start/confirm MFA enrollment or disable MFA. Fail OPEN on Redis
     # outage for the same reason as _verify_admin_payload — the
-    # authoritative logout-all/token_version control still runs below.
+    # authoritative logout-all/token_version control still runs below —
+    # unless ADMIN_REVOCATION_FAIL_CLOSED is on, in which case this helper
+    # fails CLOSED with the same 503 as _verify_admin_payload.
     jti = payload.get("jti")
     if jti:
         try:
             _jti_revoked = await redis_get(f"admin:revoked:{jti}")
         except Exception as _revoke_err:
+            _fail_closed = bool(settings.ADMIN_REVOCATION_FAIL_CLOSED)
             logger.error(
-                "[auth] admin revocation denylist unreachable (Redis down) — "
-                f"failing OPEN for jti={jti} on MFA helper; token_version still enforced: {_revoke_err}"
+                "[auth] admin revocation denylist unreachable (Redis down) — failing %s for jti=%s "
+                "on MFA helper; token_version still enforced: %s",
+                "CLOSED (503)" if _fail_closed else "OPEN",
+                jti,
+                _revoke_err,
+                exc_info=True,
+                extra={"domain": "auth", "user_id": user_id},
             )
+            _metric_inc(
+                "spinr_auth_revocation_check_error_total",
+                {"outcome": "fail_closed" if _fail_closed else "fail_open"},
+            )
+            if _fail_closed:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Sign-in is temporarily unavailable. Please try again.",
+                ) from _revoke_err
             _jti_revoked = None
         if _jti_revoked:
             raise HTTPException(status_code=401, detail="Invalid token")

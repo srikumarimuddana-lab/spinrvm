@@ -352,7 +352,9 @@ interface RideState {
   fetchRide: (rideId: string, opts?: { allowCleared?: boolean }) => Promise<void>;
   cancelRide: (reason?: string) => Promise<void>;
   simulateDriverArrival: () => Promise<void>;
-  fetchSavedAddresses: () => Promise<void>;
+  // Resolves with the list it stored ([] after a failure) so a caller can
+  // decide on fresh data without reading the store again.
+  fetchSavedAddresses: () => Promise<SavedAddress[]>;
   addSavedAddress: (address: Omit<SavedAddress, 'id' | 'user_id'>) => Promise<void>;
   updateSavedAddress: (id: string, patch: SavedAddressPatch) => Promise<void>;
   /** Throws on failure so the caller can tell the rider. */
@@ -1231,9 +1233,10 @@ export const useRideStore = create<RideState>((set, get) => ({
         // screens' .find/.filter calls, nor leave an older list showing.
         console.error('Error fetching addresses: unexpected response shape');
         set({ savedAddresses: [], savedAddressesLoadFailed: true });
-        return;
+        return [];
       }
       set({ savedAddresses: data as SavedAddress[], savedAddressesLoadFailed: false });
+      return data as SavedAddress[];
     } catch (err: unknown) {
       // PIPEDA: never spread the raw error body into logs — backend error
       // payloads can contain saved-address strings or user identifiers.
@@ -1242,6 +1245,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       // Clear rather than keep a list that may be stale — or, on a shared
       // phone, someone else's Home. Screens show a retry state instead.
       set({ savedAddresses: [], savedAddressesLoadFailed: true });
+      return [];
     }
   },
 

@@ -75,12 +75,13 @@ it('a non-array response does not crash and does not keep an old list', async ()
 it('a failed fetch clears the list and flags the failure; a later success resets it', async () => {
   useRideStore.setState({ savedAddresses: [HOME] as any });
   mockGet.mockRejectedValueOnce(new Error('network'));
-  await useRideStore.getState().fetchSavedAddresses();
+  await expect(useRideStore.getState().fetchSavedAddresses()).resolves.toEqual([]);
   expect(useRideStore.getState().savedAddresses).toEqual([]);
   expect(useRideStore.getState().savedAddressesLoadFailed).toBe(true);
 
   mockGet.mockResolvedValueOnce({ data: [GYM] });
-  await useRideStore.getState().fetchSavedAddresses();
+  // Resolves with the stored list so callers can decide on fresh data.
+  await expect(useRideStore.getState().fetchSavedAddresses()).resolves.toEqual([GYM]);
   expect(useRideStore.getState().savedAddresses).toEqual([GYM]);
   expect(useRideStore.getState().savedAddressesLoadFailed).toBe(false);
 });

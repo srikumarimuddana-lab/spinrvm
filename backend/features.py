@@ -46,6 +46,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .services.fare_service import _round as _fare_round
     from .utils.audit_logger import log_admin_action
     from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
@@ -58,6 +59,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from services.fare_service import _round as _fare_round
     from utils.audit_logger import log_admin_action
     from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
@@ -165,7 +167,7 @@ async def calculate_airport_fee(
 
     for area in areas:
         polygon = get_service_area_polygon(area)
-        fee = float(area.get("airport_fee", 0))
+        fee = _fare_f(_fare_d(area.get("airport_fee", 0) or 0))
         if fee <= 0 or len(polygon) < 3:
             continue
 
@@ -392,6 +394,7 @@ async def get_faqs(
     area_id = service_area_id
     try:
         if not area_id and lat is not None and lng is not None:
+            # nosemgrep: spinr-no-float-in-money -- GPS coordinates, not money.
             area = await resolve_service_area_for_point(float(lat), float(lng))
             area_id = area.get("id") if area else None
         scope = await resolve_area_scope(area_id)
@@ -798,13 +801,13 @@ async def calculate_all_fees(
                 "name": fee.get("fee_name"),
                 "type": fee_type,
                 "calc_mode": calc_mode,
-                "amount": float(amount),
-                "calculated_value": float(fee_value),
+                "amount": _fare_f(amount),
+                "calculated_value": _fare_f(fee_value),
             }
         )
 
     result["fees"] = fee_items
-    result["fees_total"] = float(_q2(fees_total))
+    result["fees_total"] = _fare_f(_q2(fees_total))
 
     # Calculate taxes — Decimal end-to-end so the receipt line items
     # reconcile to the cent. Saskatchewan rideshare is GST-only (5%), no PST
@@ -827,7 +830,7 @@ async def calculate_all_fees(
         nonlocal tax_total
         rate = _money(rate_value)
         amount = _q2(taxable_amount * rate / Decimal("100"))
-        tax_breakdown[label] = {"rate": float(rate), "amount": float(amount)}
+        tax_breakdown[label] = {"rate": _fare_f(rate), "amount": _fare_f(amount)}
         tax_total += amount
 
     if matched_area.get("hst_enabled"):
@@ -838,7 +841,7 @@ async def calculate_all_fees(
         if matched_area.get("pst_enabled", False):
             _apply_tax("PST", matched_area.get("pst_rate", 0))
 
-    result["tax_amount"] = float(_q2(tax_total))
+    result["tax_amount"] = _fare_f(_q2(tax_total))
     result["tax_breakdown"] = tax_breakdown
 
     return result
@@ -912,7 +915,12 @@ async def compute_fare_estimate(
         _matched_area=matched_area,
     )
 
-    grand_total = round(subtotal + fees_result["fees_total"] + fees_result["tax_amount"], 2)
+    # MONEY-006: Decimal sum + ROUND_HALF_UP (CLAUDE.md money rule), float only
+    # at the response boundary. fees_total/tax_amount arrive as floats from
+    # calculate_all_fees; _fare_d() goes via str() so they re-enter exactly.
+    grand_total = _fare_f(
+        _fare_round(fb.total_fare + _fare_d(fees_result["fees_total"]) + _fare_d(fees_result["tax_amount"]))
+    )
 
     return {
         "base_fare": _fare_f(fb.base_fare),
@@ -982,14 +990,19 @@ async def get_area_config(
     )
 
     # Build tax config
+    # Tax *rates* (percent) for the app's display cache, not money amounts —
+    # hence the nosemgrep on the three float() reads below.
     tax_config = {}
     if matched_area.get("hst_enabled"):
+        # nosemgrep: spinr-no-float-in-money
         tax_config = {"type": "HST", "rate": float(matched_area.get("hst_rate", 0))}
     else:
         taxes = []
         if matched_area.get("gst_enabled", True):
+            # nosemgrep: spinr-no-float-in-money
             taxes.append({"name": "GST", "rate": float(matched_area.get("gst_rate", 5.0))})
         if matched_area.get("pst_enabled", False):
+            # nosemgrep: spinr-no-float-in-money
             taxes.append({"name": "PST", "rate": float(matched_area.get("pst_rate", 0))})
         tax_config = {"type": "GST_PST", "taxes": taxes}
 
@@ -1008,7 +1021,7 @@ async def get_area_config(
                 "name": f.get("fee_name"),
                 "type": f.get("fee_type"),
                 "calc_mode": f.get("calc_mode", "flat"),
-                "amount": float(f.get("amount", 0)),
+                "amount": _fare_f(_fare_d(f.get("amount", 0) or 0)),
                 "description": f.get("description", ""),
                 "conditions": f.get("conditions", {}),
             }

@@ -316,6 +316,18 @@ class SettingsUpdateRequest(BaseModel):
     # max_simultaneous_offers above.
     max_candidate_pool: Optional[int] = Field(default=None, ge=50, le=500)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
+    # Migration 466. When true, a driver-app auto-decline sent on countdown
+    # expiry (reason "offer_expired") is handled as a missed offer, not a
+    # decline. Default off.
+    offer_expired_decline_as_miss_enabled: Optional[bool] = None
+    # Migration 468 — on-demand search window before auto-cancel. Capped at
+    # 300 while ride_offers keeps UNIQUE (ride_id, driver_id); see the migration.
+    ride_search_timeout_seconds: Optional[int] = Field(default=None, ge=90, le=300)
+    # Migration 469 — wider second search pass. No fare change.
+    dispatch_expanded_radius_enabled: Optional[bool] = None
+    dispatch_expanded_radius_after_seconds: Optional[int] = Field(default=None, ge=0, le=300)
+    dispatch_expanded_radius_multiplier: Optional[float] = Field(default=None, ge=1.0, le=3.0)
+    dispatch_expanded_radius_max_km: Optional[float] = Field(default=None, ge=1, le=100)
     use_eta_ranking: Optional[bool] = None
     # Hours of unreachability before the stale-intent reconciler flips a
     # driver's is_online=false (migration 146). Bounds mirror the DB CHECK.
@@ -554,6 +566,8 @@ class SettingsUpdateRequest(BaseModel):
     location_marker_write_gate_enabled: Optional[bool] = None
     p2_route_geometry_enabled: Optional[bool] = None
     rider_show_pickup_leg_enabled: Optional[bool] = None
+    # Migration 470 — rider-app "No drivers available right now" sheet. Public via GET /settings.
+    rider_no_drivers_sheet_enabled: Optional[bool] = None
     location_health_push_nudge_enabled: Optional[bool] = None
     stale_p3_autoclose_enabled: Optional[bool] = None
     route_booked_dropoff_anchor_enabled: Optional[bool] = None

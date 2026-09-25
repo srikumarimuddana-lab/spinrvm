@@ -187,6 +187,8 @@ export interface Ride {
   payment_status?: string;
   card_last4?: string;
   status: string;
+  /** Why a cancelled ride was cancelled, e.g. 'no_drivers_found' or 'rider_cancel'. */
+  cancellation_type?: string | null;
   pickup_otp: string;
   tip_amount?: string; // MoneyString
   corporate_account_id?: string | null;

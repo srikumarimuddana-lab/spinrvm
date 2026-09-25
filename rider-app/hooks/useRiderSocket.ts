@@ -8,6 +8,8 @@ import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
 import { RideStatus } from '../constants/rideStatus';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
+import { isNoDriversCancellation, NO_DRIVERS_FOUND } from '../utils/noDriversSignal';
+import { offerNoDriversPrompt, useNoDriversStore } from '../store/noDriversStore';
 import { queryClient, queryKeys } from '@shared/api/queryClient';
 
 /**
@@ -155,31 +157,43 @@ export function useRiderSocket() {
           rideState.currentRide?.id,
           rideState._clearedRideId,
         )) break;
-        const cancelMessages: Record<string, string> = {
-          driver_cancelled: 'Your driver has cancelled the ride. We apologize for the inconvenience.',
-          rider_cancelled: 'Your ride has been cancelled.',
-          noshow: `You were marked as a no-show. A $${data.noshow_fee?.toFixed(2) ?? '4.50'} fee has been charged.`,
-          auto_cancelled: 'No drivers were available. Please try again.',
-        };
-        showToast(
-          'Ride Cancelled',
-          cancelMessages[data.reason] || 'Your ride has been cancelled.',
-          data.reason === 'noshow' ? 'danger' : 'warning',
-        );
+        // No driver accepted in time: the "No drivers available" sheet
+        // (components/NoDriversSheetHost) explains it and offers Try again /
+        // Schedule, so skip the toast. Snapshot the ride before clearRide().
+        const showedNoDrivers = isNoDriversCancellation(data) &&
+          offerNoDriversPrompt(rideState.currentRide);
+        if (!showedNoDrivers) {
+          const cancelMessages: Record<string, string> = {
+            driver_cancelled: 'Your driver has cancelled the ride. We apologize for the inconvenience.',
+            rider_cancelled: 'Your ride has been cancelled.',
+            noshow: `You were marked as a no-show. A $${data.noshow_fee?.toFixed(2) ?? '4.50'} fee has been charged.`,
+            auto_cancelled: 'No drivers were available. Please try again.',
+          };
+          showToast(
+            'Ride Cancelled',
+            cancelMessages[data.reason] || 'Your ride has been cancelled.',
+            data.reason === 'noshow' ? 'danger' : 'warning',
+          );
+        }
         clearRide();
         router.replace('/(tabs)' as any);
         break;
       }
 
       // Driver didn't respond in time — backend is re-dispatching.
-      // R-P1-16: Show Alert first so the rider knows what happened,
-      // then refetch so the UI transitions back to "searching".
+      // With the no-drivers sheet on, no toast: in batch dispatch this fires
+      // every ~15 s (one per offer round) and read as a failure, while the
+      // searching screen already shows the steady "Looking for a driver"
+      // state. Switched off, keep the original toast (R-P1-16). Either way
+      // refetch so the UI settles back on "searching".
       case 'driver_timeout':
-        showToast(
-          'Driver Unavailable',
-          'The driver did not respond in time. Finding another driver\u2026',
-          'info',
-        );
+        if (!useNoDriversStore.getState().enabled) {
+          showToast(
+            'Driver Unavailable',
+            'The driver did not respond in time. Finding another driver\u2026',
+            'info',
+          );
+        }
         if (rideId) fetchRide(rideId);
         break;
 
@@ -191,10 +205,18 @@ export function useRiderSocket() {
           // #11) so the store can drop stale / out-of-order events. Omitted when
           // the backend didn't stamp one (older backend) — the store then
           // applies unconditionally, exactly as before.
+          const extra: Record<string, unknown> = {};
+          if (typeof data.version === 'number') extra.version = data.version;
+          // Carry the no-drivers cause onto the local ride so the searching
+          // screen's status effect can show the sheet if this event wins the
+          // race with ride_cancelled.
+          if (data.status === RideStatus.CANCELLED && isNoDriversCancellation(data)) {
+            extra.cancellation_type = NO_DRIVERS_FOUND;
+          }
           applyRideStatusFromWS(
             data.ride_id,
             data.status,
-            typeof data.version === 'number' ? { version: data.version } : undefined,
+            Object.keys(extra).length > 0 ? extra : undefined,
           );
           fetchRide(data.ride_id);
         }

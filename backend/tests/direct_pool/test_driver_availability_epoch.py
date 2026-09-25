@@ -300,15 +300,16 @@ def test_system_actor_pauses_without_current_session_or_controller(availability_
     ],
 )
 def test_system_actor_is_limited_to_known_sources_and_pause_actions(availability_db, session, action):
-    import psycopg2
-
     cur = availability_db
     _enable_v2(cur)
-    with pytest.raises(psycopg2.Error) as error:
-        _transition(cur, 0, action, "system-misuse", session=session)
-    assert error.value.pgcode == "22023"
+    # Migration 464 refuses an unlisted system source/action pair by returning
+    # UNAUTHORIZED_SESSION before the driver lock (owner decision 2026-09-25,
+    # CR-2026-094: keep the returned code rather than a 22023 raise).
+    assert _transition(cur, 0, action, "system-misuse", session=session) == {"code": "UNAUTHORIZED_SESSION"}
     cur.execute("SELECT online_epoch,controller_session_id FROM drivers WHERE id='avail-driver'")
     assert cur.fetchone() == (0, None)
+    cur.execute("SELECT count(*) FROM driver_availability_requests WHERE request_id='system-misuse'")
+    assert cur.fetchone()[0] == 0
 
 
 def test_system_stop_is_not_device_contact(availability_db):

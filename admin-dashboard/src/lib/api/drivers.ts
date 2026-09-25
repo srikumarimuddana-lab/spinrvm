@@ -674,8 +674,30 @@ export const getDriverStats = (params?: {
     }>(`/api/admin/drivers/stats?${sp.toString()}`);
 };
 
-export const updateDriver = (id: string, data: Record<string, any>) =>
-    request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+// CONCURRENCY-001: thrown when `PUT /admin/drivers/{id}` rejects a save
+// because the row's `updated_at` no longer matches the `expected_updated_at`
+// the caller sent (see backend/routes/admin/drivers.py admin_update_driver).
+// `request()` only exposes the backend's `detail` as a plain Error message
+// (no status code), so this matches on that literal text to give callers a
+// typed error to branch on instead of string-matching in the UI.
+export class DriverConflictError extends Error {
+    readonly status = 409;
+    constructor(message: string) {
+        super(message);
+        this.name = "DriverConflictError";
+    }
+}
+
+export const updateDriver = async (id: string, data: Record<string, any>) => {
+    try {
+        return await request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+    } catch (e: any) {
+        if (typeof e?.message === "string" && e.message.includes("changed by someone else")) {
+            throw new DriverConflictError(e.message);
+        }
+        throw e;
+    }
+};
 
 export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
     const { useAuthStore } = await import("@/store/authStore");

@@ -163,10 +163,14 @@ class TestDriverAction:
         audit = AsyncMock()
         notify = AsyncMock()
         with (
-            patch.object(admin_drivers.db_supabase, "get_driver_by_id", AsyncMock(return_value={**DRIVER, "status": "active"})),
+            patch.object(
+                admin_drivers.db_supabase, "get_driver_by_id", AsyncMock(return_value={**DRIVER, "status": "active"})
+            ),
             patch.object(admin_drivers.db_supabase, "update_one", update),
             patch.object(admin_drivers, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
-            patch.object(admin_drivers, "pause_driver_for_policy", AsyncMock(return_value={"code": "POLICY_STATE_CHANGED"})),
+            patch.object(
+                admin_drivers, "pause_driver_for_policy", AsyncMock(return_value={"code": "POLICY_STATE_CHANGED"})
+            ),
             patch.object(admin_drivers, "_log_driver_activity", activity),
             patch.object(admin_drivers, "log_admin_action", audit),
             patch.object(admin_drivers, "notify_driver_status_change", notify),
@@ -630,6 +634,101 @@ class TestUpdateDriver:
         ):
             resp = test_client.put("/api/admin/drivers/drv-1", json={"city": "Regina"})
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# admin_update_driver -- optimistic concurrency (CONCURRENCY-001)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateDriverOptimisticLock:
+    """PUT /admin/drivers/{id} accepts an optional `expected_updated_at`.
+
+    Matches the row's current `updated_at` -> normal write. Mismatches (or the
+    row moved between load and save) -> 409 rather than a silent overwrite.
+    Omitted entirely -> unchanged legacy behaviour (covered by TestUpdateDriver
+    above, none of which pass the field).
+    """
+
+    def test_expected_updated_at_match_writes_drivers_row(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock(return_value={**DRIVER, "city": "Regina"})) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1",
+                json={"city": "Regina", "expected_updated_at": "2026-09-20T10:00:00+00:00"},
+            )
+        assert resp.status_code == 200, resp.text
+        driver_call = [c for c in upd.await_args_list if c.args[0] == "drivers"][0]
+        # The lock is enforced as part of the same atomic write, not a
+        # separate read-then-compare.
+        assert driver_call.args[1] == {"id": "drv-1", "updated_at": "2026-09-20T10:00:00+00:00"}
+        assert driver_call.args[2]["city"] == "Regina"
+        assert "updated_at" in driver_call.args[2]  # bumped on the successful write
+        # expected_updated_at itself is never written as a driver column.
+        assert "expected_updated_at" not in driver_call.args[2]
+
+    def test_expected_updated_at_mismatch_returns_409_without_writing_users(self, test_client, super_admin_override):
+        driver_with_user = {**DRIVER, "user_id": "usr-1"}
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver_with_user, driver_with_user])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1",
+                json={
+                    "city": "Regina",
+                    "first_name": "New",
+                    "expected_updated_at": "2026-09-20T10:00:00+00:00",
+                },
+            )
+        assert resp.status_code == 409
+        assert "changed by someone else" in resp.json()["detail"]
+        # Only the (rejected) drivers write happened — first_name is mirrored
+        # on `drivers` so there was no separate `users` write to land here,
+        # but the ordering guard is exercised: the drivers write is attempted
+        # and rejected before anything else.
+        assert [c.args[0] for c in upd.await_args_list] == ["drivers"]
+
+    def test_expected_updated_at_race_with_deleted_driver_returns_404(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(side_effect=[DRIVER, None])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1",
+                json={"city": "Regina", "expected_updated_at": "2026-09-20T10:00:00+00:00"},
+            )
+        assert resp.status_code == 404
+
+    def test_expected_updated_at_wrong_type_400(self, test_client, super_admin_override):
+        resp = test_client.put(
+            "/api/admin/drivers/drv-1",
+            json={"city": "Regina", "expected_updated_at": 12345},
+        )
+        assert resp.status_code == 400
+
+    def test_expected_updated_at_omitted_keeps_legacy_ordering(self, test_client, super_admin_override):
+        """No `expected_updated_at` -> the drivers write is never filtered on
+        `updated_at`, matching pre-existing behaviour exactly."""
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.update_one", AsyncMock(return_value={**DRIVER, "city": "Regina"})) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("utils.vehicle_history.record_vehicle_changes", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.put("/api/admin/drivers/drv-1", json={"city": "Regina"})
+        assert resp.status_code == 200, resp.text
+        driver_call = [c for c in upd.await_args_list if c.args[0] == "drivers"][0]
+        assert driver_call.args[1] == {"id": "drv-1"}
+        assert "updated_at" not in driver_call.args[2]
 
 
 # ---------------------------------------------------------------------------

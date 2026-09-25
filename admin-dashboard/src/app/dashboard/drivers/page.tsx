@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, DriverConflictError, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { exportToCsv } from "@/lib/export-csv";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { useAuthStore } from "@/store/authStore";
 import { isPhotoFileTypeValid } from "@/lib/driverPhotoUploadSchema";
 import { workAuth, workAuthLocal } from "./_components/driver-detail-shared";
@@ -75,6 +76,10 @@ export default function DriversPage() {
     const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
     const [editing, setEditing] = useState(false);
     const [editForm, setEditForm] = useState<Record<string, any>>({});
+    // CONCURRENCY-001: the driver row's `updated_at` as of when the edit
+    // form was opened, sent back as `expected_updated_at` on save so the
+    // backend can detect another admin's edit landing in between.
+    const [editingLoadedAt, setEditingLoadedAt] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [allServiceAreas, setAllServiceAreas] = useState<any[]>([]);
     // Vehicle types catalogue + serviceAreaId → allowed type IDs map,
@@ -489,6 +494,7 @@ export default function DriversPage() {
             decal_generated_at: datetimeLocalValue(selected.decal_generated_at),
             decal_number: selected.decal_number || "",
         });
+        setEditingLoadedAt(selected.updated_at ?? null);
         setEditing(true);
     };
 
@@ -524,8 +530,12 @@ export default function DriversPage() {
         }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
+        // CONCURRENCY-001: send back the `updated_at` the form was loaded
+        // with so the backend can reject the save (409) if another admin's
+        // edit landed first, instead of silently overwriting it.
+        const payload = editingLoadedAt ? { ...changes, expected_updated_at: editingLoadedAt } : changes;
         try {
-            await updateDriver(selected.id, changes);
+            await updateDriver(selected.id, payload);
             // The backend derives is_citizen / is_permanent_resident from the
             // status, so mirror that here rather than leaving the old booleans
             // (and the consolidated projection) stale until the next refetch.
@@ -558,7 +568,35 @@ export default function DriversPage() {
                 setLiveStats(prev => prev ? { ...prev, license_number_last4: last4, license_number_on_file: true } : prev);
             }
             setEditing(false);
-        } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
+        } catch (e: any) {
+            if (e instanceof DriverConflictError) {
+                // Stale local edits are discarded rather than left open on
+                // top of data we know is out of date — "reload and try
+                // again" is the point of the 409, not "retry the same save".
+                const savedId = selected.id;
+                toast({
+                    title: "Driver changed by someone else",
+                    description: e.message,
+                    variant: "destructive",
+                    action: (
+                        <ToastAction
+                            altText="Reload driver"
+                            onClick={() => {
+                                loadDrivers().then((rows) => {
+                                    const fresh = (rows || []).find((r: any) => r.id === savedId);
+                                    if (fresh) setSelected((cur: any) => (cur?.id === savedId ? fresh : cur));
+                                });
+                            }}
+                        >
+                            Reload
+                        </ToastAction>
+                    ),
+                });
+                setEditing(false);
+            } else {
+                toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" });
+            }
+        } finally { setSaving(false); }
     };
 
     const [photoReviewing, setPhotoReviewing] = useState(false);

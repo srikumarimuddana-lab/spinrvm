@@ -1779,7 +1779,37 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     on a single driver row, so this handler must route each field to the table
     it actually exists on — writing ``email`` to ``drivers`` raises
     PGRST204 ("Could not find the 'email' column of 'drivers'") -> 500.
+
+    Optimistic concurrency (CONCURRENCY-001): an optional top-level
+    ``expected_updated_at`` may be included in the request body — the
+    ``drivers.updated_at`` value the admin's edit form was loaded with
+    (``backend/sql/02_add_updated_at.sql`` added the column with
+    ``DEFAULT now()``; it has no trigger, so it is bumped by application
+    code only — this handler is one of several call sites that do so). If
+    given, the write is rejected with 409 when the row has since changed
+    (another admin edited it first); the driver row's own current
+    ``updated_at`` is unaffected by the 409 so the caller can reload and
+    retry. If omitted, behaviour is unchanged from before this field
+    existed. It is never itself written as a driver field (it is not in
+    `allowed` below).
+
+    Known limitation: ``updated_at`` is a whole-row freshness marker, not an
+    "admin edited this" marker — it is also bumped by the driver's own app
+    (location pings while online, coalesced to ~1 write/3s per
+    docs/change-log/2026-08-27-driver-location-marker-write-gate.md; also
+    touched by utils/stale_intent_reconciler.py for is_online rows). Editing
+    a *currently online* driver's profile can therefore hit a false-positive
+    409 from that driver's own traffic, not another admin's edit — this is a
+    real gap, not covered by the current fix. Editing an offline/pending
+    driver (the common case: onboarding/compliance review) is unaffected,
+    since nothing else writes to an offline driver's row on a comparable
+    cadence. A follow-up that locks on a dedicated admin-edit-only timestamp
+    column instead of the shared `updated_at` would close this gap.
     """
+    expected_updated_at = updates.get("expected_updated_at")
+    if expected_updated_at is not None and not isinstance(expected_updated_at, str):
+        raise HTTPException(status_code=400, detail="expected_updated_at must be an ISO-8601 timestamp string")
+
     # Fields that live on the `users` account row.
     user_fields = {"first_name", "last_name", "email", "phone", "gender"}
     # Subset that exists ONLY on `users` (no mirror on `drivers`): these
@@ -1888,17 +1918,50 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         )
 
     try:
-        # Write the account row first: list/stats views prefer the user row
-        # over the driver mirror, so if the second write fails the surviving
-        # state is the canonical one, not a stale mirror.
-        if user_updates and user_id:
-            await db_supabase.update_one("users", {"id": user_id}, user_updates)
-        if driver_updates:
+        if expected_updated_at is not None:
+            # Optimistic-lock path: check the drivers row BEFORE the users
+            # row so a rejected edit never leaves a users-table change landed
+            # while the driver-row half 409s (avoids a partial write).
+            #
+            # Atomic compare-and-write: filter on the caller's expected
+            # `updated_at` rather than reading, comparing, then writing
+            # separately, so a concurrent edit landing in between cannot slip
+            # past the check (read-then-write would race here). Done even
+            # when driver_updates is empty (an email/gender-only edit) so the
+            # lock stays meaningful for that case too — otherwise the drivers
+            # row's freshness marker would never move and a stale expected
+            # value would keep matching.
+            #
             # license_number is Vault-encrypted at rest (_VAULT_PII_FIELDS,
             # routes/drivers/_shared.py) -- must be encrypted before every
             # write, same as the self-serve profile-update and bulk-import
-            # paths. This admin route previously wrote it as plaintext.
-            await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(driver_updates))
+            # paths.
+            driver_payload = await _encrypt_driver_pii(driver_updates)
+            driver_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            write_result = await db_supabase.update_one(
+                "drivers", {"id": driver_id, "updated_at": expected_updated_at}, driver_payload
+            )
+            if write_result is None:
+                # 0 rows matched: either the row is gone or updated_at moved.
+                # Re-read to tell those apart rather than assuming a conflict.
+                current = await db_supabase.get_driver_by_id(driver_id)
+                if not current:
+                    raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+                raise HTTPException(
+                    status_code=409,
+                    detail="This driver was changed by someone else. Reload and try again.",
+                )
+            if user_updates and user_id:
+                await db_supabase.update_one("users", {"id": user_id}, user_updates)
+        else:
+            # Legacy path, unchanged: write the account row first — list/stats
+            # views prefer the user row over the driver mirror, so if the
+            # second write fails the surviving state is the canonical one,
+            # not a stale mirror.
+            if user_updates and user_id:
+                await db_supabase.update_one("users", {"id": user_id}, user_updates)
+            if driver_updates:
+                await db_supabase.update_one("drivers", {"id": driver_id}, await _encrypt_driver_pii(driver_updates))
     except HTTPException:
         raise
     except Exception as e:

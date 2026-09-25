@@ -342,6 +342,16 @@ describe('notifeeService', () => {
     const alarmChannel = { id: ALARM, blocked: false };
     const postedChannel = (call = 0) => mockDisplayNotification.mock.calls[call][0].android.channelId;
 
+    // clearAllMocks keeps implementations, so an earlier test's persistent
+    // mockRejectedValue would make every post here add a fallback call and
+    // shift the call indices below (Codex review on #5778).
+    beforeEach(() => {
+      mockDisplayNotification.mockReset();
+      mockDisplayNotification.mockResolvedValue(undefined);
+      mockGetChannel.mockReset();
+      mockGetChannel.mockResolvedValue(null);
+    });
+
     it('posts on the alarm channel when the offer says alarm and the channel exists', async () => {
       mockGetChannel.mockResolvedValueOnce(alarmChannel);
       const { displayRideOfferNotification } = require('../../services/notifeeService');

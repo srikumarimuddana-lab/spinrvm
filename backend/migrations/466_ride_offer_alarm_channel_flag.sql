@@ -3,7 +3,7 @@
 -- that has the native ride-offers-alarm-v1 channel posts the minimised offer
 -- there (plays through silent/vibrate mode and Do Not Disturb's "alarms").
 -- Builds without that channel keep ride-offers-v3 (notification volume).
--- Operational rollback (no mobile release):
+-- Rollback (operational, no mobile release):
 -- UPDATE public.settings SET ride_offer_alarm_channel_enabled = false
 -- WHERE id = 'app_settings';
 -- Settings cache is 60s; the next offer after that carries ring_mode='notification'.

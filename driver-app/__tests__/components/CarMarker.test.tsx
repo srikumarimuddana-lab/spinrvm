@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Platform } from 'react-native';
+import { Animated, Platform } from 'react-native';
 import { Marker, AnimatedRegion } from 'react-native-maps';
 import { Image } from 'expo-image';
 import { CarMarker } from '../../components/CarMarker';
@@ -65,6 +65,13 @@ jest.mock('expo-image', () => {
   const ReactActual = require('react');
   return { Image: (props: any) => ReactActual.createElement('ExpoImage', props) };
 });
+
+// Controls the OS Reduce Motion setting as seen through the shared hook
+// (defaults to off, so every pre-existing test here is unaffected).
+let mockReduceMotion = false;
+jest.mock('@shared/hooks/useReduceMotion', () => ({
+  useReduceMotion: () => mockReduceMotion,
+}));
 
 const mockCaptureException = jest.fn();
 jest.mock('@shared/services/errorReporting', () => ({
@@ -911,5 +918,40 @@ describe('CarMarker — Android does not use the iOS rotate wrapper', () => {
     const { queryByTestId, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
     expect(queryByTestId('car-marker-ios-rotate')).toBeNull();
     unmount();
+  });
+});
+
+describe('CarMarker — pulsing ring respects Reduce Motion', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  let loopSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    loopSpy = jest.spyOn(Animated, 'loop');
+  });
+  afterEach(() => {
+    loopSpy.mockRestore();
+    mockReduceMotion = false;
+    jest.useRealTimers();
+  });
+
+  it('starts the ring pulse loop when Reduce Motion is off', () => {
+    const { unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#F59E0B', pulsing: true }} />,
+    );
+    expect(loopSpy).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('keeps the ring static (no loop) when Reduce Motion is on', () => {
+    mockReduceMotion = true;
+    const { unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#F59E0B', pulsing: true }} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(1400 * 3);
+    });
+    expect(loopSpy).not.toHaveBeenCalled();
+    expect(() => unmount()).not.toThrow();
   });
 });

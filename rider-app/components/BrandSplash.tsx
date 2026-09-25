@@ -382,9 +382,9 @@ export default function BrandSplash({
           style={[styles.mark, markStyle]}
         />
 
-        {/* font-scale-lock: decorative splash shown for about two seconds.
-            The tagline and provenance use a fixed lineHeight tuned to stop
-            descender clipping; a scaled font would reintroduce it. */}
+        {/* font-scale-lock: decorative splash shown for about two seconds;
+            brand dressing, not information, positioned absolutely around the
+            animated mark. */}
         <Animated.Text
           testID="brand-splash-tagline"
           allowFontScaling={false}

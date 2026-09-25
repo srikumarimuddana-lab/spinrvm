@@ -6,12 +6,20 @@
  * Code under test: shared/components/SafetyOverlay.tsx
  */
 import React from 'react';
-import { Alert, Linking, Share as RNShare } from 'react-native';
+import { Alert, Animated, Linking, Share as RNShare } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafetyOverlay } from '@shared/components/SafetyOverlay';
 import api from '@shared/api/client';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+
+// Controls the OS Reduce Motion setting as seen through the shared hook
+// (defaults to off, so every pre-existing test here is unaffected).
+let mockReduceMotion = false;
+jest.mock('@shared/hooks/useReduceMotion', () => ({
+  useReduceMotion: () => mockReduceMotion,
+}));
+
 
 // react-native's real <Modal> pulls RCTModalHostViewNativeComponent's
 // flow-typed native spec through babel-plugin-codegen, which this repo's
@@ -191,5 +199,34 @@ describe('SafetyOverlay', () => {
     expect(getByText(/Couldn't get the link/)).toBeTruthy();
     expect(shareSpy).not.toHaveBeenCalled();
     expect(Alert.alert).not.toHaveBeenCalled();
+  });
+});
+
+describe('SafetyOverlay — location dot respects Reduce Motion', () => {
+  let loopSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    loopSpy = jest.spyOn(Animated, 'loop');
+  });
+  afterEach(() => {
+    loopSpy.mockRestore();
+    mockReduceMotion = false;
+  });
+
+  it('pulses the location dot when Reduce Motion is off', async () => {
+    render(<SafetyOverlay visible rideId="ride-1" onClose={jest.fn()} onTrigger={jest.fn()} />);
+    await flush();
+    expect(loopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the location dot steady when Reduce Motion is on', async () => {
+    mockReduceMotion = true;
+    const { getByText } = render(
+      <SafetyOverlay visible rideId="ride-1" onClose={jest.fn()} onTrigger={jest.fn()} />,
+    );
+    await flush();
+    expect(loopSpy).not.toHaveBeenCalled();
+    // The text equivalent of the pulse is still shown.
+    expect(getByText('LIVE')).toBeTruthy();
   });
 });

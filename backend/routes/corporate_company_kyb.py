@@ -184,6 +184,11 @@ async def kyb_submit(
         if settings.get("corporate_kyb_refuses_closed_company", True):
             expected_status = company.get("status")
 
+    # Known, accepted gap: the document metadata write below is NOT behind the
+    # compare-and-set, so a close landing in the race window can still stamp
+    # kyb_document_url/kyb_submitted_at on the now-closed row (the status flip
+    # below still refuses with 409). Staff-only metadata, no money or access
+    # effect; see docs/change-log/2026-09-25-kyb-decision-closed-guard.md §4.
     updated = await set_kyb_document(company_id=company_id, path=path)
     if not updated:
         logger.error("kyb submit: set_kyb_document returned no row for company %s", company_id)

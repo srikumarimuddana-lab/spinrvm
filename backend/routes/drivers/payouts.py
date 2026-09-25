@@ -1,10 +1,9 @@
-"""Bank accounts, Stripe Connect onboarding, standard and instant payouts.
+"""Bank accounts, Stripe Connect onboarding and payouts (weekly only; the
+instant payout routes are retired and answer 410).
 
 Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
-
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import earnings
 from ._deps import (  # noqa: F401
@@ -34,7 +33,6 @@ from ._deps import (  # noqa: F401
     uuid,
 )
 from ._shared import (  # noqa: F401
-    _instant_payout_area_verdict,
     _money_str,
     _vault_decrypt,
     serialize_doc,
@@ -71,35 +69,9 @@ class PayoutRequest(BaseModel):
     )
 
 
-class InstantPayoutRequest(BaseModel):
-    # Lower floor than standard payouts because the fee floor below makes
-    # micro-cashouts uneconomical on the platform side anyway; ceiling is
-    # Stripe's documented Instant Payout cap of $5,000 USD/CAD per request.
-    amount: Decimal = Field(
-        ...,
-        ge=Decimal("5.00"),
-        le=Decimal("5000.00"),
-        decimal_places=2,
-        description="Instant payout must be between $5.00 and $5,000.00",
-    )
-
-
-# Instant payout fee model: 1.5% of gross, with a $0.50 floor and $15 ceiling.
-# Matches Uber's Instant Pay and Lyft Express Pay fee structures within
-# rounding. Standard scheduled payouts are still free (zero fee).
-INSTANT_PAYOUT_FEE_PCT = Decimal("0.015")
-INSTANT_PAYOUT_MIN_FEE = Decimal("0.50")
-INSTANT_PAYOUT_MAX_FEE = Decimal("15.00")
-
-
-def compute_instant_payout_fee(amount: Decimal) -> Decimal:
-    """Fee charged on an instant payout. Caller subtracts to get net."""
-    pct = (amount * INSTANT_PAYOUT_FEE_PCT).quantize(Decimal("0.01"))
-    if pct < INSTANT_PAYOUT_MIN_FEE:
-        return INSTANT_PAYOUT_MIN_FEE
-    if pct > INSTANT_PAYOUT_MAX_FEE:
-        return INSTANT_PAYOUT_MAX_FEE
-    return pct
+# Spinr pays drivers weekly only (owner decision 2026-09-25). The instant
+# payout routes below stay mounted and answer 410 with this message.
+_INSTANT_PAYOUT_GONE_DETAIL = "Instant payouts are not offered. Earnings are paid automatically every week."
 
 
 @router.get("/bank-account")
@@ -829,132 +801,13 @@ def _require_sin_for_payout(driver: dict) -> None:
         )
 
 
-async def _require_instant_payout_enabled(driver: dict) -> dict:
-    """Block instant payout when the driver's service area has it disabled.
-    Returns the service-area row (the daily cap reads its timezone).
-
-    Per-service-area kill switch (migration 314). The kill switch stays
-    opt-out per market (DEFAULT TRUE), but it fails closed on a driver whose
-    area cannot be resolved (ROADMAP N22): no service_area_id, or one that
-    matches no row. Both used to pass straight through, so a switch ops had
-    flipped off for a market never reached those drivers — and a driver can
-    set their own service_area_id via PUT /drivers/me without it being
-    checked against service_areas.
-
-    The rule itself lives in ``_shared._instant_payout_area_verdict`` so the
-    balance endpoint's ``instant_payout_available`` flag reaches the same
-    verdict."""
-    service_area, refusal = await _instant_payout_area_verdict(driver)
-    if refusal == "no_service_area":
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Instant payouts need a service area on your driver profile. "
-                "Your earnings are paid out automatically every Sunday."
-            ),
-        )
-    if refusal == "disabled_in_area":
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Instant payouts are not available in your service area. "
-                "Your earnings are paid out automatically every Sunday."
-            ),
-        )
-    return service_area
-
-
-# Instant-payout rows that moved no money: excluded from the daily cap sum.
-# Every other status (reserved, transfer_completed, completed, stranded) has
-# money in flight or already gone, so it counts.
-_INSTANT_CAP_NO_MONEY_STATUSES = frozenset({"failed", "reversed"})
-# Hitting this many rows today means the sum may be truncated, so the cap
-# check fails closed rather than under-count (each row is >= $5.00).
-_INSTANT_CAP_ROW_LIMIT = 500
-
-
-def _instant_cap_day_start_utc(service_area: dict) -> datetime:
-    """Start of "today" for the daily cap, as a UTC instant.
-
-    The module had no day-boundary logic before N22, so "today" is the
-    driver's service-area calendar day (service_areas.timezone, NOT NULL
-    DEFAULT 'America/Regina', migration 105), falling back to UTC when the
-    value is missing or not a valid IANA name."""
-    tz_name = service_area.get("timezone")
-    try:
-        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning(
-            "instant payout cap: invalid service-area timezone, using UTC",
-            extra={"service_area_id": service_area.get("id")},
-        )
-        tz = timezone.utc
-    local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    return local_midnight.astimezone(timezone.utc)
-
-
-async def _require_within_instant_payout_daily_cap(
-    driver: dict, service_area: dict, amount: Decimal, settings: dict
-) -> None:
-    """Reject an instant payout that would take the driver past
-    settings.instant_payout_daily_cap_cad for today (ROADMAP N22, migration
-    473). NULL cap = no cap and no extra query — behaviour before N22.
-
-    Runs before the payout row is reserved and before any Stripe call, so a
-    rejection never transfers anything. Residual race: the partial unique
-    index (migration 250) allows one in-flight instant payout per driver, so
-    a second request can only slip past this sum if the first reserves, runs
-    both Stripe calls and reaches a terminal status inside the few ms between
-    this read and the second request's reserve INSERT."""
-    raw_cap = settings.get("instant_payout_daily_cap_cad")
-    if raw_cap in (None, ""):
-        return
-    cap = Decimal(str(raw_cap))
-
-    rows = await db_supabase.get_rows(
-        "payouts",
-        {
-            "driver_id": driver["id"],
-            "payout_type": "instant",
-            "created_at": {"$gte": _instant_cap_day_start_utc(service_area).isoformat()},
-        },
-        columns="amount,status",
-        limit=_INSTANT_CAP_ROW_LIMIT,
-    )
-    if len(rows) >= _INSTANT_CAP_ROW_LIMIT:
-        logger.error(
-            "instant payout cap: row limit hit, failing closed",
-            extra={"driver_id": driver["id"], "rows": len(rows)},
-        )
-        raise HTTPException(status_code=429, detail="Daily instant payout limit reached. Try again tomorrow.")
-
-    used = sum(
-        (Decimal(str(r.get("amount") or 0)) for r in rows if r.get("status") not in _INSTANT_CAP_NO_MONEY_STATUSES),
-        Decimal("0"),
-    )
-    if used + amount > cap:
-        remaining = max(cap - used, Decimal("0"))
-        logger.info(
-            "instant payout rejected by daily cap",
-            extra={"driver_id": driver["id"], "cap": str(cap), "used": str(used), "requested": str(amount)},
-        )
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"Instant payouts are limited to ${_money_str(cap)} per day. "
-                f"You can cash out up to ${_money_str(remaining)} more today. "
-                "The rest of your balance is paid out automatically every Sunday."
-            ),
-        )
-
-
 @router.post("/payouts")
 async def request_payout(
     current_user: dict = Depends(get_current_user),
 ):
     """Standard cashout is disabled — payouts are now Spinr-controlled and
     run automatically every Sunday for all eligible drivers (>= $10 balance).
-    Drivers can still use instant payouts (fee-bearing) for early access."""
+    Instant payouts are not offered (owner decision 2026-09-25)."""
     # CR-4104 / A34 dual-run cutover guard: block payout for a
     # legacy-imported driver an operator has confirmed is still active on
     # the old app (drivers.dual_run_hold, migration 327). Checked first so
@@ -967,9 +820,9 @@ async def request_payout(
     #
     # Note (deliberate scope note, see PR description): this endpoint is
     # already unconditionally disabled below (410) for every caller — the
-    # live payout paths are request_instant_payout (this file) and the
-    # weekly auto_payout.py background loop, neither of which this guard
-    # touches. This check is added here because it is the exact location
+    # only live payout path is the weekly auto_payout.py background loop
+    # (request_instant_payout is retired and answers 410), which this guard
+    # does not touch. This check is added here because it is the exact location
     # named by CR-4104 and keeps the guard's presence consistent and
     # future-proof if standard cashout is ever re-enabled.
     _driver_row = (lambda _r: _r[0] if _r else None)(
@@ -984,8 +837,8 @@ async def request_payout(
             action_hint="Contact support",
         )
     # Old app builds surface this string in a toast that clamps at 140 chars
-    # (shared/utils/toastMessage.ts) — keep it under that, and don't advertise
-    # instant payout while the driver app has no instant-payout UI to tap.
+    # (shared/utils/toastMessage.ts) — keep it under that. Instant payouts are
+    # not offered, so don't advertise them here.
     raise HTTPException(
         status_code=410,
         detail=(
@@ -1117,7 +970,7 @@ async def _request_payout_legacy(
         )
     except Exception as terminal_exc:
         # Terminal write failed after Stripe transferred money. Reverse the
-        # transfer so the books match — mirrors request_instant_payout.
+        # transfer so the books match.
         if stripe_payout_id:
             logger.exception("Terminal write failed after Stripe transfer; reversing")
             reversal_ok = await _attempt_transfer_reversal(stripe_payout_id, stripe_secret, payout_id)
@@ -1156,8 +1009,9 @@ async def _request_payout_legacy(
 async def _attempt_transfer_reversal(transfer_id: str, stripe_secret: str, payout_id: str) -> bool:
     """Best-effort compensating reversal of a Stripe Transfer.
 
-    Called when the payout step of an instant payout fails after the
-    transfer step has already moved money to the connect account. Uses an
+    Called by the legacy standard payout path when its terminal write fails
+    after the transfer has already moved money to the connect account. (The
+    instant payout path that also used it is retired.) Uses an
     idempotency key tied to the payout row so a retry of this same payout
     never issues a second reversal. Returns True iff Stripe accepted the
     reversal — the caller writes "reversed" vs "stranded" accordingly.
@@ -1181,284 +1035,20 @@ async def _attempt_transfer_reversal(transfer_id: str, stripe_secret: str, payou
 
 
 @router.post("/payouts/instant")
-@idempotent_endpoint(scope="driver_instant_payout")
-async def request_instant_payout(
-    req: InstantPayoutRequest,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
-):
-    """Same-day cashout via Stripe Instant Payout (Uber-style Instant Pay).
+async def request_instant_payout(current_user: dict = Depends(get_current_user)):
+    """Retired: Spinr pays drivers weekly only (owner decision 2026-09-25).
 
-    Money-safety contract:
-      Instant payout is two Stripe calls — Transfer (platform → connect),
-      then Payout(method=instant). If the second fails after the first
-      succeeds, money is stranded in the connect account. To keep the
-      books consistent:
-        1. Generate the payout_id BEFORE the first Stripe call so every
-           Stripe call carries a per-payout idempotency key — a retry on
-           the same payout row never double-transfers or double-pays-out.
-        2. INSERT the payout row immediately after the transfer succeeds
-           with status='transfer_completed' and stripe_transfer_id set;
-           a crash between transfer and payout still leaves a recoverable
-           DB record.
-        3. If the payout step fails, attempt Transfer.create_reversal().
-           On reversal success → row status='reversed'. On reversal
-           failure → status='stranded' and requires_manual_review=true so
-           the ops dashboard surfaces it.
-
-    Fee model is regulator-friendly: shown in the receipt, separate line
-    item, never hidden. Standard scheduled payouts remain free (see
-    request_payout).
-    """
-    driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
-    )
-    if not driver:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
-
-    # Per-service-area kill switch: ops can disable instant payouts in
-    # specific markets without a code deploy (migration 314).
-    service_area = await _require_instant_payout_enabled(driver)
-
-    # CRA: rideshare drivers must be GST/HST-registered from their first fare.
-    _require_gst_for_payout(driver)
-    # CRA T4A: the SIN (held by Stripe) must be on file before any payout.
-    _require_sin_for_payout(driver)
-
-    fee = compute_instant_payout_fee(req.amount)
-    net_amount = req.amount - fee
-    if net_amount <= Decimal("0"):
-        # Defence in depth: the request schema's ge=5.00 already prevents
-        # this since the floor fee is 0.50, but guard anyway in case fee
-        # config changes later.
-        raise HTTPException(status_code=400, detail="Fee exceeds payout amount")
-
-    balance = await earnings.get_driver_balance(current_user)
-    if req.amount > Decimal(balance.get("payable_balance", "0")):
-        raise HTTPException(status_code=400, detail="Insufficient funds")
-
-    stripe_account_id = driver.get("stripe_account_id")
-    account = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
-    )
-
-    # Instant Payout requires a Stripe Connect account with a debit-card
-    # external_account on file — Stripe rejects bank-only setups with a
-    # generic 400. Surface the eligibility check up-front so the driver
-    # sees a clear message instead of a Stripe error.
-    if not stripe_account_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Instant payout requires Stripe Connect onboarding. "
-            "Please complete onboarding from the Payouts screen.",
-        )
-
-    try:
-        from ...settings_loader import get_app_settings
-    except ImportError:
-        from settings_loader import get_app_settings  # type: ignore
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
-    if not stripe_secret:
-        raise HTTPException(status_code=503, detail="Payouts temporarily unavailable")
-
-    # ROADMAP N22 velocity cap: last check before the reserve INSERT, so a
-    # rejection writes no row and makes no Stripe call. NULL cap = no-op.
-    await _require_within_instant_payout_daily_cap(driver, service_area, req.amount, settings)
-
-    payout_id = str(uuid.uuid4())
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    # WS-7 (finding 4): reserve-then-transfer. Insert the payout row BEFORE
-    # any Stripe call so the partial unique index (migration 250) blocks a
-    # concurrent instant-payout request from also reserving.
-    payout = {
-        "id": payout_id,
-        "driver_id": driver["id"],
-        "amount": req.amount,
-        "fee": fee,
-        "net_amount": net_amount,
-        "payout_type": "instant",
-        "status": "reserved",
-        "stripe_transfer_id": None,
-        "stripe_payout_id": None,
-        "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_last4") if account else "****",
-        "created_at": now_iso,
-    }
-    try:
-        await db_supabase.insert_one("payouts", payout)
-    except Exception as reserve_exc:
-        _exc_str = str(reserve_exc).lower()
-        if "unique" in _exc_str or "duplicate" in _exc_str or "23505" in _exc_str:
-            raise HTTPException(
-                status_code=409,
-                detail="A payout is already in progress. Please wait for it to complete.",
-            ) from reserve_exc
-        logger.exception("Failed to reserve instant payout row")
-        raise HTTPException(
-            status_code=500,
-            detail="Instant payout failed. Please try again.",
-        ) from reserve_exc
-
-    # ── Step 1: Transfer platform → connect account ───────────────────
-    try:
-        transfer = await asyncio.to_thread(
-            lambda: stripe.Transfer.create(
-                amount=dollars_to_cents(req.amount),
-                currency="cad",
-                destination=stripe_account_id,
-                api_key=stripe_secret,
-                idempotency_key=f"instant-payout-transfer-{payout_id}",
-            )
-        )
-        stripe_transfer_id = transfer.id
-    except Exception as e:
-        logger.exception("Stripe transfer step failed for instant payout")
-        try:
-            await db_supabase.update_one(
-                "payouts",
-                {"id": payout_id},
-                {
-                    "status": "failed",
-                    "failure_reason": str(e)[:500],
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-        except Exception:
-            logger.exception("Failed to mark reserved instant payout as failed")
-        raise HTTPException(
-            status_code=500,
-            detail="Instant payout failed. Please try again or contact support.",
-        ) from e
-
-    # Update reserved → transfer_completed so a crash between transfer and
-    # payout still leaves a recoverable record of the in-flight transfer.
-    try:
-        await db_supabase.update_one(
-            "payouts",
-            {"id": payout_id},
-            {
-                "status": "transfer_completed",
-                "stripe_transfer_id": stripe_transfer_id,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception as persist_exc:
-        logger.exception("Failed to update instant payout to transfer_completed")
-        reversal_ok = await _attempt_transfer_reversal(stripe_transfer_id, stripe_secret, payout_id)
-        new_status = "reversed" if reversal_ok else "stranded"
-        try:
-            await db_supabase.update_one(
-                "payouts",
-                {"id": payout_id},
-                {"status": new_status, "requires_manual_review": not reversal_ok},
-            )
-        except Exception:
-            logger.error(
-                "STRANDED instant payout — persist failed AND reversal status write failed. payout_id=%s driver_id=%s amount=%s",
-                payout_id,
-                driver["id"],
-                req.amount,
-            )
-        raise HTTPException(
-            status_code=500,
-            detail="Instant payout failed. Please try again or contact support.",
-        ) from persist_exc
-
-    # ── Step 2: Payout on connect account ─────────────────────────────
-    try:
-        # Stripe deducts its own ~1% fee from the platform side (separate
-        # from the fee we charge the driver). Pass stripe_account so the
-        # call runs in the connected account's context.
-        payout_obj = await asyncio.to_thread(
-            lambda: stripe.Payout.create(
-                amount=dollars_to_cents(net_amount),
-                currency="cad",
-                method="instant",
-                api_key=stripe_secret,
-                stripe_account=stripe_account_id,
-                idempotency_key=f"instant-payout-{payout_id}",
-            )
-        )
-        stripe_payout_id = payout_obj.id
-    except Exception as payout_exc:
-        # Payout failed; reverse the transfer to keep funds on the platform
-        # side. The row stays in DB either way — flagged for manual review
-        # when reversal also fails so stranded money is visible to ops.
-        logger.exception("Stripe payout step failed; attempting transfer reversal")
-        reversal_ok = await _attempt_transfer_reversal(stripe_transfer_id, stripe_secret, payout_id)
-        new_status = "reversed" if reversal_ok else "stranded"
-        try:
-            await db_supabase.update_one(
-                "payouts",
-                {"id": payout_id},
-                {
-                    "status": new_status,
-                    "failure_reason": str(payout_exc)[:500],
-                    "requires_manual_review": not reversal_ok,
-                },
-            )
-        except Exception:
-            # The row exists with status=transfer_completed; we couldn't
-            # update it to reflect the failure. Log loudly — the partial
-            # state is still recoverable from Stripe.
-            logger.exception("Failed to flag instant payout row after payout failure")
-        raise HTTPException(
-            status_code=500,
-            detail="Instant payout failed. Please try again or contact support.",
-        ) from payout_exc
-
-    # ── Step 3: Mark row as completed ─────────────────────────────────
-    try:
-        await db_supabase.update_one(
-            "payouts",
-            {"id": payout_id},
-            {"status": RideStatus.COMPLETED, "stripe_payout_id": stripe_payout_id},
-        )
-    except Exception:
-        # Money landed in the driver's bank but we couldn't flip the row
-        # to "completed". The row stays as "transfer_completed" — a
-        # follow-up reconciliation job will fix the status. Don't unwind
-        # the payout (the driver has the money).
-        logger.exception(
-            "Failed to mark instant payout completed (money already disbursed)",
-        )
-
-    # Dual-run cutover monitoring (A34/P3.1): count only after Step 2
-    # succeeded — the money has actually left for the driver's bank, so a
-    # later transfer reversal can no longer occur and the counter can't
-    # overcount. Flag-gated in the helper; never raises.
-    try:
-        from ...utils.dual_run_monitor import record_legacy_payout
-    except ImportError:
-        from utils.dual_run_monitor import record_legacy_payout
-    await record_legacy_payout(driver, payout_id, req.amount)
-
-    payout["status"] = RideStatus.COMPLETED
-    payout["stripe_payout_id"] = stripe_payout_id
-    return {"success": True, "payout": serialize_doc(payout)}
+    Kept as a route so an old or scripted client gets a clear 410 instead of
+    a 404. Returns before any database or Stripe call; the request body, if
+    any, is ignored. Earnings are paid by the weekly auto-payout loop
+    (utils/auto_payout.py)."""
+    raise HTTPException(status_code=410, detail=_INSTANT_PAYOUT_GONE_DETAIL)
 
 
 @router.get("/payouts/instant/quote")
-async def get_instant_payout_quote(
-    amount: Decimal = Query(..., ge=Decimal("5.00"), le=Decimal("5000.00")),
-    current_user: dict = Depends(get_current_user),
-):
-    """Quote the fee + net for an instant payout before the driver confirms.
-
-    Driver app shows: "Cash out $50.00 now — $0.75 fee, $49.25 to your bank"
-    Reading the quote from the server (not computing it client-side) means
-    a fee-schedule change rolls out without a mobile release.
-    """
-    fee = compute_instant_payout_fee(amount)
-    net = amount - fee
-    return {
-        "amount": _money_str(amount),
-        "fee": _money_str(fee),
-        "net_amount": _money_str(net),
-        "payout_type": "instant",
-    }
+async def get_instant_payout_quote(current_user: dict = Depends(get_current_user)):
+    """Retired with POST /payouts/instant — always 410, no fee is quoted."""
+    raise HTTPException(status_code=410, detail=_INSTANT_PAYOUT_GONE_DETAIL)
 
 
 @router.get("/payouts")

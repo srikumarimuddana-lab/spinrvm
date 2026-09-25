@@ -322,7 +322,6 @@ class ServiceAreaUpdateRequest(BaseModel):
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
     vehicle_cascade_map: Optional[List[Any]] = None
-    instant_payout_enabled: Optional[bool] = None
 
     @field_validator("dispatch_geo_provider")
     @classmethod
@@ -831,7 +830,6 @@ async def admin_update_service_area(
         "rider_referral_terms",
         "driver_referral_terms",
         "vehicle_cascade_map",
-        "instant_payout_enabled",
     ]:
         val = getattr(area, field)
         if val is not None:

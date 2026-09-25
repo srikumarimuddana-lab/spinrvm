@@ -675,7 +675,8 @@ async def _issue_company_email_session(
             await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
             user.update(_verify_patch)
             user["current_session_id"] = session_id
-            await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
+            if await _login_supersedes_other_devices(request, driver_session_enabled):
+                await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -1170,7 +1171,11 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                         _session_update,
                     )
                 existing_user["current_session_id"] = session_id
-                if previous_session_id and str(previous_session_id) != session_id:
+                if (
+                    previous_session_id
+                    and str(previous_session_id) != session_id
+                    and await _login_supersedes_other_devices(request, driver_session_enabled)
+                ):
                     try:
                         await revoke_session(str(previous_session_id))
                     except Exception:
@@ -1489,7 +1494,8 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
         if not driver_session_enabled:
             await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
         user["current_session_id"] = session_id
-        await _cleanup_superseded_session(user_id, previous_session_id, session_id)
+        if await _login_supersedes_other_devices(request, driver_session_enabled):
+            await _cleanup_superseded_session(user_id, previous_session_id, session_id)
     except Exception as e:
         # Same defect verify_otp and firebase_auth_login guard against: without
         # a persisted current_session_id, should_tombstone() can never match the
@@ -1727,7 +1733,11 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             ) from e
         user["current_session_id"] = session_id
 
-    if previous_session_id and str(previous_session_id) != session_id:
+    if (
+        previous_session_id
+        and str(previous_session_id) != session_id
+        and await _login_supersedes_other_devices(request, driver_session_enabled)
+    ):
         try:
             await revoke_session(str(previous_session_id))
             try:
@@ -2358,6 +2368,32 @@ async def _begin_driver_session_if_driver(user: dict, session_id: str) -> tuple[
     if driver:
         return await _begin_driver_session(user, session_id)
     return False, int(user.get("token_version") or 0), user.get("current_session_id")
+
+
+LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG = "login_supersede_driver_app_only_enabled"
+
+
+async def _login_supersedes_other_devices(request: Request, driver_session_enabled: bool) -> bool:
+    """Whether this login signs the account's other devices out.
+
+    Flag off or unreadable: every login does, as before. Flag on: only a
+    driver-app login does (X-App-Platform: driver). A rider-app, company
+    portal, or header-less login no longer tombstones the driver's session,
+    kicks its socket, or takes the driver offline. When the driver
+    single-session rollout owns this login it keeps its own rule.
+    """
+    if driver_session_enabled:
+        return True
+    try:
+        app_settings = await get_app_settings()
+    except Exception:
+        logger.error(
+            "login: could not read %s; signing other devices out", LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG, exc_info=True
+        )
+        return True
+    if (app_settings or {}).get(LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG) is not True:
+        return True
+    return request.headers.get("X-App-Platform") == "driver"
 
 
 async def _cleanup_superseded_session(user_id: str, previous_session_id: Optional[str], session_id: str) -> None:

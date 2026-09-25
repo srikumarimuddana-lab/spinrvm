@@ -14,7 +14,7 @@
 ## 1. Issue / gap identified
 
 - **Sort state:** sortable admin tables showed their current sort only with a chevron icon, so screen readers couldn't tell which column was sorted or in which direction.
-- **Search inputs:** 15 admin search inputs were identified only by placeholder text, which is not a reliable accessible name. The earlier audit counted "14 of 23"; a whole-element scan found 15 of 25.
+- **Search inputs:** 15 admin search inputs were identified only by placeholder text, which is not a reliable accessible name. The earlier audit counted "14 of 23"; a whole-element scan found 15 of 25, and the review found one more (a template-literal placeholder).
 
 ## 2. Root cause
 
@@ -22,9 +22,9 @@
 
 ## 3. Fix / remediation
 
-- **Sort state:** `SortableHead` sets `aria-sort` on its header cell. The active column gets `"ascending"` or `"descending"`; the others get `"none"`.
+- **Sort state:** `SortableHead` sets `aria-sort` (`"ascending"` or `"descending"`) on the sorted column's header cell only. It is omitted on unsorted columns, following the WAI-ARIA APG sortable-table pattern, so screen readers don't announce every other header as "not sorted".
 - **Search inputs:**
-  - 15 inputs get an `aria-label` naming what they search, for example "Search rides" or "Search audit logs".
+  - 16 inputs get an `aria-label` naming what they search, for example "Search rides" or "Search audit logs".
   - The company-portal address field uses its existing visible label text ("Pickup" or "Drop-off") through `aria-label={label}`, because its `<label>` wasn't associated with the input.
 
 **Not in this change:** sticky table headers. The admin tables sit inside horizontal-scroll containers, and those stop `position: sticky` from following the page scroll. That needs its own table-layout change and has been moved in the plan.
@@ -46,8 +46,8 @@
 | File path | What changed | Why |
 |---|---|---|
 | `admin-dashboard/src/components/ui/sortable-table.tsx` | `aria-sort` on the header cell | Announce the sort state |
-| `admin-dashboard/src/components/ui/sortable-table.test.tsx` | New: 4 tests | none / ascending / descending, plus that the header still sorts |
-| 15 files with search inputs[^files] | `aria-label` on the search input | Accessible name |
+| `admin-dashboard/src/components/ui/sortable-table.test.tsx` | New: 4 tests | omitted / ascending / descending, plus that the header still sorts |
+| 15 files with search inputs[^files] | `aria-label` on 16 search inputs (two on `cloud-messaging/page.tsx`) | Accessible name |
 
 [^files]: `data-transfer/EntitySearchTable.tsx`, `support-tickets/tickets/page.tsx`, `audit-logs/page.tsx`, `safety/page.tsx`, `drivers/_components/driver-rides-tab.tsx`, `promotions/page.tsx`, `corporate-accounts/page.tsx`, `rides/_components/ride-list.tsx`, `support/_tabs/{lost-and-found,complaints,tickets,flags}.tsx`, `faqs/page.tsx`, `cloud-messaging/page.tsx`, `company-portal/[id]/book/page.tsx`.
 
@@ -78,7 +78,15 @@
 - [x] **Typecheck:** `tsc --noEmit` passes.
 - [x] **Production build:** `npm run build` (`next build`) succeeds.
 - [x] **Lint:** ESLint on the touched files matches before exactly: 0 errors and 46 warnings, all pre-existing.
-- [ ] **Accessibility review:** `spinr-accessibility-reviewer` is running. The outcome will be recorded before merge.
+- [x] **Accessibility review:** `spinr-accessibility-reviewer` ran on the diff (code-read only).
+  - **Blocker:** none.
+  - **Should-fix, fixed:** the compose-message recipient search on `cloud-messaging/page.tsx` (a second input on that page) was missed and now has a label.
+  - **Nit, adopted:** `aria-sort` is omitted on unsorted headers, per the APG, instead of `"none"`. `driver-list-table.tsx` has its own hand-rolled `"none"` convention, which this change leaves alone.
+  - **Confirmed:**
+    - all labels match what each input actually filters
+    - no class or style changes
+    - no baselined page renders a changed `SortableHead`
+    - the rides-page input change is attribute-only
 
 ## 10. What was NOT verified
 

@@ -164,6 +164,7 @@
 | File path | What changed | Why |
 |---|---|---|
 | `backend/migrations/479_admin_money_action_caps.sql` | cap, threshold, `admin_dispute_refunds_enabled` columns + comments + rollback | Settings storage, all off by default |
+| `backend/migrations/477_disputes_resolution_columns.sql` | adds `requested_amount`, `original_fare` NUMERIC(10,2), `resolution` TEXT and `refund_result` JSONB to `disputes`, all nullable, with comments and rollback | production lacked the columns that `routes/disputes.py` create and resolve write, so every dispute create and resolve would have returned 500 |
 | `backend/routes/admin/settings.py` | 3 model fields; `_SUPER_ADMIN_ONLY_MONEY_FIELDS` + value-compare gate | Settable; super_admin-only to change (B) |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Snapshot gains 3 columns | Drift guard rule |
 | `backend/services/admin_money_caps.py` | Cap/alert service; counts only `refund_issued` dispute rows | N23 control |

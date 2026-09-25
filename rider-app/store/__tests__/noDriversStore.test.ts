@@ -16,6 +16,7 @@ import {
   useNoDriversStore,
   offerNoDriversPrompt,
   prepareRebookDraft,
+  raiseNoDriversPromptAfterResume,
   type NoDriversPrompt,
 } from '../noDriversStore';
 
@@ -148,6 +149,43 @@ describe('prepareRebookDraft', () => {
     useRideStore.setState({ currentRide: { ...ride('ride-9'), status: 'searching' } } as any);
     prepareRebookDraft(prompt);
     expect(useRideStore.getState().currentRide?.id).toBe('ride-9');
+  });
+});
+
+describe('raiseNoDriversPromptAfterResume', () => {
+  const searching = { ...ride(), status: 'searching', cancellation_type: null };
+
+  it('raises the prompt and retires the ride when it ended for no drivers', async () => {
+    useRideStore.setState({ currentRide: searching } as any);
+    mockApi.get.mockResolvedValueOnce({ data: ride(), status: 200 } as any);
+
+    await expect(raiseNoDriversPromptAfterResume(searching)).resolves.toBe(true);
+
+    expect(mockApi.get).toHaveBeenCalledWith('/rides/ride-1');
+    expect(useNoDriversStore.getState().prompt?.rideId).toBe('ride-1');
+    expect(useRideStore.getState().currentRide).toBeNull();
+  });
+
+  it('works when fetchActiveRide already cleared the local ride', async () => {
+    mockApi.get.mockResolvedValueOnce({ data: ride(), status: 200 } as any);
+    await expect(raiseNoDriversPromptAfterResume(searching)).resolves.toBe(true);
+    expect(useNoDriversStore.getState().prompt?.rideId).toBe('ride-1');
+  });
+
+  it('does nothing for a rider cancel', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: { ...ride(), cancellation_type: 'rider_cancel' }, status: 200,
+    } as any);
+    await expect(raiseNoDriversPromptAfterResume(searching)).resolves.toBe(false);
+    expect(useNoDriversStore.getState().prompt).toBeNull();
+  });
+
+  it('skips the lookup when nothing was searching, or a newer ride took over', async () => {
+    await expect(raiseNoDriversPromptAfterResume(null)).resolves.toBe(false);
+    await expect(raiseNoDriversPromptAfterResume({ ...searching, status: 'driver_accepted' })).resolves.toBe(false);
+    useRideStore.setState({ currentRide: { ...searching, id: 'ride-9' } } as any);
+    await expect(raiseNoDriversPromptAfterResume(searching)).resolves.toBe(false);
+    expect(mockApi.get).not.toHaveBeenCalled();
   });
 });
 

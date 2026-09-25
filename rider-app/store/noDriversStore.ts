@@ -13,7 +13,9 @@
  * `currentRide.id === rideId` check) do that before calling in here.
  */
 import { create } from 'zustand';
+import api from '@shared/api/client';
 import { useRideStore } from './rideStore';
+import { isNoDriversCancellation } from '../utils/noDriversSignal';
 
 export interface NoDriversPlace {
   address: string;
@@ -87,6 +89,36 @@ export function offerNoDriversPrompt(ride: RideAddresses | null | undefined): bo
     pickup: { address: ride.pickup_address ?? '', lat: ride.pickup_lat, lng: ride.pickup_lng },
     dropoff: { address: ride.dropoff_address ?? '', lat: ride.dropoff_lat, lng: ride.dropoff_lng },
   });
+  return true;
+}
+
+/**
+ * Foreground resume: /rides/active only says "no active ride", not why, and
+ * fetchActiveRide() then clears the local ride — so a rider who reopens the
+ * app after the no-drivers cancel would get no explanation. Given the ride
+ * that was searching before that check, look it up once and raise the prompt
+ * if it ended for no drivers. Returns true when the prompt was raised.
+ * Errors propagate to the caller.
+ */
+export async function raiseNoDriversPromptAfterResume(
+  rideBefore: { id?: string; status?: string } | null | undefined,
+): Promise<boolean> {
+  if (!rideBefore?.id) return false;
+  if (rideBefore.status !== 'searching' && rideBefore.status !== 'driver_assigned') return false;
+  // A newer ride replaced it meanwhile — not the ride on screen any more.
+  const now = useRideStore.getState().currentRide;
+  if (now && now.id !== rideBefore.id) return false;
+  const res = await api.get<RideAddresses & { status?: string; cancellation_type?: string | null }>(
+    `/rides/${rideBefore.id}`,
+  );
+  const ride = res?.data;
+  if (ride?.status !== 'cancelled' || !isNoDriversCancellation(ride)) return false;
+  if (!offerNoDriversPrompt(ride)) return false;
+  // The server confirmed the cancel; retire the local copy the same way the
+  // ride_cancelled WS path does (fetchActiveRide keeps it when an older
+  // ride's cancel latch is still set).
+  const rides = useRideStore.getState();
+  if (rides.currentRide?.id === rideBefore.id) rides.clearRide();
   return true;
 }
 

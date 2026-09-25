@@ -371,7 +371,7 @@ export default function HomeScreen() {
   // drop-off and open the booking flow (the rider still confirms pickup);
   // not saved yet → Saved Places to add it. "Saved" opens Saved Places.
   // Flag off → the previous behaviour (all three just open search).
-  const handleQuickAction = (type: string) => {
+  const handleQuickAction = async (type: string) => {
     if (!savedPlaceShortcutsEnabled) {
       openNewSearch();
       return;
@@ -380,7 +380,15 @@ export default function HomeScreen() {
       router.push('/saved-places' as any);
       return;
     }
-    const place = (savedAddresses ?? []).find(type === 'home' ? isHomePlace : isWorkPlace);
+    const matches = type === 'home' ? isHomePlace : isWorkPlace;
+    let place = (savedAddresses ?? []).find(matches);
+    if (!place) {
+      // The list may not have loaded yet (tap right after launch) or may be
+      // stale (saved on another device): check the server once before
+      // telling the rider they have no Home/Work.
+      const fresh = await fetchSavedAddresses();
+      place = (fresh ?? []).find(matches);
+    }
     if (!place) {
       showToast(
         type === 'home' ? 'Add your home' : 'Add your work',

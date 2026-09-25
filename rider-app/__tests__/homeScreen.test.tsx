@@ -206,6 +206,7 @@ beforeEach(() => {
   };
   mockAiChatState = { enabled: true, mode: 'enabled', loadConfig: jest.fn() };
   mockFetchActiveRide.mockResolvedValue({ active: false });
+  mockFetchSavedAddresses.mockResolvedValue([]);
   mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
   mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
   mockGetCurrentPositionAsync.mockResolvedValue(LOCATION);
@@ -334,8 +335,12 @@ describe('HomeScreen', () => {
 
     it('Home with no saved Home opens Saved Places to add one', async () => {
       mockRideState.savedAddresses = [WORK];
+      mockFetchSavedAddresses.mockResolvedValue([WORK]);
       const r = await renderScreen();
-      act(() => { findButtonByLabel(r, 'Go home').props.onPress(); });
+      mockFetchSavedAddresses.mockClear();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      // Checked the server once before deciding there is no Home.
+      expect(mockFetchSavedAddresses).toHaveBeenCalledTimes(1);
       expect(mockPush).toHaveBeenCalledWith('/saved-places');
       expect(mockSetDropoff).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith('Add your home', 'Save your home address to book it in one tap.', 'info');
@@ -344,8 +349,28 @@ describe('HomeScreen', () => {
     it('Work with no saved Work opens Saved Places', async () => {
       mockRideState.savedAddresses = [];
       const r = await renderScreen();
-      act(() => { findButtonByLabel(r, 'Go to work').props.onPress(); });
+      await act(async () => { await findButtonByLabel(r, 'Go to work').props.onPress(); });
       expect(mockPush).toHaveBeenCalledWith('/saved-places');
+    });
+
+    it('a Home tap before the saved list has loaded uses the freshly fetched list', async () => {
+      // Store still empty (initial fetch not back yet); the server has a Home.
+      mockRideState.savedAddresses = [];
+      mockFetchSavedAddresses.mockResolvedValue([HOME]);
+      const r = await renderScreen();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockSetDropoff).toHaveBeenCalledWith({ address: '1 Test St', lat: 50.1, lng: -104.1, place_id: 'pid_h' });
+      expect(mockPush).toHaveBeenCalledWith('/search-destination');
+      expect(mockPush).not.toHaveBeenCalledWith('/saved-places');
+      expect(mockShowToast).not.toHaveBeenCalled();
+    });
+
+    it('a Home tap with the Home already loaded does not refetch', async () => {
+      mockRideState.savedAddresses = [HOME];
+      const r = await renderScreen();
+      mockFetchSavedAddresses.mockClear();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockFetchSavedAddresses).not.toHaveBeenCalled();
     });
 
     it('Saved opens Saved Places', async () => {

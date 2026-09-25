@@ -2360,7 +2360,7 @@ async def logout(
         own_chain_session = None
         if token_session_id and await _driver_app_only_sessions_enabled():
             presented_refresh = refresh_token_from_cookie or (body.refresh_token if body else None)
-            own_chain_session = await refresh_token_session_id(presented_refresh)
+            own_chain_session = await refresh_token_session_id(presented_refresh, user_id=current_user["id"])
         if should_tombstone(token_session_id, current_user.get("current_session_id")) or (
             own_chain_session is not None and own_chain_session == str(token_session_id)
         ):
@@ -2442,7 +2442,13 @@ LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG = "login_supersede_driver_app_only_enabled"
 
 
 async def _driver_app_only_sessions_enabled() -> bool:
-    """The flag; unreadable counts as off (today's shared-session behaviour)."""
+    """The flag; unreadable counts as off (today's shared-session behaviour).
+
+    Mutually exclusive with driver_single_session_enabled: that rollout's
+    begin_driver_session RPC runs on every driver-account login and revokes
+    the account's rider and driver refresh tokens, so per-login sessions
+    cannot hold while it is on. When both are set, single-session wins.
+    """
     try:
         app_settings = await get_app_settings()
     except Exception:
@@ -2450,7 +2456,16 @@ async def _driver_app_only_sessions_enabled() -> bool:
             "login: could not read %s; treating it as off", LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG, exc_info=True
         )
         return False
-    return (app_settings or {}).get(LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG) is True
+    app_settings = app_settings or {}
+    if app_settings.get(LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG) is not True:
+        return False
+    if app_settings.get("driver_single_session_enabled"):
+        logger.error(
+            "login: %s is ignored while driver_single_session_enabled is on; turn one off",
+            LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG,
+        )
+        return False
+    return True
 
 
 async def _login_session_policy(request: Request, driver_session_enabled: bool) -> tuple[bool, bool]:

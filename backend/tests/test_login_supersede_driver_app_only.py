@@ -60,6 +60,8 @@ def _settings(enabled: bool):
         ({FLAG: True}, "rider", False, (True, False)),
         ({FLAG: True}, None, False, (True, False)),  # portal / old build
         ({FLAG: True}, "rider", True, (True, True)),  # single-session rollout keeps its rule
+        # Mutually exclusive: with single-session on, this flag is ignored.
+        ({FLAG: True, "driver_single_session_enabled": True}, "rider", False, (False, True)),
     ],
 )
 async def test_login_session_policy(settings, platform, driver_session_enabled, expected):
@@ -288,8 +290,11 @@ async def test_issue_refresh_token_stores_session_id_only_when_given(session_id)
 async def test_refresh_token_session_id_lookup():
     from backend.utils import refresh_tokens
 
-    with patch.object(refresh_tokens.db, "find_one", AsyncMock(return_value={"session_id": "s1"})):
+    with patch.object(refresh_tokens.db, "find_one", AsyncMock(return_value={"session_id": "s1", "user_id": "u1"})):
         assert await refresh_tokens.refresh_token_session_id("raw") == "s1"
+        assert await refresh_tokens.refresh_token_session_id("raw", user_id="u1") == "s1"
+        # Someone else's refresh token never vouches for this user's session.
+        assert await refresh_tokens.refresh_token_session_id("raw", user_id="u2") is None
     with patch.object(refresh_tokens.db, "find_one", AsyncMock(side_effect=RuntimeError("db down"))):
         assert await refresh_tokens.refresh_token_session_id("raw") is None
     assert await refresh_tokens.refresh_token_session_id("") is None

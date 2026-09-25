@@ -756,12 +756,13 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         logger.error(f"reuse-cascade: audit_logs insert failed (user={user_id}): {e}")
 
 
-async def refresh_token_session_id(raw: str) -> Optional[str]:
+async def refresh_token_session_id(raw: str, *, user_id: Optional[str] = None) -> Optional[str]:
     """The session id stored on the refresh-token row for ``raw``, if any.
 
     Holding the raw refresh token proves the caller owns that chain, so logout
     can tombstone the chain's own session without touching other devices.
-    Lookup failures answer None (logout falls back to its current-session rule).
+    With ``user_id``, a row belonging to anyone else answers None. Lookup
+    failures answer None (logout falls back to its current-session rule).
     """
     if not raw:
         return None
@@ -770,7 +771,9 @@ async def refresh_token_session_id(raw: str) -> Optional[str]:
     except Exception:
         logger.opt(exception=True).error("refresh_token_session_id lookup failed")
         return None
-    session_id = (row or {}).get("session_id")
+    if not row or (user_id is not None and str(row.get("user_id") or "") != str(user_id)):
+        return None
+    session_id = row.get("session_id")
     return str(session_id) if session_id else None
 
 

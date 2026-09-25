@@ -406,11 +406,15 @@ def _run_interleaved(rows, schedule, req_a, req_b):
 
 
 def _patch_req(address_id, **fields):
-    return lambda mod: mod.update_saved_address(address_id, mod.SavedAddressUpdate(**fields), current_user=RIDER)
+    return lambda mod: mod.update_saved_address(
+        address_id, mod.SavedAddressUpdate(**fields), current_user=RIDER, x_app_platform="rider"
+    )
 
 
 def _post_req(**fields):
-    return lambda mod: mod.create_saved_address(mod.SavedAddressCreate(**{**PAYLOAD, **fields}), current_user=RIDER)
+    return lambda mod: mod.create_saved_address(
+        mod.SavedAddressCreate(**{**PAYLOAD, **fields}), current_user=RIDER, x_app_platform="rider"
+    )
 
 
 def _row(row_id, icon, created_at, name="Place"):
@@ -468,3 +472,60 @@ class TestConcurrentSaves:
             rows, ["A"] * 4 + ["B"] * 4, _patch_req("A", icon="home"), _patch_req("B", icon="home")
         )
         assert [r["id"] for r in _homes(final)] == ["B"]
+
+
+# -- Rider-app-only singleton rule (edge-case review 2026-09-25) -----------
+#
+# Driver-app builds before this fix save every address with icon "home";
+# the one-Home rule must not make each driver save replace the last one.
+
+
+@pytest.fixture
+def as_user():
+    """Override the authenticated user for one test (used with `client`)."""
+    import dependencies
+    from backend.server import app
+
+    def _set(user):
+        app.dependency_overrides[dependencies.get_current_user] = lambda: user
+
+    return _set
+
+
+DRIVER = {**RIDER, "is_driver": True}
+
+
+class TestDriverAppSavesAreNotSingletons:
+    def test_driver_app_home_save_twice_keeps_both_rows(self, client, table):
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
+        for _ in range(2):
+            r = client.post("/api/v1/addresses", json=PAYLOAD, headers={"X-App-Platform": "driver"})
+            assert r.status_code == 200
+        assert table.insert.call_count == 2
+        table.update.assert_not_called()
+        table.delete.assert_not_called()
+
+    def test_headerless_driver_falls_back_to_is_driver(self, client, table, as_user):
+        as_user(DRIVER)
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
+        r = client.post("/api/v1/addresses", json=PAYLOAD)
+        assert r.status_code == 200
+        table.insert.assert_called_once()
+        table.delete.assert_not_called()
+
+    def test_rider_app_still_replaces_even_for_a_dual_role_user(self, client, table, as_user):
+        as_user(DRIVER)
+        table.responses["select"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
+        table.responses["update"] = [{"id": "old_home", "user_id": "user_1", **PAYLOAD}]
+        r = client.post("/api/v1/addresses", json=PAYLOAD, headers={"X-App-Platform": "rider"})
+        assert r.status_code == 200
+        assert r.json()["id"] == "old_home"
+        table.insert.assert_not_called()
+
+    def test_driver_app_patch_to_home_deletes_nothing(self, client, table):
+        row = {"id": "a1", "user_id": "user_1", "name": "Cafe", "icon": "other"}
+        table.responses["select"] = [row]
+        table.responses["update"] = [{**row, "icon": "home"}]
+        r = client.patch("/api/v1/addresses/a1", json={"icon": "home"}, headers={"X-App-Platform": "driver"})
+        assert r.status_code == 200
+        table.delete.assert_not_called()

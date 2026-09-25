@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 try:
     from .. import db_supabase
@@ -46,6 +46,25 @@ def _singleton_type(name: Optional[str], icon: Optional[str]) -> Optional[str]:
     return label if label in _SINGLETON_TYPES else None
 
 
+def _singletons_apply(current_user: dict, app_platform: Optional[str]) -> bool:
+    """True when the one-Home/one-Work rule applies to this request.
+
+    It is a rider-app rule. Driver-app builds before the 2026-09-25 fix save
+    every driver address with icon "home", so applying the rule there would
+    make each driver save silently replace the previous one. The app is told
+    apart by the X-App-Platform header both apps send on every request via
+    shared/api/client.ts setAppIdentity() (the same header
+    notifications._audience_filter and rides/safety.py already read); only
+    when it is missing or unrecognised do we fall back to the users-row
+    is_driver flag. Trusted-but-unauthenticated: forging it only changes how
+    the caller's own rows are de-duplicated.
+    """
+    platform = (app_platform or "").strip().lower()
+    if platform in ("rider", "driver"):
+        return platform == "rider"
+    return not current_user.get("is_driver", False)
+
+
 async def _drop_other_singletons(user_id: str, place_type: str, keep_id: str) -> None:
     # One filtered delete scoped to this rider. Also collapses any
     # pre-existing duplicate Home/Work rows onto keep_id.
@@ -73,6 +92,7 @@ async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
 async def create_saved_address(
     request: SavedAddressCreate,
     current_user: dict = Depends(get_current_user),
+    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform"),
 ):
     user_id = current_user["id"]
     _, sanitized_address = sanitize_string(request.address)
@@ -88,7 +108,7 @@ async def create_saved_address(
         raise HTTPException(status_code=400, detail=_MISMATCH_DETAIL)
 
     name = sanitize_string(request.name)[1]
-    place_type = _singleton_type(name, request.icon)
+    place_type = _singleton_type(name, request.icon) if _singletons_apply(current_user, x_app_platform) else None
     address = SavedAddress(
         user_id=user_id,
         name=name,
@@ -132,6 +152,7 @@ async def update_saved_address(
     address_id: str,
     request: SavedAddressUpdate,
     current_user: dict = Depends(get_current_user),
+    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform"),
 ):
     user_id = current_user["id"]
     existing = await db_supabase.find_one("saved_addresses", {"id": address_id, "user_id": user_id})
@@ -168,7 +189,9 @@ async def update_saved_address(
     elif "place_id" in sent:
         update["place_id"] = sent["place_id"]
 
-    place_type = _singleton_type(update.get("name", existing.get("name")), update.get("icon", existing.get("icon")))
+    place_type = None
+    if _singletons_apply(current_user, x_app_platform):
+        place_type = _singleton_type(update.get("name", existing.get("name")), update.get("icon", existing.get("icon")))
     if place_type:
         update["icon"] = place_type
         # Only a row becoming this type drops the others — cleanup first,

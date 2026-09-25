@@ -200,6 +200,18 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # only once that ARN is configured.
     "/api/v1/webhooks/stripe",
     "/api/v1/webhooks/twilio-inbound",
+    # Public website assistant (spinr.ca chat widget). A browser surface, so like
+    # the tracking page it can never attach X-Firebase-AppCheck — without this,
+    # every visitor's message got 401 "App Check token required" (production
+    # access log, 2026-09-25). The endpoint is anonymous by design
+    # (routes/ai.py ai_public_chat): a "web" turn reaches only the read-only
+    # search_faqs/get_company_info tools, it is gated by the
+    # ai_public_chat_enabled kill switch, and rate limited 6/min per IP
+    # (ai_public_chat_limit). App Check was never its control. Accepted risk:
+    # abuse costs LLM spend only; flip ai_public_chat_enabled off to stop it.
+    # Prefix safety: the only route under this prefix is POST /ai/public-chat;
+    # every other /api/v1/ai/* route keeps App Check and its JWT dependency.
+    "/api/v1/ai/public-chat",
 )
 
 

@@ -1435,11 +1435,49 @@ async def admin_create_ride(
             # matching.py's exclusion set that actually applies to this call
             # site.)
             _ADMIN_FCM_EXCLUDE = {"rider_name"}
+            # N13 (docs/audit/clean-sheet/ROADMAP.md, SKB-001): honour the
+            # same minimal_fcm_offer_payload_enabled flag matching.py's
+            # batch-dispatch path uses (migration 424) rather than a second,
+            # divergent on/off switch for the same class of data. Gated, not
+            # unconditional: the driver-app's background/killed FCM handler
+            # (driver-app/services/backgroundMessaging.ts) keys off
+            # `data.type === 'new_ride_assignment'` generically — it does
+            # not distinguish an admin-direct-assignment push from a
+            # batch-dispatch offer push — and it reads pickup/dropoff
+            # coordinates straight off the FCM `data` payload unless
+            # `data.offer_minimal === 'true'` tells it to refetch instead
+            # (GET /drivers/rides/{ride_id}/offer, ride_reads.py's
+            # get_ride_offer, whose `is_direct_assigned` branch already
+            # explicitly serves this admin-assignment shape). Stripping
+            # these fields here without also setting the `offer_minimal`
+            # marker would silently default the driver-app's background
+            # offer card to a (0,0) pin instead of triggering that refetch
+            # (see backgroundMessaging.ts's own comment on that exact
+            # failure mode) — gating keeps this path byte-for-byte identical
+            # to today while the flag is off, and identical in shape to
+            # matching.py's minimal payload once it's on.
+            _admin_minimal_offer_payload = bool(_admin_settings.get("minimal_fcm_offer_payload_enabled", False))
+            if _admin_minimal_offer_payload:
+                _ADMIN_FCM_EXCLUDE = _ADMIN_FCM_EXCLUDE | {
+                    "pickup_lat",
+                    "pickup_lng",
+                    "dropoff_lat",
+                    "dropoff_lng",
+                    "rider_rating",
+                }
+            _admin_fcm_data = {
+                k: str(v) for k, v in dispatch_payload.items() if v is not None and k not in _ADMIN_FCM_EXCLUDE
+            }
+            if _admin_minimal_offer_payload:
+                # Same marker matching.py sets — lets backgroundMessaging.ts
+                # tell a minimal admin-assign payload apart from a full one
+                # without inferring it from field absence.
+                _admin_fcm_data["offer_minimal"] = "true"
             await send_push_notification(
                 driver["user_id"],
                 "New ride request",
                 f"{ride_doc['pickup_address']} → {ride_doc['dropoff_address']}",
-                {k: str(v) for k, v in dispatch_payload.items() if v is not None and k not in _ADMIN_FCM_EXCLUDE},
+                _admin_fcm_data,
                 priority="dispatch",
                 target_app="driver",
             )

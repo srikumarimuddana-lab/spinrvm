@@ -1,8 +1,18 @@
 # Git history rewrite plan — driver_bank_sin_migration.sql / driver_csv_migration.sql
 
-**Status: PREPARED, NOT EXECUTED.** Per explicit owner instruction (2026-08-31): write the
-plan/script and stop short of force-pushing. Nothing below has been run against the real
-remote. This document is the thing to review/hand off before anyone pulls the trigger.
+**Status (updated 2026-09-13): PARTIALLY EXECUTED.** `main` plus the 6 branches that had open
+PRs at the time were rewritten and force-pushed on 2026-09-11 — not through this document's
+exact script, but by the repository owner running `git filter-repo` directly in a local WSL
+terminal, following commands prepared and verified step-by-step by an AI-assisted session (the
+session-side tooling used to prepare this document is blocked from running `git push --force`
+or `git filter-repo` itself — see "Update (2026-09-05)" below and `docs/audit/breach-record.md`
+Incident 1, item 1, for the full account of how and why). **544 other branches remain
+unrewritten as of 2026-09-13** — a complete, every-branch recount (not a sample) found in
+`docs/audit/2026-09-13-pii-branch-exposure-full-scan.md`. This document's remaining value is
+the plan for finishing those 544 branches; the commands below are still correct for that, with
+one caveat noted in "Remaining scope" below: take a **fresh** mirror clone before re-running
+them, not the one from any earlier attempt, since `main` is already clean and an old mirror
+would not reflect that.
 
 ## Why this is needed
 
@@ -118,6 +128,43 @@ Claude Code session, either:
 - Run the commands directly outside Claude Code (a local terminal, any machine with git and
   network access) — this was always the actual point of "hand off exact reproducible
   commands" in prior status updates on this item.
+
+**Update (2026-09-13) — main's rewrite happened, by the path above; 544 branches remain:**
+The repository owner did execute this operation on 2026-09-11, in a local WSL terminal, for
+`main` and the 6 branches that had open PRs open at that moment (`docs/ai-security-assessment-2026-09-08`
+and 5 `dependabot/*` dependency-bump branches) — confirmed independently in
+`docs/audit/breach-record.md` Incident 1, item 1, by re-fetching all 7 refs from GitHub after
+the push and finding zero commits touching either file. This document's own "Recommended tool"
+section above was followed for the mechanics; the routing around this session's tool-level
+push/filter-repo block was a human running the prepared commands directly, not a change to
+that block.
+
+**Remaining scope, corrected 2026-09-13:** a complete, every-branch scan (not a sample —
+`docs/audit/2026-09-13-pii-branch-exposure-full-scan.md`) found **544 branches** still contain
+one or both files in reachable history, out of 1,394 total. None of the 7 already-rewritten
+refs is among them (verified). The commands in "Recommended tool" above already do the right
+thing for this — `--mirror` clones every ref, `--invert-paths` strips both paths from every
+commit that ever touched them, and `git push origin --force --all` pushes every ref — but two
+things matter for whoever runs them next:
+
+1. **Take a fresh mirror clone now, not an old one.** `main` is already clean; a mirror taken
+   before 2026-09-11 would still have the old, PII-bearing `main` and would force-push it back
+   over the already-fixed history. A mirror taken today only needs to rewrite the 544 branches
+   that are still exposed — `main` and the 7 already-clean refs pass through
+   `--invert-paths` as a no-op (there's nothing left on those paths to strip).
+2. **544 is a lot of refs to force-push at once.** Many are very likely stale/merged/abandoned
+   (this repo has many short-lived AI-session branches — the count is in
+   `docs/audit/2026-09-13-pii-branch-exposure-full-scan.md`, whose branch-name list is redacted
+   there pending remediation; reproduce it via that doc's Methodology section if needed for
+   planning). Consider identifying and deleting confirmed-merged/stale branches first to
+   shrink the blast radius before running `filter-repo` + the `--force --all` push against the
+   survivors — fewer live refs to force-push means less risk of clobbering someone's
+   in-progress work by accident. This is a judgment call for whoever executes it, not something
+   this document decides.
+
+The GitHub purge request draft referenced in step 5 below should be updated to include the
+commit SHAs from *this* rewrite too, once it's run — not just the 2026-09-11 `main`/6-branch
+one already covered by `docs/incidents/2026-09-12-github-purge-request-driver-pii-history-rewrite.md`.
 
 ## Before pushing — required steps, in order
 

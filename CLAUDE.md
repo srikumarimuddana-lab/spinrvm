@@ -199,7 +199,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 42 background asyncio loops (full registry: `_WATCHDOG_LOOP_NAMES` in `lifespan.py`; among them: subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, route-deviation safety alert, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, insurance period reconciler, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 44 background asyncio loops (full registry: `_WATCHDOG_LOOP_NAMES` in `lifespan.py`; among them: subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, route-deviation safety alert, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, insurance period reconciler, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -246,7 +246,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **Race condition guard for ride acceptance** — the Supabase update filters on `{'status': 'searching'}`. Zero rows returned → ride already taken → send `ride_taken` WS event, return 409.
 
-**JWT trust model** — admin JWTs are fully trusted (role+email+modules in claims). Rider/driver role is always re-read from the `users` table on every request; never trust the JWT role claim for non-admin tokens.
+**JWT trust model** — admin JWTs carry role+email+modules in claims, but every admin request re-verifies the token server-side (`_verify_admin_payload` in `backend/dependencies/__init__.py`): `aud=spinr:admin`, per-JTI Redis revocation denylist, `admin_staff.is_active`, `token_version` match (bumped on logout-all), and a 30-minute idle timeout — the claims are not blindly trusted. Rider/driver role is always re-read from the `users` table on every request; never trust the JWT role claim for non-admin tokens.
 
 **Driver online/available flags** — `is_online` is driver-toggled (a driver tapped "Go online"); `is_available` is system-computed (`is_online AND not on active ride AND not in offer-pending`). The invariant **`is_available ⇒ is_online`** must hold; the inverse does not. Dispatch reads `is_available`; admin filters read `is_online`. Never set `is_available = True` without `is_online = True`.
 
@@ -258,7 +258,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 10-second ping heartbeat (tightened from 30s — see `routes/websocket.py`'s `HEARTBEAT_INTERVAL`/`HEARTBEAT_TIMEOUT`, a 30s ping meant a dead connection could go undetected for 45s+); 30 msg/s rate limit; 64 KB max message.
 
-**Background task safety** — the 42 startup loops run on every replica concurrently (28 hold best-effort Redis leader locks — see `docs/audit/2026-08-26-db-query-optimization-recommendations.md` §4.3; not every one of the 28 fails open on a Redis error the same way, e.g. `route_deviation_alerter`'s `SET NX` claims are unguarded like `safety_checkin_loop`'s — a Redis error there aborts just that tick, retried 30s later, rather than an explicit fail-open branch). Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
+**Background task safety** — the 44 startup loops run on every replica concurrently (28 hold best-effort Redis leader locks — see `docs/audit/2026-08-26-db-query-optimization-recommendations.md` §4.3; not every one of the 28 fails open on a Redis error the same way, e.g. `route_deviation_alerter`'s `SET NX` claims are unguarded like `safety_checkin_loop`'s — a Redis error there aborts just that tick, retried 30s later, rather than an explicit fail-open branch). Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the Supabase `settings` table, in its single row `id = 'app_settings'` (managed via admin dashboard), not in `.env`. There is no `app_settings` table: query `SELECT ... FROM settings WHERE id = 'app_settings'`, and read it in code via `settings_loader.get_app_settings()` (60 s in-process cache). This allows rotation without redeployment.
 

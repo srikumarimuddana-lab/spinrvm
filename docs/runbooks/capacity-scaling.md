@@ -31,13 +31,14 @@ the alert exists to buy you the ~2 minutes it takes to upgrade a tier.
 
 ## 2. Fly: how the burst pool actually works
 
-`backend/fly.toml` + `.github/workflows/bootstrap-fly.yml`:
+`backend/fly.toml` + `.github/workflows/deploy-fly.yml` (mixed-fleet rollout detail:
+`docs/runbooks/fly-mixed-fleet.md`):
 
 ```
-pool size            8 machines in yyz     (flyctl scale count 8)
-always running       2                     (min_machines_running = 2)
-suspended            6                     (auto_stop_machines = "suspend")
-per machine          750 soft / 1000 hard  (type = "connections")
+pool size            8 machines in yyz, two process groups (flyctl scale count app=2 burst=6)
+app group            2 machines, shared-cpu-2x / 4 GB  (min_machines_running = 2, always on)
+burst group          6 machines, shared-cpu-1x / 2 GB  (min_machines_running = 0, auto_stop_machines = "off")
+per machine          750 soft / 1000 hard  (type = "connections", both groups)
 ```
 
 Fly's proxy resumes a suspended machine when running machines exceed
@@ -45,8 +46,9 @@ Fly's proxy resumes a suspended machine when running machines exceed
 drivers each hold a long-lived WebSocket — connection count ≈ active users.
 
 **Pool size and concurrency limits ship together, automatically.**
-`deploy-fly.yml` runs `flyctl scale count 8` immediately after every deploy, so
-`fly.toml`'s limits can never take effect without the machines to absorb them.
+`deploy-fly.yml` runs `flyctl scale count app=2 burst=6` immediately after every
+deploy, so `fly.toml`'s limits can never take effect without the machines to
+absorb them.
 This is deliberate: the two are one capacity decision, and separating them once
 meant a merge would have raised limits 4× on an unchanged 2-machine fleet —
 strictly worse than the limits it replaced. `scale count` is idempotent, so the
@@ -60,20 +62,28 @@ creation only.
   which point new users were refused outright.
 
 **Suspend vs stop.** Suspend restores from a memory snapshot in under a second;
-a cold boot is 5–15 s (VM + uvicorn + lifespan DB probe + 18 background loops)
+a cold boot is 5–15 s (VM + uvicorn + lifespan DB probe + background loops)
 plus the 30 s health-check grace period. Suspend supports machines ≤ 2 GB, so
-the 1 GB VM qualifies. If resumed machines show stale-connection errors beyond
-what `run_sync`'s `httpx.NetworkError` retry absorbs
-(`backend/repositories/_base.py:311-317`), set `auto_stop_machines = "stop"`.
+the 2 GB `burst` VMs qualify (the 4 GB `app` VMs do not). If resumed machines
+show stale-connection errors beyond what `run_sync`'s `httpx.NetworkError`
+retry absorbs (`backend/repositories/_base.py:311-317`), set
+`auto_stop_machines = "stop"`. **Current live setting is `auto_stop_machines =
+"off"`** on both process groups — autostop is deliberately disabled during the
+mixed-fleet observation window (`backend/fly.toml` header comment), so neither
+suspend nor stop is presently in effect; this subsection describes the intended
+behavior once autostop is re-enabled.
 
 **Checking state:**
 
 ```bash
-flyctl status -a spinr-backend-yyz     # expect 2 started + 6 suspended at rest
-flyctl scale count 8 --region yyz -a spinr-backend-yyz --yes   # resize the pool (live)
+flyctl status -a spinr-backend-yyz     # app=2 always on; burst=6 may all show started —
+                                        # autostop is currently "off" (see note above), not "suspend"
+flyctl scale count app=2 burst=6 --region yyz -a spinr-backend-yyz --yes   # resize the pool (live)
 ```
 
-All 8 `started` outside a burst means autostop is not taking effect — check
+All 8 `started` outside a burst is the expected state while `auto_stop_machines
+= "off"` (current setting). Once autostop is re-enabled, all 8 `started`
+outside a burst would instead mean autostop is not taking effect — check
 `auto_stop_machines` in `backend/fly.toml`.
 
 **Do not raise per-machine limits further without loadtest evidence.** CPU on
@@ -139,8 +149,10 @@ than fail. The app-side queue plus the breaker are the buffer; sizing the pool
 below the DB's capacity is what keeps the buffer in front of the database
 rather than inside it.
 
-`UVICORN_WORKERS` stays at **2**: 4 workers on `shared-cpu-1x`/1 GB is
-memory-tight (see the `fly.toml` header comment).
+`UVICORN_WORKERS` stays at **2** for both process groups (`backend/fly.toml`'s
+`[env]`): 4 workers would be memory-tight on the `burst` group's smaller
+`shared-cpu-1x`/2 GB machines (see `fly.toml`'s `[[vm]]` blocks — the `app`
+group runs `shared-cpu-2x`/4 GB).
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: spinr-realtime-reliability-reviewer
-description: WebSocket + background-loop reliability auditor for Spinr. Use PROACTIVELY on changes to socket_manager.py, utils/ws_pubsub.py, WebSocket route handlers, or any of the 42 startup background loops in core/lifespan.py (corrected 2026-09-19 — this description previously said 18, stale against CLAUDE.md's own `_WATCHDOG_LOOP_NAMES` count; always re-read lifespan.py fresh rather than trusting either number). Enforces the WS auth/heartbeat/rate-limit contract and replay-safety for loops that run concurrently on every replica.
+description: WebSocket + background-loop reliability auditor for Spinr. Use PROACTIVELY on changes to socket_manager.py, utils/ws_pubsub.py, WebSocket route handlers, or any of the 44 startup background loops in core/lifespan.py (corrected 2026-09-25 — this description previously said 42, stale against CLAUDE.md's own `_WATCHDOG_LOOP_NAMES` count; always re-read lifespan.py fresh rather than trusting either number). Enforces the WS auth/heartbeat/rate-limit contract and replay-safety for loops that run concurrently on every replica.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---

@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
+import { MAX_FONT_SCALE } from '@shared/utils/responsive';
 import {
   GLOW_DP,
   GLOW_SETTLED_OPACITY,
@@ -384,7 +385,7 @@ export default function BrandSplash({
 
         <Animated.Text
           testID="brand-splash-tagline"
-          allowFontScaling={false}
+          maxFontSizeMultiplier={MAX_FONT_SCALE}
           style={[
             styles.tagline,
             { opacity: taglineOpacity, transform: [{ translateY: taglineY }] },
@@ -395,7 +396,7 @@ export default function BrandSplash({
 
         <Animated.Text
           testID="brand-splash-provenance"
-          allowFontScaling={false}
+          maxFontSizeMultiplier={MAX_FONT_SCALE}
           style={[
             styles.provenance,
             { opacity: provenanceOpacity, transform: [{ translateY: provenanceY }] },

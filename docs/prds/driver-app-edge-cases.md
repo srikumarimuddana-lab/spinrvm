@@ -95,7 +95,7 @@ driver-to-rider star rating, and a WAV self-declaration toggle exist.
 - **Subscription expiry mid-trip.** The current trip can finish. The next go-online is blocked with a renew action.
 - **Scheduled rides.** An Upcoming list shows accepted scheduled trips. A nudge fires if navigation has not started by the lead time. Cancelling one shows the rider impact.
 - **Long trip.** Above a configurable distance (default 50 km), accept is a second explicit tap.
-- **Destination mode.** Auto-clears after a configurable number of hours (default 8). A driver with the flag on and no coordinates is treated as not in destination mode.
+- **Destination mode.** Behind `settings.destination_mode_enabled` (migration 482, default off); while off, dispatch ignores stored destinations and the app hides the feature. When on, it is a hard filter (only rides whose dropoff is at least 5% closer to the destination) and auto-expires after a fixed 2-hour TTL (`DESTINATION_MODE_TTL`, not configurable) or when the driver goes offline. A driver with the flag on and no coordinates, or a NULL/past expiry, is treated as not in destination mode.
 - **WAV accept guard.** Accept returns 403 when `requires_wav` is true and `is_wav` is false. The card hides Accept.
 - **Driver safety check-in.** On a long trip the driver gets an in-app prompt. No response alerts the safety team and does not dial 911. Threshold is configurable. The rider check-in (20 minutes, 90 seconds) is the pattern.
 - **Insurance period label.** While online, the dashboard names the current period in plain language (offline, available, on the way, passenger aboard) within 5 seconds of a transition. The label is not an insurance contract.

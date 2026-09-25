@@ -13792,6 +13792,9 @@ record of what was assumed vs. what was actually true</summary>
 
 ### C136. Destination mode silently hides drivers from dispatch; push tokens cross accounts on shared devices
 - [ ] **Status:** in progress 2026-09-24 (branch `fix/c136-destination-mode-and-push-token-ownership`).
+- **Update (2026-09-25):** owner decision — destination mode is now behind `settings.destination_mode_enabled`
+  (migration 482, **default off**): dispatch skips the destination filter, `POST /drivers/destination` 409s, the
+  driver app hides its entry points. See `docs/change-log/2026-09-25-destination-mode-flag.md`.
 - **What's wrong:** found in a live Regina test. Driver `3066009097` got zero offers all day
   while `3065203304` got them normally. Only material difference: `destination_mode = true`.
   `dispatch_service._ride_brings_driver_closer_to_destination` excludes that driver from every

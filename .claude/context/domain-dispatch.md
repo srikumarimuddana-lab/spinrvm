@@ -10,21 +10,46 @@ _Load when working on: driver matching, offer timeouts, ride search, location up
 - `backend/socket_manager.py` + `backend/utils/ws_pubsub.py` — WS fan-out
 - `backend/core/lifespan.py` — scheduled-dispatch background loop
 
-## Matching algorithm (current)
+## Matching algorithm (current — verified against code 2026-09-25)
 
-1. Rider requests → ride inserted with `status='searching'`
-2. Dispatch service queries online drivers within radius (expanding: 2 km → 5 km → 10 km)
-3. Rank by: ETA (weight 0.6) + driver rating (0.2) + acceptance rate (0.2)
-4. Send offer to top driver → update ride to `driver_assigned`, start 15 s timeout
-5. Driver accepts → `driver_accepted` + WS event to rider
-6. Driver ignores/declines → release, loop step 3 with next driver
-7. No drivers after ~5 minutes → auto-cancel with `ride_cancelled` WS event
+Source: `routes/rides/matching.py` (`match_driver_to_ride`, `_dispatch_retry`,
+`ride_search_timeout`), `services/dispatch_service.py` (`resolve_matching_config`).
+
+1. Rider requests → ride inserted with `status='searching'`.
+2. Candidates: available drivers within **one fixed radius** — `search_radius_km`
+   (service area overrides global; default 10 km). There is **no** 2 → 5 → 10 km
+   expansion today.
+3. Ranking: `driver_matching_algorithm` (`nearest` default, `rating_based`,
+   `combined`, `round_robin`), then Distance-Matrix ETA via
+   `rank_by_eta_with_acceptance` (effective ETA = ETA ÷ acceptance rate, rate
+   floored at 0.1). Falls back to haversine order if the ETA call fails or is slow.
+4. **Batch offers**: the top `max_simultaneous_offers` drivers (area overrides
+   global; default 3, range 1–10) are claimed and offered at once. Each offer
+   lasts `ride_offer_timeout_seconds` (default 15 s, range 5–60).
+5. First driver to accept wins (`driver_accepted` + WS event to rider); the
+   other drivers in the batch get a `ride_taken` WS event.
+6. No acceptance (all declined/expired) or no candidates → re-dispatch every
+   10 s (`_dispatch_retry`).
+7. On-demand ride still searching after `ride_search_timeout_seconds` (default
+   300 s, clamped 90–300, migration 468) → auto-cancel `no_drivers_found` with a
+   `ride_cancelled` WS event + push. Enforced by the in-process timer and by
+   `utils/stuck_ride_sweeper.py` (60 s, restart-safe) reading the same setting.
+   The retry cap is `ceil(window ÷ 10 s)` (30 at 300 s). Scheduled rides ignore
+   this setting and keep a fixed 300 s grace after pickup.
 
 ## Offer timeout
 
 - Timeout handler filters on `status='driver_assigned' AND driver_id=<current>` — atomic
-- On timeout: driver released (removed from assignment), ride returns to `searching`
-- Never re-offer to a driver who already declined this ride in this search cycle
+- On timeout or decline: driver released, ride returns to `searching`
+- The driver gets a `spinr:offer_skip:{ride}:{driver}` Redis key with a 300 s
+  TTL, so they are not offered **this ride** again for 300 s. This is why the
+  search window is capped at 300 s: `ride_offers` is `UNIQUE(ride_id, driver_id)`
+  (migration 100), and a re-offer after the key expires fails the bulk insert.
+- Not yet wired, flags exist and default **off** (settings migrations 466, 467,
+  469; plan `.claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md`):
+  `offer_expired_decline_as_miss_enabled`, `dispatch_reoffer_enabled` (+
+  `dispatch_decline_reoffer_after_seconds`, `dispatch_max_offers_per_driver_per_ride`),
+  `dispatch_expanded_radius_enabled` (+ `_after_seconds`, `_multiplier`, `_max_km`).
 
 ## Race conditions to guard
 

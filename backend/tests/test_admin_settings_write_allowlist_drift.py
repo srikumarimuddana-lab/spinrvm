@@ -99,6 +99,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "corporate_kyb_reverify_after_months",
         "corporate_subscription_billing_enabled",
         "corporate_wallet_admin_adjust_daily_cap",
+        "destination_mode_enabled",
         "directions_proxy_enabled",
         "driver_always_location_gate_enabled",
         "driver_discreet_sos_enabled",
@@ -170,6 +171,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "route_integrity_v2_mode",
         "route_location_gap_alert_seconds",
         "safety_alert_emails",
+        "saved_place_shortcuts_enabled",  # migration 484 (2026-09-25)
         "scheduled_dispatch_enabled",
         "search_radius_km",
         "sendgrid_api_key",
@@ -280,3 +282,44 @@ async def test_stationary_tracking_admin_save_preserves_boolean(monkeypatch, ena
     )
     assert write.await_args.args[2]["driver_stationary_tracking_enabled"] is enabled
     assert "driver_stationary_tracking_enabled" not in SettingsUpdateRequest().model_dump(exclude_none=True)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("field", ["destination_mode_enabled", "saved_place_shortcuts_enabled"])
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_feature_flag_admin_save_preserves_boolean(monkeypatch, field, enabled):
+    """Both dashboard toggles (2026-09-25) round-trip an explicit False, not
+    just True -- exclude_none must not drop an admin turning a flag off."""
+    from routes.admin import settings
+
+    monkeypatch.setattr(settings.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "app_settings"}]))
+    write = AsyncMock()
+    monkeypatch.setattr(settings.db_supabase, "update_one", write)
+    audit = AsyncMock()
+    monkeypatch.setattr(settings.db_supabase, "insert_one", audit)
+    await settings.admin_update_settings(
+        SettingsUpdateRequest(**{field: enabled}),
+        admin={"id": "admin-1", "role": "admin"},
+    )
+    assert write.await_args.args[2][field] is enabled
+    assert audit.await_args.args[1]["details"]["changed_keys"] == [field]
+    # Unset = leave unchanged: a save that never touched the toggle must not
+    # write the column (matters before migration 484 is applied).
+    assert field not in SettingsUpdateRequest().model_dump(exclude_none=True)
+
+
+@pytest.mark.anyio
+async def test_admin_get_settings_includes_destination_mode_default(monkeypatch):
+    """GET /admin/settings carries destination_mode_enabled (AppSettings
+    default False) so the dashboard toggle reflects the real state even when
+    the row predates migration 482."""
+    import sys
+
+    from routes.admin import settings
+
+    # Whichever import spelling routes.admin.settings resolved (dual-import).
+    settings_loader = sys.modules[settings.get_app_settings.__module__]
+    monkeypatch.setattr(settings_loader, "_settings_cache", None)
+    monkeypatch.setattr(settings_loader.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "app_settings"}]))
+    body = await settings.admin_get_settings(admin={"id": "admin-1", "role": "admin"})
+    assert body["destination_mode_enabled"] is False

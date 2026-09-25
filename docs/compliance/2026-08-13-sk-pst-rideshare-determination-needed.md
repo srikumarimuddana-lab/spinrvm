@@ -212,3 +212,28 @@ current operational setting. That tension is exactly why this doc's original
 now tracked separately as `ACTION_ITEMS.md` G9, with real urgency behind it
 given real Saskatchewan ride volume is no longer purely hypothetical the way
 it was during all three prior determinations.
+
+## Input received 2026-09-25 — recorded, NOT treated as a resolution
+
+The repo owner reported "SK PST has been confirmed by the City of Regina as not
+needed." This is logged here as a data point, but it does not close G9, for
+one specific, checkable reason: PST is a Saskatchewan *provincial* sales tax,
+administered by the SK Ministry of Finance / eTax Saskatchewan -- a municipal
+government (the City of Regina) has no jurisdiction to determine provincial
+tax applicability. A city can regulate rideshare business licensing, permits,
+or municipal fees; it cannot rule on PST-46 applicability. Treating this as
+the primary-source answer this doc has been asking for since 2026-08-13 would
+repeat the exact failure pattern already flagged three times above (a verbal,
+non-primary-source confirmation, taken as final) -- and it would do so
+against a source with no authority over the question at all, which is a step
+backward from the prior three (at least those came from someone with actual
+business authority over Spinr's own tax posture).
+
+**G9 stays open.** What would actually close it: a citation (URL + date, or
+document name + section) from the SK Ministry of Finance / eTax Saskatchewan
+PST bulletin governing passenger-transportation-for-hire, or a named
+accountant/tax advisor's written determination citing that bulletin. If the
+City of Regina input came with a specific document or licensing determination
+attached, forward it -- it may be useful context (e.g. how the city classifies
+rideshare for municipal purposes) even if it can't answer the provincial tax
+question itself.

@@ -16,13 +16,13 @@ jest.mock('react-native', () => ({
   Platform: { OS: 'android' }, Dimensions: { get: () => ({ height: 800 }) },
   Animated: { Value: class { setValue() {} }, parallel: () => ({ start() {} }),
     timing: () => ({}), spring: () => ({}) }, Vibration: { vibrate: jest.fn() }, Linking: {},
-}), { virtual: true });
+}));
 jest.mock('@react-native-community/netinfo', () => ({
   addEventListener: (cb: (state: object) => void) => {
     mockNetListeners.add(cb);
     return () => mockNetListeners.delete(cb);
   },
-}), { virtual: true });
+}));
 const mockAuth = { user: { id: 'driver-1' }, token: 'token', driver: { is_online: true },
   refreshProfile: jest.fn(), updateDriverStatus: jest.fn(), logout: jest.fn().mockResolvedValue(undefined) };
 const mockDriver = { rideState: 'idle', incomingRide: null, activeRide: null,
@@ -40,7 +40,7 @@ jest.mock('@shared/hooks/queries', () => ({ useDriverConfig: () => ({ data: unde
 // useDriverDashboard now imports queryClient/queryKeys directly (for the
 // WS `new_notification` cache merge) — shared/api/queryClient.ts has a
 // module-load-time AppState.addEventListener side effect (RN focusManager
-// wiring) that this file's minimal virtual `react-native` mock above isn't
+// wiring) that this file's minimal `react-native` mock above isn't
 // built to support; mock it out the same way @shared/hooks/queries is
 // already mocked above, since real TanStack Query behavior isn't under
 // test here.
@@ -52,11 +52,11 @@ jest.mock('@shared/config', () => ({ API_URL: 'https://example.test' }));
 jest.mock('@shared/config/spinr.config', () => ({ __esModule: true, default: { api: { baseUrl: 'https://example.test' } } }));
 jest.mock('@shared/services/firebase', () => ({ onForegroundMessage: () => jest.fn() }));
 jest.mock('@shared/services/errorReporting', () => ({ captureException: jest.fn() }));
-jest.mock('expo-router', () => ({ router: { push: jest.fn() } }), { virtual: true });
+jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn().mockResolvedValue(null), setItem: jest.fn().mockResolvedValue(undefined),
   removeItem: jest.fn().mockResolvedValue(undefined),
-}), { virtual: true });
+}));
 jest.mock('../../components/AlertDialog', () => ({ showAlert: jest.fn() }));
 jest.mock('../useToast', () => ({ showToast: jest.fn() }));
 jest.mock('../../i18n', () => ({ tKey: (key: string) => key }));
@@ -84,7 +84,7 @@ jest.mock('expo-location', () => ({
   getCurrentPositionAsync: jest.fn(),
   getBackgroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
   watchPositionAsync: jest.fn().mockResolvedValue({ remove: jest.fn() }),
-}), { virtual: true });
+}));
 
 class Socket {
   static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;

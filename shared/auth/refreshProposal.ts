@@ -43,9 +43,15 @@ export async function refreshProposalFor(parent: string): Promise<string | null>
   try {
     const stored = await SecureStore.getItemAsync(REFRESH_PROPOSAL_KEY);
     if (stored) {
-      const pending = JSON.parse(stored) as { parent?: unknown; proposal?: unknown };
-      if (pending.parent === parent && typeof pending.proposal === 'string' && PROPOSAL_RE.test(pending.proposal)) {
-        return pending.proposal;
+      try {
+        const pending = JSON.parse(stored) as { parent?: unknown; proposal?: unknown };
+        if (pending.parent === parent && typeof pending.proposal === 'string' && PROPOSAL_RE.test(pending.proposal)) {
+          return pending.proposal;
+        }
+      } catch {
+        // Corrupt pending entry — fall through and generate a fresh proposal
+        // instead of aborting via the outer catch (which would silently
+        // disable X8 recovery until the entry is cleared some other way).
       }
     }
     const proposal = generateProposal();

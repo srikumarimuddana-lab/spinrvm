@@ -14,6 +14,9 @@ FAIL=0
 WORKDIR=$(mktemp -d)
 PATCH_FILE="$WORKDIR/patch.txt"
 trap 'rm -rf "$WORKDIR"' EXIT
+# Resolve the real git BEFORE any fakebin is prepended to PATH (see shim).
+REAL_GIT=$(command -v git)
+[ -x "$REAL_GIT" ] || { echo "real git not found"; exit 2; }
 
 _pass() { echo -e "${GREEN}  PASS${NC} — $1"; ((PASS++)) || true; }
 _fail() { echo -e "${RED}  FAIL${NC} — $1"; ((FAIL++)) || true; }
@@ -26,9 +29,19 @@ _run_gate() {
   local fakebin="$WORKDIR/fakebin"
   mkdir -p "$fakebin"
 
-  # Shim reads patch from file so no quoting issues with special chars
+  # Shim reads patch from file so no quoting issues with special chars.
+  # Falls back to the REAL git by absolute path (resolved before fakebin is
+  # on PATH). A bare `command git` fallback resolves to this shim again and
+  # recursed forever on the hook's un-intercepted calls (check 9's
+  # `git rev-parse --show-toplevel`), fork-bombing the machine (2026-09-25).
+  # The env guard makes any re-entry fail fast instead of recursing.
   cat > "$fakebin/git" <<SHIM
 #!/bin/bash
+if [ -n "\$SPINR_GIT_SHIM_ACTIVE" ]; then
+  echo "git shim re-entered — refusing to recurse" >&2
+  exit 97
+fi
+export SPINR_GIT_SHIM_ACTIVE=1
 args="\$*"
 if [[ "\$args" == *"--cached"* && "\$args" == *"-U0"* ]]; then
   cat "$PATCH_FILE"
@@ -37,7 +50,7 @@ elif [[ "\$args" == *"--name-only"* ]]; then
 elif [[ "\$args" == *"show-current"* ]]; then
   echo "feature/test-branch"
 else
-  command git "\$@"
+  "$REAL_GIT" "\$@"
 fi
 SHIM
   chmod +x "$fakebin/git"

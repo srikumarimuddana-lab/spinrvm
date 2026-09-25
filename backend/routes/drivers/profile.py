@@ -31,8 +31,12 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...services.dispatch_service import DESTINATION_MODE_TTL, is_destination_mode_active
+    from ...settings_loader import get_app_settings
+    from ...utils.audit_logger import log_user_action
 except ImportError:
     from services.dispatch_service import DESTINATION_MODE_TTL, is_destination_mode_active
+    from settings_loader import get_app_settings  # type: ignore
+    from utils.audit_logger import log_user_action  # type: ignore
 
 router = APIRouter()
 
@@ -1028,14 +1032,34 @@ class SetDestinationRequest(BaseModel):
     lng: float
 
 
+DESTINATION_MODE_UNAVAILABLE_DETAIL = "Destination mode is not available."
+
+
+async def _destination_mode_enabled() -> bool:
+    """``settings.destination_mode_enabled`` (migration 482, C136). Off unless
+    the stored value is exactly ``True`` — a missing column/key or a non-bool
+    keeps destination mode hidden. A settings read failure is NOT treated as
+    "off" silently: it surfaces as 503 so the client retries."""
+    try:
+        settings = await get_app_settings() or {}
+    except Exception as e:
+        logger.error(f"destination mode: failed to read app_settings: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Settings temporarily unavailable. Please try again.") from e
+    return settings.get("destination_mode_enabled") is True
+
+
 @router.post("/destination")
 async def set_destination_mode(req: SetDestinationRequest, current_user: dict = Depends(get_current_user)):
-    """Set driver's preferred destination. Ride matching will prioritize
-    rides heading toward this destination to reduce empty miles.
+    """Set driver's destination. While set, dispatch ONLY offers this driver
+    rides whose dropoff is at least 5% closer to the destination (a hard
+    filter, not a preference — see ``dispatch_service``).
 
     C136: the destination auto-expires ``DESTINATION_MODE_TTL`` (2h) after it
     is set — dispatch stops filtering once ``destination_expires_at`` passes
-    (see ``dispatch_service.is_destination_mode_active``)."""
+    (see ``dispatch_service.is_destination_mode_active``). Refused with 409
+    while ``settings.destination_mode_enabled`` is off (migration 482)."""
+    if not await _destination_mode_enabled():
+        raise HTTPException(status_code=409, detail=DESTINATION_MODE_UNAVAILABLE_DETAIL)
     driver = await _deps.db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -1056,6 +1080,15 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
             "updated_at": set_at,
         },
     )
+    # Usage audit (C136): IDs + expiry only — never the address or coords.
+    # log_user_action never raises; an audit failure is logged there.
+    await log_user_action(
+        current_user,
+        "driver_destination_mode_set",
+        "drivers",
+        str(driver["id"]),
+        {"destination_expires_at": expires_at},
+    )
     return {
         "success": True,
         "destination_mode": True,
@@ -1066,7 +1099,9 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
 
 @router.delete("/destination")
 async def clear_destination_mode(current_user: dict = Depends(get_current_user)):
-    """Clear driver's destination mode."""
+    """Clear driver's destination mode. Deliberately NOT gated on
+    ``settings.destination_mode_enabled`` — a stale row must always be
+    clearable."""
     driver = await _deps.db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -1084,6 +1119,17 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+    # Usage audit (C136): IDs + prior state only — never the address or coords.
+    await log_user_action(
+        current_user,
+        "driver_destination_mode_cleared",
+        "drivers",
+        str(driver["id"]),
+        {
+            "was_destination_mode": bool(driver.get("destination_mode")),
+            "was_active": is_destination_mode_active(driver),
+        },
+    )
     return {"success": True, "destination_mode": False}
 
 
@@ -1094,7 +1140,12 @@ async def get_destination_mode(current_user: dict = Depends(get_current_user)):
     ``active`` is computed server-side by the SAME helper dispatch uses, so the
     app never shows "heading home" while dispatch has stopped filtering (C136).
     ``destination_mode`` is the raw stored flag and can be true while
-    ``active`` is false (expired / pre-migration-465 row with no expiry)."""
+    ``active`` is false (expired / pre-migration-465 row with no expiry).
+
+    ``enabled`` mirrors ``settings.destination_mode_enabled`` (migration 482);
+    while it is false ``active`` is always false (dispatch ignores the row)
+    and the driver app hides every destination-mode entry point."""
+    enabled = await _destination_mode_enabled()
     driver = await _deps.db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -1106,7 +1157,8 @@ async def get_destination_mode(current_user: dict = Depends(get_current_user)):
         "destination_lng": driver.get("destination_lng"),
         "destination_set_at": _iso_or_none(driver.get("destination_set_at")),
         "destination_expires_at": _iso_or_none(driver.get("destination_expires_at")),
-        "active": is_destination_mode_active(driver),
+        "active": enabled and is_destination_mode_active(driver),
+        "enabled": enabled,
     }
 
 

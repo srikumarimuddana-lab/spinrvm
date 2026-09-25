@@ -102,3 +102,63 @@
 | **Rollback plan** | Behavioural rollback is already in place, because everything is off. For the schema, follow each file's header: drop the added columns only after reverting the code, and delete the tracking rows. |
 | **Verification performed** | Before the apply, neither set of columns existed. Afterwards, the settings cap and threshold read `null`, the refund flag reads `false`, all 4 `disputes` columns exist, and both tracking rows are present. Railway deploy logs from 15:54 UTC, filtered for `PGRST204` / `admin_money` / `admin_dispute_refunds` / `disputes`, returned no entries, so no failed saves were seen in the ~2-minute gap. |
 | **What was NOT verified** | An admin settings save and a dispute resolve were not run through the UI after the apply. |
+
+## 9. Instant payouts switched off in every service area (owner decision: weekly payouts only)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | The owner decided (2026-09-25) that Spinr pays drivers weekly only, with no instant payout option. Production still had `service_areas.instant_payout_enabled = true` in all 6 areas, and `settings.instant_payout_daily_cap_cad` was NULL, so no cap applied. `POST /api/drivers/payouts/instant` was therefore reachable by any driver with Stripe Connect and a balance, even though no app UI calls it. |
+| **Fix/remediation** | Owner-approved at about 17:00 UTC. Ran `UPDATE service_areas SET instant_payout_enabled = false WHERE instant_payout_enabled IS TRUE`, which updated 6 rows. The code removal follows in branch `claude/remove-instant-payouts` (migration 483 makes the column default `false`). |
+| **Risk & impact** | The gate (`_instant_payout_area_verdict`) re-reads the row on every request, so the change took effect immediately and needed no deploy. `GET /drivers/balance` now reports `instant_payout_available: false`. The weekly auto payout (`utils/auto_payout.py`) does not read this flag. |
+| **User experience effect** | None visible. No driver-app UI exists, and 0 instant payouts have ever been executed in production. |
+| **Rollback plan** | `UPDATE service_areas SET instant_payout_enabled = true;` (no deploy). This contradicts the owner's decision, so it is for emergency use only. |
+| **Verification performed** | Before: 6 of 6 areas were `true`, and there were 0 `payouts` rows with `payout_type = 'instant'`. After: 0 areas have `instant_payout_enabled IS NOT FALSE`. |
+| **What was NOT verified** | A driver's actual `POST /payouts/instant` call was not made after the change; the gate logic was read in code only. New service areas still default to `true` until migration 483 ships. |
+
+## 10. Reset the C136 incident driver's stale destination
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | The driver in the C136 incident (driver id prefix `d491bb3c`) still had `destination_mode = true`, with destination coordinates set and `destination_set_at` / `destination_expires_at` NULL. Dispatch has ignored the stale row since C136, because a NULL expiry counts as off. However, the driver-app Destination Mode screen still showed "on". On 2026-09-24 this state caused 0 offers: recomputing the 5% rule for the 8 rides created 16:30–16:50 UTC gave driver-to-destination 4.33 km, the nearest drop-off-to-destination 4.76 km, and 0 of 8 rides passing. |
+| **Fix/remediation** | Owner-approved at about 17:00 UTC. For that one driver row only (matched by user and id prefix), set `destination_mode = false` and set `destination_address`, `destination_lat`, `destination_lng`, `destination_set_at` and `destination_expires_at` to NULL. |
+| **Risk & impact** | Single row. Only the dispatch destination filter and the destination endpoints read these columns. |
+| **User experience effect** | The driver's Destination Mode screen now shows off. Their dispatch eligibility is unchanged, because the row was already ignored. |
+| **Rollback plan** | None needed. The previous destination was deliberately not copied into this log, because it is an exact address (PIPEDA). If the driver wants it, they can set it again. |
+| **Verification performed** | After the change, 0 drivers in production have `destination_mode` true or `destination_lat` set. |
+| **What was NOT verified** | A live offer to this driver was not observed. The owner should retest with a Regina XL booking while the driver stays online for more than 2 minutes. Fly.io (the primary host) logs and deploy state were not inspected. |
+
+## 11. Applied migration 481 (`corporate_kyb_refuses_closed_company`, merged in #5805)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5805 merged at about 17:09 UTC. Until its kill-switch column exists, the code treats the flag as ON, but admins cannot see or change it in Settings. |
+| **Fix/remediation** | Owner-approved at about 17:12 UTC. Ran the merged file's statements verbatim (`ADD COLUMN IF NOT EXISTS … BOOLEAN NOT NULL DEFAULT TRUE`, plus its `COMMENT`) in one transaction, with the tracking row inserted: checksum `ef545ac6…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`. |
+| **Risk & impact** | Additive. It adds a metadata-only default on the one-row `settings` table, and behaviour is unchanged. |
+| **User experience effect** | None. The KYB guard was already active through the code default. |
+| **Rollback plan** | Behaviour: `UPDATE settings SET corporate_kyb_refuses_closed_company = false WHERE id = 'app_settings';`. Schema: drop the column after reverting the code, then delete the tracking row. |
+| **Verification performed** | The flag reads `true`, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | An admin settings save round-trip with the new field was not run through the UI. |
+
+## 12. Applied migration 482 (`destination_mode_enabled`, merged in #5813)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5813 merged at about 18:37 UTC. Until its column exists, destination mode is off through the code default (`app_settings.get("destination_mode_enabled") is True`), but admins cannot switch it on without a code change. |
+| **Fix/remediation** | Owner-approved at about 18:41 UTC. Ran the merged file's statements verbatim (`ADD COLUMN IF NOT EXISTS … BOOLEAN NOT NULL DEFAULT FALSE`, plus its `COMMENT`) in one transaction, with the tracking row inserted: checksum `2c5b099e…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`, `applied_at` 18:42:41 UTC. |
+| **Risk & impact** | Additive. It adds a metadata-only constant default on the one-row `settings` table. Behaviour is unchanged: the feature was already off through the code default, and 0 drivers had `destination_mode` true before the apply. |
+| **User experience effect** | None. Drivers on the new build still see destination mode hidden, and old builds still get the 409 on save. |
+| **Rollback plan** | Behaviour: `UPDATE settings SET destination_mode_enabled = true WHERE id = 'app_settings';` (no deploy). Schema: drop the column after reverting the code, then delete the tracking row. |
+| **Verification performed** | Before the apply: column absent, no tracking row, 0 drivers in destination mode. After: `settings.destination_mode_enabled = false` for `app_settings`, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | The deployed backend was not observed reading the new column (the settings cache has a 60 s TTL). No live offer was placed after the apply. Fly.io (the primary host) was not inspected. |
+
+## 13. Applied migration 483 (`service_areas_instant_payout_default_off`, merged in #5810)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | #5810 merged at about 18:40 UTC. Instant payouts are removed in code, but `service_areas.instant_payout_enabled` still defaulted to `true` (migration 314), so a newly created service area would state "instant enabled". |
+| **Fix/remediation** | Owner-approved at about 18:45 UTC. Ran the merged file's statements verbatim (`ALTER COLUMN … SET DEFAULT false`, then the normalising `UPDATE … WHERE instant_payout_enabled IS DISTINCT FROM false`) in one transaction, with the tracking row inserted: checksum `62b21d1c…` (runner `_checksum`), `applied_by = 'claude-audit-apply-2026-09-25'`, `applied_at` 18:45:56 UTC. |
+| **Risk & impact** | Metadata-only default change. The `UPDATE` touched 0 rows, because all 6 areas were already `false` from the §9 switch-off. No code reads the column any more. |
+| **User experience effect** | None. |
+| **Rollback plan** | `ALTER TABLE public.service_areas ALTER COLUMN instant_payout_enabled SET DEFAULT true;`, then delete the tracking row. Row values are left as they are. |
+| **Verification performed** | Before the apply: no tracking row, default `true`, 6 areas, 0 not false. After: default `false`, 0 of 6 areas not false, and the tracking row checksum matches the file on `main`. |
+| **What was NOT verified** | No service area was created after the apply to observe the new default. Fly.io (the primary host) was not inspected. |

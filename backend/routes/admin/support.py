@@ -12,7 +12,6 @@ try:
     from ...dependencies import get_admin_user
     from ...services.zoho_desk_integration import (
         create_ticket_for_complaint,
-        create_ticket_for_dispute,
         create_ticket_for_flag,
     )
     from ...utils.audit_logger import log_admin_action
@@ -23,7 +22,6 @@ except ImportError:
     from dependencies import get_admin_user  # noqa: F401
     from services.zoho_desk_integration import (
         create_ticket_for_complaint,
-        create_ticket_for_dispute,
         create_ticket_for_flag,
     )
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -55,25 +53,6 @@ class ComplaintResolveRequest(BaseModel):
     resolution: str
 
 
-class DisputeCreateRequest(BaseModel):
-    # user_name was removed (PIPEDA): names are joined from users at read
-    # time. Pydantic ignores the extra field if an old client still sends it.
-    ride_id: Optional[str] = None
-    user_id: Optional[str] = None
-    user_type: str = "rider"
-    reason: str = ""
-    description: str = ""
-    refund_amount: float = 0
-
-
-class DisputeUpdateRequest(BaseModel):
-    reason: Optional[str] = None
-    description: Optional[str] = None
-    status: Optional[str] = None
-    refund_amount: Optional[float] = None
-    user_type: Optional[str] = None
-
-
 class TicketCreateRequest(BaseModel):
     subject: str = ""
     category: str = "general"
@@ -99,6 +78,8 @@ class TicketUpdateRequest(BaseModel):
 # ---------- Disputes ----------
 
 
+# The only GET /admin/disputes handler (a shadowed duplicate in
+# routes/disputes.py was deleted 2026-09-25; test_disputes_disabled.py pins it).
 @router.get("/disputes")
 async def admin_get_disputes(
     limit: int = 50,
@@ -258,27 +239,24 @@ async def admin_get_chargebacks(
     return result
 
 
+# In-app disputes are disabled (owner decision 2026-09-25): existing
+# `disputes` rows are a read-only historical view (GET list/stats/detail
+# above and below stay). Creating or editing a dispute answers 410, and the
+# old hard DELETE is gone entirely -- dispute records fall under the 7-year
+# financial retention rule. Card-network chargebacks (/disputes/chargebacks,
+# stripe_disputes) are untouched. The original create/update handlers were
+# deleted 2026-09-25 (the 410 stubs stay for old clients). See
+# docs/change-log/2026-09-25-disable-in-app-disputes.md.
+_DISPUTE_WRITES_DISABLED_DETAIL = (
+    "In-app disputes are disabled; existing dispute records are read-only. "
+    "Issue any refund in the Stripe Dashboard. Bank chargebacks are on the Chargebacks tab."
+)
+
+
 @router.post("/disputes")
-async def admin_create_dispute(dispute: DisputeCreateRequest, admin: dict = Depends(get_admin_user)):
-    """Create a dispute manually from admin."""
-    doc = {
-        "id": str(uuid.uuid4()),
-        "ride_id": dispute.ride_id,
-        "user_id": dispute.user_id,
-        # PIPEDA data minimization: user_name is NOT persisted — the admin
-        # list endpoint joins users by user_id at read time instead.
-        "user_type": dispute.user_type,
-        "reason": dispute.reason,
-        "description": dispute.description,
-        "status": "pending",
-        "refund_amount": dispute.refund_amount,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db_supabase.insert_one("disputes", doc)
-    _spawn(create_ticket_for_dispute(doc))
-    await log_admin_action(admin, "dispute_created", "disputes", doc["id"], {"ride_id": dispute.ride_id})
-    return {"success": True, "dispute": doc}
+async def admin_create_dispute_disabled():
+    """In-app disputes are disabled: always 410, nothing is written."""
+    raise HTTPException(status_code=410, detail=_DISPUTE_WRITES_DISABLED_DETAIL)
 
 
 @router.get("/disputes/{dispute_id}")
@@ -293,30 +271,9 @@ async def admin_get_dispute_details(dispute_id: str):
 
 
 @router.put("/disputes/{dispute_id}")
-async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, admin: dict = Depends(get_admin_user)):
-    """Update a dispute."""
-    updates: Dict[str, Any] = {}
-    if dispute.reason is not None:
-        updates["reason"] = dispute.reason
-    if dispute.description is not None:
-        updates["description"] = dispute.description
-    if dispute.status is not None:
-        updates["status"] = dispute.status
-    if dispute.refund_amount is not None:
-        updates["refund_amount"] = dispute.refund_amount
-    if dispute.user_type is not None:
-        updates["user_type"] = dispute.user_type
-    if updates:
-        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        await db_supabase.update_one("disputes", {"id": dispute_id}, updates)
-        await log_admin_action(
-            admin,
-            "dispute_updated",
-            "disputes",
-            dispute_id,
-            {"fields": sorted(k for k in updates if k != "updated_at")},
-        )
-    return {"message": "Dispute updated"}
+async def admin_update_dispute_disabled(dispute_id: str):
+    """In-app disputes are disabled: always 410, nothing is written."""
+    raise HTTPException(status_code=410, detail=_DISPUTE_WRITES_DISABLED_DETAIL)
 
 
 # PUT /disputes/{dispute_id}/resolve is served by routes/disputes.py
@@ -326,12 +283,8 @@ async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, a
 # payload was silently ignored. Removed 2026-09-25 (N23).
 
 
-@router.delete("/disputes/{dispute_id}")
-async def admin_delete_dispute(dispute_id: str, admin: dict = Depends(get_admin_user)):
-    """Delete a dispute."""
-    await db_supabase.delete_many("disputes", {"id": dispute_id})
-    await log_admin_action(admin, "dispute_deleted", "disputes", dispute_id, {})
-    return {"message": "Dispute deleted"}
+# DELETE /disputes/{dispute_id} was removed 2026-09-25: it hard-deleted a
+# financial record, which the 7-year retention rule forbids. No replacement.
 
 
 # ---------- Support Tickets ----------

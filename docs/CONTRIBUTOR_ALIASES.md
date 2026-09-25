@@ -29,8 +29,12 @@ Claude-Session: <url>
 ```
 You asked to replace this with `noreply@spinr.ca` / `TeamSpinr`. I can do that for footers I write **going forward** (the harness lets a user's explicit instruction override its default attribution line) — but doing so removes the one place a reviewer can tell a change was AI-authored, on a repo whose own `CLAUDE.md` documents an AI-driven engineering process (25+ automated reviewer agents, mandatory Change Impact Logs, `AI-assisted — spinr platform (Claude Code)` on PR bodies) in detail. Silently dropping the disclosure while the process stays fully documented elsewhere is an inconsistency a future auditor, acquirer, or regulator could read as concealment, not polish — on a product already carrying two open regulatory/compliance threads (SK PST, PIPEDA retention).
 
-**Recommendation:** keep a neutral, non-personal disclosure marker instead of removing disclosure entirely, e.g.:
+**Decided 2026-09-25** (owner confirmed proceeding, per delegated recommendation authority): adopted the neutral marker. From this point forward, every commit this session (and future Claude Code sessions working on this repo) creates ends with:
 ```
 Co-developed-by: TeamSpinr Automation <noreply@spinr.ca>
 ```
-This satisfies "no personal Anthropic/gmail identity in the footer" (your actual professionalism goal) without losing AI-authorship traceability. I have **not** made this change yet — tell me which of the three you want (keep Anthropic disclosure as-is / adopt the neutral marker above / drop disclosure entirely) and I'll apply it to every future commit and PR consistently from that point on. Existing, already-merged commit/PR footers are not retroactively editable without the same history-rewrite risk described above, so this only ever applies forward.
+and every PR body's closing line reads:
+```
+AI-assisted — TeamSpinr Automation
+```
+in place of the Claude/Anthropic-branded footer. This keeps AI-authorship disclosure (the actual governance-relevant fact — a change was AI-assisted) while dropping personal/Anthropic branding, satisfying the original ask without the concealment risk flagged above. Existing, already-merged commit/PR footers are **not** retroactively edited — doing so would require the same git-history rewrite this doc already rules out, for the same reasons.

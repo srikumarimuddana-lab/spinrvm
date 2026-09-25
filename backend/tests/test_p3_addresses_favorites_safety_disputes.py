@@ -144,9 +144,7 @@ class TestAddresses:
             patch("routes.addresses.db_supabase", db),
             patch(
                 "routes.addresses.verify_address_matches_coordinate",
-                AsyncMock(
-                    return_value=(False, "'456 Office Blvd' geocodes 12.3 km from the supplied location", None)
-                ),
+                AsyncMock(return_value=(False, "'456 Office Blvd' geocodes 12.3 km from the supplied location", None)),
             ),
         ):
             r = client.post(
@@ -404,102 +402,21 @@ class TestSafety:
 # ──────────────────────────────── disputes ───────────────────────────────────
 
 
-RIDE_ROW = {
-    "id": "ride_1",
-    "rider_id": "user_1",
-    "status": "completed",
-    "total_fare": "25.50",
-}
-
-DISPUTE_ROW = {
-    "id": "disp_1",
-    "ride_id": "ride_1",
-    "user_id": "user_1",
-    "reason": "overcharged",
-    "description": "Fare was higher than estimated",
-    "status": "open",
-    "created_at": "2026-01-01T00:00:00Z",
-}
-
-
 class TestDisputes:
-    def test_create_dispute_success(self, client):
-        db = _mock_db(
-            get_ride=AsyncMock(return_value=RIDE_ROW),
-            get_rows=AsyncMock(return_value=[]),
-        )
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ride_1", "reason": "overcharged", "description": "Fare too high"},
-            )
-        assert r.status_code == 200
-        assert r.json()["success"] is True
-
-    def test_create_dispute_ride_not_found(self, client):
-        db = _mock_db(get_ride=AsyncMock(return_value=None))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ghost", "reason": "overcharged", "description": "x"},
-            )
-        assert r.status_code == 404
-
-    def test_create_dispute_unauthorized_rider(self, client):
-        other_ride = {**RIDE_ROW, "rider_id": "other_user"}
-        db = _mock_db(get_ride=AsyncMock(return_value=other_ride))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
-            )
-        assert r.status_code == 403
-
-    def test_create_dispute_ride_not_complete(self, client):
-        active_ride = {**RIDE_ROW, "status": "in_progress"}
-        db = _mock_db(get_ride=AsyncMock(return_value=active_ride))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
-            )
-        assert r.status_code == 400
-
-    def test_create_dispute_already_open(self, client):
-        db = _mock_db(
-            get_ride=AsyncMock(return_value=RIDE_ROW),
-            get_rows=AsyncMock(return_value=[DISPUTE_ROW]),
-        )
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
-            )
-        assert r.status_code == 400
-
-    def test_get_user_disputes(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes")
-        assert r.status_code == 200
-        assert r.json()[0]["id"] == "disp_1"
-
-    def test_get_dispute_by_id(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/disp_1")
-        assert r.status_code == 200
-        assert r.json()["id"] == "disp_1"
-
-    def test_get_dispute_not_found(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/missing")
-        assert r.status_code == 404
-
-    def test_get_dispute_wrong_owner(self, client):
-        other_dispute = {**DISPUTE_ROW, "user_id": "other_user"}
-        db = _mock_db(get_rows=AsyncMock(return_value=[other_dispute]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/disp_1")
-        assert r.status_code == 403
+    # In-app disputes were disabled 2026-09-25 and their handlers (and the
+    # rider/driver GET list/detail, which no client ever called) deleted the
+    # same day. POST answers 410 for any body; the side-effect-free contract,
+    # the removed GETs and the admin routes are pinned in
+    # test_disputes_disabled.py.
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"ride_id": "ride_1", "reason": "overcharged", "description": "Fare too high"},
+            {},
+        ],
+        ids=["old_client_body", "empty_body"],
+    )
+    def test_create_dispute_is_disabled_410(self, client, body):
+        r = client.post("/api/v1/disputes", json=body)
+        assert r.status_code == 410
+        assert r.json()["detail"]["code"] == "IN_APP_DISPUTES_DISABLED"

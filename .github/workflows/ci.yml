@@ -120,6 +120,20 @@ jobs:
     # would just be guessing again in a few months. If runtime keeps
     # climbing run over run even at 35, that's the same open perf
     # investigation, not another timeout bump.
+    #
+    # Update (2026-09-25, docs/audit/2026-09-25-contributor-governance-
+    # baseline.md E12 follow-up): profiled per CR #5579's own recommendation.
+    # --durations=50 showed no slow outlier -- time is spread evenly across
+    # ~16,500 tests, so the mocked-DB tier now runs under pytest-xdist
+    # (-n auto). Measured locally: 16m11s sequential -> 3m56s parallel (~4x).
+    # Splitting the three tiers into separate jobs (the other half of #5579's
+    # recommendation) and the still-open cross-workflow duplication with
+    # ci-guardrails.yml's shared-coverage-run (ACTION_ITEMS.md C47) are
+    # deliberately NOT done here -- each is its own larger, separately-
+    # reviewed change. timeout-minutes stays at 35 rather than being tightened
+    # to the new local number: this container's core count may not match the
+    # actual GitHub-hosted runner's, so the real post-merge CI runtime should
+    # set the next timeout value, not a local benchmark.
     timeout-minutes: 35
     needs: [detect-changes]
     if: |
@@ -232,11 +246,31 @@ jobs:
           # until its stability/runtime is proven; wiring it into CI as its own
           # step (blocking or scheduled) is a separate follow-up decision, not
           # something to default into via this ignore staying here forever.
+          #
+          # -n auto (pytest-xdist, added for CR #5579's profiling follow-up):
+          # this tier is ~16,500 tests, none touching a real service (mocked
+          # Supabase/Redis), so xdist's process-per-worker isolation is safe
+          # here. Measured on a comparable machine: 16m11s sequential -> 3m56s
+          # parallel (--durations=50 showed no single slow test -- the time is
+          # spread evenly across the suite, so parallelizing is the right
+          # lever, not chasing individual slow tests).
+          #
+          # tests/test_sms.py is carved out into its own sequential invocation
+          # below. Verified: all 11 of its tests fail under -n auto (real
+          # threads with a 0.1s timeout budget racing against the extra CPU
+          # contention from parallel worker processes) but pass cleanly (22/22
+          # in ~2s) run alone -- a parallel-safety gap in that one file, not a
+          # correctness bug. --cov-append combines its coverage into the same
+          # run (verified locally: coverage total increased after the append,
+          # not reset).
           CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           export DATABASE_URL="$CI_PG_DSN"
-          pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
+          pytest --cov=. --cov-report= --timeout=30 \
             --ignore=tests/direct_pool --ignore=tests/rls \
-            --ignore=tests/test_schemathesis_fuzz.py -v
+            --ignore=tests/test_schemathesis_fuzz.py --ignore=tests/test_sms.py \
+            -n auto -v
+          pytest --cov=. --cov-append --cov-report=xml --cov-report=term-missing --timeout=30 \
+            tests/test_sms.py -v
 
       # This separate step executes the durable WS outbox Lua script against
       # the disposable Redis service above. The test itself permits only

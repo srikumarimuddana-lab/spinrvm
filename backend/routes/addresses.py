@@ -1,54 +1,261 @@
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
-    from ..schemas import SavedAddress, SavedAddressCreate
+    from ..schemas import SavedAddress, SavedAddressCreate, SavedAddressUpdate
     from ..utils.address_verification import verify_address_matches_coordinate
+    from ..utils.error_handling import DuplicateRecordError
     from ..validators import sanitize_string
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
-    from schemas import SavedAddress, SavedAddressCreate
+    from schemas import SavedAddress, SavedAddressCreate, SavedAddressUpdate
     from utils.address_verification import verify_address_matches_coordinate
+    from utils.error_handling import DuplicateRecordError
     from validators import sanitize_string
 
+logger = logging.getLogger(__name__)
+
 api_router = APIRouter(prefix="/addresses", tags=["Addresses"])
+
+# Fixed text on purpose: the verifier's own reason string quotes the full
+# address back, and a 400 detail travels into client logs/error reporting.
+_MISMATCH_DETAIL = "Address and location don't match. Please search for the address again and re-select it."
+
+_SINGLETON_TYPES = ("home", "work")
+# Icons that name a type of their own, so the label is never consulted.
+_OTHER_TYPED_ICONS = ("gym", "school", "other")
+# What a non-rider-app "home"/"work" icon is stored as (see _driver_safe_icon).
+_UNTYPED_ICON = "location"
+# Migration 485's partial unique index (user_id, icon) WHERE icon IN
+# ('home','work') rejects a second Home/Work written by a concurrent request.
+_HOME_WORK_CONFLICT_DETAIL = "Your Home or Work place was just changed on another device. Refresh and try again."
 
 
 def serialize_doc(doc):
     return doc
 
 
+def _singleton_type(name: Optional[str], icon: Optional[str]) -> Optional[str]:
+    """Return "home"/"work" when this place is the rider's Home/Work, else None.
+
+    Mirrors rider-app/utils/savedPlaceIcon.ts isHomePlace/isWorkPlace: the
+    type the rider picked (stored in ``icon``) wins; only an untyped row
+    (legacy "location" icon, or none) falls back to an exact label match.
+    """
+    icon_l = (icon or "").strip().lower()
+    if icon_l in _SINGLETON_TYPES:
+        return icon_l
+    if icon_l in _OTHER_TYPED_ICONS:
+        return None
+    label = (name or "").strip().lower()
+    return label if label in _SINGLETON_TYPES else None
+
+
+def _singletons_apply(current_user: dict, app_platform: Optional[str]) -> bool:
+    """True when the one-Home/one-Work rule applies to this request.
+
+    It is a rider-app rule. Driver-app builds before the 2026-09-25 fix save
+    every driver address with icon "home", so applying the rule there would
+    make each driver save silently replace the previous one. The app is told
+    apart by the X-App-Platform header both apps send on every request via
+    shared/api/client.ts setAppIdentity() (the same header
+    notifications._audience_filter and rides/safety.py already read); only
+    when it is missing or unrecognised do we fall back to the users-row
+    is_driver flag. Trusted-but-unauthenticated: forging it only changes how
+    the caller's own rows are de-duplicated.
+    """
+    platform = (app_platform or "").strip().lower()
+    if platform in ("rider", "driver"):
+        return platform == "rider"
+    return not current_user.get("is_driver", False)
+
+
+def _driver_safe_icon(icon: Optional[str]) -> Optional[str]:
+    """Store a non-rider-app "home"/"work" icon as the untyped "location".
+
+    The driver app never had Home/Work semantics: builds before the
+    2026-09-25 fix send icon "home" for EVERY saved address, and the new
+    build sends "location". Stored as-is, an old driver build's second
+    "home" would hit migration 485's one-Home unique index and fail. The
+    driver screen draws the same glyph for "location" as for "home".
+    """
+    return _UNTYPED_ICON if icon in _SINGLETON_TYPES else icon
+
+
+def _home_work_conflict(e: DuplicateRecordError, op: str, user_id: str, address_id: Optional[str]) -> HTTPException:
+    # IDs only. The underlying 23505 text names the key (user_id, icon),
+    # never the address.
+    logger.error(
+        "saved_addresses one-Home/Work unique violation on %s (user_id=%s address_id=%s): %s",
+        op,
+        user_id,
+        address_id,
+        (e.details or {}).get("original"),
+    )
+    return HTTPException(status_code=409, detail=_HOME_WORK_CONFLICT_DETAIL)
+
+
+async def _drop_other_singletons(user_id: str, place_type: str, keep_id: str) -> None:
+    # One filtered delete scoped to this rider. Also collapses any
+    # pre-existing duplicate Home/Work rows onto keep_id.
+    #
+    # Callers run this BEFORE writing their own row, never after: with the
+    # delete first, the last request to clean up still writes its row
+    # afterwards, so no interleaving of concurrent saves leaves the rider with
+    # zero Homes (worst case is a temporary duplicate the next save collapses).
+    # Clean-after-write let two devices each delete the other's new Home.
+    await db_supabase.delete_many(
+        "saved_addresses",
+        {"user_id": user_id, "icon": place_type, "id": {"$ne": keep_id}},
+    )
+
+
 @api_router.get("")
 async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
-    addresses = await db_supabase.get_rows("saved_addresses", {"user_id": current_user["id"]}, limit=100)
+    addresses = await db_supabase.get_rows(
+        "saved_addresses", {"user_id": current_user["id"]}, order="created_at", limit=100
+    )
     return serialize_doc(addresses)
 
 
 @api_router.post("")
-async def create_saved_address(request: SavedAddressCreate, current_user: dict = Depends(get_current_user)):
+async def create_saved_address(
+    request: SavedAddressCreate,
+    current_user: dict = Depends(get_current_user),
+    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform"),
+):
+    user_id = current_user["id"]
     _, sanitized_address = sanitize_string(request.address)
 
     # B9: best-effort check that the address text and the coordinate agree —
     # fails open on anything ambiguous (see utils/address_verification.py
     # docstring); only rejects a confident mismatch so a saved address can't
     # silently replay a wrong pin forever (Glide Crescent incident).
-    ok, mismatch_reason, place_id = await verify_address_matches_coordinate(sanitized_address, request.lat, request.lng)
+    ok, _mismatch_reason, place_id = await verify_address_matches_coordinate(
+        sanitized_address, request.lat, request.lng
+    )
     if not ok:
-        raise HTTPException(status_code=400, detail=f"Address and location don't match: {mismatch_reason}")
+        raise HTTPException(status_code=400, detail=_MISMATCH_DETAIL)
 
+    name = sanitize_string(request.name)[1]
+    singletons = _singletons_apply(current_user, x_app_platform)
+    place_type = _singleton_type(name, request.icon) if singletons else None
     address = SavedAddress(
-        user_id=current_user["id"],
-        name=sanitize_string(request.name)[1],
+        user_id=user_id,
+        name=name,
         address=sanitized_address,
         lat=request.lat,
         lng=request.lng,
-        icon=request.icon,
-        place_id=place_id,
+        # A Home/Work row always carries its type in `icon`, so the replace
+        # filter below (and the next save) can find it by icon alone.
+        icon=place_type or (request.icon if singletons else _driver_safe_icon(request.icon)),
+        # The server's own geocode place_id wins; the client's is a fallback.
+        place_id=place_id or request.place_id,
     )
-    await db_supabase.insert_one("saved_addresses", address.dict())
-    return address.dict()
+    doc = address.model_dump()
+
+    try:
+        if place_type:
+            # Owner decision 2026-09-25: a rider keeps exactly one Home and one
+            # Work — saving a second one replaces the first, in place (same id).
+            # The oldest row is the one kept, so concurrent saves agree on it;
+            # the others are dropped before the write (see _drop_other_singletons).
+            current = await db_supabase.get_rows(
+                "saved_addresses", {"user_id": user_id, "icon": place_type}, order="created_at", limit=1
+            )
+            if current:
+                keep_id = current[0]["id"]
+                await _drop_other_singletons(user_id, place_type, keep_id)
+                fields = {k: doc[k] for k in ("name", "address", "lat", "lng", "icon", "place_id")}
+                updated = await db_supabase.update_one(
+                    "saved_addresses", {"id": keep_id, "user_id": user_id, "icon": place_type}, fields
+                )
+                if updated:
+                    return updated
+                # The kept row was removed or re-typed by a concurrent request
+                # between the read and the write: save this one as a new row.
+
+        await db_supabase.insert_one("saved_addresses", doc)
+    except DuplicateRecordError as e:
+        # A concurrent request wrote this rider's Home/Work first.
+        raise _home_work_conflict(e, "create", user_id, doc["id"]) from e
+    return doc
+
+
+@api_router.patch("/{address_id}")
+async def update_saved_address(
+    address_id: str,
+    request: SavedAddressUpdate,
+    current_user: dict = Depends(get_current_user),
+    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform"),
+):
+    user_id = current_user["id"]
+    existing = await db_supabase.find_one("saved_addresses", {"id": address_id, "user_id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Address not found")
+
+    sent = request.model_dump(exclude_unset=True)
+    sent = {k: v for k, v in sent.items() if v is not None}
+    if not sent:
+        raise HTTPException(status_code=422, detail="No fields to update")
+
+    update: dict = {}
+    if "name" in sent:
+        update["name"] = sanitize_string(sent["name"])[1]
+    singletons = _singletons_apply(current_user, x_app_platform)
+    if "icon" in sent:
+        update["icon"] = sent["icon"] if singletons else _driver_safe_icon(sent["icon"])
+
+    location_keys = {"address", "lat", "lng"} & sent.keys()
+    if location_keys:
+        if location_keys != {"address", "lat", "lng"}:
+            raise HTTPException(status_code=422, detail="address, lat and lng must be updated together")
+        _, sanitized_address = sanitize_string(sent["address"])
+        ok, _mismatch_reason, verified_place_id = await verify_address_matches_coordinate(
+            sanitized_address, sent["lat"], sent["lng"]
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail=_MISMATCH_DETAIL)
+        update.update(
+            address=sanitized_address,
+            lat=sent["lat"],
+            lng=sent["lng"],
+            place_id=verified_place_id or sent.get("place_id"),
+        )
+    elif "place_id" in sent:
+        update["place_id"] = sent["place_id"]
+
+    place_type = None
+    if singletons:
+        place_type = _singleton_type(update.get("name", existing.get("name")), update.get("icon", existing.get("icon")))
+    if place_type:
+        update["icon"] = place_type
+        # Only a row becoming this type drops the others — cleanup first,
+        # then the promote (see _drop_other_singletons). A row that already
+        # is the Home/Work (a rename) deletes nothing: were it to, two such
+        # PATCHes on pre-existing duplicates could each delete the other.
+        if (existing.get("icon") or "").strip().lower() != place_type:
+            await _drop_other_singletons(user_id, place_type, address_id)
+
+    try:
+        row = await db_supabase.update_one("saved_addresses", {"id": address_id, "user_id": user_id}, update)
+    except DuplicateRecordError as e:
+        # A concurrent request made another row this rider's Home/Work first.
+        raise _home_work_conflict(e, "update", user_id, address_id) from e
+    if not row:
+        # The row existed above, so it vanished mid-request: another device's
+        # Home/Work save removed it (e.g. two phones swapping Home and Work at
+        # once). Say so and let the client retry, rather than a misleading 404.
+        raise HTTPException(
+            status_code=409,
+            detail="This saved place was just changed on another device. Refresh and try again.",
+        )
+    return row
 
 
 @api_router.delete("/{address_id}")

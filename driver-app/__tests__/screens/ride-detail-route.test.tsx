@@ -63,4 +63,16 @@ describe('driver ride detail route presentation contract', () => {
     expect(source).not.toContain('Planned route preview');
     expect(source).toContain('Imported from the previous app');
   });
+
+  it('sends earnings questions to Help, never to the disabled /disputes endpoint', () => {
+    // In-app disputes are disabled (2026-09-25; POST /disputes answers 410).
+    // The old "Report an earnings issue" button posted there; it is now a
+    // plain link to the Help screen, where SupportScreen shows the support
+    // email.
+    expect(source).not.toContain('/disputes');
+    expect(source).not.toContain('Report an earnings issue');
+    expect(source).not.toContain('api.post(');
+    expect(source).toContain("router.push('/driver/help' as any)");
+    expect(source).toContain("Questions about this trip's earnings? Get help");
+  });
 });

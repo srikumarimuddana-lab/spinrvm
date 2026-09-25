@@ -1,6 +1,6 @@
 """Regression tests for finding 4 (WS-7): payout TOCTOU double-withdraw.
 
-The standard and instant payout paths both read payable_balance, check
+The standard and (since-retired) instant payout paths both read payable_balance, check
 amount <= balance, then call Stripe Transfer.create, then persisted the
 payout row. Two concurrent requests both passed the balance check against
 the same snapshot and both transferred — a TOCTOU double-withdraw of
@@ -24,6 +24,12 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _PAYOUTS = (_ROOT / "routes" / "drivers" / "payouts.py").read_text()
 _EARNINGS = (_ROOT / "routes" / "drivers" / "earnings.py").read_text()
 _MIG_250 = (_ROOT / "migrations" / "250_payout_reservation_guard.sql").read_text()
+
+
+def _standard_section() -> str:
+    """The legacy standard payout handler (kept off-route for rollback)."""
+    start = _PAYOUTS.index("async def _request_payout_legacy")
+    return _PAYOUTS[start : _PAYOUTS.index("async def _attempt_transfer_reversal")]
 
 
 # ── Migration 250 contract ──────────────────────────────────────────────
@@ -77,52 +83,34 @@ class TestStandardPayoutReservation:
     def test_marks_failed_on_transfer_error(self):
         """When the Stripe Transfer fails, the reserved row must be updated
         to status='failed' so the index slot is freed for the next attempt."""
-        # Find the standard payout section (before instant payout)
-        std_section = _PAYOUTS[: _PAYOUTS.index("async def request_instant_payout")]
-        assert '"failed"' in std_section
+        assert '"failed"' in _standard_section()
 
     def test_reverses_transfer_on_terminal_write_failure(self):
         """If the terminal write (reserved -> completed) fails after the
         Stripe Transfer succeeded, the transfer must be reversed."""
-        std_section = _PAYOUTS[: _PAYOUTS.index("async def request_instant_payout")]
-        assert "_attempt_transfer_reversal" in std_section
+        assert "_attempt_transfer_reversal" in _standard_section()
 
     def test_standard_payout_has_idempotency_key(self):
         assert "payout-transfer-" in _PAYOUTS
 
 
-# ── Instant payout: reserve-then-transfer ────────────────────────────────
+# ── Instant payout: retired (weekly-only, owner decision 2026-09-25) ────
 
 
-class TestInstantPayoutReservation:
+class TestInstantPayoutRetired:
+    """The instant route is a 410 stub now: it must move no money and write
+    no row, so none of the reserve-then-transfer machinery may reappear in it."""
+
     def _instant_section(self):
         start = _PAYOUTS.index("async def request_instant_payout")
-        return _PAYOUTS[start:]
+        end = _PAYOUTS.index("async def get_instant_payout_quote")
+        return _PAYOUTS[start:end]
 
-    def test_inserts_reserved_row_before_transfer(self):
+    def test_instant_handler_makes_no_stripe_or_db_call(self):
         section = self._instant_section()
-        reserve_pos = section.index('"reserved"')
-        # "stripe.Transfer.create(" (not "Transfer.create") -- the plain
-        # substring also matches the docstring's mention of
-        # "Transfer.create_reversal()" a few lines above the real call.
-        transfer_pos = section.index("stripe.Transfer.create(")
-        insert_pos = section.index('insert_one("payouts"')
-        assert insert_pos < transfer_pos, "instant payout row must be inserted before the Stripe Transfer"
-        assert reserve_pos < transfer_pos
-
-    def test_updates_to_transfer_completed_after_transfer(self):
-        section = self._instant_section()
-        assert '"transfer_completed"' in section
-
-    def test_marks_failed_on_transfer_error(self):
-        section = self._instant_section()
-        # After transfer fails, reserved -> failed
-        assert '"failed"' in section
-
-    def test_handles_unique_violation_as_409(self):
-        section = self._instant_section()
-        assert "409" in section
-        assert "already in progress" in section.lower()
+        assert "status_code=410" in section
+        for forbidden in ("stripe.", "insert_one(", "update_one(", "get_rows(", "get_driver_balance"):
+            assert forbidden not in section, forbidden
 
 
 # ── Balance: reserved rows are deducted ──────────────────────────────────

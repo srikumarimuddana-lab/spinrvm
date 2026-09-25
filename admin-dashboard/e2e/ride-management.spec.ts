@@ -177,65 +177,10 @@ test.describe('admin dashboard: ride management', () => {
     expect(errors.filter((e) => !/chunk|hydrat/i.test(e))).toHaveLength(0);
   });
 
-  test('refund: resolving an open dispute with a full refund closes the dialog and updates the list', async ({ page }) => {
-    const dispute = {
-      id: 'dispute_1', user_name: 'Jane Rider', reason: 'overcharged',
-      original_fare: 18.5, requested_amount: 18.5, status: 'open',
-      description: 'Charged twice for the same trip.', created_at: '2026-04-28T10:00:00Z',
-    };
-    await mockAdminAPIs(page);
-    let resolved = false;
-    await page.route('**/api/admin/disputes/stats', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ open: resolved ? 0 : 1, under_review: 0, resolved: resolved ? 1 : 0, rejected: 0, total_refunded: resolved ? 18.5 : 0 }) }));
-    await page.route('**/api/admin/disputes/dispute_1/resolve', (route) => {
-      resolved = true;
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
-    });
-    await page.route('**/api/admin/disputes*', (route) => {
-      if (route.request().method() !== 'GET') return route.fallback();
-      const d = resolved ? { ...dispute, status: 'resolved', resolution: 'approved', refund_amount: 18.5, resolved_at: '2026-04-28T11:00:00Z' } : dispute;
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([d]) });
-    });
-
-    await page.goto('/dashboard/disputes');
-    await page.getByText('Jane Rider').click();
-
-    const dialog = page.getByRole('dialog', { name: 'Resolve Dispute' });
-    await expect(dialog).toBeVisible({ timeout: 10000 });
-    // Default resolution is "Approve Full Refund" — submit as-is.
-    await dialog.getByRole('button', { name: 'Submit Resolution' }).click();
-
-    await expect(dialog).not.toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('approved').first()).toBeVisible({ timeout: 10000 });
-  });
-
-  test('refund: a failed resolve request leaves the dialog open (no false success)', async ({ page }) => {
-    await mockAdminAPIs(page);
-    const dispute = {
-      id: 'dispute_2', user_name: 'Sam Rider', reason: 'driver_issue',
-      original_fare: 20, requested_amount: 20, status: 'open',
-      description: 'Driver took a longer route.', created_at: '2026-04-28T10:00:00Z',
-    };
-    await page.route('**/api/admin/disputes/stats', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ open: 1, under_review: 0, resolved: 0, rejected: 0, total_refunded: 0 }) }));
-    await page.route('**/api/admin/disputes/dispute_2/resolve', (route) =>
-      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Internal error' }) }));
-    await page.route('**/api/admin/disputes*', (route) => {
-      if (route.request().method() !== 'GET') return route.fallback();
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([dispute]) });
-    });
-
-    await page.goto('/dashboard/disputes');
-    await page.getByText('Sam Rider').click();
-
-    const dialog = page.getByRole('dialog', { name: 'Resolve Dispute' });
-    await expect(dialog).toBeVisible({ timeout: 10000 });
-    await dialog.getByRole('button', { name: 'Submit Resolution' }).click();
-
-    // The dialog must not silently disappear on a failed resolve — that would
-    // mislead the admin into thinking the refund went through.
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-  });
+  // The two dispute-refund tests that lived here were removed 2026-09-25:
+  // in-app disputes are disabled, the resolve dialog no longer exists and
+  // PUT /api/admin/disputes/{id}/resolve answers 410. See
+  // docs/change-log/2026-09-25-disable-in-app-disputes.md.
 
   test('driver approval: approving a pending driver activates them', async ({ page }) => {
     await mockAdminAPIs(page);

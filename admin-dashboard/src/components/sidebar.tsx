@@ -168,7 +168,7 @@ const NAV_GROUPS: NavGroup[] = [
                 // path per view, matching the rest of this group.
                 children: [
                     { href: "/dashboard/support?tab=tickets", label: "Support Tickets", icon: LifeBuoy, module: "support" },
-                    { href: "/dashboard/support?tab=disputes", label: "Disputes & Refunds", icon: HelpCircle, module: "support" },
+                    { href: "/dashboard/support?tab=disputes", label: "Chargebacks", icon: HelpCircle, module: "support" },
                     { href: "/dashboard/support?tab=complaints", label: "Complaints", icon: FileWarning, module: "support" },
                     { href: "/dashboard/support?tab=lost-found", label: "Lost & Found", icon: PackageSearch, module: "support" },
                     { href: "/dashboard/support?tab=flags", label: "Flags", icon: Flag, module: "support" },

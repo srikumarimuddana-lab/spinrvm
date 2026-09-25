@@ -50,7 +50,6 @@ export {
     getLostAndFoundItems,
     updateLostItem,
     deleteLostItem,
-    deleteDispute,
     getComplaints,
     deleteComplaint,
 } from "./api/rides";
@@ -439,11 +438,6 @@ export {
     createPromotion,
     updatePromotion,
     deletePromotion,
-    getDisputes,
-    getDisputeStats,
-    getDisputeDetails,
-    createDispute,
-    updateDispute,
     getChargebacks,
     downloadDisputeEvidencePack,
     submitDisputeEvidence,
@@ -543,7 +537,6 @@ export {
     getPayoutsOverview,
     getAutoPayoutBatches,
     getBlockedPayoutDrivers,
-    resolveDispute,
 } from "./api/analytics-payouts";
 export type {
     PayoutsOverview,

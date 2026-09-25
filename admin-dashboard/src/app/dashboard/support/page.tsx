@@ -44,7 +44,7 @@ const TAB_ORDER: TabSlug[] = ["tickets", "disputes", "complaints", "lost-found",
 
 const TAB_META: Record<TabSlug, { label: string; icon: typeof LifeBuoy; Component: React.ComponentType }> = {
     tickets: { label: "Support Tickets", icon: LifeBuoy, Component: TicketsTab },
-    disputes: { label: "Disputes", icon: HelpCircle, Component: DisputesTab },
+    disputes: { label: "Chargebacks", icon: HelpCircle, Component: DisputesTab },
     complaints: { label: "Complaints", icon: FileWarning, Component: ComplaintsTab },
     "lost-found": { label: "Lost & Found", icon: PackageSearch, Component: LostAndFoundTab },
     flags: { label: "Flags", icon: Flag, Component: FlagsTab },

@@ -153,10 +153,11 @@ async def places_autocomplete(
 
     payload = build_autocomplete_payload(input, session_token, location, radius)
 
+    # PIPEDA: never log the typed text (it is an address) or the bias point
+    # (raw lat/lng). Length + whether a bias was sent is enough to debug.
     logger.info(
-        "[maps_proxy] autocomplete(new) input=%r location=%s radius=%s restricted=%s",
-        input,
-        location or "(none)",
+        "[maps_proxy] autocomplete(new) input_len=%d radius=%s restricted=%s",
+        len(input),
         radius if location else "(none)",
         bool(location),
     )
@@ -182,10 +183,12 @@ async def places_autocomplete(
 
     predictions = legacy_predictions_from_new_response(data)
 
+    # The top description is an address too — log only whether it carries a
+    # place_id (i.e. is resolvable), never its text.
     logger.info(
-        "[maps_proxy] autocomplete results=%d top=%s",
+        "[maps_proxy] autocomplete results=%d top_has_place_id=%s",
         len(predictions),
-        predictions[0].get("description", "")[:60] if predictions else "(none)",
+        bool(predictions[0].get("place_id")) if predictions else False,
     )
 
     # Sort by distance from the rider when origin was provided. Google's

@@ -67,7 +67,7 @@ Payment is processed through our payment partner, Stripe. We do not store your f
 
 5. CANCELLATIONS
 
-You may cancel a ride before it starts. Depending on how much time has passed since a driver accepted your request, a cancellation fee may apply; the app will tell you before you cancel if a fee applies to that specific cancellation. Rides cannot be cancelled by either party once the trip is underway — at that point the trip must be completed and any dispute handled through Support afterward.
+You may cancel a ride before it starts. Depending on how much time has passed since a driver accepted your request, a cancellation fee may apply; the app will tell you before you cancel if a fee applies to that specific cancellation. Rides cannot be cancelled by either party once the trip is underway — at that point the trip must be completed. Questions about a charge? Email support@spinr.ca, or contact your card issuer.
 
 6. SAFETY
 
@@ -83,7 +83,7 @@ You agree not to use the Service to harass, endanger, or discriminate against an
 
 8. DISPUTES AND LIABILITY
 
-If you have a complaint about a ride, contact Support through the app first — most issues are resolved there. To the maximum extent permitted by Saskatchewan and Canadian law, Spinr's liability for any claim arising from your use of the Service is limited to the amount you paid for the ride giving rise to the claim. Nothing in these Terms limits liability that cannot be limited under applicable law, including liability for gross negligence or willful misconduct.
+If you have a complaint about a ride, contact Support first — most issues are resolved there. Questions about a charge? Email support@spinr.ca, or contact your card issuer. To the maximum extent permitted by Saskatchewan and Canadian law, Spinr's liability for any claim arising from your use of the Service is limited to the amount you paid for the ride giving rise to the claim. Nothing in these Terms limits liability that cannot be limited under applicable law, including liability for gross negligence or willful misconduct.
 
 9. CHANGES TO THESE TERMS
 

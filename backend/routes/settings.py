@@ -82,6 +82,13 @@ async def get_public_settings():
         # dark-launched, rider-app only. False = rider-app keeps today's
         # jump-to-home + toast on a no_drivers_found auto-cancel.
         "rider_no_drivers_sheet_enabled": bool(settings.get("rider_no_drivers_sheet_enabled", False)),
+        # Rider home-screen Home/Work/Saved shortcuts (2026-09-25 saved-places
+        # fix). Default True: it repairs buttons that ignored which one was
+        # tapped. False = rider-app falls back to the old behaviour (all three
+        # just open search). Column added by migration 484; admins toggle it
+        # in the dashboard (docs/change-log/2026-09-25-admin-flag-toggles.md).
+        # The True default here also covers a DB where 484 isn't applied yet.
+        "saved_place_shortcuts_enabled": bool(settings.get("saved_place_shortcuts_enabled", True)),
         # PostHog session replay (rider-app + driver-app). Default off.
         # Project API key is client-safe (phc_...), same class as
         # stripe_publishable_key. Apps fail closed if the flag is on but

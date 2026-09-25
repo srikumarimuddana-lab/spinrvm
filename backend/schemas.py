@@ -562,6 +562,10 @@ class AppSettings(BaseModel):
     # brand-new safety-team-paging behavior, not an established one, so it
     # defaults OFF: ship dark, verify in staging, then flip on.
     route_deviation_alert_enabled: bool = False
+    # Driver destination ("heading home") mode switch (migration 482, C136).
+    # Defaults OFF: dispatch skips the destination hard-filter and drivers
+    # cannot set a destination until an admin deliberately re-enables it.
+    destination_mode_enabled: bool = False
     # ── Notification throttling (quiet hours + daily cap) ────────────────
     # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
     # unchanged until an admin opts in after staging verification. Global for
@@ -860,12 +864,59 @@ class SavedAddress(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+# Every value a saved address's `icon` can legitimately hold: the rider-app
+# type chips (rider-app/utils/savedPlaceIcon.ts SAVED_PLACE_TYPES keys,
+# lowercased) plus "location", the legacy-import / generic default
+# (services/saved_address_import_service.py _DEFAULT_ICON). The icon doubles
+# as the place's type — "home"/"work" drive the one-Home/one-Work rule in
+# routes/addresses.py — so free-form values are rejected rather than stored.
+SAVED_ADDRESS_ICONS = ("home", "work", "gym", "school", "other", "location")
+
+
+def _normalize_saved_address_icon(v: Any) -> Any:
+    if v is None:
+        return v
+    if not isinstance(v, str):
+        raise ValueError("icon must be a string")
+    icon = v.strip().lower()
+    if icon not in SAVED_ADDRESS_ICONS:
+        raise ValueError(f"icon must be one of: {', '.join(SAVED_ADDRESS_ICONS)}")
+    return icon
+
+
 class SavedAddressCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     address: str = Field(..., min_length=5, max_length=300)
-    lat: float
-    lng: float
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
     icon: str = "location"
+    # Google place_id the client resolved the address from (rider-app's
+    # autocomplete pick). The server's own write-time geocode place_id (B9)
+    # wins when it has one; this is only the fallback when that check fails
+    # open, so the rider-app can still re-resolve fresh coordinates later.
+    place_id: Optional[str] = Field(None, max_length=300)
+
+    @field_validator("icon", mode="before")
+    @classmethod
+    def _icon_known(cls, v: Any) -> Any:
+        return _normalize_saved_address_icon(v)
+
+
+class SavedAddressUpdate(BaseModel):
+    """PATCH /addresses/{id} — every field optional; only sent fields change.
+    address/lat/lng must be sent together (routes/addresses.py enforces it)."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    address: Optional[str] = Field(None, min_length=5, max_length=300)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
+    icon: Optional[str] = None
+    place_id: Optional[str] = Field(None, max_length=300)
+
+    @field_validator("icon", mode="before")
+    @classmethod
+    def _icon_known(cls, v: Any) -> Any:
+        return _normalize_saved_address_icon(v)
 
 
 class Driver(BaseModel):

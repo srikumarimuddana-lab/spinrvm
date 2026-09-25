@@ -33,6 +33,7 @@ def offer_db(pg_cur):
         "459_driver_claim_epoch_fence.sql",
         "460_offer_decision_atomicity.sql",
         "464_driver_availability_transition_hardening.sql",
+        "486_driver_availability_controller_rebind.sql",
     ):
         _apply(cur, name)
     cur.execute("UPDATE settings SET driver_availability_v2_enabled=true WHERE id='app_settings'")
@@ -111,7 +112,7 @@ def test_claim_rolls_back_when_period_2_is_not_recorded(offer_db, result):
     if result is None:
         failure_body = "BEGIN RAISE EXCEPTION 'forced insurance failure'; END;"
     else:
-        failure_body = "BEGIN RETURN '{\"status\":\"race\",\"opened\":false}'::jsonb; END;"
+        failure_body = 'BEGIN RETURN \'{"status":"race","opened":false}\'::jsonb; END;'
     cur.execute(
         "CREATE OR REPLACE FUNCTION public.record_insurance_period_transition("
         "p_driver_id text,p_new_period smallint,p_ride_id text DEFAULT NULL) "
@@ -237,7 +238,9 @@ def test_admin_claim_cannot_overlap_existing_batch_offer(offer_db):
     assert cur.fetchone() == (True, None)
 
 
-@pytest.mark.parametrize("assigned_driver,expected", [("d1", "OK"), ("d2", "RIDE_STATE_CONFLICT"), (None, "RIDE_STATE_CONFLICT")])
+@pytest.mark.parametrize(
+    "assigned_driver,expected", [("d1", "OK"), ("d2", "RIDE_STATE_CONFLICT"), (None, "RIDE_STATE_CONFLICT")]
+)
 def test_admin_claim_legacy_assignment_must_match_candidate(offer_db, assigned_driver, expected):
     cur = offer_db
     cur.execute(

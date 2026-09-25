@@ -1,7 +1,8 @@
 // Ride management, flags, complaints, and lost-and-found. Extracted from the
 // monolithic lib/api.ts as part of the per-domain split — grouped by original
-// file position, not a strict domain boundary (deleteDispute lives here
-// alongside deleteComplaint; createDispute is in api/disputes-safety.ts).
+// file position, not a strict domain boundary (deleteDispute was removed
+// 2026-09-25 along with the backend's hard-delete route, which broke 7-year
+// retention; the other in-app dispute helpers were deleted the same day).
 
 import { request } from "./client";
 import { useAuthStore } from "@/store/authStore";
@@ -230,8 +231,6 @@ export const updateLostItem = (itemId: string, data: any) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteLostItem = (itemId: string) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "DELETE" });
-export const deleteDispute = (disputeId: string) =>
-    request<any>(`/api/admin/disputes/${disputeId}`, { method: "DELETE" });
 export const getComplaints = (opts: {
     limit?: number;
     offset?: number;

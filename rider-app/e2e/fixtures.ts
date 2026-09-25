@@ -222,7 +222,9 @@ export async function mockBackend(
     if (path === '/wallet/transactions') return json(200, { transactions: [], total: 0 });
     if (path === '/loyalty') return json(200, { points: 0, lifetime_points: 0, tier: 'bronze', multiplier: 1.0, redemption_rate: 100 });
     if (path.startsWith('/promos')) return json(200, { promos: [] });
-    if (path.startsWith('/saved-places') || path.startsWith('/users/saved-addresses')) return json(200, { saved_addresses: [] });
+    // The real endpoint is GET /addresses and it returns a bare list (the
+    // old '/saved-places' mock never matched, so it fell to the `{}` default).
+    if (path === '/addresses' || path === '/addresses/') return json(200, []);
 
     // Default: empty 200 so UI doesn't error
     return json(200, {});

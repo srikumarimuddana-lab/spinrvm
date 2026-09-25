@@ -2,11 +2,17 @@
  * app/driver/destination-mode.tsx — driver "heading home" destination
  * filter. Pins:
  *  - GET /drivers/destination on mount, populating the address input
- *  - Save: blocks on an empty/whitespace-only address; geocodes via the
- *    autocomplete->details session-token flow, then POST /drivers/destination
- *    on success, or a "not found" toast when geocoding returns nothing
- *  - Clear: confirms via Alert.alert, then DELETE /drivers/destination and
- *    resets local state to inactive
+ *  - on/off is decided from the server's `active` flag (isDestinationActive),
+ *    not the raw stored `destination_mode` flag
+ *  - enabled=false (settings.destination_mode_enabled off, migration 482):
+ *    the form is replaced by an "unavailable" notice; a stored row can
+ *    still be cleared
+ *  - address entry is the shared usePlacesAutocomplete typeahead, biased to
+ *    the driver's last-known GPS; the driver must pick from the list
+ *    (place details -> coords) before Save POSTs /drivers/destination
+ *  - search failure ("temporarily unavailable") is distinguished from a
+ *    genuine empty result ("no matching address")
+ *  - Clear: confirms via Alert.alert, then DELETE /drivers/destination
  *  - load/save/clear failures each surface their own toast
  */
 import React from 'react';
@@ -45,8 +51,26 @@ jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => mockLanguageState,
 }));
 
-jest.mock('@shared/utils/placesSession', () => ({
-  newPlacesSessionToken: () => 'session-token-1',
+const HOOK_IDLE = {
+  predictions: [] as any[],
+  loading: false,
+  error: null as null | 'unavailable',
+  searched: false,
+  clear: jest.fn(),
+  rotateSessionToken: jest.fn(),
+  sessionToken: 'session-token-1',
+};
+let mockHookState = { ...HOOK_IDLE };
+const mockUsePlaces = jest.fn((..._args: any[]) => mockHookState);
+jest.mock('@shared/hooks/usePlacesAutocomplete', () => ({
+  usePlacesAutocomplete: (...a: any[]) => mockUsePlaces(...a),
+}));
+
+const mockGetPerms = jest.fn();
+const mockLastKnown = jest.fn();
+jest.mock('expo-location', () => ({
+  getForegroundPermissionsAsync: (...a: any[]) => mockGetPerms(...a),
+  getLastKnownPositionAsync: (...a: any[]) => mockLastKnown(...a),
 }));
 
 const mockApiGet = jest.fn();
@@ -91,6 +115,9 @@ function findButtonByChildText(r: TestRenderer.ReactTestRenderer, text: string) 
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockHookState = { ...HOOK_IDLE };
+  mockGetPerms.mockResolvedValue({ granted: true });
+  mockLastKnown.mockResolvedValue({ coords: { latitude: 52.13, longitude: -106.67 } });
   mockApiGet.mockResolvedValue({ data: INACTIVE });
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
@@ -137,46 +164,11 @@ describe('DestinationModeScreen', () => {
     expect(mockApiPost).not.toHaveBeenCalled();
   });
 
-  it('geocodes and saves a valid address', async () => {
-    mockApiGet.mockImplementation((url: string) => {
-      if (url === '/drivers/destination') return Promise.resolve({ data: INACTIVE });
-      if (url.startsWith('/maps/places/autocomplete')) {
-        return Promise.resolve({ data: { predictions: [{ place_id: 'p1', description: '123 Main St' }] } });
-      }
-      if (url.startsWith('/maps/places/details')) {
-        return Promise.resolve({ data: { lat: 50.45, lng: -104.6 } });
-      }
-      return Promise.reject(new Error('unexpected url ' + url));
-    });
-    mockApiPost.mockResolvedValue({ data: {} });
+  it('refuses to save typed text that was not picked from the list', async () => {
     const r = await renderScreen();
     const input = r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' });
     act(() => {
       input.props.onChangeText('123 Main St');
-    });
-    const saveBtn = findButtonByChildText(r, 'destinationMode.activateBtn');
-    await act(async () => {
-      await saveBtn.props.onPress();
-      await flush();
-    });
-    expect(mockApiPost).toHaveBeenCalledWith('/drivers/destination', {
-      address: '123 Main St',
-      lat: 50.45,
-      lng: -104.6,
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('success', 'destinationMode.savedTitle', 'destinationMode.savedMsg');
-  });
-
-  it('shows a "not found" toast when geocoding returns no result', async () => {
-    mockApiGet.mockImplementation((url: string) => {
-      if (url === '/drivers/destination') return Promise.resolve({ data: INACTIVE });
-      if (url.startsWith('/maps/places/autocomplete')) return Promise.resolve({ data: { predictions: [] } });
-      return Promise.reject(new Error('unexpected'));
-    });
-    const r = await renderScreen();
-    const input = r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' });
-    act(() => {
-      input.props.onChangeText('nowhere');
     });
     const saveBtn = findButtonByChildText(r, 'destinationMode.activateBtn');
     await act(async () => {
@@ -186,36 +178,188 @@ describe('DestinationModeScreen', () => {
     expect(mockApiPost).not.toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalledWith(
       'warning',
-      'destinationMode.notFoundTitle',
-      'destinationMode.notFoundMsg',
+      'destinationMode.missingAddressTitle',
+      'destinationMode.pickFromListMsg',
     );
   });
 
-  it('shows a toast when the save POST fails', async () => {
-    mockApiGet.mockImplementation((url: string) => {
-      if (url === '/drivers/destination') return Promise.resolve({ data: INACTIVE });
-      if (url.startsWith('/maps/places/autocomplete')) {
-        return Promise.resolve({ data: { predictions: [{ place_id: 'p1', description: 'x' }] } });
-      }
-      if (url.startsWith('/maps/places/details')) return Promise.resolve({ data: { lat: 1, lng: 2 } });
-      return Promise.reject(new Error('unexpected'));
-    });
-    mockApiPost.mockRejectedValue(new Error('server error'));
+  it('biases the typeahead to the driver GPS and passes the typed text', async () => {
     const r = await renderScreen();
     const input = r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' });
     act(() => {
-      input.props.onChangeText('123 Main St');
+      input.props.onChangeText('123 Main');
     });
+    const lastCall = mockUsePlaces.mock.calls[mockUsePlaces.mock.calls.length - 1];
+    expect(lastCall[0]).toBe('123 Main');
+    expect(lastCall[1]).toEqual({ lat: 52.13, lng: -106.67, radiusMeters: 50000 });
+  });
+
+  it('does not bias (and does not prompt) when location is not already granted', async () => {
+    mockGetPerms.mockResolvedValue({ granted: false });
+    await renderScreen();
+    expect(mockLastKnown).not.toHaveBeenCalled();
+    const lastCall = mockUsePlaces.mock.calls[mockUsePlaces.mock.calls.length - 1];
+    expect(lastCall[1]).toBeNull();
+  });
+
+  it('shows a pick list; picking resolves details and Save posts the picked place', async () => {
+    mockHookState = {
+      ...HOOK_IDLE,
+      searched: true,
+      predictions: [
+        {
+          place_id: 'p1',
+          description: '123 Main St, Saskatoon, SK',
+          structured_formatting: { main_text: '123 Main St', secondary_text: 'Saskatoon, SK' },
+        },
+        { place_id: 'p2', description: '123 Main St, Regina, SK' },
+      ],
+    };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/drivers/destination') return Promise.resolve({ data: { ...INACTIVE, enabled: true, active: false } });
+      if (url.startsWith('/maps/places/details')) return Promise.resolve({ data: { lat: 52.12, lng: -106.66 } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    mockApiPost.mockResolvedValue({ data: { destination_expires_at: '2026-09-25T20:00:00+00:00' } });
+    const r = await renderScreen();
+    const input = r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' });
+    act(() => {
+      input.props.onChangeText('123 main');
+    });
+    expect(r.root.findByProps({ testID: 'destination-predictions' })).toBeTruthy();
+    const row = r.root.findByProps({ testID: 'destination-prediction-p1' });
+    await act(async () => {
+      await row.props.onPress();
+      await flush();
+    });
+    expect(mockApiGet).toHaveBeenCalledWith('/maps/places/details?place_id=p1&session_token=session-token-1');
+    expect(mockHookState.rotateSessionToken).toHaveBeenCalled();
+    expect(r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' }).props.value).toBe(
+      '123 Main St, Saskatoon, SK',
+    );
+
     const saveBtn = findButtonByChildText(r, 'destinationMode.activateBtn');
     await act(async () => {
       await saveBtn.props.onPress();
       await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledWith('/drivers/destination', {
+      address: '123 Main St, Saskatoon, SK',
+      lat: 52.12,
+      lng: -106.66,
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('success', 'destinationMode.savedTitle', 'destinationMode.savedMsg');
+    // Now reads as on (server active=true is mirrored locally after the POST).
+    expect(r.root.findByProps({ testID: 'destination-mode-status' }).props.children).toBe('destinationMode.activeLabel');
+  });
+
+  it('shows "not found" when the picked place has no coordinates', async () => {
+    mockHookState = { ...HOOK_IDLE, searched: true, predictions: [{ place_id: 'p1', description: 'Somewhere' }] };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/drivers/destination') return Promise.resolve({ data: INACTIVE });
+      if (url.startsWith('/maps/places/details')) return Promise.resolve({ data: { lat: null, lng: null } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    act(() => {
+      r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' }).props.onChangeText('somewhere');
+    });
+    await act(async () => {
+      await r.root.findByProps({ testID: 'destination-prediction-p1' }).props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'destinationMode.notFoundTitle', 'destinationMode.notFoundMsg');
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes search unavailable (429/5xx) from no matching address', async () => {
+    mockHookState = { ...HOOK_IDLE, error: 'unavailable' };
+    const r = await renderScreen();
+    act(() => {
+      r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' }).props.onChangeText('123 main');
+    });
+    expect(r.root.findByProps({ testID: 'destination-search-unavailable' }).props.children).toBe(
+      'destinationMode.searchUnavailableMsg',
+    );
+    expect(r.root.findAllByProps({ testID: 'destination-search-no-match' })).toHaveLength(0);
+
+    mockHookState = { ...HOOK_IDLE, searched: true, predictions: [] };
+    act(() => {
+      r.root.findByProps({ placeholder: 'destinationMode.addressPlaceholder' }).props.onChangeText('zzzz qqq');
+    });
+    expect(r.root.findByProps({ testID: 'destination-search-no-match' }).props.children).toBe(
+      'destinationMode.noMatchingAddress',
+    );
+    expect(r.root.findAllByProps({ testID: 'destination-search-unavailable' })).toHaveLength(0);
+  });
+
+  it('shows neither message while a search is still pending', async () => {
+    mockHookState = { ...HOOK_IDLE, loading: true };
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ testID: 'destination-search-no-match' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ testID: 'destination-search-unavailable' })).toHaveLength(0);
+  });
+
+  it('shows a toast when the save POST fails (e.g. 409 feature switched off)', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...ACTIVE, active: true } });
+    mockApiPost.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 409'), {
+        response: { status: 409, data: { detail: 'Destination mode is not available.' } },
+      }),
+    );
+    const r = await renderScreen();
+    const saveBtn = findButtonByChildText(r, 'destinationMode.updateBtn');
+    await act(async () => {
+      await saveBtn.props.onPress();
+      await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledWith('/drivers/destination', {
+      address: '123 Main St',
+      lat: 50.45,
+      lng: -104.6,
     });
     expect(mockShowToast).toHaveBeenCalledWith(
       'error',
       'destinationMode.saveFailedTitle',
       'destinationMode.saveFailedMsg',
     );
+  });
+
+  it('decides on/off from the server active flag, not the raw destination_mode', async () => {
+    // Expired row: raw flag still true, server says not active.
+    mockApiGet.mockResolvedValue({ data: { ...ACTIVE, active: false, enabled: true } });
+    const r = await renderScreen();
+    expect(r.root.findByProps({ testID: 'destination-mode-status' }).props.children).toBe(
+      'destinationMode.inactiveLabel',
+    );
+    expect(findButtonByChildText(r, 'destinationMode.activateBtn')).toBeTruthy();
+    // The stale row can still be cleared.
+    expect(findButtonByChildText(r, 'destinationMode.clearBtn')).toBeTruthy();
+  });
+
+  it('reads as on when the server reports active', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...ACTIVE, active: true, enabled: true } });
+    const r = await renderScreen();
+    expect(r.root.findByProps({ testID: 'destination-mode-status' }).props.children).toBe('destinationMode.activeLabel');
+  });
+
+  it('when the feature is switched off, shows the unavailable notice, no form, and never searches', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...ACTIVE, active: false, enabled: false } });
+    const r = await renderScreen();
+    expect(r.root.findByProps({ testID: 'destination-mode-unavailable' })).toBeTruthy();
+    expect(r.root.findAllByProps({ placeholder: 'destinationMode.addressPlaceholder' })).toHaveLength(0);
+    expect(findButtonByChildText(r, 'destinationMode.activateBtn')).toBeUndefined();
+    const lastCall = mockUsePlaces.mock.calls[mockUsePlaces.mock.calls.length - 1];
+    expect(lastCall[0]).toBe('');
+    // A stored row can still be cleared while switched off.
+    expect(findButtonByChildText(r, 'destinationMode.clearBtn')).toBeTruthy();
+  });
+
+  it('when switched off with nothing stored, shows only the notice', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...INACTIVE, active: false, enabled: false } });
+    const r = await renderScreen();
+    expect(r.root.findByProps({ testID: 'destination-mode-unavailable' })).toBeTruthy();
+    expect(findButtonByChildText(r, 'destinationMode.clearBtn')).toBeUndefined();
   });
 
   it('shows the Clear button only when destination mode is active, and confirms before clearing', async () => {

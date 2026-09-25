@@ -13,6 +13,7 @@ import type { SOSTriggerResult } from '@shared/types/safety';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
+import { savedPlaceType } from '../utils/savedPlaceIcon';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
 const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED]);
@@ -213,7 +214,7 @@ export interface Ride {
   actual_distance_km?: number;
 }
 
-interface SavedAddress {
+export interface SavedAddress {
   id: string;
   user_id: string;
   name: string;
@@ -221,6 +222,25 @@ interface SavedAddress {
   lat: number;
   lng: number;
   icon: string;
+  /** Google place_id; lets a tap re-resolve fresh coordinates (handleSelectLocation). */
+  place_id?: string | null;
+  created_at?: string;
+}
+
+/** Fields the rider can change via PATCH /addresses/{id}. */
+export type SavedAddressPatch = Partial<Pick<SavedAddress, 'name' | 'address' | 'lat' | 'lng' | 'icon' | 'place_id'>>;
+
+/**
+ * Merge a row the server just saved into the local list: replace by id, and
+ * — because the server keeps one Home and one Work per rider, replacing the
+ * old one — drop any other local entry of the same singleton type.
+ */
+function mergeSavedAddress(current: SavedAddress[], saved: SavedAddress): SavedAddress[] {
+  const type = savedPlaceType(saved);
+  const kept = current.filter((a) => a.id === saved.id || !(type && savedPlaceType(a) === type));
+  return kept.some((a) => a.id === saved.id)
+    ? kept.map((a) => (a.id === saved.id ? saved : a))
+    : [...kept, saved];
 }
 
 interface Promo {
@@ -269,6 +289,8 @@ interface RideState {
   _lastEventRideId: string | null;
   _lastEventVersion: number;
   savedAddresses: SavedAddress[];
+  /** True when the last GET /addresses failed — the list is empty, not "none saved". */
+  savedAddressesLoadFailed: boolean;
   recentSearches: Location[];
   scheduledTime: Date | null;
   scheduledRides: Ride[];
@@ -332,6 +354,8 @@ interface RideState {
   simulateDriverArrival: () => Promise<void>;
   fetchSavedAddresses: () => Promise<void>;
   addSavedAddress: (address: Omit<SavedAddress, 'id' | 'user_id'>) => Promise<void>;
+  updateSavedAddress: (id: string, patch: SavedAddressPatch) => Promise<void>;
+  /** Throws on failure so the caller can tell the rider. */
   deleteSavedAddress: (id: string) => Promise<void>;
   startRide: () => Promise<void>;
   completeRide: () => Promise<Ride | undefined>;
@@ -424,6 +448,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   _activeRideRequestId: 0,
   wsConnected: false,
   savedAddresses: [],
+  savedAddressesLoadFailed: false,
   recentSearches: [],
   availablePromos: [],
   appliedPromo: null,
@@ -1200,32 +1225,46 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchSavedAddresses: async () => {
     try {
       const response = await api.get<SavedAddress[]>('/addresses');
-      set({ savedAddresses: response.data as SavedAddress[] });
+      const data: unknown = response.data;
+      if (!Array.isArray(data)) {
+        // A non-list body (proxy error page, `{}`) must not reach the
+        // screens' .find/.filter calls, nor leave an older list showing.
+        console.error('Error fetching addresses: unexpected response shape');
+        set({ savedAddresses: [], savedAddressesLoadFailed: true });
+        return;
+      }
+      set({ savedAddresses: data as SavedAddress[], savedAddressesLoadFailed: false });
     } catch (err: unknown) {
       // PIPEDA: never spread the raw error body into logs — backend error
       // payloads can contain saved-address strings or user identifiers.
       const e = err as { code?: unknown; status?: unknown } | undefined;
       console.error('Error fetching addresses', { code: e?.code, status: e?.status });
+      // Clear rather than keep a list that may be stale — or, on a shared
+      // phone, someone else's Home. Screens show a retry state instead.
+      set({ savedAddresses: [], savedAddressesLoadFailed: true });
     }
   },
 
   addSavedAddress: async (address) => {
     try {
       const response = await api.post<SavedAddress>('/addresses', address);
-      set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
+      set({ savedAddresses: mergeSavedAddress(get().savedAddresses, response.data as SavedAddress) });
     } catch (error: unknown) {
       set({ error: getApiErrorMessage(error, 'Failed to add address') });
       throw error;
     }
   },
 
+  updateSavedAddress: async (id, patch) => {
+    const response = await api.patch<SavedAddress>(`/addresses/${id}`, patch);
+    set({ savedAddresses: mergeSavedAddress(get().savedAddresses, response.data as SavedAddress) });
+  },
+
   deleteSavedAddress: async (id) => {
-    try {
-      await api.delete(`/addresses/${id}`);
-      set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
-    } catch (error: unknown) {
-      set({ error: getApiErrorMessage(error, 'Failed to delete address') });
-    }
+    // No catch: the store's shared `error` field was never shown for this,
+    // so a failed delete looked like it did nothing. The screen toasts it.
+    await api.delete(`/addresses/${id}`);
+    set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
   },
 
   setWsConnected: (v) => set({ wsConnected: v }),
@@ -1525,6 +1564,9 @@ registerLogoutCallback(() => {
     // Recents are per-person, not per-device: the next account on this phone
     // must not inherit (or book to) the previous rider's destinations.
     recentSearches: [],
+    // Same for saved places — the next account must not see this rider's Home.
+    savedAddresses: [],
+    savedAddressesLoadFailed: false,
   });
   AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
   AsyncStorage.removeItem(RECENT_SEARCHES_KEY).catch(() => {});

@@ -49,3 +49,30 @@ export function savedPlaceConfig(addr: { name?: string | null; icon?: string | n
     SAVED_PLACE_TYPES[SAVED_PLACE_TYPES.length - 1]
   );
 }
+
+type PlaceLike = { name?: string | null; icon?: string | null };
+
+// Types a rider keeps exactly one of (owner decision 2026-09-25): saving a
+// second Home/Work replaces the first — backend/routes/addresses.py applies
+// the same rule server-side (_singleton_type), keep the two in step.
+const OTHER_TYPED_ICONS = ['gym', 'school', 'other'];
+
+/**
+ * 'home' | 'work' when this saved place is the rider's Home/Work, else null.
+ *
+ * The type the rider picked (stored in `icon`) wins, so a place typed Home
+ * but labelled "My house" is still Home, and one labelled "Home" but typed
+ * Gym is not. Only an untyped row — legacy-import "location" icon, or no
+ * icon — falls back to an exact label match.
+ */
+export function savedPlaceType(addr: PlaceLike | null | undefined): 'home' | 'work' | null {
+  if (!addr) return null;
+  const icon = (addr.icon || '').trim().toLowerCase();
+  if (icon === 'home' || icon === 'work') return icon;
+  if (OTHER_TYPED_ICONS.includes(icon)) return null;
+  const label = (addr.name || '').trim().toLowerCase();
+  return label === 'home' || label === 'work' ? label : null;
+}
+
+export const isHomePlace = (addr: PlaceLike | null | undefined): boolean => savedPlaceType(addr) === 'home';
+export const isWorkPlace = (addr: PlaceLike | null | undefined): boolean => savedPlaceType(addr) === 'work';

@@ -288,6 +288,14 @@ class Settings(BaseSettings):
     # compromised admin must not be able to disable device attestation.
     APP_CHECK_ENFORCEMENT: str = ""
 
+    # Shared secret(s) the spinr.ca website signs its server-to-server calls
+    # with (core/web_caller.py). Comma-separated so a rotation can run both
+    # values at once; each must be ≥32 chars. Empty = website requests get no
+    # App Check bypass and are handled exactly as any other caller. Deploy
+    # secret, not app_settings: an admin must not be able to mint a way past
+    # device attestation. Generate: python -c 'import secrets; print(secrets.token_urlsafe(48))'
+    WEB_CALLER_SIGNING_SECRETS: str = ""
+
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
@@ -408,6 +416,14 @@ class Settings(BaseSettings):
                     f"(got {len(admin_password)}). Matches core/middleware.py's "
                     "_validate_production_config check. Generate one with: "
                     "python -c 'import secrets; print(secrets.token_urlsafe(24))'"
+                )
+
+            short = [s for s in (self.WEB_CALLER_SIGNING_SECRETS or "").split(",") if s.strip() and len(s.strip()) < 32]
+            if short:
+                raise ValueError(
+                    "WEB_CALLER_SIGNING_SECRETS has an entry shorter than 32 characters. "
+                    "It would be ignored, silently breaking the website's backend calls. "
+                    "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
                 )
 
             for field in ("FIREBASE_DRIVER_APP_ID", "FIREBASE_RIDER_APP_ID"):

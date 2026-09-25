@@ -98,6 +98,12 @@ def get_real_client_ip(request: Request) -> str:
     (Origin hosts must only accept traffic from Cloudflare for this to be
     airtight against a direct-to-origin bypass — an infra/network control.)
     """
+    # A signed website call carries the visitor's IP inside its HMAC
+    # (core/web_caller.py); the middleware sets this only after verifying it.
+    # Without it every spinr.ca visitor shares one bucket: Vercel's egress IP.
+    web_ip = getattr(getattr(request, "state", None), "web_client_ip", None)
+    if isinstance(web_ip, str) and web_ip:
+        return web_ip
     cf_ip = request.headers.get("cf-connecting-ip")
     if cf_ip:
         return cf_ip.strip()

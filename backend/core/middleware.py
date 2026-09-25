@@ -10,6 +10,7 @@ from loguru import logger
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from core import web_caller
 from core.config import settings
 from utils.log_context import set_request_context
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
@@ -438,6 +439,29 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        # Signed server-to-server call from the spinr.ca website
+        # (core/web_caller.py). Checked before the exempt list so a verified
+        # call also gets its per-visitor rate-limit key on paths that are
+        # exempt anyway (send-otp). A missing or failing signature grants
+        # nothing and rejects nothing: the request continues down the normal
+        # App Check path below, so a website/backend secret mismatch shows up
+        # as the same 401 as before plus this warning — never a new failure.
+        if web_caller.has_signature_headers(request):
+            reason = await web_caller.verify(request)
+            if reason is None:
+                web_ip = request.headers.get(web_caller.CLIENT_IP_HEADER, "")
+                if web_ip:
+                    request.state.web_client_ip = web_ip
+                return await call_next(request)
+            if reason != "not_configured":
+                logger.warning(
+                    "Web caller: signature not accepted for {} {} ({}) req_id={}",
+                    request.method,
+                    path,
+                    reason,
+                    getattr(request.state, "request_id", "-"),
+                )
 
         # Exempt WebSockets, docs, and health probes.
         if any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES):

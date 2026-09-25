@@ -4,10 +4,14 @@
 # guardrails-audit.md Section 3 / ACTION_ITEMS.md E8): this repo currently
 # has exactly 2 collaborators and 0 GitHub teams (confirmed via the GitHub
 # API, not assumed) --
-#   @srikumarimuddana-lab  -- admin (the account/org owner)
+#   @srikumarimuddana-lab  -- admin (the account/org owner)     -- alias "Spinrmk" in docs/reports, see docs/CONTRIBUTOR_ALIASES.md
 #   @ittalenthireca-sketch -- write (opens/authors PRs; per this repo's own
 #                              observed history, effectively the PR-author
-#                              identity on most PRs)
+#                              identity on most PRs)             -- alias "Spinrmv" in docs/reports, see docs/CONTRIBUTOR_ALIASES.md
+#
+# NOTE: the @handles above must stay the real GitHub usernames -- GitHub can
+# only resolve real usernames for review-routing enforcement. Do not replace
+# them with the aliases; docs/CONTRIBUTOR_ALIASES.md explains why.
 #
 # Both accounts are listed below (OR semantics -- either one's approval
 # satisfies the rule). IMPORTANT caveat: GitHub never counts a PR's own

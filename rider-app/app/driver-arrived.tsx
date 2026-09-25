@@ -566,7 +566,9 @@ function createStyles(colors: ThemeColors) {
     otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
     otpDigits: { flexDirection: 'row', gap: 10, marginBottom: 12 },
     otpBox: {
-      width: 52, height: 60, backgroundColor: 'rgba(255,255,255,0.18)',
+      // min*, not fixed: the digit scales with OS text size (MAX_FONT_SCALE),
+      // so the box grows with it instead of clipping.
+      minWidth: 52, minHeight: 60, backgroundColor: 'rgba(255,255,255,0.18)',
       borderRadius: 14, justifyContent: 'center', alignItems: 'center',
       borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
     },

@@ -1235,7 +1235,10 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: colors.border,
     },
     fareTopRow: {
-      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md,
+      // Wraps so the payment badge drops below a large (OS-scaled) total
+      // instead of overflowing the card.
+      flexDirection: 'row', flexWrap: 'wrap', rowGap: SPACING.sm,
+      justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md,
     },
     fareLabel: {
       fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold',

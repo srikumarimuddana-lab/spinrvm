@@ -1017,7 +1017,9 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     pinLabel: { fontSize: sf(11), fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, letterSpacing: 1, marginBottom: 12 },
     pinBoxes: { flexDirection: 'row', gap: 10 },
     pinBox: {
-      width: 50, height: 58, borderRadius: 12, backgroundColor: '#F8F9FA',
+      // min*, not fixed: the digit scales with OS text size (MAX_FONT_SCALE),
+      // so the box grows with it instead of clipping.
+      minWidth: 50, minHeight: 58, borderRadius: 12, backgroundColor: '#F8F9FA',
       borderWidth: 1.5, borderColor: colors.primary, justifyContent: 'center', alignItems: 'center',
     },
     pinDigit: { fontSize: sf(26), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },

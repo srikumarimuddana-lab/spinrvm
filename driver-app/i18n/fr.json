@@ -358,7 +358,9 @@
     "autoNavigate": "Démarrer la navigation automatiquement",
     "autoNavigateDesc": "Ouvrir votre application de cartes à l’acceptation d’une course et au début du trajet",
     "destinationModeTitle": "Mode Destination",
-    "destinationModeDesc": "Définir une destination de fin de service"
+    "destinationModeDesc": "Définir une destination de fin de service",
+    "destinationModeOn": "Activé",
+    "destinationModeOff": "Désactivé"
   },
   "destinationMode": {
     "title": "Mode Destination",
@@ -387,7 +389,18 @@
     "clearedTitle": "Destination effacée",
     "clearedMsg": "Le mode destination a été désactivé.",
     "clearFailedTitle": "Échec de l'effacement",
-    "clearFailedMsg": "Impossible d'effacer votre destination. Veuillez réessayer."
+    "clearFailedMsg": "Impossible d'effacer votre destination. Veuillez réessayer.",
+    "bannerTitle": "Retour à la maison",
+    "bannerOnlyToward": "Seulement les courses vers {{area}}",
+    "bannerEndsIn": "se termine dans {{time}}",
+    "bannerFallbackArea": "votre destination",
+    "durationHoursMinutes": "{{h}} h {{m}} min",
+    "durationMinutes": "{{m}} min",
+    "bannerTurnOff": "Désactiver",
+    "bannerTurnOffA11y": "Désactiver le mode destination",
+    "bannerA11y": "Le mode destination est activé. Vous ne recevez que des courses vers {{area}}.",
+    "bannerTurnOffFailedTitle": "Impossible de désactiver",
+    "bannerTurnOffFailedMsg": "Le mode destination est toujours activé. Vérifiez votre connexion et réessayez."
   },
   "payout": {
     "title": "Paiement",

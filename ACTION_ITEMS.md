@@ -13790,6 +13790,20 @@ record of what was assumed vs. what was actually true</summary>
   return and escalates (log level + Sentry visibility) on `False`, matching line 855's pattern;
   add/extend a test per call site confirming the escalation fires on a simulated DB failure.
 
+### C136. Destination mode silently hides drivers from dispatch; push tokens cross accounts on shared devices
+- [ ] **Status:** in progress 2026-09-24 (branch `fix/c136-destination-mode-and-push-token-ownership`).
+- **What's wrong:** found in a live Regina test. Driver `3066009097` got zero offers all day
+  while `3065203304` got them normally. Only material difference: `destination_mode = true`.
+  `dispatch_service._ride_brings_driver_closer_to_destination` excludes that driver from every
+  ride not heading toward its destination. The mode never expires, the driver app gives no
+  on-screen indication it's on, and the exclusion is never logged. Separately,
+  `POST /notifications/register-token` never detaches a device token from the previous account
+  that held it, so production now has both test accounts' tokens crossed between the two phones.
+  A push for one person can ring the other's device (privacy + reliability).
+- **Plan:** `docs/audit/2026-09-24-c136-destination-mode-and-push-token-ownership.md`
+  (T1 expiry, T2 driver banner, T3 exclusion log/metric, T4 token ownership, T5 cleanup script).
+- **Acceptance:** see the plan's "Definition of done".
+
 ### C3. Production env sweep on Fly/Railway
 - [ ] **Status:** partially done (SENTRY_DSN deployed via Fly Sentry extension — verify
   boot log shows "Sentry SDK initialized for error monitoring")

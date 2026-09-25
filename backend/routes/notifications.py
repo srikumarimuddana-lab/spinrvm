@@ -307,6 +307,56 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
     }
 
 
+_USER_PUSH_TOKEN_COLUMNS = ("fcm_token", "fcm_token_rider", "fcm_token_driver")
+
+
+def _redact_token(text: str, token: str) -> str:
+    """Strip a push token out of arbitrary text (e.g. an exception message
+    that echoes the PostgREST filter) before it reaches a log line."""
+    return text.replace(token, "<redacted-token>") if token else text
+
+
+async def _detach_token_from_other_users(token: str, user_id: str) -> Dict[str, Any]:
+    """C136 T4: a device token belongs to exactly one account.
+
+    When a device registers under ``user_id``, remove the same token from
+    every OTHER account, otherwise the previous account on that phone keeps
+    receiving the new account's pushes (and vice versa — a privacy leak).
+
+    * ``push_tokens``: delete rows with this token and ``user_id != user_id``.
+    * ``users.fcm_token`` / ``fcm_token_rider`` / ``fcm_token_driver``: null
+      that column on any OTHER user whose column equals the token. The
+      current user's columns are never touched here — a dual-role user
+      legitimately holds the same token as rider and driver.
+
+    Users are cleared per id (read ids, then ``update_one`` by ``id``) rather
+    than one filter-wide update so ``update_one`` invalidates each affected
+    user's Redis row cache; the token stays in the filter as a guard against
+    the column changing between read and write.
+
+    Raises on any DB failure — the caller decides how to handle it.
+    Returns counts + affected user ids only (never the token).
+    """
+    removed = await db_supabase.delete_many("push_tokens", {"token": token, "user_id": {"$ne": user_id}})
+    removed = removed or []
+    affected: set = {r.get("user_id") for r in removed if isinstance(r, dict) and r.get("user_id")}
+    cleared_columns = 0
+    for col in _USER_PUSH_TOKEN_COLUMNS:
+        rows = await db_supabase.get_rows("users", {col: token, "id": {"$ne": user_id}}, columns="id", limit=1000)
+        for row in rows or []:
+            other_id = row.get("id")
+            if not other_id or other_id == user_id:
+                continue
+            await db.update_one("users", {"id": other_id, col: token}, {col: None})
+            cleared_columns += 1
+            affected.add(other_id)
+    return {
+        "push_tokens_deleted": len(removed),
+        "user_columns_cleared": cleared_columns,
+        "user_ids": sorted(affected),
+    }
+
+
 @api_router.post("/register-token")
 async def register_push_token(body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)):
     """Save FCM push token for this user/device.
@@ -324,9 +374,47 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
 
     When the same user registers a new token (e.g. they reinstalled the
     app), the new token replaces the old one on both rows.
+
+    C136 T4: the token is first detached from every OTHER account
+    (``_detach_token_from_other_users``) so a shared/handed-over phone only
+    receives pushes for the account currently signed in on it.
+
+    Detach failure policy: logged at ERROR (exception type + redacted message
+    + DatabaseError original) and the current user's registration still
+    proceeds. Failing the registration instead would leave the signed-in user
+    — for a driver, their ride offers — with no push token at all, while the
+    stale token on the other account (the pre-C136 status quo) would remain
+    either way. The next registration from this device retries the detach.
     """
     token = body.token
     platform = body.platform
+
+    try:
+        detached = await _detach_token_from_other_users(token, current_user["id"])
+    except Exception as exc:
+        original = ""
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict):
+            original = str(details.get("original") or "")
+        # No exc_info: the traceback would carry the raw exception text, which
+        # can echo the token from the PostgREST filter. Redacted text only.
+        logger.error(
+            "register-token: failed to detach push token from other accounts for user %s: %s: %s original=%s",
+            current_user["id"],
+            type(exc).__name__,
+            _redact_token(str(exc), token),
+            _redact_token(original, token),
+        )
+    else:
+        if detached["push_tokens_deleted"] or detached["user_columns_cleared"]:
+            logger.info(
+                "register-token: detached push token from other users %s for user %s "
+                "(push_tokens_deleted=%d, user_columns_cleared=%d)",
+                detached["user_ids"],
+                current_user["id"],
+                detached["push_tokens_deleted"],
+                detached["user_columns_cleared"],
+            )
     client_type = body.client_type if body.client_type in ("rider", "driver") else None
 
     # If the app didn't send client_type (pre-EAS-update), infer from

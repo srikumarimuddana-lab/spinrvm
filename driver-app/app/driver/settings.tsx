@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
     View,
     StyleSheet,
@@ -15,7 +15,7 @@ import {
 import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeader } from '../../components/ScreenHeader';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
@@ -35,6 +35,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { otaVersionLabel } from '@shared/utils/otaVersion';
 import { isDeleteConfirmationValid } from '../../utils/accountDeletionSchema';
+import { isDestinationActive, type DestinationModeResponse } from '../../utils/destinationModeState';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -86,6 +87,23 @@ export default function SettingsScreen() {
             .catch(() => { /* default off on failure */ });
         return () => { active = false; };
     }, []);
+    // Destination mode On/Off hint on its row (C136 T2). null = unknown
+    // (loading or fetch failed) → the row falls back to its description.
+    // Refetched on every focus so returning from destination-mode.tsx
+    // reflects the change. Failures are silent: this is a status hint, the
+    // destination-mode screen itself surfaces load errors.
+    const [destinationOn, setDestinationOn] = useState<boolean | null>(null);
+    useFocusEffect(
+        useCallback(() => {
+            let live = true;
+            api.get<DestinationModeResponse>('/drivers/destination')
+                .then((res: any) => {
+                    if (live && res?.data) setDestinationOn(isDestinationActive(res.data));
+                })
+                .catch(() => { /* keep last known / unknown */ });
+            return () => { live = false; };
+        }, []),
+    );
     const handleMarketingToggle = (
         field: 'email_opt_in' | 'sms_opt_in',
         setter: (v: boolean) => void,
@@ -431,7 +449,14 @@ export default function SettingsScreen() {
                                 <Ionicons name="navigate" size={18} color={colors.primary} />
                             </View>
                             <Text style={styles.settingLabel}>{t('settings.destinationModeTitle')}</Text>
-                            <Text style={styles.settingValue}>{t('settings.destinationModeDesc')}</Text>
+                            <Text
+                                style={[styles.settingValue, destinationOn && { color: colors.primary, fontWeight: '700' }]}
+                                testID="settings-destination-mode-state"
+                            >
+                                {destinationOn === null
+                                    ? t('settings.destinationModeDesc')
+                                    : t(destinationOn ? 'settings.destinationModeOn' : 'settings.destinationModeOff')}
+                            </Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                     </View>

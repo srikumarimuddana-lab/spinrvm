@@ -83,6 +83,10 @@ jest.mock('@shared/api/client', () => ({
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: jest.fn(), push: jest.fn(), replace: jest.fn() }),
+  useFocusEffect: (cb: () => void | (() => void)) => {
+    const ReactActual = require('react');
+    ReactActual.useEffect(() => cb(), [cb]);
+  },
 }));
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));

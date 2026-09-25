@@ -136,6 +136,169 @@ class TestRegisterPushToken:
         assert and_row is not None
 
 
+class _FakeTokenStore:
+    """In-memory push_tokens + users with just enough filter semantics
+    ({col: value} equality and {col: {"$ne": v}}) to exercise
+    register_push_token's cross-account detach end-to-end."""
+
+    _USER_TOKEN_COLS = ("fcm_token", "fcm_token_rider", "fcm_token_driver")
+
+    def __init__(self):
+        self.push_tokens: list[dict] = []
+        self.users: dict[str, dict] = {}
+        self._seq = 0
+
+    @staticmethod
+    def _match(row, filters):
+        for k, v in (filters or {}).items():
+            if isinstance(v, dict):
+                if set(v) != {"$ne"}:
+                    raise AssertionError(f"unexpected operator in fake: {v!r}")
+                if row.get(k) == v["$ne"]:
+                    return False
+            elif row.get(k) != v:
+                return False
+        return True
+
+    def _table(self, table):
+        if table == "push_tokens":
+            return self.push_tokens
+        if table == "users":
+            return list(self.users.values())
+        raise AssertionError(f"unexpected table {table}")
+
+    async def get_rows(self, table, filters=None, limit=None, columns="*", **kw):
+        rows = [dict(r) for r in self._table(table) if self._match(r, filters)]
+        return rows[:limit] if limit else rows
+
+    async def update_one(self, table, filters, data):
+        n = 0
+        for r in self._table(table):
+            if self._match(r, filters):
+                r.update(data)
+                n += 1
+        return {"n": n}
+
+    async def insert_one(self, table, row):
+        assert table == "push_tokens"
+        self.push_tokens.append(dict(row))
+        return row
+
+    async def delete_many(self, table, filters):
+        assert table == "push_tokens"
+        gone = [r for r in self.push_tokens if self._match(r, filters)]
+        self.push_tokens = [r for r in self.push_tokens if not self._match(r, filters)]
+        return gone
+
+    def patches(self):
+        return (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(side_effect=self.get_rows)),
+            patch("backend.routes.notifications.db_supabase.update_one", AsyncMock(side_effect=self.update_one)),
+            patch("backend.routes.notifications.db_supabase.insert_one", AsyncMock(side_effect=self.insert_one)),
+            patch("backend.routes.notifications.db_supabase.delete_many", AsyncMock(side_effect=self.delete_many)),
+            patch("backend.routes.notifications.db.update_one", AsyncMock(side_effect=self.update_one)),
+        )
+
+    def user_has_token(self, uid, token):
+        in_pt = any(r["user_id"] == uid and r["token"] == token for r in self.push_tokens)
+        in_cols = [c for c in self._USER_TOKEN_COLS if self.users[uid].get(c) == token]
+        return in_pt, in_cols
+
+
+@pytest.mark.asyncio
+class TestRegisterPushTokenOwnership:
+    """C136 T4: a device token belongs to exactly one account."""
+
+    TOKEN = "fcm-shared-device-token-SECRET-1234567890"
+
+    async def _register(self, store, user, token, client_type=None, platform="android"):
+        from backend.routes.notifications import RegisterTokenRequest, register_push_token
+
+        body = RegisterTokenRequest(token=token, platform=platform, client_type=client_type)
+        p = store.patches()
+        with p[0], p[1], p[2], p[3], p[4]:
+            return await register_push_token(body=body, current_user=user)
+
+    def _store(self):
+        store = _FakeTokenStore()
+        store.users["A"] = {"id": "A", "is_rider": True, "is_driver": False}
+        store.users["B"] = {"id": "B", "is_rider": True, "is_driver": True}
+        return store
+
+    async def test_register_as_b_detaches_token_from_a_everywhere(self):
+        store = self._store()
+        user_a = {"id": "A", "is_rider": True, "is_driver": False}
+        user_b = {"id": "B", "is_rider": True, "is_driver": True}
+
+        await self._register(store, user_a, self.TOKEN, client_type="rider")
+        # Simulate A also holding it in the driver column (e.g. older dual-role state)
+        store.users["A"]["fcm_token_driver"] = self.TOKEN
+        assert store.user_has_token("A", self.TOKEN) == (True, ["fcm_token", "fcm_token_rider", "fcm_token_driver"])
+
+        result = await self._register(store, user_b, self.TOKEN, client_type="driver")
+
+        assert result == {"success": True}
+        assert store.user_has_token("A", self.TOKEN) == (False, [])
+        in_pt, cols = store.user_has_token("B", self.TOKEN)
+        assert in_pt is True
+        assert "fcm_token" in cols and "fcm_token_driver" in cols
+
+    async def test_dual_role_same_user_keeps_both_columns(self):
+        store = self._store()
+        user_b = {"id": "B", "is_rider": True, "is_driver": True}
+
+        await self._register(store, user_b, self.TOKEN, client_type="rider")
+        await self._register(store, user_b, self.TOKEN, client_type="driver")
+
+        in_pt, cols = store.user_has_token("B", self.TOKEN)
+        assert in_pt is True
+        assert sorted(cols) == ["fcm_token", "fcm_token_driver", "fcm_token_rider"]
+
+    async def test_other_users_other_tokens_untouched(self):
+        store = self._store()
+        store.users["C"] = {"id": "C", "fcm_token": "other-token", "fcm_token_rider": "other-token"}
+        store.push_tokens.append({"id": "pt-c", "user_id": "C", "token": "other-token", "platform": "ios"})
+
+        await self._register(store, {"id": "B", "is_rider": True, "is_driver": True}, self.TOKEN, client_type="driver")
+
+        assert store.users["C"]["fcm_token"] == "other-token"
+        assert store.users["C"]["fcm_token_rider"] == "other-token"
+        assert any(r["id"] == "pt-c" for r in store.push_tokens)
+
+    async def test_token_never_logged(self, caplog):
+        import logging
+
+        store = self._store()
+        caplog.set_level(logging.DEBUG)
+        await self._register(store, {"id": "A", "is_rider": True, "is_driver": False}, self.TOKEN, client_type="rider")
+        await self._register(store, {"id": "B", "is_rider": True, "is_driver": True}, self.TOKEN, client_type="driver")
+
+        assert self.TOKEN not in caplog.text
+        # The detach IS logged (user ids + counts only).
+        assert "detached" in caplog.text and "A" in caplog.text
+
+    async def test_detach_failure_is_logged_loudly_and_registration_still_lands(self, caplog):
+        import logging
+
+        store = self._store()
+        caplog.set_level(logging.DEBUG)
+
+        async def _boom(table, filters):
+            raise RuntimeError("delete exploded " + self.TOKEN)
+
+        store.delete_many = _boom  # type: ignore[assignment]
+        result = await self._register(
+            store, {"id": "B", "is_rider": True, "is_driver": True}, self.TOKEN, client_type="driver"
+        )
+
+        assert result == {"success": True}
+        assert store.user_has_token("B", self.TOKEN)[0] is True
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert errors, "detach failure must be logged at ERROR"
+        # Even the exception text must not leak the token into logs.
+        assert self.TOKEN not in caplog.text
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /notifications
 # ─────────────────────────────────────────────────────────────────────────────

@@ -35,6 +35,11 @@ const mockPush = jest.fn();
 const mockReplace = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: jest.fn(), push: mockPush, replace: mockReplace }),
+  // Run focus effects once on mount, like a screen that starts focused.
+  useFocusEffect: (cb: () => void | (() => void)) => {
+    const ReactActual = require('react');
+    ReactActual.useEffect(() => cb(), [cb]);
+  },
 }));
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -406,6 +411,38 @@ describe('delete account flow', () => {
     act(() => { continueBtn.onPress(); });
     fireEvent.press(screen.getByText('settings.cancel'));
     expect(mockApiDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('destination mode row state (C136 T2)', () => {
+  const futureIso = () => new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const routeGet = (dest: any) => (url: string) =>
+    url === '/drivers/destination'
+      ? (dest instanceof Error ? Promise.reject(dest) : Promise.resolve({ data: dest }))
+      : Promise.resolve({ data: { email_opt_in: false, sms_opt_in: false } });
+
+  it('shows On when the server reports destination mode active', async () => {
+    mockApiGet.mockImplementation(routeGet({
+      destination_mode: true, destination_address: 'Home', active: true, destination_expires_at: futureIso(),
+    }));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(mockApiGet).toHaveBeenCalledWith('/drivers/destination');
+    expect(screen.getByTestId('settings-destination-mode-state').props.children).toBe('settings.destinationModeOn');
+  });
+
+  it('shows Off when inactive', async () => {
+    mockApiGet.mockImplementation(routeGet({ destination_mode: false, destination_address: null, active: false }));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(screen.getByTestId('settings-destination-mode-state').props.children).toBe('settings.destinationModeOff');
+  });
+
+  it('falls back to the description when the fetch fails (no toast)', async () => {
+    mockApiGet.mockImplementation(routeGet(new Error('offline')));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(screen.getByTestId('settings-destination-mode-state').props.children).toBe('settings.destinationModeDesc');
   });
 });
 

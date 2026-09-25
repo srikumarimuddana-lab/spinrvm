@@ -409,6 +409,29 @@ class TestUpdateServiceAreaGuards:
         assert payload["spinr_pass_enabled"] is True
 
     @pytest.mark.anyio
+    async def test_instant_payout_enabled_is_not_accepted_or_written(self):
+        """Weekly-only payouts (owner decision 2026-09-25): the admin API must
+        not be able to re-enable instant payouts for an area. An old client
+        that still sends the key gets it silently dropped, not written."""
+        assert "instant_payout_enabled" not in ServiceAreaUpdateRequest.model_fields
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value=None),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest.model_validate({"name": "Regina", "instant_payout_enabled": True})
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        _, _, payload = update_one.await_args.args
+        assert payload["name"] == "Regina"
+        assert "instant_payout_enabled" not in payload
+
+    @pytest.mark.anyio
     async def test_spinr_pass_disable_coerced_back_on_when_subscription_required_in_db(self):
         update_one = AsyncMock()
         existing = {"subscription_required": True}

@@ -73,13 +73,13 @@ DELETE FROM users WHERE id = ANY(v_user_ids);
 
 | `stats_since` (UTC) | Phones targeted | Mode |
 |---|---|---|
-| 2026-08-14 20:13:03 | `+13062929175` | real (`p_dry_run := false`) |
-| 2026-08-14 20:38:25 | `+13066009097`, `+13065203307`, `+13065203304` | real (`p_dry_run := false`) |
-| 2026-08-14 20:08:24 | `+13062929175` | dry run only |
+| 2026-08-14 20:13:03 | `phone ending 9175` | real (`p_dry_run := false`) |
+| 2026-08-14 20:38:25 | `phone ending 9097`, `+13065203307`, `phone ending 3304` | real (`p_dry_run := false`) |
+| 2026-08-14 20:08:24 | `phone ending 9175` | dry run only |
 
 Both real executions fall squarely inside the 2026-08-13 → 2026-08-16 gap window.
 
-**Cross-checked against the legacy MongoDB export** (`bookings.csv`/`drivers.csv`/`customers.csv`, local 10-digit phone format): 3 of the 4 targeted numbers (`3062929175`, `3066009097`, `3065203304`) appear **repeatedly** as both driver and customer records — several explicitly test-labeled ("Test YK", "Yy", "Hh", "Test Y") alongside apparently-real names ("Kiran", "Tristan", "Yash Kumar", "Ryan D").
+**Cross-checked against the legacy MongoDB export** (`bookings.csv`/`drivers.csv`/`customers.csv`, local 10-digit phone format): 3 of the 4 targeted numbers (`phone ending 9175`, `phone ending 9097`, `phone ending 3304`) appear **repeatedly** as both driver and customer records — several explicitly test-labeled ("Test YK", "Yy", "Hh", "Test Y") alongside apparently-real names ("Kiran", "Tristan", "Yash Kumar", "Ryan D").
 
 Since the legacy importer matches bookings to real Spinr accounts by phone (A30: 100% rider match, 94.2% driver match rate), any Spinr account behind these phone numbers that had a legacy-imported ride linked would have had that ride swept into `v_ride_ids` and deleted by this script — a coherent, well-evidenced mechanism for some or all of the 38-row gap.
 

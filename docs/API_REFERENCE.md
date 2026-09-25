@@ -171,7 +171,8 @@ searching → driver_assigned → driver_accepted → driver_arrived
 | POST | `/drivers/bank-account` | Save bank account (Stripe external account) |
 | DELETE | `/drivers/bank-account` | Remove bank account |
 | POST | `/drivers/stripe-onboard` | Start Stripe Connect onboarding; returns an account link URL |
-| POST | `/drivers/payouts` | Request an instant payout |
+| POST | `/drivers/payouts` | Retired — returns 410; earnings are paid automatically every week |
+| POST / GET | `/drivers/payouts/instant`, `/drivers/payouts/instant/quote` | Retired — return 410. Instant payouts are not offered (weekly only, owner decision 2026-09-25) |
 | GET | `/drivers/payouts` | List payout history |
 
 ### Active ride lifecycle (driver side)

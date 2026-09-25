@@ -188,6 +188,7 @@ Concrete scenarios:
   - `repositories/corporate_repo.py`: 90%
 - [x] **Lint.** `ruff check` and `ruff format --check` are clean on every touched file, and the pre-commit hook passed on each commit.
 - [x] **Blast-radius grep.** Listed in §4.
+- [x] **Admin dashboard.** After `npm ci`, `npx tsc --noEmit` was clean and a real production build (`npm run build`) succeeded, including `/dashboard/corporate-accounts/kyb-queue`. ESLint on the two changed files shows 0 errors and 1 warning (`react-hooks/set-state-in-effect` on the page's existing `load()` effect). `main`'s copy of the page gives the same warning.
 - [x] **Feature flag.** Default-true kill switch per `domain-corporate.md`.
 - [ ] **Staging / manual repro.** Not done.
 - [ ] **Migration against real Postgres.** Not run.

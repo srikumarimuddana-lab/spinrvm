@@ -543,7 +543,6 @@ export {
     getPayoutsOverview,
     getAutoPayoutBatches,
     getBlockedPayoutDrivers,
-    resolveDispute,
 } from "./api/analytics-payouts";
 export type {
     PayoutsOverview,

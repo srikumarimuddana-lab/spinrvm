@@ -1,9 +1,13 @@
 import React, { useCallback, useState } from 'react';
-import { View, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Text } from '@shared/components/Text';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { SPACING, FONT } from '@shared/utils/responsive';
+import { ScreenHeader } from '../../components/ScreenHeader';
+import SafeRefreshControl from '../../components/SafeRefreshControl';
 
 type UpcomingRide = {
   id: string;
@@ -13,23 +17,40 @@ type UpcomingRide = {
   dropoff_address?: string;
 };
 
+// Date and time on separate lines, no seconds. The previous single
+// toLocaleString('en-CA') rendered e.g. "2026-09-25, 3:30:00 p.m." in one
+// cramped line.
+function formatWhen(raw?: string): { date: string; time: string } | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    date: d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }),
+    time: d.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' }),
+  };
+}
+
 export default function UpcomingRidesScreen() {
   const { colors } = useTheme();
   const [rides, setRides] = useState<UpcomingRide[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
+  const load = useCallback((isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     api.get<{ rides: UpcomingRide[] }>('/drivers/rides/upcoming').then(
       (res) => {
         setRides(res.data?.rides ?? []);
         setError(null);
         setLoading(false);
+        setRefreshing(false);
       },
       () => {
         setError('Could not load upcoming trips.');
         setLoading(false);
+        setRefreshing(false);
       },
     );
   }, []);
@@ -38,39 +59,88 @@ export default function UpcomingRidesScreen() {
     load();
   }, [load]));
 
-  if (loading) {
+  const renderEmpty = () => {
+    // Error and empty are mutually exclusive: before, a failed load showed
+    // the error AND "No upcoming scheduled trips." underneath it.
+    if (error) {
+      return (
+        <View style={styles.emptyWrap}>
+          <Ionicons name="cloud-offline-outline" size={40} color={colors.textSecondary} />
+          <Text style={[styles.emptyText, { color: colors.error }]}>{error}</Text>
+          <TouchableOpacity
+            onPress={() => load()}
+            style={[styles.retryBtn, { borderColor: colors.primary }]}
+            accessibilityRole="button"
+          >
+            <Text style={{ color: colors.primary, fontWeight: '600' }}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
     return (
-      <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.primary} />
+      <View style={styles.emptyWrap}>
+        <Ionicons name="calendar-outline" size={40} color={colors.textSecondary} />
+        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No upcoming scheduled trips.</Text>
       </View>
     );
-  }
+  };
 
   return (
     <View style={[styles.wrap, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>Upcoming trips</Text>
-      {error ? <Text style={{ color: colors.error }}>{error}</Text> : null}
-      <FlatList
-        data={rides}
-        keyExtractor={(item) => item.id}
-        ListEmptyComponent={<Text style={{ color: colors.textSecondary }}>No upcoming scheduled trips.</Text>}
-        renderItem={({ item }) => (
-          <View style={[styles.card, { borderColor: colors.border }]}>
-            <Text style={{ color: colors.text, fontWeight: '600' }}>
-              {item.scheduled_time ? new Date(item.scheduled_time).toLocaleString('en-CA') : 'Scheduled'}
-            </Text>
-            <Text style={{ color: colors.textSecondary }}>{item.pickup_address || 'Pickup'}</Text>
-            <Text style={{ color: colors.textSecondary }}>{item.dropoff_address || 'Drop-off'}</Text>
-          </View>
-        )}
-      />
+      <ScreenHeader title="Upcoming trips" />
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : (
+        <FlatList
+          data={error ? [] : rides}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.primary} />}
+          ListEmptyComponent={renderEmpty}
+          renderItem={({ item }) => {
+            const when = formatWhen(item.scheduled_time);
+            return (
+              <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={styles.whenRow}>
+                  <Ionicons name="time-outline" size={18} color={colors.primary} />
+                  <Text style={[styles.whenDate, { color: colors.text }]}>{when ? when.date : 'Scheduled'}</Text>
+                  {when ? <Text style={[styles.whenTime, { color: colors.primary }]}>{when.time}</Text> : null}
+                </View>
+                <View style={styles.stopRow}>
+                  <View style={[styles.dot, { backgroundColor: colors.success }]} />
+                  <Text style={[styles.stopText, { color: colors.text }]} numberOfLines={2}>
+                    {item.pickup_address || 'Pickup'}
+                  </Text>
+                </View>
+                <View style={styles.stopRow}>
+                  <View style={[styles.dot, { backgroundColor: colors.primary }]} />
+                  <Text style={[styles.stopText, { color: colors.text }]} numberOfLines={2}>
+                    {item.dropoff_address || 'Drop-off'}
+                  </Text>
+                </View>
+              </View>
+            );
+          }}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, padding: 16 },
+  wrap: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 22, fontWeight: '700', marginBottom: 12 },
-  card: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 10 },
+  list: { padding: SPACING.md },
+  card: { borderWidth: 1, borderRadius: 14, padding: SPACING.md, marginBottom: SPACING.sm },
+  whenRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACING.sm },
+  whenDate: { flex: 1, marginLeft: 8, fontSize: FONT.bodyMd, fontWeight: '700' },
+  whenTime: { fontSize: FONT.bodyMd, fontWeight: '700' },
+  stopRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 6 },
+  dot: { width: 8, height: 8, borderRadius: 4, marginTop: 6, marginRight: 10 },
+  stopText: { flex: 1, fontSize: FONT.bodySm, lineHeight: 20 },
+  emptyWrap: { alignItems: 'center', paddingTop: 48, paddingHorizontal: SPACING.lg },
+  emptyText: { marginTop: SPACING.sm, textAlign: 'center', fontSize: FONT.bodyMd },
+  retryBtn: { marginTop: SPACING.md, borderWidth: 1, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 20 },
 });

@@ -6,10 +6,16 @@ on:
       - main
 
 # Serialize deploys: rapid successive merges otherwise launch overlapping
-# `flyctl deploy` runs against the same app. Runs whose SHA is no longer main
-# fail the CI gate before secrets are staged or a release is attempted. Every
-# main push triggers this workflow: a docs-only push can advance main while an
-# older backend deploy waits for CI, and must start a fresh exact-SHA deploy.
+# `flyctl deploy` runs against the same app. A run whose SHA stops being main
+# while its gate is waiting is superseded: the gate job exits cleanly with
+# deploy=false, the deploy job is skipped (no secrets staged, no release), and
+# the run for the newer main commit owns the deploy (newest wins). A newer
+# commit landing after the gate has passed does not stop this deploy; the
+# newer run is queued behind it and redeploys next (redundant, never out of
+# order: the group holds at most one queued run, always the newest push).
+# Every main push triggers this workflow: a docs-only push can advance main
+# while an older backend deploy waits for CI, and must start a fresh exact-SHA
+# deploy.
 concurrency:
   group: deploy-fly-spinr-backend-yyz
   cancel-in-progress: false
@@ -36,8 +42,28 @@ permissions:
 # Missing probe configuration blocks the job before any Fly secret is staged.
 
 jobs:
+  # Exit 0 + deploy=true: exact-SHA evidence passed and this SHA is still main.
+  # Exit 0 + deploy=false: superseded by a newer main commit (not a failure).
+  # Exit 1: denied (required workflow/job failed while this SHA is main,
+  # evidence mismatch, timeout, or API error).
+  gate:
+    name: Exact-SHA deploy gate
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.gate.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Wait for exact-SHA backend and security gates
+        id: gate
+        run: python3 scripts/fly_deploy_gate.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   deploy:
     name: Deploy to Fly.io
+    needs: gate
+    if: needs.gate.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     env:
       FLY_APP: spinr-backend-yyz
@@ -45,11 +71,6 @@ jobs:
       METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Wait for exact-SHA backend and security gates
-        run: python3 scripts/fly_deploy_gate.py
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify production probe configuration
         run: python3 scripts/fly_deploy_gate.py --check-probes

@@ -1,8 +1,12 @@
 """Fail-closed checks for production Fly deployment evidence."""
 
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import fly_deploy_gate
 from fly_deploy_gate import GateDenied, evaluate_deploy_evidence, validate_probe_config, wait_for_deploy_evidence
 
 
@@ -39,6 +43,28 @@ def successful_jobs(names):
             for name in names
         ]
     }
+
+
+def all_success_runs():
+    return [run(name, run_id=i) for i, name in enumerate(WORKFLOWS, 1)]
+
+
+def jobs_for(run_id):
+    return successful_jobs(list(WORKFLOWS.values())[run_id - 1])
+
+
+def wait(fetch_runs, read_main_sha, *, has_deploy_run=lambda _sha: True, max_attempts=3, sleeps=None):
+    return wait_for_deploy_evidence(
+        expected_sha=SHA,
+        repository=REPO,
+        fetch_runs=fetch_runs,
+        fetch_jobs=jobs_for,
+        read_main_sha=read_main_sha,
+        has_deploy_run=has_deploy_run,
+        required_workflows=WORKFLOWS,
+        max_attempts=max_attempts,
+        sleep=(sleeps.append if sleeps is not None else (lambda _seconds: None)),
+    )
 
 
 def evidence(runs=None, jobs=None, *, current_main_sha=SHA):
@@ -98,10 +124,10 @@ class DeployEvidenceTests(unittest.TestCase):
         with self.assertRaises(GateDenied):
             evidence(current_main_sha="c" * 40)
 
-    def test_wait_retries_missing_evidence_and_reads_main_after_gates_pass(self):
+    def test_wait_retries_missing_evidence_and_reads_main_every_poll(self):
         runs_by_poll = [
             [run("CI/CD Pipeline", run_id=1)],
-            [run(name, run_id=i) for i, name in enumerate(WORKFLOWS, 1)],
+            all_success_runs(),
         ]
         poll_count = 0
         sleeps = []
@@ -113,38 +139,69 @@ class DeployEvidenceTests(unittest.TestCase):
             poll_count += 1
             return result
 
-        def fetch_jobs(run_id):
-            names = list(WORKFLOWS.values())[run_id - 1]
-            return successful_jobs(names)
-
-        ready = wait_for_deploy_evidence(
-            expected_sha=SHA,
-            repository=REPO,
-            fetch_runs=fetch_runs,
-            fetch_jobs=fetch_jobs,
-            read_main_sha=lambda: main_reads.append(True) or SHA,
-            required_workflows=WORKFLOWS,
-            max_attempts=2,
-            sleep=sleeps.append,
-        )
+        ready = wait(fetch_runs, lambda: main_reads.append(True) or SHA, max_attempts=2, sleeps=sleeps)
         self.assertTrue(ready.ready)
+        self.assertIsNone(ready.superseded_by)
         self.assertEqual(sleeps, [60])
-        self.assertEqual(main_reads, [True])
+        # Once per poll, each read taken after that poll's evidence snapshot,
+        # so the final read still happens after the gates passed.
+        self.assertEqual(main_reads, [True, True])
 
-    def test_wait_timeout_denies_missing_evidence_without_reading_main(self):
-        main_reads = []
+    def test_wait_timeout_denies_missing_evidence_while_still_main(self):
         with self.assertRaises(GateDenied):
-            wait_for_deploy_evidence(
-                expected_sha=SHA,
-                repository=REPO,
-                fetch_runs=lambda _sha: [],
-                fetch_jobs=lambda _run_id: {},
-                read_main_sha=lambda: main_reads.append(True) or SHA,
-                required_workflows=WORKFLOWS,
-                max_attempts=2,
-                sleep=lambda _seconds: None,
-            )
-        self.assertEqual(main_reads, [])
+            wait(lambda _sha: [], lambda: SHA, max_attempts=2)
+
+    def test_superseded_while_pending_skips_without_waiting_for_ci(self):
+        sleeps = []
+        pending = [run(name, run_id=i, status="in_progress", conclusion=None) for i, name in enumerate(WORKFLOWS, 1)]
+        result = wait(lambda _sha: pending, lambda: "c" * 40, sleeps=sleeps)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.superseded_by, "c" * 40)
+        self.assertEqual(sleeps, [])
+
+    def test_superseded_after_gates_pass_never_authorizes_deploy(self):
+        result = wait(lambda _sha: all_success_runs(), lambda: "c" * 40)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.superseded_by, "c" * 40)
+
+    def test_cancelled_ci_on_superseded_sha_skips_instead_of_denying(self):
+        runs = [run("CI/CD Pipeline", run_id=1, conclusion="cancelled"), run("Security Gates", run_id=2)]
+        result = wait(lambda _sha: runs, lambda: "c" * 40)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.superseded_by, "c" * 40)
+
+    def test_failed_or_cancelled_ci_on_current_main_is_still_denied(self):
+        for conclusion in ("failure", "cancelled"):
+            with self.subTest(conclusion=conclusion):
+                runs = [run("CI/CD Pipeline", run_id=1, conclusion=conclusion), run("Security Gates", run_id=2)]
+                with self.assertRaises(GateDenied):
+                    wait(lambda _sha: runs, lambda: SHA)
+
+    def test_superseded_without_successor_deploy_run_is_denied_not_skipped(self):
+        # e.g. the newer main commit was pushed with [skip ci], so no deploy
+        # run will ever carry it: this must go red, never silently green.
+        sleeps = []
+        with self.assertRaisesRegex(GateDenied, "no deploy run exists"):
+            wait(lambda _sha: all_success_runs(), lambda: "c" * 40, has_deploy_run=lambda _sha: False, sleeps=sleeps)
+        self.assertEqual(sleeps, [60, 60])
+
+    def test_superseded_skips_once_successor_deploy_run_appears(self):
+        checks = []
+
+        def has_deploy_run(sha):
+            checks.append(sha)
+            return len(checks) > 1  # run for the newer push is created a poll later
+
+        result = wait(lambda _sha: all_success_runs(), lambda: "c" * 40, has_deploy_run=has_deploy_run)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.superseded_by, "c" * 40)
+        self.assertEqual(checks, ["c" * 40, "c" * 40])
+
+    def test_unreadable_main_is_denied_not_treated_as_superseded(self):
+        for main_sha in (None, ""):
+            with self.subTest(main_sha=main_sha):
+                with self.assertRaises(GateDenied):
+                    wait(lambda _sha: all_success_runs(), lambda: main_sha)
 
     def test_probe_config_requires_exact_production_url_and_metrics_token(self):
         for url, token in (
@@ -156,6 +213,40 @@ class DeployEvidenceTests(unittest.TestCase):
                 with self.assertRaises(GateDenied):
                     validate_probe_config(url, token)
         validate_probe_config("https://spinr-backend-yyz.fly.dev", "metrics-token")
+
+
+class GateEntrypointTests(unittest.TestCase):
+    def run_main(self, *, main_sha, runs=None, with_output=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out"
+            env = {"GITHUB_SHA": SHA, "GITHUB_REPOSITORY": REPO}
+            if with_output:
+                env["GITHUB_OUTPUT"] = str(output)
+            fetch = runs if runs is not None else all_success_runs()
+            with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(fly_deploy_gate.sys, "argv", ["fly_deploy_gate.py"]), \
+                mock.patch.object(fly_deploy_gate, "_fetch_runs", lambda _repo, _sha: fetch), \
+                mock.patch.object(fly_deploy_gate, "_fetch_jobs", lambda _repo, run_id: jobs_for(run_id)), \
+                mock.patch.object(fly_deploy_gate, "_read_main_sha", lambda _repo: main_sha), \
+                mock.patch.object(fly_deploy_gate, "_has_deploy_run", lambda _repo, _sha: True), \
+                mock.patch.object(fly_deploy_gate.time, "sleep", lambda _seconds: None), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                code = fly_deploy_gate.main()
+            return code, (output.read_text() if output.exists() else "")
+
+    def test_pass_on_current_main_outputs_deploy_true(self):
+        self.assertEqual(self.run_main(main_sha=SHA), (0, "deploy=true\n"))
+
+    def test_superseded_exits_clean_with_deploy_false(self):
+        self.assertEqual(self.run_main(main_sha="c" * 40), (0, "deploy=false\n"))
+
+    def test_denied_exits_nonzero_without_deploy_output(self):
+        runs = [run("CI/CD Pipeline", run_id=1, conclusion="failure"), run("Security Gates", run_id=2)]
+        self.assertEqual(self.run_main(main_sha=SHA, runs=runs), (1, ""))
+
+    def test_missing_github_output_is_denied_not_silently_skipped(self):
+        code, _ = self.run_main(main_sha=SHA, with_output=False)
+        self.assertEqual(code, 1)
 
 
 class DeployWorkflowTests(unittest.TestCase):
@@ -175,6 +266,22 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertLess(gate, self.source.index("Stage Sentry DSN in Fly secrets"))
         self.assertLess(gate, self.source.index("run: flyctl deploy"))
         self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.source)
+
+    def test_successor_lookup_targets_this_workflow_file(self):
+        workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+        self.assertEqual((workflows / fly_deploy_gate.DEPLOY_WORKFLOW_FILE).read_text(), self.source)
+
+    def test_deploy_job_runs_only_on_explicit_gate_pass(self):
+        self.assertIn("      deploy: ${{ steps.gate.outputs.deploy }}", self.source)
+        self.assertIn("        id: gate\n        run: python3 scripts/fly_deploy_gate.py\n", self.source)
+        gate_start = self.source.index("\n  gate:\n")
+        deploy_start = self.source.index("\n  deploy:\n")
+        self.assertLess(gate_start, deploy_start)
+        self.assertIn("    needs: gate\n    if: needs.gate.outputs.deploy == 'true'\n", self.source[deploy_start:])
+        # The polling gate job holds only GITHUB_TOKEN; Fly/probe secrets stay in the deploy job.
+        gate_job = self.source[gate_start:deploy_start]
+        for secret in ("FLY_API_TOKEN", "SENTRY_DSN", "METRICS_AUTH_TOKEN", "FLY_HEALTH_URL"):
+            self.assertNotIn(secret, gate_job)
 
     def test_production_readiness_and_served_sha_probes_are_required(self):
         self.assertIn("Verify production probe configuration", self.source)

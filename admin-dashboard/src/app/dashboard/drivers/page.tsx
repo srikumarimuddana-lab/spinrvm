@@ -12,6 +12,7 @@ import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { useAuthStore } from "@/store/authStore";
@@ -26,6 +27,7 @@ const PAGE_SIZE = 50;
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     // Quiet Console Stage 3: gates the flag-on Badge alternates for the
     // driver-lifecycle status pill and the Spinr Pass pill below — the
     // ad-hoc-color originals stay fully intact when the flag is off.
@@ -674,11 +676,13 @@ export default function DriversPage() {
         // Report-only by design: account_not_on_key drivers are counted but
         // NOT detached. Retiring in bulk stays a deliberate per-driver action
         // (the slideout button), never one click across the fleet.
-        if (!window.confirm(
-            "Refresh Stripe verification for ALL drivers with a Stripe account?\n\n" +
-            "This reads live state from Stripe and updates each driver's row. " +
-            "Nothing is detached or changed on Stripe."
-        )) return;
+        if (!(await confirm({
+            title: "Refresh Stripe verification for ALL drivers with a Stripe account?",
+            description:
+                "This reads live state from Stripe and updates each driver's row. " +
+                "Nothing is detached or changed on Stripe.",
+            confirmLabel: "Refresh all",
+        }))) return;
         setBulkKycRunning(true);
         try {
             const res = await refreshAllDriverStripeKyc();
@@ -703,12 +707,14 @@ export default function DriversPage() {
 
     const [bulkPayoutsRunning, setBulkPayoutsRunning] = useState(false);
     const handleBulkPayoutRefresh = async () => {
-        if (!window.confirm(
-            "Sync Stripe payout history for ALL drivers?\n\n" +
-            "Reads every mapped driver's Stripe Transfers, bank payouts and balance " +
-            "transactions and materializes anything missing. Nothing is changed on " +
-            "Stripe, and re-running is safe."
-        )) return;
+        if (!(await confirm({
+            title: "Sync Stripe payout history for ALL drivers?",
+            description:
+                "Reads every mapped driver's Stripe Transfers, bank payouts and balance " +
+                "transactions and materializes anything missing. Nothing is changed on " +
+                "Stripe, and re-running is safe.",
+            confirmLabel: "Sync all",
+        }))) return;
         setBulkPayoutsRunning(true);
         try {
             const res = await refreshAllDriverStripePayouts();
@@ -743,15 +749,18 @@ export default function DriversPage() {
             const sample = preview.changes.slice(0, 3).map(c =>
                 `${c.period_type} ${String(c.period_start).slice(0, 10)}: paid out ${c.before.payouts_total} → ${c.after.payouts_total}`
             ).join("\n");
-            if (!window.confirm(
-                `Rewrite stored totals for ${preview.corrected} of ${preview.scanned} statement(s)?\n\n` +
+            if (!(await confirm({
+                title: `Rewrite stored totals for ${preview.corrected} of ${preview.scanned} statement(s)?`,
+                description:
                 `Net movement — earnings ${preview.delta_earnings >= 0 ? "+" : ""}${preview.delta_earnings.toFixed(2)}, ` +
                 `paid out ${preview.delta_payouts >= 0 ? "+" : ""}${preview.delta_payouts.toFixed(2)}\n\n` +
                 `Examples:\n${sample}\n\n` +
                 "Previous figures are kept for rollback. Only the totals shown in the " +
                 "statements list change — what was emailed to drivers is untouched." +
-                (preview.has_more ? "\n\nMore statements remain beyond this batch — run again after this one." : "")
-            )) return;
+                (preview.has_more ? "\n\nMore statements remain beyond this batch — run again after this one." : ""),
+                confirmLabel: "Rewrite totals",
+                destructive: true,
+            }))) return;
 
             const applied = await recomputeStatementTotals({ apply: true });
             toast({
@@ -891,6 +900,7 @@ export default function DriversPage() {
 
     return (
         <div className="space-y-5">
+            {confirmDialog}
             <DriverListTable
                 data={data}
                 loading={loading}

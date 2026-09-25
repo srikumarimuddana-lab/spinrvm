@@ -6,15 +6,31 @@
 |---|---|
 | Date | 2026-09-25 |
 | Author | Claude Code |
-| Surface(s) | backend |
+| Surface(s) | backend, admin-dashboard (disputes page notice only) |
 | Domain (Sentry tag) | admin (money path: payments) |
-| PR / commit link | branch `claude/fix-admin-money-action-caps` (local, not pushed). Round 1: `8d6e79e`, `00b3771`, `be63745`. Round 2 (reviewer fixes + owner decisions A/B): `415cecf`, `effeb82`, `b12e6d6`, `0c20940`, `29f1725`, `a35e65e`, `4bd8825`, `3894ca7` |
+| PR / commit link | branch `claude/fix-admin-money-action-caps` (local, not pushed). Round 1: `8d6e79e`, `00b3771`, `be63745`. Round 2 (reviewer fixes + owner decisions A/B): `415cecf`, `effeb82`, `b12e6d6`, `0c20940`, `29f1725`, `a35e65e`, `4bd8825`, `3894ca7`. Round 3 (prod schema + refund truth + dashboard notice): `e76679b`, `b518786`, `94a1091` |
 | Related issue or gap ID | ROADMAP N23, finding ADMIN-OPS-001; cap/threshold values are founder decision E-F7; owner decisions (A) real dispute refunds behind a flag that ships off, (B) super_admin-only cap settings |
 
 ## 1. Issue / gap identified
 
 - Admins could credit or debit any rider/driver wallet, and issue dispute refunds, with no cumulative limit and no alert.
 - Separately, the dashboard's dispute "approve refund" never refunded anyone. A duplicate `PUT /api/admin/disputes/{id}/resolve` in `routes/admin/support.py` shadowed the real handler in `routes/disputes.py`.
+
+## 1b. Missing `disputes` columns (found round 2, fixed round 3)
+
+- **Finding.** Production `public.disputes` has only the migration 10 and 126 columns (read-only `information_schema` check, 2026-09-25). `routes/disputes.py` writes four columns that don't exist:
+  - `create_dispute`: `requested_amount`, `original_fare`;
+  - `admin_resolve_dispute`: `resolution`, `refund_result`.
+- **Impact.**
+  - PostgREST rejects unknown columns (PGRST204), so **both handlers would have returned 500 in production**. Rider- and driver-filed disputes could never have been created, which fits the 0 disputes to date.
+  - Once the routing fix made the resolve handler live, every resolve would also have returned 500.
+  - With the refund flag on, that 500 would come **after** the Stripe refund.
+- **Fix.** Migration `477_disputes_resolution_columns.sql` (additive, all nullable, no default):
+  - `requested_amount NUMERIC(10,2)`
+  - `original_fare NUMERIC(10,2)`
+  - `resolution TEXT`
+  - `refund_result JSONB`
+- **Guard.** `backend/tests/test_disputes_column_drift.py` captures the real `insert_one`/`update_one` payload keys on every create and resolve path (Stripe refund, `manual_required`, flag off, rejected). It fails if a key is neither in the production column snapshot nor declared by a migration's `ADD COLUMN`. All 6 tests fail with 477 removed.
 
 ## 2. Root cause
 
@@ -66,6 +82,15 @@
 - Fixing the route by moving `disputes_admin_router` ahead of `support_router`: that would leave a dead duplicate handler that could silently win again if someone reorders the includes.
 - A presence-based super-admin check: it breaks unrelated saves (see item 5).
 
+**Round 3 changes:**
+- **Refund truth.** With the flag on, a refund counts as issued only when Stripe's refund status is `succeeded` or `pending`. `failed`, `canceled` or anything else means:
+  - `refund_issued: false`, plus the "refund manually" message;
+  - the audit row has `refund_issued=false`, so the cap doesn't count it;
+  - no "refund issued" rider push;
+  - `refund_amount` stored as 0;
+  - a `logger.error` for manual follow-up.
+- **Dashboard notice.** `disputes/page.tsx::handleResolve` now reads the response. When `refund_issued === false` for approved or partial_refund, it shows the backend `message` in a destructive toast, using the page's existing `useToast` pattern, instead of closing silently.
+
 ## 4. Risk & impact on existing functionality
 
 **Blast radius: backend admin money endpoints plus one admin route's handler and permission. Riders and drivers are unaffected while the flag is off.**
@@ -103,13 +128,12 @@
 - **Internal admins, dispute resolve.** Until a super_admin turns `admin_dispute_refunds_enabled` on:
   - approving a refund marks the dispute resolved and issues no refund;
   - the API response says "Dispute resolved, but no refund was issued. Issue the refund manually in Stripe…";
-  - **however, the current dashboard (`disputes/page.tsx::handleResolve`) ignores the response body.** It just closes the dialog and refreshes, so today the admin sees no "do it manually" notice.
-
-  A dashboard change to render `message` / `refund_issued: false` is needed and is not part of this branch.
+  - the dashboard now shows that message as a toast titled "Dispute resolved, no refund issued" when the dialog closes (round 3). The same toast appears if Stripe returns a `failed` or `canceled` refund with the flag on.
+- **Pre-existing gap, not fixed here: "Approve Full Refund" never refunds.** For `approved`, the dashboard sends no `refund_amount`; it only sends one for `partial_refund`. The backend refunds only when `refund_amount` is set, so a full approval issues **no refund even with the flag on**. The new toast at least tells the admin. Fixing it means defaulting the refund to `original_fare` on approve, in either the dashboard or the backend. That is a money-behaviour decision and needs the owner's call.
 - **Internal admins, cap.** Once E-F7 values are set, an over-cap credit, debit or refund fails with "Daily admin money-action cap of $X reached … Nothing was moved…".
 - **Internal admins, settings.** A non-super-admin changing any of the three settings gets 403 "Only super admins can change <field>". Unchanged round-trips still save.
 - **Riders.** A dispute approved while the flag is off gets "Your dispute has been approved." with no refund claim. With the flag on, they get the same push as before plus a real refund.
-- **Visibility.** Changes are visible to already-logged-in admins within the 60s settings cache. No dashboard code changed, so there is no visual diff.
+- **Visibility.** Changes are visible to already-logged-in admins within the 60s settings cache. The dashboard change is a toast on `/dashboard/disputes`. That page is not one of the 6 visual-regression baselines in `e2e/visual-regression.spec.ts` (login, dashboard-home, rides, drivers, monitoring, settings), so there is no baseline to update; the toast was reasoned about, not screenshotted.
 
 ## 6. Files modified
 
@@ -166,11 +190,19 @@ elif wants_refund:
 - **Flag off:** A credits $40, debits $25, then approves a $30 dispute refund. The refund is recorded with no Stripe call and not counted, so the total stays at $65. A following $35 credit is allowed, bringing the total to exactly $100.
 - **Flag on:** the same $30 refund calls Stripe and counts, bringing the total to $95, so the next $10 credit gets a 403 and `wallet_apply_delta` is never called.
 
+## Deploy order (required)
+
+1. Apply **475** and **477** before deploying this backend. Without 475, saving admin settings fails (PGRST204) on the new fields, because the dashboard round-trips the settings object. Without 477, dispute create and resolve fail.
+2. Deploy the backend and dashboard.
+3. Only then may a super_admin turn `admin_dispute_refunds_enabled` on. **477 must be applied before the flag is turned on**, or the resolve write fails after the Stripe refund.
+
 ## 8. Rollback plan
 
 - **Flag.** Leave it off, or turn it back off. This needs no deploy and takes effect within the 60s cache: `UPDATE public.settings SET admin_dispute_refunds_enabled = FALSE WHERE id = 'app_settings';`. A Stripe refund already issued while the flag was on is not reversed by this. It is a real refund and needs a manual Stripe-side decision.
 - **Cap/threshold:** `UPDATE public.settings SET admin_money_daily_cap_per_admin = NULL, admin_money_alert_threshold = NULL WHERE id = 'app_settings';`. This has to be SQL, because the API drops None values.
 - **Routing change:** revert commit `29f1725`, which restores the `support.py` handler and its shadowing. No data migration is involved. Rows resolved in the meantime keep `resolution`/`resolved_by`.
+- **Dashboard toast:** revert `94a1091`. It is display-only.
+- **Migration 477:** leave it in place; its columns are additive and harmless. Only drop them after reverting the code that writes them (rollback SQL is in its header).
 - **Schema** (only after reverting the code): `ALTER TABLE public.settings DROP COLUMN IF EXISTS admin_dispute_refunds_enabled, DROP COLUMN IF EXISTS admin_money_alert_threshold, DROP COLUMN IF EXISTS admin_money_daily_cap_per_admin;`
 
 ## 9. Verification performed
@@ -182,6 +214,11 @@ elif wants_refund:
   - The 4 blocking or fail-closed wallet and dispute cap tests fail with the wiring reverted.
   - Full `pytest -m "not slow"` gave 16352 passed. The only failures were 6 order-dependent ones in `test_verify_otp_login_flow.py`, which pass in isolation, plus the `tests/rls` errors that need real Postgres.
 - [x] **Round-2 full `pytest -m "not slow"`** (with `tests/rls` ignored): 16369 passed, 6 failed. The 6 failures are the same order-dependent `test_verify_otp_login_flow.py` tests as round 1 (auth code, untouched here), and there are no other failures. The run started before commit `3894ca7`, which is a small `refund_amount` change whose affected files were re-run separately (99 passed).
+- [x] **Round 3:**
+  - Backend: `test_disputes_column_drift.py` 6 passed (6 fail without 477); refund-status tests 3 new, and `test_admin_money_caps*` 26 passed; dispute, support and drift files 105 passed; `test_migration*` plus drift 251 passed.
+  - Dashboard: `npm ci`, then **`npm run build` (Next.js production build) exited 0** with "Compiled successfully".
+  - Dashboard tests: `npx vitest run src/app/dashboard/disputes/ src/__tests__/dashboard/pages.smoke.test.tsx src/app/dashboard/support` gave 38 passed across 3 files. The new `page.resolve.test.tsx` fails with the page change reverted.
+  - `eslint` on the changed files: 0 errors, 3 pre-existing `set-state-in-effect` warnings.
 - [x] `ruff check` and `ruff format --check` are clean, and the pre-commit hook ran on every commit (no `--no-verify`).
 - [x] **Blast-radius grep:**
   - every `/disputes/{id}/resolve` registration and dashboard caller;
@@ -194,10 +231,10 @@ elif wants_refund:
 
 ## What was NOT verified
 
-- **Production `disputes` schema (pre-merge blocker to check).** The repo migrations for `disputes` (`10_disputes_table.sql`, `126_*`) define no `resolution`, `refund_result`, `requested_amount` or `original_fare` columns. `routes/disputes.py` writes `resolution`/`refund_result` on resolve, and `requested_amount`/`original_fare` on create. That handler was never reachable before, so these writes have never run against production. If the columns are missing there, every resolve will fail with PGRST204 (500) — **after** the Stripe refund when the flag is on. It may also be why production has 0 disputes rows, since create writes two of those columns. Someone should run a read-only `information_schema.columns` check for `disputes` before merge. If the columns are missing, an additive migration is needed before the flag is ever turned on. I didn't add one, because I would be guessing at the production state.
-- **Dashboard.** The dashboard ignores the resolve response, so the "no refund issued" message is not shown to admins yet (see §5). No dashboard build was run, because no dashboard code changed.
+- Migration 477 has not been applied anywhere. The drift test proves only that a migration declares every written key, not that production has run it.
+- The dashboard toast was not screenshotted or exercised in a real browser. It was covered by vitest with a mocked `useToast`, plus the production build.
 - Nothing ran against live Supabase or Stripe. The migration wasn't applied, Sentry was mocked, and there was no staging run.
-- **`refund_issued` on odd statuses.** It is set when `Refund.create` returns, whatever the refund status. A synchronously `failed` refund would be counted toward the cap and would trigger the "issued" rider push.
+- **`pending` refunds.** A `pending` refund counts as issued; if Stripe later fails it, only the `charge.refund.updated` webhook would know. No webhook reconciliation of `refund_result` was added.
 - **Accepted gaps in the interim control:**
   - It's check-then-act, not a lock.
   - Wallet audit rows are written after the money moves, and `log_admin_action` swallows failures, which undercounts.

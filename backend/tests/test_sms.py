@@ -196,6 +196,15 @@ def _capacity(executor) -> int:
     return executor._slots._initial_value
 
 
+def _saturated(sms_mod, pool: str) -> int:
+    counters = sms_mod.metrics.snapshot()["counters"]["spinr_sms_executor_saturated_total"]
+    return counters[(("pool", pool),)]
+
+
+def _occupied(sms_mod, pool: str) -> float:
+    return sms_mod.metrics.snapshot()["gauges"]["spinr_sms_executor_occupied_slots"][(("pool", pool),)]
+
+
 class TestSMSBoundedExecutor:
     """Twilio sends run on dedicated bounded pools (security-auditor finding on
     #5784): a hung Twilio/DNS call must pin at most the SMS pool's threads,
@@ -274,12 +283,16 @@ class TestSMSBoundedExecutor:
                 assert all(r["success"] is False and r["error"] == "TimeoutError" for r in hung)
                 assert len(sms_mod._SMS_EXECUTOR._threads) == sms_mod._SMS_EXECUTOR._max_workers == 16
 
+                before = _saturated(sms_mod, "general")
                 start = time.monotonic()
                 result = await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW)
                 elapsed = time.monotonic() - start
 
                 assert result == {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
                 assert elapsed < 0.05, "a full SMS pool must reject immediately, not wait"
+                # The wedge is alertable: rejection counted, pool reads fully occupied.
+                assert _saturated(sms_mod, "general") == before + 1
+                assert _occupied(sms_mod, "general") == capacity
 
                 # The loop's shared default executor is untouched by the outage.
                 probe = await asyncio.wait_for(asyncio.to_thread(lambda: "free"), timeout=1.0)
@@ -328,6 +341,50 @@ class TestSMSBoundedExecutor:
                 assert [r["success"] for r in sos] == [True, True, True]
         finally:
             release.set()
+
+    @pytest.mark.asyncio
+    async def test_saturation_metrics_preregistered_and_tagged_by_domain(self):
+        """Every pool's counter/gauge exists at 0 from import (alert rules
+        never see a missing series), and a saturated SOS / OTP pool's error
+        log carries domain=safety / domain=auth for Sentry filtering."""
+        from loguru import logger
+
+        import backend.sms_service as sms_mod
+
+        for pool in ("sos", "otp", "general"):
+            assert isinstance(_saturated(sms_mod, pool), int)
+            assert isinstance(_occupied(sms_mod, pool), (int, float))
+
+        release = threading.Event()
+        records: list = []
+        sink_id = logger.add(lambda m: records.append(m.record), level="ERROR")
+
+        def _hang(**_kwargs):
+            release.wait(5)
+            return MagicMock(sid="SM-late")
+
+        try:
+            with (
+                patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.1),
+                patch("twilio.http.http_client.TwilioHttpClient"),
+                patch("twilio.rest.Client") as mock_client_cls,
+            ):
+                mock_client_cls.return_value.messages.create.side_effect = _hang
+                for pool, send in (("sos", sms_mod.send_sos_sms), ("otp", sms_mod.send_otp_sms)):
+                    await asyncio.gather(
+                        *(send("+13065551234", "x", **_TWILIO_KW) for _ in range(_capacity(sms_mod._SMS_POOLS[pool])))
+                    )
+                    before = _saturated(sms_mod, pool)
+                    result = await send("+13065551234", "x", **_TWILIO_KW)
+                    assert result["error"] == "ExecutorSaturated"
+                    assert _saturated(sms_mod, pool) == before + 1
+                    assert _occupied(sms_mod, pool) == _capacity(sms_mod._SMS_POOLS[pool])
+        finally:
+            release.set()
+            logger.remove(sink_id)
+
+        tags = {r["extra"].get("sms_pool"): r["extra"].get("domain") for r in records if "sms_pool" in r["extra"]}
+        assert tags == {"sos": "safety", "otp": "auth"}
 
     @pytest.mark.asyncio
     async def test_max_size_broadcast_plus_small_callers_never_saturates_when_healthy(self):

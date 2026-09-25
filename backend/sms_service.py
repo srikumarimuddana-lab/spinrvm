@@ -10,9 +10,11 @@ import contextvars
 from loguru import logger
 
 try:
+    from .utils import metrics
     from .utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from .utils.pii import redact_phone
 except ImportError:
+    from utils import metrics
     from utils.bounded_executor import BoundedExecutor, ExecutorSaturated
     from utils.pii import redact_phone
 
@@ -59,6 +61,25 @@ _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
 _SOS_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=28, thread_name_prefix="spinr-sms-sos")
 _OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=8, thread_name_prefix="spinr-sms-otp")
 _SMS_EXECUTOR = BoundedExecutor(max_workers=16, queue_size=240, thread_name_prefix="spinr-sms")
+_SMS_POOLS = {"sos": _SOS_SMS_EXECUTOR, "otp": _OTP_SMS_EXECUTOR, "general": _SMS_EXECUTOR}
+# Sentry `domain` tag for a saturated pool's error log (general is mixed-use).
+_POOL_DOMAIN = {"sos": "safety", "otp": "auth"}
+
+# A running send whose wait_for fires cannot be cancelled and keeps its slot
+# (e.g. a stalled DNS lookup), so a pool can wedge silently. These make it
+# alertable: saturation counts rejected sends; occupied_slots (running +
+# queued) is sampled at every submit/finish -- it can read high after an
+# abandoned thread finishes until the next send on that pool re-samples it.
+_SATURATED_METRIC = "spinr_sms_executor_saturated_total"
+_OCCUPIED_METRIC = "spinr_sms_executor_occupied_slots"
+for _pool in _SMS_POOLS:
+    metrics.inc(_SATURATED_METRIC, {"pool": _pool}, by=0)
+    metrics.set_gauge(_OCCUPIED_METRIC, 0, {"pool": _pool})
+
+
+def _record_occupancy(pool: str) -> None:
+    slots = _SMS_POOLS[pool]._slots
+    metrics.set_gauge(_OCCUPIED_METRIC, slots._initial_value - slots._value, {"pool": pool})
 
 
 async def send_sms(
@@ -74,7 +95,7 @@ async def send_sms(
         dict with 'success' (bool), 'provider' (str), and optionally 'sid' or 'error'.
     """
     return await _send_sms_on(
-        _SMS_EXECUTOR, to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+        "general", to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
     )
 
 
@@ -85,12 +106,12 @@ async def send_sos_sms(
     an OTP flood or a bulk broadcast can never take its capacity. Same
     arguments and return shape as send_sms."""
     return await _send_sms_on(
-        _SOS_SMS_EXECUTOR, to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+        "sos", to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
     )
 
 
 async def _send_sms_on(
-    executor: BoundedExecutor, to_phone: str, message: str, *, twilio_sid: str, twilio_token: str, twilio_from: str
+    pool: str, to_phone: str, message: str, *, twilio_sid: str, twilio_token: str, twilio_from: str
 ) -> dict:
     masked = redact_phone(to_phone)
     if not all([twilio_sid, twilio_token, twilio_from]):
@@ -123,12 +144,21 @@ async def _send_sms_on(
         # was live when the thread was first spawned.
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
-        sid = await asyncio.wait_for(loop.run_in_executor(executor, ctx.run, _send), timeout=_TWILIO_THREAD_TIMEOUT_S)
+        future = loop.run_in_executor(_SMS_POOLS[pool], ctx.run, _send)
+        _record_occupancy(pool)
+        try:
+            sid = await asyncio.wait_for(future, timeout=_TWILIO_THREAD_TIMEOUT_S)
+        finally:
+            _record_occupancy(pool)
         logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
         return {"success": True, "provider": "twilio", "sid": sid}
     except ExecutorSaturated:
-        pool = {id(_SOS_SMS_EXECUTOR): "sos", id(_OTP_SMS_EXECUTOR): "otp"}.get(id(executor), "general")
-        logger.bind(sms_pool=pool).error(f"Failed to send SMS to {masked}: ExecutorSaturated (sms pool={pool} full)")
+        metrics.inc(_SATURATED_METRIC, {"pool": pool})
+        _record_occupancy(pool)
+        log_ctx = {"sms_pool": pool}
+        if pool in _POOL_DOMAIN:
+            log_ctx["domain"] = _POOL_DOMAIN[pool]
+        logger.bind(**log_ctx).error(f"Failed to send SMS to {masked}: ExecutorSaturated (sms pool={pool} full)")
         return {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
     except Exception as e:
         # PIPEDA: never log or return str(e) — TwilioRestException text
@@ -155,5 +185,5 @@ async def send_otp_sms(
     message = f"Your Spinr verification code is: {otp_code}. It expires in 5 minutes."
     # OTP pool, not the general one: an OTP flood must not starve SOS sends.
     return await _send_sms_on(
-        _OTP_SMS_EXECUTOR, phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+        "otp", phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
     )

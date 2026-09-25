@@ -143,19 +143,19 @@ def test_dispute_stats_total_refunded_uses_round_half_up(client, _set_admin, mon
     assert resp.json()["total_refunded"] == 10.13
 
 
-def test_create_dispute(client, _set_admin, monkeypatch):
-    monkeypatch.setattr(m.db_supabase, "insert_one", AsyncMock(return_value=None))
+def test_create_dispute_is_disabled_410(client, _set_admin, monkeypatch):
+    """In-app disputes disabled 2026-09-25: no row, no Zoho ticket, no audit."""
+    insert_one = AsyncMock(return_value=None)
+    monkeypatch.setattr(m.db_supabase, "insert_one", insert_one)
     resp = client.post(
         "/api/admin/disputes",
         json={"ride_id": "r1", "user_id": "u1", "reason": "no-show", "description": "d"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-    assert body["dispute"]["status"] == "pending"
-    assert "user_name" not in body["dispute"]
-    m.log_admin_action.assert_awaited_once()
-    assert m.log_admin_action.call_args.args[1] == "dispute_created"
+    assert resp.status_code == 410, resp.text
+    assert "read-only" in resp.text
+    insert_one.assert_not_called()
+    m.create_ticket_for_dispute.assert_not_called()
+    m.log_admin_action.assert_not_called()
 
 
 def test_get_dispute_details_not_found(client, _set_admin, monkeypatch):
@@ -172,23 +172,14 @@ def test_get_dispute_details_found(client, _set_admin, monkeypatch):
     assert resp.json()["ride_details"]["id"] == "r1"
 
 
-def test_update_dispute_no_fields_skips_write(client, _set_admin, monkeypatch):
+@pytest.mark.parametrize("body", [{}, {"status": "resolved", "refund_amount": 5}])
+def test_update_dispute_is_disabled_410(client, _set_admin, monkeypatch, body):
     update_one = AsyncMock()
     monkeypatch.setattr(m.db_supabase, "update_one", update_one)
-    resp = client.put("/api/admin/disputes/d1", json={})
-    assert resp.status_code == 200
+    resp = client.put("/api/admin/disputes/d1", json=body)
+    assert resp.status_code == 410, resp.text
     update_one.assert_not_called()
-
-
-def test_update_dispute_with_fields(client, _set_admin, monkeypatch):
-    update_one = AsyncMock()
-    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
-    resp = client.put("/api/admin/disputes/d1", json={"status": "resolved", "refund_amount": 5})
-    assert resp.status_code == 200
-    update_one.assert_called_once()
-    assert update_one.call_args.args[2]["status"] == "resolved"
-    m.log_admin_action.assert_awaited_once()
-    assert m.log_admin_action.call_args.args[1] == "dispute_updated"
+    m.log_admin_action.assert_not_called()
 
 
 # PUT /disputes/{id}/resolve is served by routes/disputes.py (admin_router,
@@ -207,13 +198,15 @@ def test_resolve_route_is_served_by_disputes_py_and_disabled(client, _set_admin,
     update_one.assert_not_called()
 
 
-def test_delete_dispute(client, _set_admin, monkeypatch):
+def test_delete_dispute_route_removed(client, _set_admin, monkeypatch):
+    """The hard DELETE broke 7-year financial retention; it no longer exists.
+    GET/PUT still match the path, so DELETE is 405 and nothing is deleted."""
     delete_many = AsyncMock()
     monkeypatch.setattr(m.db_supabase, "delete_many", delete_many)
     resp = client.delete("/api/admin/disputes/d1")
-    assert resp.status_code == 200
-    delete_many.assert_called_once_with("disputes", {"id": "d1"})
-    m.log_admin_action.assert_awaited_once_with(_ADMIN, "dispute_deleted", "disputes", "d1", {})
+    assert resp.status_code == 405, resp.text
+    delete_many.assert_not_called()
+    m.log_admin_action.assert_not_called()
 
 
 # ---------- Support Tickets ----------

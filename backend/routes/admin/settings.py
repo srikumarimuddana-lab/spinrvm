@@ -558,6 +558,9 @@ class SettingsUpdateRequest(BaseModel):
     background_location_fanout_enabled: Optional[bool] = None
     driver_stationary_tracking_enabled: Optional[bool] = None
     period1_distance_tracking_enabled: Optional[bool] = None
+    # Migration 471. Android ride offers on the alarm-volume channel; read by
+    # utils/ride_offer_ring.py when building offer payloads.
+    ride_offer_alarm_channel_enabled: Optional[bool] = None
     # Migration 467. Android Allow-all-the-time gate; served to the driver app
     # as always_location_required on /drivers/config.
     driver_always_location_gate_enabled: Optional[bool] = None

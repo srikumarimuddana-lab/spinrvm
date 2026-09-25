@@ -25,6 +25,7 @@ import notifee, {
     type Event,
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // v3: Android channel settings (incl. sound) are IMMUTABLE once created on a
 // device. v2 was created pointing at a `ride_offer` raw resource that was
@@ -57,6 +58,15 @@ const RIDE_OFFER_SILENT_CHANNEL_ID = 'ride-offers-fg-v2';
 // Delete it when a previous build left it on the device, and keep v3, which
 // does show the card (at the phone's notification volume).
 const RIDE_OFFER_RING_CHANNEL_ID = 'ride-offers-v4';
+// Alarm-volume channel, created NATIVELY with USAGE_ALARM
+// (plugins/withRideOfferRingChannel.js) because Notifee cannot set a channel's
+// audio usage. Silent/vibrate mode does not mute the alarm stream, and DND
+// lets alarm sound through by default (whether the card itself shows under
+// DND still needs DND access, which this app does not ask for). Posted to only when the offer says
+// ring_mode=alarm (settings flag, migration 471) AND the channel exists and is
+// not blocked; otherwise ride-offers-v3. JS never creates it: a JS create would
+// lock in notification-stream audio on binaries without the plugin.
+const RIDE_OFFER_ALARM_CHANNEL_ID = 'ride-offers-alarm-v1';
 const STALE_CHANNEL_IDS = ['ride-offers-v2', 'ride-offers-fg-v1'];
 const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
 const RIDE_OFFER_CATEGORY_ID = 'ride-offer';
@@ -95,16 +105,57 @@ export interface RideOfferDisplayData {
     // Signed, short-lived URL to the branded fare-banner image. When present,
     // the Android card expands to this rich BigPicture instead of the text card.
     offer_card_url?: string;
+    // 'alarm' | 'notification' from the backend (migration 471). Android only.
+    ring_mode?: string;
 }
 
 let channelReadyPromise: Promise<void> | null = null;
-// The loud channel actually in use on this device — resolved by
-// ensureNotifeeReady (v4 when the native ring-volume channel exists, else v3).
+// The notification-volume loud channel (always v3 now). loudChannelId() picks
+// the alarm channel over it per post.
 let rideOfferChannelId: string = RIDE_OFFER_CHANNEL_ID;
 let rideOfferDismissTimer: ReturnType<typeof setTimeout> | null = null;
 // Absolute deadline for the offer currently on screen, pinned the first time
 // we see that ride. See getRideOfferTimeoutMs.
 let rideOfferDeadline: { rideId: string; expiresAtMs: number } | null = null;
+// Last ring_mode the backend sent. The reclaim re-post is built from app state
+// that does not carry it, and the setting is global, not per ride.
+// Persisted too: opening the app from a killed-state offer starts a new JS
+// context, and a reclaim there has no ring_mode of its own.
+let lastRingMode: string | undefined;
+const RING_MODE_KEY = 'spinr_ride_offer_ring_mode';
+
+async function rememberRingMode(mode: string): Promise<void> {
+    if (mode === lastRingMode) return;
+    lastRingMode = mode;
+    await AsyncStorage.setItem(RING_MODE_KEY, mode).catch((e: unknown) => {
+        console.error('[Notifee] could not persist ring_mode:', e);
+    });
+}
+
+async function currentRingMode(): Promise<string | undefined> {
+    if (lastRingMode === undefined) {
+        const stored = await AsyncStorage.getItem(RING_MODE_KEY).catch((e: unknown) => {
+            console.error('[Notifee] could not read ring_mode — using ride-offers-v3:', e);
+            return null;
+        });
+        if (lastRingMode === undefined && stored) lastRingMode = stored;
+    }
+    return lastRingMode;
+}
+
+async function loudChannelId(): Promise<string> {
+    if (Platform.OS !== 'android' || (await currentRingMode()) !== 'alarm') return rideOfferChannelId;
+    try {
+        const channel = await notifee.getChannel(RIDE_OFFER_ALARM_CHANNEL_ID);
+        if (channel && !channel.blocked) return RIDE_OFFER_ALARM_CHANNEL_ID;
+        // Expected on a binary built before the native channel existed, or if
+        // the driver turned that channel off.
+        console.warn('[Notifee] ring_mode=alarm but ride-offers-alarm-v1 is missing or blocked — using ride-offers-v3');
+    } catch (e) {
+        console.error('[Notifee] ride-offers-alarm-v1 lookup failed — using ride-offers-v3:', e);
+    }
+    return rideOfferChannelId;
+}
 
 function getRideOfferTimeoutMs(offer: RideOfferDisplayData): number {
     // `offer_expires_at` is already absolute, so a re-post recomputes the same
@@ -275,6 +326,10 @@ export async function displayRideOfferNotification(
     // Everything audible keys off `muted`; visibility behaviour keys off `silent`.
     const muted = silent || opts?.muted === true;
     const reclaim = opts?.reclaim === true;
+    // Recorded even on silent/muted posts: a foreground offer that later
+    // reclaims the ring needs to know which channel to ring on.
+    // The in-memory value is set synchronously; only the write is async.
+    if (offer.ring_mode) void rememberRingMode(offer.ring_mode);
 
     // HANDOVER, not an update — this is the fix for the overlapping ringtones.
     //
@@ -330,6 +385,7 @@ export async function displayRideOfferNotification(
         await dismissRideOfferNotification();
         return;
     }
+    const channelId = muted ? RIDE_OFFER_SILENT_CHANNEL_ID : await loudChannelId();
 
     const totalEarnings = offer.fare + (offer.total_bonus || 0);
 
@@ -376,7 +432,7 @@ export async function displayRideOfferNotification(
         subtitle: summaryLine || undefined,
         data: dataPayload,
         android: {
-            channelId: muted ? RIDE_OFFER_SILENT_CHANNEL_ID : rideOfferChannelId,
+            channelId,
             category: AndroidCategory.CALL,
             importance: AndroidImportance.HIGH,
             visibility: AndroidVisibility.PUBLIC,
@@ -470,7 +526,7 @@ export async function displayRideOfferNotification(
                 body,
                 data: dataPayload,
                 android: {
-                    channelId: muted ? RIDE_OFFER_SILENT_CHANNEL_ID : rideOfferChannelId,
+                    channelId,
                     importance: AndroidImportance.HIGH,
                     smallIcon: RIDE_OFFER_SMALL_ICON,
                     pressAction: { id: 'default', launchActivity: 'default' },

@@ -7,7 +7,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
@@ -69,6 +69,9 @@ class DebugRideOfferRequest(BaseModel):
     dropoff_address: str = "Test dropoff — Stonebridge, Saskatoon"
     fare: float = 12.50
     countdown_seconds: int = 30
+    # Migration 471. Test one Android channel on one device without flipping
+    # ride_offer_alarm_channel_enabled; omitted = whatever the flag says.
+    ring_mode: Optional[Literal["alarm", "notification"]] = None
 
 
 def _mask_token(token: Optional[str]) -> Optional[str]:
@@ -248,6 +251,16 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
     now = datetime.now(timezone.utc)
     offer_expires_at = (now + timedelta(seconds=body.countdown_seconds)).isoformat()
 
+    ring_mode = body.ring_mode
+    if ring_mode is None:
+        try:
+            from ..settings_loader import get_app_settings
+            from ..utils.ride_offer_ring import ride_offer_ring_mode
+        except ImportError:  # pragma: no cover
+            from settings_loader import get_app_settings  # type: ignore
+            from utils.ride_offer_ring import ride_offer_ring_mode  # type: ignore
+        ring_mode = ride_offer_ring_mode(await get_app_settings())
+
     # Minimal but realistic dispatch payload — same key shape the live offer
     # paths use in routes/rides/matching.py / admin/rides.py's
     # admin_create_ride. rider_name and precise lat/lng below are stripped
@@ -273,6 +286,7 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
         "quiet_mode": False,
         "countdown_seconds": body.countdown_seconds,
         "offer_expires_at": offer_expires_at,
+        "ring_mode": ring_mode,
         "deeplink": "/driver/",
     }
     fcm_data = _stringify_fcm(offer_payload, exclude=_DEBUG_FCM_EXCLUDE)

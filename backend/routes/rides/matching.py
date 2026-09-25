@@ -15,6 +15,7 @@ try:
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.metrics import observe as _dispatch_observe
     from ...utils.metrics import time_ms as _time_ms
+    from ...utils.ride_offer_ring import ride_offer_ring_mode
     from ...utils.scheduled_ride_config import scheduled_search_deadline
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover - dual-import pattern
     )
     from utils.metrics import observe as _dispatch_observe  # type: ignore
     from utils.metrics import time_ms as _time_ms  # type: ignore
+    from utils.ride_offer_ring import ride_offer_ring_mode  # type: ignore
     from utils.scheduled_ride_config import scheduled_search_deadline
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
@@ -1725,6 +1727,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     "scheduled_time": ride.get("scheduled_time"),
                     "countdown_seconds": offer_timeout,
                     "offer_expires_at": _offer_expires_at,
+                    # Migration 471: Android channel for the minimised offer.
+                    "ring_mode": ride_offer_ring_mode(app_settings),
                     "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
                     "incentives": _incentives if _incentives else None,
                     "total_bonus": _total_bonus if _total_bonus > 0 else None,

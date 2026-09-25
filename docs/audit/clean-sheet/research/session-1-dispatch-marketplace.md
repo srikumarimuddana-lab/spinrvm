@@ -571,3 +571,141 @@ before rollout — stated explicitly per card, not assumed.
 | 13 | Winter-storm / declared-emergency surge behaviour | Human legal question (§5), not scored |
 | 14 | Self-run dispatch fairness audit by neighbourhood (H3 + census join) | TRIAL |
 
+---
+
+## §3 Ranked build order
+
+Ranking: cheapest, already-scoped fixes first (disclosure, measurement-surfacing); then
+small additive builds with a clear fairness/trust payoff (airport queue, fairness audit);
+then items that need a human decision before any code. Nothing here is a rewrite of the
+state machine — `dispatch.md` §6 and `04-blueprint.md`'s H1 already own that question and
+are cited, not re-litigated. Every item that changes matching/ranking/offer behaviour
+states its replay-test plan and rollback per the session guardrail.
+
+### Now (days; mostly config, copy, docs, or reading a metric that already exists)
+
+| Rank | Item | Effort | Closes | Replay-test plan | Rollback |
+|---|---|---|---|---|---|
+| 1 | **Disclose the acceptance-rate ranking penalty** (FAQ + one in-app line) | S | DRIVER-004, `ROADMAP.md` X3, COMP-009's open half | None needed — copy-only, no algorithm change | Revert the copy |
+| 2 | **Surface the existing `eta_error_p50/p95`/`eta_on_time_pct` metric** in a recurring review (admin-dashboard chart if not already rendered) | S | Research question 2 ("how big is the error today") | None needed — read-only | n/a |
+| 3 | **Name the numeric acceptance-rate ranking ceiling** (`0.1` → a documented, decided constant) and ship it with the disclosure (item 1) | S | CS-8's "unexplained constant" gap | **Yes** — replay the new ceiling against historical dispatch data before it goes live; compare match rate and rider wait vs. the current `0.1` floor | Revert to `0.1`; no data migration |
+| 4 | **Winter-storm driver safety messaging** (informational push during a declared weather warning, no gating effect) | S | Research question 5 (winter mode, safety half) | None needed — messaging only, no dispatch-logic change | Stop sending the push |
+
+### Next (weeks; new code, flagged, additive)
+
+| Rank | Item | Effort | Closes | Replay-test plan | Rollback |
+|---|---|---|---|---|---|
+| 5 | **Self-run dispatch fairness audit by neighbourhood** (extend `admin_efficiency_metrics`'s query pattern to group by H3 cell; join census data; publish methodology) | M | `03-benchmark.md` §6's own recommendation, research question 6 | n/a — this *is* the analysis; no live behaviour changes | n/a (read-only analysis) |
+| 6 | **Turn on `driver_heatmap_v2_enabled`** in one service area, after confirming the forecast layer's copy reads as guidance not instruction | S | Research question 3 (already largely built) | Optional: compare driver-reported idle time before/after in the pilot area if a survey mechanism exists; not a dispatch-algorithm change so not mandatory under the guardrail | Flag off |
+| 7 | **Admin-settable, time-boxed search-radius override for a named event** | S–M | Research question 5 (event mode) | **Yes** — compare match rate / pickup-ETA distribution for a comparable past event, with and without a simulated widening, before the first live use | Flag off; override auto-expires at its set end time regardless |
+| 8 | **Airport virtual FIFO queue** at the higher-volume of Regina/Saskatoon first | M | Research question 5 (airport mode) | **Yes** — mandatory: simulate the queue against historical airport-pickup rides (`is_airport=true`) and compare wait-time fairness (variance across drivers) to the current `effective_eta` ranking for the same rides | Flag off; ranking reverts to fleet-wide `effective_eta` for that geofence |
+
+### Later (needs a human legal/product decision, or depends on another session's item)
+
+| Rank | Item | Effort | Closes | Depends on |
+|---|---|---|---|---|
+| 9 | **Surge-cap behaviour during a declared provincial state of emergency** — document a policy (freeze at current value, suspend to 1.0×, or no automatic change) with a stated trigger | S once decided | Research question 5 (winter mode, pricing half) | §5 human question 1 — a Saskatchewan/Canadian price-gouging or emergency-management legal read this session could not perform |
+| 10 | **A driver-facing appeal path for "why was I offered this ride later than I expected"**, once the ranking ceiling is disclosed (rank 3) | S | The appeal-path gap the disclosure creates once drivers can ask the question | Rank 1 and 3 shipping first |
+| 11 | **Periodic bipartite/batch matching, or RL dispatch** | L | Would only be revisited if Spinr's per-city concurrent-open-ride volume grows by an order of magnitude | Real production concurrency numbers this session did not have; explicitly HOLD, not scheduled |
+
+**Sequencing note.** Ranks 1 and 3 should ship together (never disclose a mechanism whose
+strength is about to change without saying so, and never silently change the strength of
+an undisclosed mechanism either). Rank 5 (the fairness audit) has no code dependency on
+anything else in this list and can start immediately in parallel with the Now items.
+
+---
+
+## §4 What not to build
+
+- **A periodic global bipartite/Hungarian-algorithm batching window.** The operations-
+  research literature this session found is explicit that batching's advantage is
+  conditional on enough simultaneous conflicting demand to exist — a condition Spinr's
+  current scale does not meet, and pursuing it risks adding rider wait for no matching-
+  quality gain (§2.1).
+- **Reinforcement-learning dispatch.** No labelled volume, no ML-ops owner, and it makes
+  the already-open driver-transparency question (DRIVER-004) harder to answer, not
+  easier (§2.1).
+- **A full DeepETA-class learned ETA model.** Spinr's own `eta_error` sample size is very
+  unlikely to support training and validating a model that beats a much cheaper constant-
+  correction check against the metric that already exists (§2.2).
+- **An automated event-detection or airport-forecasting system.** The event and airport
+  cards in this session are deliberately scoped to *admin-configured, time-boxed*
+  mechanisms, not the automated demand-forecasting infrastructure Uber's own airport
+  posts describe — that infrastructure is justified by an airport count and volume Spinr
+  does not have (§2.5).
+- **Any acceptance-rate-linked mechanism that gates going online, availability, or pay** —
+  only ranking order may be affected, matching what already exists; CLAUDE.md's
+  "not a driver-control platform" and the guardrail's "no penalty for being offline" both
+  forbid extending this into an offline penalty of any kind.
+- **A demand forecast or heatmap framed as an expectation or a quota.** The existing v1/v2
+  heatmap (CS-4) and destination mode (CS-5) are correct today specifically because
+  nothing downstream ties them to availability or offer ranking — any future positioning
+  feature must keep that property.
+- **Answering the surge-during-emergency question in code before it is answered in
+  policy.** This is a legal question (§5), not an engineering one, and CLAUDE.md's surge
+  cap (2.5×, "never suggest raising it without explicit business + legal review") applies
+  with equal force to any emergency-specific carve-out.
+
+---
+
+## §5 Open human questions
+
+1. **Surge behaviour during a declared provincial/municipal state of emergency**: does
+   Saskatchewan or federal price-gouging/emergency-management law require Spinr to
+   suspend or cap surge during a declared emergency (independent of the existing 2.5×
+   auto-mode cap), the way some U.S. jurisdictions require of Uber? This session found no
+   primary Saskatchewan or Canadian statute on point (`ride.guru`'s claim about Uber is a
+   secondary source about a different jurisdiction) — needs a legal read, not an
+   engineering guess (§2.5, §4).
+2. **The acceptance-rate ranking ceiling**: is `0.1` (a 10× penalty) the intended, decided
+   fairness ceiling, or an unreviewed engineering safety floor that happens to also work?
+   Product/legal should decide the number before it is disclosed to drivers (§2.4).
+3. **Is a driver appeal path needed for the ranking penalty once disclosed**, or does the
+   existing general support contact suffice? (§3, rank 10)
+4. **Which airport should pilot the FIFO queue first** — Regina or Saskatoon — and does
+   either airport authority have its own ground-transportation queue rules Spinr would
+   need to coordinate with (a question this session, with no local-authority access,
+   could not check)? (§2.5)
+5. **Should the fairness-audit methodology be published even if it finds nothing
+   actionable**, as `03-benchmark.md` §6 already recommends, or only once Spinr has a
+   result worth publishing? A "we checked and found no disparity at our scale" result is
+   itself a defensible trust claim, but the founder should decide the publishing bar.
+6. **Does the admin dashboard already chart `pickup_eta_error`**, or does rank 2 in §3
+   need a small chart added, not just a review habit? Not checked this session (no
+   `admin-dashboard/` read was in scope).
+
+---
+
+## §6 Deferred and not verified
+
+- **External sources**: every claim in this file except the Pandey/Caliskan Chicago study
+  (VERIFIED via `03-benchmark.md`'s own prior citation) rests on a WebSearch result
+  snippet of the named URL, not a full page read (WebFetch was not attempted this
+  session, following Session 3's precedent that the egress proxy blocks most primary-
+  source domains) — every Uber/Lyft/Grab/DoorDash engineering-blog claim, the two
+  additional fairness papers (arXiv 2407.20522, arXiv 2303.05698), the Eom & Toriello
+  batching paper, the Lyft non-exclusive-dispatch paper, the OSRM-vs-Google comparison
+  pages, and the SB 24-75/deactivation-lawsuit claims should all be re-read from a
+  machine that can reach them before being quoted as settled fact in a decision memo.
+- **Live state not checked**: `dispatch_direct_pool_enabled`'s live value;
+  `max_simultaneous_offers`' live per-area values; whether `driver_heatmap_v2_enabled` or
+  any per-area surge/heatmap override is on anywhere; the live `eta_sample` size per
+  service area (needed before trusting the `eta_error` percentiles cited in §2.2); whether
+  the admin dashboard already renders `pickup_eta_error` (§5 question 6).
+- **Code not read this session, cited from `dispatch.md`/`driver-journey.md` instead**:
+  the full `_offer_timeout_handler`/`resolve_driver_offer` RPC internals, the v2/v3
+  batch-claim RPC (migrations 402/403/448/460+), `ride_complete.py`'s fare-finalization
+  logic, `location.py`'s staleness handling, and every scenario `dispatch.md` §3.2/§3.3
+  already marked UNKNOWN (driver GPS freeze, wrong-way-driver fee dispute, mid-trip stop
+  re-pricing) — this session did not re-derive any of them and has nothing new to add.
+- **Not designed this session**: the exact Redis data structure and cooldown rule for the
+  airport queue's anti-phantom-queuing protection (§2.5) — flagged as a design detail for
+  whoever builds rank 8, not resolved here.
+- **No replay test was run** for any of this session's proposed algorithm changes
+  (the ranking-ceiling change, the airport queue, the event-radius widening) — every
+  number in §2 and §3 is a design target, not a validated result, per the session's own
+  mandatory-replay-test guardrail.
+- **Admin-dashboard rendering of any new fairness-audit or ETA-error chart** was not
+  designed or screenshotted — `04-blueprint.md`/CLAUDE.md's visual-regression rules for
+  `admin-dashboard` apply to any future artifact, not evaluated in this report-only
+  session.

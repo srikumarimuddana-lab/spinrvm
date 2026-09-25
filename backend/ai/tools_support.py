@@ -483,7 +483,12 @@ register(
             "Call this for how-the-app-works and policy questions — scheduling rides, "
             "cancellation fees, splitting fares, accessibility, service animals, payments "
             "setup. Returns matching help-centre articles; answer ONLY from them and say "
-            "so if nothing matches."
+            "so if nothing matches. Matching is by shared keywords, so results can be "
+            "unrelated: check each article actually answers the question before using it. "
+            "If none does, search ONCE more using different help-centre terms (e.g. "
+            "'cash' -> 'payment methods', 'left my phone' -> 'lost item', 'what "
+            "percentage do you take' -> 'commission fare keep'), then say so if still "
+            "nothing fits."
         ),
         input_schema={
             "type": "object",
@@ -491,7 +496,17 @@ register(
                 "query": {
                     "type": "string",
                     "maxLength": 200,
-                    "description": "Keywords from the rider's question.",
+                    # The lexical ranker (_lexical_results) scores shared words, so
+                    # filler ("how do I", "can you") matches every "How do I..." FAQ
+                    # and buries the real topic. Measured in
+                    # tests/test_ai_faq_retrieval_eval.py: the user's raw wording
+                    # finds the right FAQ in the top 5 for 32/48 questions; 2-6
+                    # topic keywords find it for 48/48.
+                    "description": (
+                        "2-6 topic keywords, not the user's full sentence. Drop filler words "
+                        "(how, can, do, I, my, what). Prefer the terms a help centre would use, "
+                        "e.g. 'cancellation fee', 'criminal record check expired', 'wallet top up'."
+                    ),
                 }
             },
             "required": ["query"],

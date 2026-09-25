@@ -1216,6 +1216,13 @@ async def update_driver_status(
     _write_filters = {"id": driver_id}
     if _claim_guard:
         _write_filters["is_available"] = True
+    # Offline re-assert (the driver already read as offline): write only if
+    # still offline. A delayed or retried request must not overwrite a newer
+    # go-online from another session, possibly already claimed (Codex review).
+    # None matches a legacy NULL row as IS NULL.
+    _reassert_offline = not is_online and not status_flipped
+    if _reassert_offline:
+        _write_filters["is_online"] = driver.get("is_online")
     try:
         await db_supabase.update_one("drivers", _write_filters, _payload)
     except Exception as _col_exc:
@@ -1278,6 +1285,13 @@ async def update_driver_status(
     if verify is None:
         logger.error(f"[go-online] driver row disappeared immediately after update: driver_id={driver_id}")
         raise HTTPException(status_code=500, detail="Driver row missing after status update.")
+    if _reassert_offline and verify.get("is_online"):
+        # A newer go-online landed after this request read the row; it wins.
+        logger.info(f"[go-offline] went online during an offline re-assert; staying online driver_id={driver_id}")
+        raise HTTPException(
+            status_code=409,
+            detail="You are now online from another request. Go offline again if you meant to.",
+        )
     if _claim_guard and verify.get("is_online") and verify.get("is_available") is not True:
         # The conditional write lost to a dispatch claim. Not the silent no-op
         # below: the driver may now hold an offer, so they stay online and

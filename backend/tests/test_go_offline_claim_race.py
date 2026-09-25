@@ -125,14 +125,23 @@ class TestOfflineWriteIsConditional:
         record_period.assert_not_awaited()
 
     @pytest.mark.anyio
-    async def test_offline_reassert_by_an_offline_driver_keeps_the_plain_filter(self):
-        # Not a flip: nothing for a claim to race, and a stale flag must not
-        # turn a re-assert into a conditional write that can miss.
+    async def test_offline_reassert_is_fenced_on_still_being_offline(self):
         pre = _driver(is_online=False, is_available=False)
         _, error, update_one, _ = await _run(pre, pre)
 
         assert error is None
-        assert update_one.await_args_list[0].args[1] == {"id": DRIVER_ID}
+        assert update_one.await_args_list[0].args[1] == {"id": DRIVER_ID, "is_online": False}
+
+    @pytest.mark.anyio
+    async def test_offline_reassert_does_not_overwrite_a_newer_go_online(self):
+        """Codex review: a delayed re-assert overlapping a second session's
+        go-online (possibly already claimed) must not take the driver offline."""
+        pre = _driver(is_online=False, is_available=False)
+        newer_online = _driver(is_online=True, is_available=False, claimed_seconds_ago=0)
+        _, error, _, record_period = await _run(pre, newer_online)
+
+        assert error is not None and error.status_code == 409
+        record_period.assert_not_awaited()
 
 
 class TestClaimInFlight:

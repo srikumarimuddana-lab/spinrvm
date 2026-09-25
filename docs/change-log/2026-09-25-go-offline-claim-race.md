@@ -28,7 +28,8 @@ This predates #5775. Every go-offline hits it, the manual toggle included. #5775
   - Claim first: the offline write matches zero rows.
 - **Detection.** The handler already re-reads the row after writing. If the driver is still online and `is_available` is no longer true, it returns **409** ("A ride offer just arrived…") before any insurance-period write. That case previously fell through to the "silent no-op" 500.
 - **Claim in flight.** If the pre-read row already shows `is_available=false` with an `availability_claimed_at` younger than 30 s and no offer row yet, the request returns **409** up front. Release clears the stamp. An older unreleased stamp is an orphan for the claim reaper and does not block.
-- Go-online writes and offline re-asserts (driver already offline) keep the plain `{"id"}` filter.
+- **Offline re-assert (Codex review).** A driver already offline who sends Go offline again writes only if still offline (`{"id", "is_online": <pre-read value>}`). A delayed or retried request that overlaps a newer go-online from another session, possibly already claimed, matches zero rows, and the verify returns 409 instead of overwriting the newer session.
+- Go-online writes keep the plain `{"id"}` filter.
 
 Alternatives considered:
 - **Turn on `driver_availability_v2_enabled` in production.** This is already atomic, but it is a whole-protocol rollout with its own client and epoch contract, and not a fix for the default path.

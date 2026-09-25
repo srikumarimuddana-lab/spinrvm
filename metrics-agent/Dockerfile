@@ -70,7 +70,10 @@ RUN sed -i 's/\r$//' /usr/local/bin/discover-targets.sh /usr/local/bin/entrypoin
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin grafana
 
 COPY --from=loki /usr/bin/loki /usr/local/bin/loki
-COPY --from=vector /usr/bin/vector /usr/local/bin/vector
+# The distroless Vector images install the binary under /usr/local/bin
+# (only the -debian variant uses /usr/bin) — /usr/bin/vector failed the
+# first real build, 2026-09-24.
+COPY --from=vector /usr/local/bin/vector /usr/local/bin/vector
 COPY --from=grafana --chown=grafana:grafana /usr/share/grafana /usr/share/grafana
 COPY loki.yaml /etc/loki/loki.yaml
 COPY vector.toml /etc/vector/vector.toml

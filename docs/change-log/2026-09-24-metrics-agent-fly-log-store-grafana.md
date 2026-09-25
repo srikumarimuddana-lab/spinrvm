@@ -95,3 +95,7 @@ exec /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
 - **flyctl behaviour when adding `[mounts]` to an app whose existing machine has no volume** — the README prescribes destroying the machine first to avoid depending on it.
 - **Memory headroom (1 GB + swap), disk sizing (5 GB), and log volume** are not measured.
 - **PII content of existing backend logs** not audited. It's now retained for 7 days, in-region (`yyz`).
+
+## Follow-up — first real build (2026-09-25)
+
+The first real `fly deploy` build (after the PR merged and the owner completed the manual setup) failed at `COPY --from=vector /usr/bin/vector`: the distroless Vector image keeps the binary at `/usr/local/bin/vector`. Fixed that path. The Loki `COPY` (the step before) succeeded in that build. The Grafana `COPY` and everything after it are still unverified until the next build.

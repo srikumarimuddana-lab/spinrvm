@@ -18,6 +18,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { offerNoDriversPrompt } from '../store/noDriversStore';
+import { isNoDriversCancellation } from '../utils/noDriversSignal';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -166,6 +168,19 @@ export default function RideStatusScreen() {
     }
     // fetchRide is a zustand action (stable reference).
   }, [rideId, currentRide?.status, fetchRide]);
+
+  // No driver accepted in time, learned from the poll above (the
+  // ride_cancelled message was missed): raise the "No drivers available"
+  // sheet over home — the same check driver-arriving.tsx makes. With
+  // rider_no_drivers_sheet_enabled off, offerNoDriversPrompt returns false and
+  // this screen behaves as before.
+  useEffect(() => {
+    if (currentRide?.id !== rideId || currentRide?.status !== 'cancelled') return;
+    const cancelledRide = useRideStore.getState().currentRide;
+    if (!isNoDriversCancellation(cancelledRide) || !offerNoDriversPrompt(cancelledRide)) return;
+    clearRide();
+    router.replace('/(tabs)' as any);
+  }, [currentRide?.id, currentRide?.status, rideId, clearRide, router]);
 
   useEffect(() => {
     AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);

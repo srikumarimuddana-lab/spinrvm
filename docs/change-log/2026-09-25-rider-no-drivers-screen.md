@@ -152,6 +152,7 @@ single-surface. No ride state transition, no DB write, no money path changed.
 | `backend/migrations/470_settings_rider_no_drivers_sheet.sql` | New `settings.rider_no_drivers_sheet_enabled BOOLEAN NOT NULL DEFAULT FALSE` | Rollout switch |
 | `backend/routes/settings.py` | `GET /settings` returns `rider_no_drivers_sheet_enabled` | App reads the switch |
 | `rider-app/components/NoDriversSheetHost.tsx` (+test) | Screen-reader announcement when the sheet opens | Accessibility review blocker |
+| `rider-app/app/ride-status.tsx` (+ `__tests__/rideStatusScreen.test.tsx`) | Poll-learned no-drivers cancel raises the sheet and goes home (switch on only) | Sibling of `driver-arriving.tsx` (design review) |
 | `backend/routes/admin/settings.py` | `rider_no_drivers_sheet_enabled` field (+ drift-test snapshot) | Admin can flip it |
 | `backend/tests/test_public_settings_no_drivers_sheet.py` | New | Public key, default off |
 | `backend/routes/rides/matching.py` | `cancellation_type` on rider WS, status broadcast and push data in `ride_search_timeout` (payload section only) | App needs a machine-readable cause |
@@ -256,7 +257,18 @@ booking; booking creates a new ride and a new card hold.
   hard-coded `#1a73e8` button with white 16px text is ≈4.5:1 by hand
   calculation — needs a contrast-tool check before the switch is turned on.
   French strings verified equivalent; touch targets ≈46–48pt.
-- [ ] `spinr-design-consistency-reviewer` — running at time of writing.
+- [x] `spinr-design-consistency-reviewer` (2026-09-25): no blockers; four
+  states on the Try again → ride-options path are covered by the existing
+  screen (loading, error + retry, "No cars available", success). Warnings:
+  (1) **sibling screen gap** — `app/ride-status.tsx` (AI-assistant bookings)
+  polls the ride but never reacted to a no-drivers cancel. **Fixed**: the same
+  check `driver-arriving.tsx` makes (sheet + home, only when the switch is on;
+  off = unchanged), with two tests. Other poll-learned cancels on that screen
+  still leave the rider on it, as before this change — a pre-existing gap,
+  not widened here. (2) Try again and Schedule render with equal weight
+  (`ConfirmSheet` has no secondary style) and (3) `ConfirmSheet`'s variant
+  colours are hard-coded and off the brand tokens — both in the shared
+  component, left for a separate change.
 
 ## What was NOT verified
 

@@ -193,7 +193,7 @@ class TestFilterAndRankDrivers:
         drivers = [self._driver("d1")]
         # ride drops far from any preferred destination
         ride = self._ride_with_dropoff(53.0, -106.0)
-        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert len(out) == 1
 
     def test_destination_mode_accepts_ride_that_brings_driver_closer(self):
@@ -214,7 +214,7 @@ class TestFilterAndRankDrivers:
             }
         ]
         ride = self._ride_with_dropoff(52.3, -106.0)
-        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert len(out) == 1
 
     def test_destination_mode_rejects_ride_in_wrong_direction(self):
@@ -235,7 +235,7 @@ class TestFilterAndRankDrivers:
             }
         ]
         ride = self._ride_with_dropoff(51.5, -106.0)
-        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert out == []
 
     def test_destination_mode_fails_open_when_coords_missing(self):
@@ -254,7 +254,7 @@ class TestFilterAndRankDrivers:
             }
         ]
         ride = self._ride_with_dropoff(53.0, -106.0)
-        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert len(out) == 1
 
     # ── C136: destination mode auto-expires ──────────────────────────
@@ -279,28 +279,38 @@ class TestFilterAndRankDrivers:
 
     def test_destination_active_future_expiry_still_filters(self):
         drivers = [self._wrong_direction_driver(destination_expires_at=_future_iso())]
-        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True
+        )
         assert out == []
 
     def test_destination_expired_does_not_filter(self):
         drivers = [self._wrong_direction_driver(destination_expires_at=_past_iso())]
-        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True
+        )
         assert len(out) == 1
 
     def test_destination_null_expiry_does_not_filter(self):
         drivers = [self._wrong_direction_driver(destination_expires_at=None)]
-        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True
+        )
         assert len(out) == 1
 
     def test_destination_missing_expiry_key_does_not_filter(self):
         # Legacy row / column not selected: no key at all.
         drivers = [self._wrong_direction_driver()]
-        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True
+        )
         assert len(out) == 1
 
     def test_destination_unparseable_expiry_does_not_filter(self):
         drivers = [self._wrong_direction_driver(destination_expires_at="not-a-date")]
-        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=True
+        )
         assert len(out) == 1
 
     # ── C136 T3: exclusion observability ─────────────────────────────
@@ -311,7 +321,7 @@ class TestFilterAndRankDrivers:
         driver = self._wrong_direction_driver(id="drv-dest-42", destination_expires_at=_future_iso())
         ride = self._ride_with_dropoff(51.5, -106.0)
         ride["id"] = "ride-99"
-        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert out == []
 
         mock_logger.info.assert_called_once()
@@ -333,7 +343,7 @@ class TestFilterAndRankDrivers:
     def test_expired_destination_not_counted_as_destination_exclusion(self, mock_logger, mock_metric_inc):
         driver = self._wrong_direction_driver(destination_expires_at=_past_iso())
         ride = self._ride_with_dropoff(51.5, -106.0)
-        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0)
+        out = filter_and_rank_drivers(ride, [driver], "nearest", 4.0, 10000.0, destination_mode_enabled=True)
         assert len(out) == 1
 
         extra = mock_logger.info.call_args[1]["extra"]
@@ -375,9 +385,43 @@ class TestFilterAndRankDrivers:
             self._wrong_direction_driver(id="d_dest", destination_expires_at=_future_iso()),
         ]
         ride = self._ride_with_dropoff(51.5, -106.0)
-        out = filter_and_rank_drivers(ride, drivers, "rating_based", 4.0, 10.0)
+        out = filter_and_rank_drivers(ride, drivers, "rating_based", 4.0, 10.0, destination_mode_enabled=True)
         assert [t[0]["id"] for t in out] == ["d_near"]
         assert out[0][1] == 0.0
+
+    # ── Migration 482: settings.destination_mode_enabled switch ──────
+    # With the switch off (the default) the destination filter is skipped
+    # entirely: an ACTIVE destination (future expiry, coords present, wrong-
+    # direction ride) must not exclude the driver or count as a destination
+    # exclusion.
+
+    def test_switch_off_by_default_ignores_active_destination(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at=_future_iso())]
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_switch_off_explicit_ignores_active_destination(self):
+        drivers = [self._wrong_direction_driver(destination_expires_at=_future_iso())]
+        out = filter_and_rank_drivers(
+            self._ride_with_dropoff(51.5, -106.0), drivers, "nearest", 4.0, 10000.0, destination_mode_enabled=False
+        )
+        assert len(out) == 1
+
+    @patch("services.dispatch_service._metric_inc")
+    @patch("services.dispatch_service.logger")
+    def test_switch_off_not_counted_as_destination_exclusion(self, mock_logger, mock_metric_inc):
+        driver = self._wrong_direction_driver(id="drv-dest-7", destination_expires_at=_future_iso())
+        out = filter_and_rank_drivers(self._ride_with_dropoff(51.5, -106.0), [driver], "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+        extra = mock_logger.info.call_args[1]["extra"]
+        assert extra["exclusion_counts"]["destination"] == 0
+        assert extra["destination_excluded_driver_ids"] == []
+        assert not [
+            c
+            for c in mock_metric_inc.call_args_list
+            if c[0][0] == "spinr_dispatch_candidate_excluded_total"
+            and c[1].get("labels", {}).get("reason") == "destination"
+        ]
 
 
 class TestIsDestinationModeActive:

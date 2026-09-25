@@ -1,6 +1,7 @@
 # Dispatch: re-offer decliners, shorter search, honest "no drivers" ending
 
-Status: **plan only — nothing implemented.** Written 2026-09-25 for the
+Status (2026-09-25): Phase 0 built; Phases 2, 3, 4 in progress on PR #5776;
+**Phase 1 blocked** (see below). Written 2026-09-25 for the
 Saskatoon launch, where a ride may have ~10 drivers in range and nobody
 accepts on the first pass.
 
@@ -135,6 +136,23 @@ Rollback: flag off → backend treats `offer_expired` like any other decline
 
 ### Phase 1 — Re-offer decliners once; never re-offer ignorers
 
+> **Blocked (found 2026-09-25 before any code was written).** `ride_offers` has
+> `UNIQUE (ride_id, driver_id)` (`ride_offers_ride_driver_uq`, migration 100),
+> so a driver can never hold a second offer row for the same ride. On the
+> default PostgREST claim path (`matching.py` ~1394-1407) `claim_driver_atomic`
+> succeeds, then the batch `ride_offers` insert fails, releasing every driver
+> claimed that round and raising — repeated on every 10 s retry while the
+> decliner ranks in the top N. The v3 RPC (`ALREADY_OFFERED`) and the direct
+> pool (`ON CONFLICT DO NOTHING`) are safe but simply never re-offer.
+> Unblocking needs a one-way migration: a partial unique index on
+> `(ride_id, driver_id) WHERE status = 'pending'`, `CREATE OR REPLACE` of
+> `dispatch_claim_batch`, `dispatch_claim_batch_v2` and
+> `dispatch_claim_offers_v3`, dropping the old constraint, and newest-row
+> ordering in `driver_offer_service._load_offer` and `ride_reads.get_ride_offer`.
+> Once any ride has two rows for one driver the old constraint cannot be
+> restored without deleting rows. Awaiting a founder decision. Migration 467
+> was removed from the PR until then.
+
 | # | Change | Verify |
 |---|---|---|
 | 1.1 | Migration `467_settings_dispatch_reoffer.sql`: `dispatch_reoffer_enabled BOOL DEFAULT false`, `dispatch_decline_reoffer_after_seconds INT DEFAULT 45 CHECK 15–120`, `dispatch_max_offers_per_driver_per_ride INT DEFAULT 2 CHECK 1–3`, plus fields in `routes/admin/settings.py`. | Migration review; admin settings tests |
@@ -208,7 +226,8 @@ Without it, expect far drivers to decline, which Phase 1 then re-asks once.
 
 ## Open questions for you
 
-1. Search window for launch: **180 s**? (Uber is ~120 s.)
+1. ~~Search window for launch~~ — **decided 2026-09-25: 180 s.** The setting is
+   capped at 300 s (see Phase 1 blocker).
 2. Phase 4 wider radius: build it now, and with or without a long-pickup fee?
 3. Should we force a minimum driver-app version at launch, so every driver
    has the Phase 0 fix? Otherwise older builds keep resetting their miss streak.

@@ -1279,7 +1279,8 @@ const client = {
     return { data, status: response.status };
   },
 
-  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
+  // `credentials` is opt-in: omitted, fetch keeps its default, so existing callers are unchanged.
+  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string>; credentials?: RequestCredentials }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     // Mirrors the FormData handling in put(): without it a multipart upload
     // was JSON.stringify'd into "{}" and the file never left the device.
@@ -1310,6 +1311,7 @@ const client = {
       method: 'POST',
       headers,
       body: isFormData ? (body as FormData) : (body ? JSON.stringify(body) : undefined),
+      ...(config?.credentials ? { credentials: config.credentials } : {}),
     });
 
     if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config, true), _isRetry);

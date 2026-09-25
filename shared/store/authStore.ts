@@ -416,11 +416,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           // X8: replaying the same proposal after a lost response recovers the
-          // committed successor instead of being treated as token theft.
+          // committed successor instead of being treated as token theft. The
+          // server only commits a proposal on a request with no cookie, so omit
+          // cookies: the jar may also hold a stale refresh cookie from before
+          // the driver app's background task rotated the token.
           const proposal = await refreshProposalFor(candidate);
-          const res = await api.post('/auth/refresh', proposal
-            ? { refresh_token: candidate, proposed_refresh_token: proposal }
-            : { refresh_token: candidate });
+          const res = proposal
+            ? await api.post('/auth/refresh', { refresh_token: candidate, proposed_refresh_token: proposal },
+              { credentials: 'omit' })
+            : await api.post('/auth/refresh', { refresh_token: candidate });
           const { token, refresh_token: newRefresh, expires_in, access_expires_at, csrf_token } = res.data as RefreshTokenResponse;
           let expiresIn = typeof expires_in === 'number' && Number.isFinite(expires_in) && expires_in > 0
             ? expires_in

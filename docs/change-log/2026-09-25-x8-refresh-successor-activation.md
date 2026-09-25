@@ -25,8 +25,8 @@
 ## 3. Fix / remediation
 
 Server, only when `refresh_successor_commitment_enabled` is on and the body carries a valid proposal:
-- **Body wins over cookie.** The refresh token in the body is used instead of a cookie.
-- **Proposal becomes the successor.** On `no_match`, the proposal becomes the successor's secret, but only when the parent came from the body. The caller already holds a live credential, so choosing the successor grants nothing new. A cookie-sourced parent still never chooses its successor, which keeps the 2026-09-24 attack closed.
+- **Proposal becomes the successor only on a cookie-less request.** On `no_match`, the proposal becomes the successor's secret only when the request carried no `refresh_token` cookie. The party that presented the parent is then the party receiving the response, so choosing the successor grants nothing new.
+- **A cookie is never overridden.** Any request with a cookie keeps today's cookie-first parent and a server-random successor. That keeps the 2026-09-24 attack closed and blocks the session-fixation variant found in review (see §9).
 
 Client:
 - **New helper.** `shared/auth/refreshProposal.ts`:
@@ -36,6 +36,7 @@ Client:
   - Clears it after success and on sign-out.
   - Sends nothing when the RNG output is degenerate, missing, or unsaved, or on web.
 - **Callers.** The shared auth store (both apps) and the driver app's background renewal use it. Both run under the session lock and share one pending proposal.
+- **No cookies on a proposing request.** A renewal that carries a proposal is sent with `credentials: 'omit'`. The background task already did this; the foreground now does too, through a new opt-in `credentials` option on `shared/api/client.ts` `post` (unchanged for every other caller). This also stops a possibly stale foreground refresh cookie from being presented instead of the token the app holds.
 - **Rider dependency.** The rider app gains `expo-crypto`, a native module, so it needs a new rider build.
 
 ## 4. Risk & impact on existing functionality
@@ -71,10 +72,11 @@ Client:
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/routes/auth.py` | Body-parent precedence and proposal-as-successor when the parent came from the body (flag on) | Make X8 commit successors safely |
-| `backend/tests/test_refresh_successor_route.py` | Cookie vs body cases, stale-cookie precedence, flag-off precedence | Pin each rule |
+| `backend/routes/auth.py` | Proposal-as-successor only on a request with no refresh cookie (flag on); cookie never overridden | Make X8 commit successors without a fixation path |
+| `backend/tests/test_refresh_successor_route.py` | Cookie-less commit, cookie-parent never commits, forged body can't override a cookie, flag-off unchanged | Pin each rule |
+| `shared/api/client.ts` | Opt-in `credentials` on `post` | Let the proposing renewal omit cookies |
 | `shared/auth/refreshProposal.ts` | New: generate, persist, reuse, clear proposal | Client half of X8 |
-| `shared/store/authStore.ts` | Send the proposal; clear it after success and on sign-out | Foreground renewals (both apps) |
+| `shared/store/authStore.ts` | Send the proposal with `credentials: 'omit'`; clear it after success and on sign-out | Foreground renewals (both apps) |
 | `driver-app/utils/backgroundAuth.ts` | Send the proposal; clear after success | Headless driver renewals |
 | `driver-app/__tests__/auth/refreshProposal.test.ts` | Helper tests | Persist-before-use, reuse, weak-RNG and failure paths |
 | `rider-app/package.json`, `rider-app/yarn.lock` | `expo-crypto ~57.0.3` | CSPRNG for the rider app (native build) |
@@ -96,7 +98,9 @@ Scenario (flag on, new build): a driver's phone renews with parent P and the rep
 # Before (no_match)
 proposed = None
 # After
-if not parent_from_body:   # cookie-sourced parent never chooses its successor
+parent_from_body = bool(proposed and not request.cookies.get("refresh_token"))
+...
+if not parent_from_body:   # a request with a cookie never chooses its successor
     proposed = None
 ```
 
@@ -113,7 +117,7 @@ if not parent_from_body:   # cookie-sourced parent never chooses its successor
 - [ ] pytest and jest: **not run**. This container cannot reach PyPI or npm. CI is the first run.
 - [ ] No device or staging test. The "native stacks re-send the refresh cookie" claim is reasoned from React Native's networking defaults, not observed.
 - [x] Blast-radius grep for every `/auth/refresh` caller: shared auth store, driver background auth, and a rider `utils/apiClient.ts` cookie-only call that is unchanged.
-- [x] `spinr-security-auditor` on the three commits (findings recorded in the PR).
+- [x] `spinr-security-auditor` on the first version: **blocker found and fixed.** That version preferred a body token over a present cookie. A forged browser request (XSS, or a cross-site `text/plain` form, since `/auth/refresh` checks no CSRF token) could then carry the attacker's own refresh token plus a proposal. The attacker's session and chosen successor would be set as cookies in the victim's browser (session fixation). Fixed: the proposal is only committed on a request with no refresh cookie, and a cookie is never overridden. `test_cookie_is_never_overridden_by_a_forged_body_token` pins it. The client helper, RNG and storage were reviewed as sound.
 
 ## 10. What was NOT verified
 
@@ -121,3 +125,4 @@ if not parent_from_body:   # cookie-sourced parent never chooses its successor
 - The rider build with `expo-crypto`. The lockfile entry was added by hand from the driver app's identical resolution, because yarn cannot run here. CI's `--frozen-lockfile` install is the check.
 - Whether jest-expo's automatic `expo-crypto` mock returns bytes. If it does, three exact-body assertions will need `objectContaining`.
 - The X8 audit gate in the 2026-09-24 security note still applies before the flag is enabled.
+- **Pre-existing, not introduced here:** a cookie-less browser (signed out) can already be logged into an attacker's account by a cross-site form posting the attacker's refresh token in the body (login CSRF). That happens because `/auth/refresh` accepts a body token when no cookie is present and checks no CSRF token. X8 adds nothing to it (the attacker already owns that account), but it should get its own fix, e.g. require a JSON `Content-Type` or a custom header on `/auth/refresh`.

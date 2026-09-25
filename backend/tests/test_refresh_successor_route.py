@@ -121,16 +121,18 @@ async def test_no_match_with_body_parent_commits_the_proposal():
     assert m["issue"].await_args.kwargs["raw"] == PROPOSED
 
 
-async def test_body_parent_is_preferred_over_a_stale_cookie():
-    """Native HTTP stacks keep the cookie from the last foreground response,
-    which is stale after the driver app's background task rotated the token.
-    With a valid proposal, the body token is the one the client holds."""
+async def test_cookie_is_never_overridden_by_a_forged_body_token():
+    """Session fixation guard. A browser attaches the victim's real cookie and
+    stores whatever Set-Cookie comes back. A forged body carrying the
+    attacker's own valid refresh token plus a proposal must not pick the
+    parent, or the victim's browser would be signed into the attacker's
+    account with a successor the attacker chose."""
     from backend.routes import auth
 
-    _result, m = await _call(auth, _patches(auth), _body(), cookie="stale-cookie-token")
-    m["classify"].assert_awaited_once_with(PARENT, PROPOSED)
-    m["lookup"].assert_awaited_once_with(PARENT)
-    assert m["issue"].await_args.kwargs["raw"] == PROPOSED
+    _result, m = await _call(auth, _patches(auth), _body(refresh_token="attacker-own-token"), cookie="victim-cookie")
+    m["classify"].assert_awaited_once_with("victim-cookie", PROPOSED)
+    m["lookup"].assert_awaited_once_with("victim-cookie")
+    assert "raw" not in m["issue"].await_args.kwargs
 
 
 async def test_flag_off_keeps_cookie_precedence_and_server_random_successor():

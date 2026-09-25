@@ -40,7 +40,7 @@ jest.mock('react-native', () => {
 // hooks/__tests__/useScheduledRideReminder.test.ts.
 jest.mock('expo-notifications', () => ({
   getPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted', granted: true, canAskAgain: true })),
-}), { virtual: true });
+}));
 
 describe('Notification Permission Service Helpers', () => {
   beforeEach(() => {

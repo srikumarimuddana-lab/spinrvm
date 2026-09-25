@@ -111,10 +111,60 @@ _POST_ACCEPT_STATUSES = (
 )
 
 
+# On-demand "no driver found" search window: settings.ride_search_timeout_seconds
+# (migration 468). 300 s is the historical hard-coded value and the fallback when
+# the setting is missing or unreadable; the clamp mirrors the column's CHECK.
+# utils/stuck_ride_sweeper.py reads the same setting with the same default and
+# clamp, so the durable backstop cancels at the same time as ride_search_timeout.
+# Scheduled rides do not use it — they keep their fixed 300 s grace after pickup.
+_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS = 300
+_MIN_RIDE_SEARCH_TIMEOUT_SECONDS = 90
+# Max 300: the offer-skip key lasts 300 s and ride_offers is UNIQUE(ride_id, driver_id) (migration 100).
+_MAX_RIDE_SEARCH_TIMEOUT_SECONDS = 300
+_NO_DRIVER_RETRY_SECONDS = 10
+
 # Cap the no-driver re-dispatch chain. At 10s/attempt this is ~5 min, matching
 # the stuck-ride sweeper's cancel window — defense-in-depth so a sweeper failure
-# can't leave a ride re-dispatching (and re-querying drivers) forever.
+# can't leave a ride re-dispatching (and re-querying drivers) forever. This is
+# the cap at the default 300 s window; _dispatch_retry derives the live cap from
+# the configured window via _max_dispatch_attempts().
 _MAX_DISPATCH_ATTEMPTS = 30
+
+
+async def _ride_search_timeout_seconds() -> int:
+    """The configured on-demand search window in seconds, clamped to 90..300.
+
+    Missing setting (column not migrated yet) → 300, silently. A read error or
+    a non-integer value → 300, logged at error level. Never raises: a settings
+    problem must not stop a ride from being cancelled.
+    """
+    try:
+        settings = await _deps.get_app_settings()
+        raw = settings.get("ride_search_timeout_seconds")
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"[DISPATCH] could not read ride_search_timeout_seconds, using {_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS}s: {e}"
+        )
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    if raw is None:
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    try:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            raise TypeError(f"unsupported type {type(raw).__name__}")
+        seconds = int(raw)
+    except (TypeError, ValueError, OverflowError) as e:
+        logger.error(
+            f"[DISPATCH] invalid ride_search_timeout_seconds={raw!r}, "
+            f"using {_DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS}s: {e}"
+        )
+        return _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS
+    return max(_MIN_RIDE_SEARCH_TIMEOUT_SECONDS, min(_MAX_RIDE_SEARCH_TIMEOUT_SECONDS, seconds))
+
+
+def _max_dispatch_attempts(timeout_seconds: int) -> int:
+    """No-driver retry cap for a search window: ceil(window / 10 s). 300 s → 30."""
+    return -(-timeout_seconds // _NO_DRIVER_RETRY_SECONDS)
+
 
 # Escalating re-arm delays for dispatch ERRORS (DB blip mid-attempt): back off
 # 10s → 30s → 60s so a struggling dependency isn't hammered at a fixed cadence.
@@ -150,7 +200,7 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         if deadline:
             if datetime.now(timezone.utc) >= deadline:
                 return
-        elif attempt > _MAX_DISPATCH_ATTEMPTS:
+        elif attempt > _max_dispatch_attempts(await _ride_search_timeout_seconds()):
             return
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
@@ -2218,16 +2268,23 @@ async def _batch_offer_timeout_handler(
         logger.opt(exception=True).error(f"[DISPATCH] Batch timeout handler error for ride {ride_id}: {e}")
 
 
-async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
+async def ride_search_timeout(r_id: str, timeout_seconds: Optional[int] = _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS):
     """Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.
 
-    Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
-    message to the rider's channel and fires a push notification so the rider
-    is alerted even if the app is backgrounded.
+    ``timeout_seconds=None`` means "use the configured on-demand window"
+    (``settings.ride_search_timeout_seconds``, default 300 s), read here in the
+    spawned task so the booking request never waits on it. booking.py passes
+    None for on-demand rides only. Scheduled callers (utils/scheduled_rides.py,
+    and booking.py for a scheduled ride dispatched at once) keep the fixed 300 s
+    default, and a scheduled ride's grace after pickup is 300 s even when None
+    is passed — the setting never changes scheduled-ride deadlines.
+
+    Publishes a ``ride_cancelled`` WS message to the rider's channel and fires
+    a push notification so the rider is alerted even if the app is backgrounded.
 
     Durable backstop: this is an in-process asyncio timer, so a pod
     restart/deploy drops it. ``utils.stuck_ride_sweeper`` is the restart-safe
-    equivalent — it cancels rides stuck in ``searching`` past the same 5-minute
+    equivalent — it cancels rides stuck in ``searching`` past the same configured
     threshold with the identical payload (``no_drivers_found`` attribution,
     ``ride_cancelled`` WS, push, driver release) via an atomic replay-safe DB
     claim. So a lost timer here still cancels within ~one 60s sweep of the
@@ -2236,10 +2293,13 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     Extracted from ``create_ride`` so it can be unit-tested directly — see
     backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
     """
+    scheduled_grace = _DEFAULT_RIDE_SEARCH_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    if timeout_seconds is None:
+        timeout_seconds = await _ride_search_timeout_seconds()
     await asyncio.sleep(timeout_seconds)
     try:
         current_ride = await _deps.db_supabase.get_ride(r_id)
-        deadline = scheduled_search_deadline(current_ride or {}, timeout_seconds)
+        deadline = scheduled_search_deadline(current_ride or {}, scheduled_grace)
         if deadline and current_ride.get("status") == RideStatus.SEARCHING:
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining > 0:

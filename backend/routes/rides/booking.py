@@ -1598,7 +1598,13 @@ async def create_ride(
         return doc
 
     if updated_ride and updated_ride.get("status") == RideStatus.SEARCHING:
-        _deps.spawn(matching.ride_search_timeout(ride.id))
+        # On-demand rides use the configured search window (timeout_seconds=None:
+        # settings.ride_search_timeout_seconds, read inside the task). A scheduled
+        # ride dispatched at once keeps the fixed 300 s default, as in scheduled_rides.py.
+        if updated_ride.get("is_scheduled"):
+            _deps.spawn(matching.ride_search_timeout(ride.id))
+        else:
+            _deps.spawn(matching.ride_search_timeout(ride.id, timeout_seconds=None))
 
     _deps.spawn(
         log_user_action(

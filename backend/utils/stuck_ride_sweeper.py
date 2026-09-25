@@ -36,10 +36,54 @@ try:
 except ImportError:
     from supabase_client import supabase  # type: ignore
 
+try:
+    from ..settings_loader import get_app_settings
+except ImportError:
+    from settings_loader import get_app_settings  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 _SWEEP_INTERVAL_SECONDS = 60
+# Scheduled rides: cancelled 5 min past pickup (and past ride_requested_at),
+# unchanged by the on-demand setting below.
 _SEARCHING_TIMEOUT_MINUTES = 5
+
+# On-demand rides: settings.ride_search_timeout_seconds (migration 468). Same
+# default and clamp as routes/rides/matching.py's _ride_search_timeout_seconds,
+# so this backstop cancels at the same time as the in-process timer.
+_DEFAULT_SEARCH_TIMEOUT_SECONDS = 300
+_MIN_SEARCH_TIMEOUT_SECONDS = 90
+# Max 300: the offer-skip key lasts 300 s and ride_offers is UNIQUE(ride_id, driver_id) (migration 100).
+_MAX_SEARCH_TIMEOUT_SECONDS = 300
+
+
+async def _search_timeout_seconds() -> int:
+    """Configured on-demand search window, clamped to 90..300. Missing → 300;
+    read error or non-integer → 300, logged at error level. Never raises."""
+    try:
+        settings = await get_app_settings()
+        raw = settings.get("ride_search_timeout_seconds")
+    except Exception as exc:
+        logger.error(
+            f"[stuck_ride_sweeper] could not read ride_search_timeout_seconds, "
+            f"using {_DEFAULT_SEARCH_TIMEOUT_SECONDS}s: {exc}",
+            exc_info=True,
+        )
+        return _DEFAULT_SEARCH_TIMEOUT_SECONDS
+    if raw is None:
+        return _DEFAULT_SEARCH_TIMEOUT_SECONDS
+    try:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            raise TypeError(f"unsupported type {type(raw).__name__}")
+        seconds = int(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.error(
+            f"[stuck_ride_sweeper] invalid ride_search_timeout_seconds={raw!r}, "
+            f"using {_DEFAULT_SEARCH_TIMEOUT_SECONDS}s: {exc}"
+        )
+        return _DEFAULT_SEARCH_TIMEOUT_SECONDS
+    return max(_MIN_SEARCH_TIMEOUT_SECONDS, min(_MAX_SEARCH_TIMEOUT_SECONDS, seconds))
+
 
 # The release itself lives in utils/card_hold_release so the sweeper, the
 # orphaned-hold reconciler and (conceptually) the interactive cancel path share one
@@ -52,7 +96,10 @@ async def _sweep() -> None:
     if not supabase:
         return
 
-    cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=_SEARCHING_TIMEOUT_MINUTES)).isoformat()
+    search_timeout_seconds = await _search_timeout_seconds()
+    now = datetime.now(timezone.utc)
+    on_demand_cutoff_iso = (now - timedelta(seconds=search_timeout_seconds)).isoformat()
+    scheduled_cutoff_iso = (now - timedelta(minutes=_SEARCHING_TIMEOUT_MINUTES)).isoformat()
     now_iso = datetime.now(timezone.utc).isoformat()
 
     update_payload = {
@@ -69,8 +116,14 @@ async def _sweep() -> None:
             supabase.table("rides")
             .update(update_payload)
             .eq("status", "searching")
-            .lt("ride_requested_at", cutoff_iso)
-            .or_(f"scheduled_time.is.null,scheduled_time.lt.{cutoff_iso}")
+            # On-demand (no scheduled_time): the configured window. Scheduled:
+            # both timestamps past the fixed 5-minute cutoff, as before. At the
+            # default 300 s both cutoffs are equal and this matches the old
+            # .lt(ride_requested_at).or_(scheduled_time null/lt) filter exactly.
+            .or_(
+                f"and(scheduled_time.is.null,ride_requested_at.lt.{on_demand_cutoff_iso}),"
+                f"and(scheduled_time.lt.{scheduled_cutoff_iso},ride_requested_at.lt.{scheduled_cutoff_iso})"
+            )
             .execute()
         )
         return db_supabase._rows_from_res(res)

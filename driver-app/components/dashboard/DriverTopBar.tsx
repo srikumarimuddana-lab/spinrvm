@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Animated, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNetworkStatus } from '@shared/components/OfflineBanner';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import type { ConnectionState } from '../../hooks/useDriverDashboard';
 import type { EarningsSummary } from '../../store/driverStore';
 
@@ -58,9 +58,14 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   // bannerHeight is never reassigned after creation.
   // eslint-disable-next-line react-hooks/refs
   const bannerHeight = useRef(new Animated.Value(0)).current;
+  // 12pt of padding + border around one 16pt line of 12pt text. The text part
+  // follows the OS text size (capped at MAX_FONT_SCALE) so the banner never
+  // clips its message; at default size this is the original 28.
+  const { fontScale } = useWindowDimensions();
+  const bannerTarget = 12 + Math.ceil(16 * Math.min(fontScale, MAX_FONT_SCALE));
   useEffect(() => {
     Animated.timing(bannerHeight, {
-      toValue: showBanner ? 28 : 0,
+      toValue: showBanner ? bannerTarget : 0,
       duration: 200,
       useNativeDriver: false,
     }).start();
@@ -70,7 +75,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
     // read under react-hooks/refs (confirmed in otp.tsx's dotAnims). Its
     // identity never changes, so excluding it changes nothing about firing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showBanner]);
+  }, [showBanner, bannerTarget]);
 
   const bannerText = bannerLevel === 'no_internet'
     ? t('dashboard.noInternet')
@@ -93,16 +98,16 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
             accessibilityRole="button"
             accessibilityLabel={`Today's earnings $${todayEarnings}, ${todayTrips} trips. Tap for details.`}
           >
-            <Text allowFontScaling={false} style={styles.earningsAmount}>${todayEarnings}</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.earningsAmount}>${todayEarnings}</Text>
             <View style={styles.earningsDivider} />
-            <Text allowFontScaling={false} style={styles.earningsTrips}>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.earningsTrips}>
               {todayTrips} {todayTrips === 1 ? 'trip' : 'trips'}
             </Text>
           </TouchableOpacity>
           {isSurgeActive && (
             <View style={styles.surgeBadge} accessibilityRole="text" accessibilityLabel={`Surge ${surgeMultiplier!.toFixed(1)} times`}>
               <Ionicons name="flash" size={11} color="#fff" />
-              <Text allowFontScaling={false} style={styles.surgeBadgeText}>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.surgeBadgeText}>
                 {surgeMultiplier!.toFixed(1)}×
               </Text>
             </View>
@@ -119,6 +124,9 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
           <Ionicons name="notifications-outline" size={22} color={colors.text} />
           {unreadNotifCount > 0 && (
             <View style={styles.notifBadge}>
+              {/* font-scale-lock: fixed 16pt count badge inside the 44pt bell;
+                  larger text overflows it and would cover the bell. The count
+                  is also in the button's accessibilityLabel. */}
               <Text allowFontScaling={false} style={styles.notifBadgeText}>
                 {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
               </Text>
@@ -149,7 +157,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
                 size={13}
                 color={bannerIsRed ? '#991B1B' : '#92400E'}
               />
-              <Text allowFontScaling={false} style={[styles.bannerText, bannerIsRed ? styles.bannerTextDisconnected : styles.bannerTextReconnecting]}>
+              <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.bannerText, bannerIsRed ? styles.bannerTextDisconnected : styles.bannerTextReconnecting]}>
                 {bannerText}
               </Text>
             </Animated.View>
@@ -170,7 +178,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
             size={13}
             color={bannerIsRed ? '#991B1B' : '#92400E'}
           />
-          <Text allowFontScaling={false} style={[styles.bannerText, bannerIsRed ? styles.bannerTextDisconnected : styles.bannerTextReconnecting]}>
+          <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={[styles.bannerText, bannerIsRed ? styles.bannerTextDisconnected : styles.bannerTextReconnecting]}>
             {bannerText}
           </Text>
         </Animated.View>
@@ -228,6 +236,11 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
+      // Wraps (instead of pushing the bell off-screen) when OS-scaled
+      // earnings and surge pills no longer fit on one line.
+      flexShrink: 1,
+      flexWrap: 'wrap',
+      rowGap: SPACING.sm,
     },
     notificationButton: {
       width: 44,

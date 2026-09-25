@@ -613,6 +613,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               token: newToken,
               isInitialized: true,
               isLoading: false,
+              // Credentials rotated; leaving recovery set would keep the
+              // reconnect screen up and rotate them again every retry.
+              sessionRecoverable: false,
             });
             return;
           }

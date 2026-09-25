@@ -61,10 +61,19 @@ class _FakeExecute:
         self.data = data
 
 
+class _UniqueViolationError(Exception):
+    """Shaped like the postgrest-py exception commit_saved_address_import_plan's
+    _is_unique_violation detects: a `.code` attribute (as supabase-py surfaces
+    a PostgREST error) is enough, same as the message-substring path."""
+
+    code = "23505"
+
+
 class _FakeQuery:
-    def __init__(self, table, store):
+    def __init__(self, table, store, fake):
         self.table = table
         self.store = store
+        self.fake = fake
         self._filters = []
         self._insert_rows = None
 
@@ -80,7 +89,9 @@ class _FakeQuery:
         return self
 
     def insert(self, rows):
-        self._insert_rows = rows
+        # The service inserts a whole chunk (list) on the happy path and a
+        # single row (dict) on the per-row fallback -- normalize both.
+        self._insert_rows = rows if isinstance(rows, list) else [rows]
         return self
 
     def _matched(self):
@@ -95,6 +106,9 @@ class _FakeQuery:
 
     def execute(self):
         if self._insert_rows is not None:
+            for row in self._insert_rows:
+                if (row.get("user_id"), row.get("icon")) in self.fake.fail_pairs:
+                    raise _UniqueViolationError("duplicate key value violates unique constraint")
             self.store.setdefault(self.table, []).extend(self._insert_rows)
             return _FakeExecute(list(self._insert_rows))
         return _FakeExecute(self._matched())
@@ -103,9 +117,13 @@ class _FakeQuery:
 class _FakeSupabase:
     def __init__(self, store=None):
         self.store = store if store is not None else {}
+        # (user_id, icon) pairs whose insert should look like a migration
+        # 485 unique-index violation -- simulates a concurrent write that
+        # claimed that Home/Work between validate and commit.
+        self.fail_pairs: set[tuple[str, str]] = set()
 
     def table(self, name):
-        return _FakeQuery(name, self.store)
+        return _FakeQuery(name, self.store, self)
 
 
 def _install(monkeypatch, **kwargs):
@@ -272,6 +290,194 @@ def test_different_address_for_same_rider_is_not_treated_as_duplicate(monkeypatc
     )
     plan = svc.build_saved_address_import_plan([_address_row()], [_customer_row()], batch="b1")
     assert len(plan.rows_to_insert) == 1
+
+
+# ── one Home / one Work per user (migration 485) ────────────────────────
+
+
+def test_existing_home_in_db_downgrades_legacy_home_to_location(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [{"user_id": "rider-1", "address": "An existing home address", "icon": "home"}],
+        },
+    )
+    plan = svc.build_saved_address_import_plan([_address_row()], [_customer_row()], batch="b1")
+    assert len(plan.rows_to_insert) == 1
+    row = plan.rows_to_insert[0]
+    assert row["icon"] == "location"
+    # Label is kept ("Home") -- only the icon is downgraded, so the row still
+    # reads as the rider's old home address, just not the DB's one Home slot.
+    assert row["name"] == "Home"
+    assert plan.downgraded_duplicate_home_work == 1
+    assert plan.skipped_already_imported == 0
+
+
+def test_two_home_rows_in_one_batch_only_first_stays_home(monkeypatch):
+    _install(monkeypatch, store={"users": [_rider()], "saved_addresses": []})
+    rows = [
+        _address_row(_id="addr-1", name="111 First Street, Saskatoon, SK"),
+        _address_row(_id="addr-2", name="222 Second Street, Saskatoon, SK"),
+    ]
+    plan = svc.build_saved_address_import_plan(rows, [_customer_row()], batch="b1")
+    assert len(plan.rows_to_insert) == 2
+    icons_by_old_id = {r["legacy_import_metadata"]["old_address_id"]: r["icon"] for r in plan.rows_to_insert}
+    assert icons_by_old_id == {"addr-1": "home", "addr-2": "location"}
+    assert plan.downgraded_duplicate_home_work == 1
+
+
+def test_existing_home_does_not_affect_work_import(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [{"user_id": "rider-1", "address": "An existing home address", "icon": "home"}],
+        },
+    )
+    plan = svc.build_saved_address_import_plan([_address_row(type="work")], [_customer_row()], batch="b1")
+    row = plan.rows_to_insert[0]
+    assert row["icon"] == "work"
+    assert plan.downgraded_duplicate_home_work == 0
+
+
+def test_existing_work_downgrades_legacy_work_but_leaves_home_alone(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [{"user_id": "rider-1", "address": "An existing work address", "icon": "work"}],
+        },
+    )
+    rows = [
+        _address_row(_id="addr-1", name="111 First Street, Saskatoon, SK", type="home"),
+        _address_row(_id="addr-2", name="222 Second Street, Saskatoon, SK", type="work"),
+    ]
+    plan = svc.build_saved_address_import_plan(rows, [_customer_row()], batch="b1")
+    icons_by_old_id = {r["legacy_import_metadata"]["old_address_id"]: r["icon"] for r in plan.rows_to_insert}
+    assert icons_by_old_id == {"addr-1": "home", "addr-2": "location"}
+    assert plan.downgraded_duplicate_home_work == 1
+
+
+def test_non_home_work_icon_unaffected_by_existing_home(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [{"user_id": "rider-1", "address": "An existing home address", "icon": "home"}],
+        },
+    )
+    plan = svc.build_saved_address_import_plan([_address_row(type="")], [_customer_row()], batch="b1")
+    row = plan.rows_to_insert[0]
+    assert row["icon"] == "location"
+    assert plan.downgraded_duplicate_home_work == 0
+
+
+def test_earlier_created_at_wins_home_regardless_of_csv_row_order(monkeypatch):
+    """The earliest-created legacy row keeps Home, not just whichever the
+    CSV happens to list first -- same "oldest wins" rule routes/addresses.py
+    uses for this table's own live replace-on-save logic."""
+    _install(monkeypatch, store={"users": [_rider()], "saved_addresses": []})
+    rows = [
+        _address_row(_id="addr-later", name="111 First Street, Saskatoon, SK", created_at="1700000100000"),
+        _address_row(_id="addr-earlier", name="222 Second Street, Saskatoon, SK", created_at="1700000000000"),
+    ]
+    plan = svc.build_saved_address_import_plan(rows, [_customer_row()], batch="b1")
+    icons_by_old_id = {r["legacy_import_metadata"]["old_address_id"]: r["icon"] for r in plan.rows_to_insert}
+    assert icons_by_old_id == {"addr-earlier": "home", "addr-later": "location"}
+
+
+def test_two_home_rows_for_different_users_both_stay_home(monkeypatch):
+    _install(
+        monkeypatch, store={"users": [_rider(), _rider(id="rider-2", phone="+13065550102")], "saved_addresses": []}
+    )
+    rows = [
+        _address_row(_id="addr-1", customer_id="mongo-cust-1", name="111 First Street, Saskatoon, SK"),
+        _address_row(_id="addr-2", customer_id="mongo-cust-2", name="222 Second Street, Saskatoon, SK"),
+    ]
+    customers = [_customer_row(), _customer_row(_id="mongo-cust-2", phone="3065550102")]
+    plan = svc.build_saved_address_import_plan(rows, customers, batch="b1")
+    icons_by_user = {r["user_id"]: r["icon"] for r in plan.rows_to_insert}
+    assert icons_by_user == {"rider-1": "home", "rider-2": "home"}
+    assert plan.downgraded_duplicate_home_work == 0
+
+
+# ── commit-time race (a write lands between validate and commit) ────────
+
+
+def test_commit_falls_back_to_row_level_on_home_work_race(monkeypatch):
+    """A concurrent write claims this rider's Home between validate and
+    commit: the chunk-level insert 23505s, so commit falls back to
+    row-by-row -- the other, unrelated row in the same chunk still lands
+    instead of the whole chunk being lost."""
+    fake = _install(monkeypatch, store={"saved_addresses": []})
+    fake.fail_pairs = {("rider-1", "home")}
+    plan = svc.SavedAddressImportPlan()
+    plan.rows_to_insert.extend(
+        [
+            {
+                "id": "new-addr-1",
+                "user_id": "rider-1",
+                "name": "Home",
+                "address": "111 First Street",
+                "lat": 52.1,
+                "lng": -106.6,
+                "icon": "home",
+                "place_id": None,
+                "created_at": "2024-01-01T00:00:00+00:00",
+                "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_address_id": "addr-1"},
+            },
+            {
+                "id": "new-addr-2",
+                "user_id": "rider-1",
+                "name": "Saved Address",
+                "address": "222 Second Street",
+                "lat": 52.2,
+                "lng": -106.7,
+                "icon": "location",
+                "place_id": None,
+                "created_at": "2024-01-01T00:00:00+00:00",
+                "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_address_id": "addr-2"},
+            },
+        ]
+    )
+    result = svc.commit_saved_address_import_plan(plan)
+    assert result.inserted == 1
+    assert len(result.race_conflicts) == 1
+    assert "rider-1" in result.race_conflicts[0].message
+    stored = fake.store["saved_addresses"]
+    assert len(stored) == 1
+    assert stored[0]["id"] == "new-addr-2"
+
+
+def test_commit_reraises_a_unique_violation_that_is_not_the_home_work_race(monkeypatch):
+    """A 23505 on a non-home/work row isn't the race this fallback exists
+    for (e.g. an id collision) -- it must surface, never be swallowed as a
+    race_conflict."""
+    fake = _install(monkeypatch, store={"saved_addresses": []})
+    fake.fail_pairs = {("rider-1", "location")}
+    plan = svc.SavedAddressImportPlan()
+    plan.rows_to_insert.append(
+        {
+            "id": "dup-id",
+            "user_id": "rider-1",
+            "name": "Saved Address",
+            "address": "999 Some Street",
+            "lat": 52.1,
+            "lng": -106.6,
+            "icon": "location",
+            "place_id": None,
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_address_id": "addr-9"},
+        }
+    )
+    raised = False
+    try:
+        svc.commit_saved_address_import_plan(plan)
+    except _UniqueViolationError:
+        raised = True
+    assert raised, "expected the unique violation to propagate, not be swallowed"
+    assert fake.store["saved_addresses"] == []
 
 
 # ── malformed address text ──────────────────────────────────────────────

@@ -28,6 +28,15 @@ file, not assumed):
 - Only rows that resolve to a real, already-migrated Spinr rider by phone.
 - Idempotent: skips a row if an identical (user_id, address text) pair
   already exists in ``saved_addresses`` -- safe to re-run.
+- At most one Home and one Work saved address per user (migration 485's
+  partial unique index on ``(user_id, icon) WHERE icon IN ('home','work')``).
+  A legacy row that would be a second Home/Work for the same user -- either
+  because one already exists in ``saved_addresses``, or an earlier row in
+  this same batch already claimed it -- is imported as a plain 'location'
+  place instead of a second Home/Work. No address is dropped. A residual
+  race at commit time (a write lands between validate and commit) is
+  handled the same way and reported in ``ImportCommitResult.race_conflicts``
+  rather than aborting the run -- see ``commit_saved_address_import_plan``.
 
 The CSV's own column shapes don't map 1:1 onto ``SavedAddress`` --
 ``name`` in the source is actually the full formatted address string, and
@@ -37,6 +46,7 @@ The CSV's own column shapes don't map 1:1 onto ``SavedAddress`` --
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +58,8 @@ try:
 except ImportError:
     from services.driver_import_service import normalize_phone
     from supabase_client import supabase
+
+logger = logging.getLogger(__name__)
 
 # Saskatchewan bounding box -- generous enough to cover the whole province
 # plus a margin, tight enough to exclude the clearly-foreign junk rows
@@ -61,6 +73,10 @@ _TYPE_LABELS = {"home": "Home", "work": "Work"}
 _TYPE_ICONS = {"home": "home", "work": "work"}
 _DEFAULT_LABEL = "Saved Address"
 _DEFAULT_ICON = "location"
+# Icons migration 485's unique index singles out -- at most one row per
+# (user_id, icon) for these two. Everything else (including _DEFAULT_ICON)
+# can repeat freely, same as routes/addresses.py's own singleton rule.
+_SINGLETON_ICONS = frozenset(_TYPE_ICONS.values())
 
 
 @dataclass
@@ -77,6 +93,11 @@ class SavedAddressImportPlan:
     skipped_unmatched_customer: int = 0
     skipped_no_rider: int = 0
     skipped_already_imported: int = 0
+    # A row that would have been a second Home/Work for its user was
+    # imported as a plain 'location' place instead (see module docstring).
+    # Not a "skipped_*" counter -- the row IS in rows_to_insert, just
+    # retyped, so it isn't dropped like the skipped_* counters above.
+    downgraded_duplicate_home_work: int = 0
     warnings: list[ImportReportItem] = field(default_factory=list)
     errors: list[ImportReportItem] = field(default_factory=list)
 
@@ -208,13 +229,37 @@ def build_saved_address_import_plan(
 
     user_ids = sorted({r["user_id"] for r in resolved})
     existing_by_user: dict[str, set[str]] = {}
-    for row in _select_in("saved_addresses", "user_id,address", "user_id", user_ids):
+    existing_home_work_by_user: dict[str, set[str]] = {}
+    for row in _select_in("saved_addresses", "user_id,address,icon", "user_id", user_ids):
         existing_by_user.setdefault(row["user_id"], set()).add(row["address"])
+        icon = row.get("icon")
+        if icon in _SINGLETON_ICONS:
+            existing_home_work_by_user.setdefault(row["user_id"], set()).add(icon)
 
-    for r in resolved:
+    # Tracks a home/work icon a *prior row in this same batch* already
+    # claimed for a user, so two legacy 'home' rows for the same rider don't
+    # both try to become the DB's one Home -- the DB-existing check above
+    # only sees rows already committed, not siblings still being planned.
+    claimed_this_batch: dict[str, set[str]] = {}
+
+    # Earliest-created legacy row wins the DB's one Home/one Work slot, not
+    # just whichever the CSV happens to list first -- same "oldest row is
+    # kept" rule routes/addresses.py uses for this table's own live
+    # replace-on-save logic, rather than depending on export row order.
+    for r in sorted(resolved, key=lambda c: c["created_at"]):
         if r["address"] in existing_by_user.get(r["user_id"], set()):
             plan.skipped_already_imported += 1
             continue
+
+        icon = r["icon"]
+        if icon in _SINGLETON_ICONS:
+            claimed = claimed_this_batch.setdefault(r["user_id"], set())
+            if icon in existing_home_work_by_user.get(r["user_id"], set()) or icon in claimed:
+                icon = _DEFAULT_ICON
+                plan.downgraded_duplicate_home_work += 1
+            else:
+                claimed.add(icon)
+
         plan.rows_to_insert.append(
             {
                 "id": str(uuid.uuid4()),
@@ -223,7 +268,7 @@ def build_saved_address_import_plan(
                 "address": r["address"],
                 "lat": r["lat"],
                 "lng": r["lng"],
-                "icon": r["icon"],
+                "icon": icon,
                 "place_id": None,
                 "created_at": r["created_at"],
                 "legacy_import_metadata": {
@@ -238,10 +283,73 @@ def build_saved_address_import_plan(
     return plan
 
 
-def commit_saved_address_import_plan(plan: SavedAddressImportPlan) -> None:
+@dataclass
+class ImportCommitResult:
+    inserted: int = 0
+    # A row that lost a race for (user_id, icon) against a write that landed
+    # between validate and commit (another import run, or the rider's own
+    # app) -- not inserted this run. Re-running validate+commit picks it up
+    # again and, per build_saved_address_import_plan, imports it as a plain
+    # 'location' place instead. Never silently dropped: logged at error
+    # level in commit_saved_address_import_plan and returned here so the
+    # admin route can report it.
+    race_conflicts: list[ImportReportItem] = field(default_factory=list)
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    """Postgres 23505 via PostgREST/supabase-py -- same detection this
+    repo's other raw-supabase-py legacy-import commits use (e.g.
+    services/stripe_payout_sync_service.py's ``_is_unique_violation``)."""
+    return getattr(exc, "code", None) == "23505" or "duplicate key value" in str(exc)
+
+
+def commit_saved_address_import_plan(plan: SavedAddressImportPlan) -> ImportCommitResult:
+    """Insert the planned rows. Sync (call via ``asyncio.to_thread`` from routes).
+
+    Inserts in chunks of 200 for throughput. If a chunk hits migration 485's
+    one-Home/one-Work unique index -- a race the plan-build dedup didn't see
+    because it landed after validate -- that chunk falls back to row-by-row
+    inserts instead of losing every row in it. Only the specific
+    conflicting row(s) are excluded; everything else in the chunk still
+    commits. A conflict on any icon other than home/work is not this race
+    (e.g. an id collision) and is raised, never swallowed.
+    """
     if plan.errors:
         raise RuntimeError("refusing to commit with validation errors")
-    if plan.rows_to_insert:
-        for i in range(0, len(plan.rows_to_insert), 200):
-            batch = plan.rows_to_insert[i : i + 200]
-            supabase.table("saved_addresses").insert(batch).execute()
+
+    result = ImportCommitResult()
+    for i in range(0, len(plan.rows_to_insert), 200):
+        chunk = plan.rows_to_insert[i : i + 200]
+        try:
+            supabase.table("saved_addresses").insert(chunk).execute()
+            result.inserted += len(chunk)
+            continue
+        except Exception as e:
+            if not _is_unique_violation(e):
+                raise
+
+        for row in chunk:
+            try:
+                supabase.table("saved_addresses").insert(row).execute()
+                result.inserted += 1
+            except Exception as row_e:
+                if not _is_unique_violation(row_e) or row["icon"] not in _SINGLETON_ICONS:
+                    # Not the home/work race this fallback exists for --
+                    # surface it loudly rather than guess.
+                    raise
+                logger.error(
+                    "saved_addresses home/work unique violation on legacy import "
+                    "(user_id=%s icon=%s old_address_id=%s) -- a concurrent write "
+                    "claimed this Home/Work first; row not inserted this run",
+                    row["user_id"],
+                    row["icon"],
+                    row["legacy_import_metadata"]["old_address_id"],
+                )
+                result.race_conflicts.append(
+                    ImportReportItem(
+                        0,
+                        "icon",
+                        f"home/work race on user_id={row['user_id']} icon={row['icon']}; not inserted",
+                    )
+                )
+    return result

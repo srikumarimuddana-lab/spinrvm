@@ -125,6 +125,7 @@ def _report(plan: Any, batch: str, total_address_rows: int, validation_token: Op
             "skipped_unmatched_customer": plan.skipped_unmatched_customer,
             "skipped_no_rider": plan.skipped_no_rider,
             "skipped_already_imported": plan.skipped_already_imported,
+            "downgraded_duplicate_home_work": plan.downgraded_duplicate_home_work,
         },
         "warnings": _serialize_items(plan.warnings),
         "errors": _serialize_items(plan.errors),
@@ -181,22 +182,33 @@ async def commit_saved_address_backfill(
         return {**_report(plan, batch, len(address_rows)), "committed": False}
 
     try:
-        await asyncio.to_thread(import_svc.commit_saved_address_import_plan, plan)
+        result = await asyncio.to_thread(import_svc.commit_saved_address_import_plan, plan)
     except Exception as e:
         logger.error("legacy saved-address backfill commit failed", extra={"batch": batch}, exc_info=True)
         raise HTTPException(status_code=502, detail="Backfill commit failed; no changes may have been applied") from e
 
-    addresses_inserted = len(plan.rows_to_insert)
+    if result.race_conflicts:
+        # Not swallowed: logged here (IDs/icons only, no address/PII — see
+        # module docstring) and returned in the response below. The rest of
+        # the run still committed; re-running validate+commit picks these
+        # rows up again as plain 'location' places.
+        logger.error(
+            "legacy saved-address backfill commit had %d home/work race conflict(s)",
+            len(result.race_conflicts),
+            extra={"batch": batch},
+        )
+
     await log_admin_action(
         admin,
         "legacy_saved_address_backfill",
         "saved_addresses",
         batch,
-        {"addresses_inserted": addresses_inserted},
+        {"addresses_inserted": result.inserted, "race_conflicts": len(result.race_conflicts)},
     )
     return {
         "batch": batch,
         "committed": True,
-        "addresses_inserted": addresses_inserted,
+        "addresses_inserted": result.inserted,
         "warnings": _serialize_items(plan.warnings),
+        "race_conflicts": _serialize_items(result.race_conflicts),
     }

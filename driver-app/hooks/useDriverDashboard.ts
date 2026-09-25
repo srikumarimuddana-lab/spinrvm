@@ -12,6 +12,13 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
+import {
+  isCarRingOwner,
+  registerPhoneRingHandler,
+  setCarOfferToneEnabled,
+  subscribeCarRingOwner,
+} from '../lib/androidAuto/carOfferRing';
+import { toRideOfferDisplayData } from '../services/rideOfferDisplayData';
 import { tKey } from '../i18n';
 import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
@@ -205,11 +212,6 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
 function _surfaceOfferNotification(data: any, forceSilent = false, reclaim = false): Promise<void> {
   const display = _displayRideOfferNotification;
   if (!display) return Promise.resolve();
-  const _num = (v: unknown): number | undefined => {
-    if (v === null || v === undefined || v === '' || v === 'None') return undefined;
-    const n = typeof v === 'number' ? v : parseFloat(String(v));
-    return Number.isFinite(n) ? n : undefined;
-  };
   // Silent when the app is foreground-active: the in-app offer panel is
   // visible and useRideOfferSound is already looping the tone, so a channel
   // sound here would double-ring. Backgrounded-but-alive (WS still connected)
@@ -225,26 +227,13 @@ function _surfaceOfferNotification(data: any, forceSilent = false, reclaim = fal
   // this path exists to prevent.
   const silent = forceSilent || AppState.currentState === 'active';
   // Settings → Sound & Haptics → Sound Effects: suppress the channel/APNs
-  // sound (audio only — the card and full-screen wake still fire).
-  const muted = !useAlertPrefsStore.getState().soundEffects;
-  const posted = display({
-    ride_id: data.ride_id,
-    booking_id: data.booking_id || data.ride_id,
-    pickup_address: data.pickup_address,
-    dropoff_address: data.dropoff_address,
-    fare: _num(data.fare) ?? 0,
-    total_bonus: _num(data.total_bonus),
-    distance_km: _num(data.distance_km),
-    duration_minutes: _num(data.duration_minutes),
-    surge_multiplier: _num(data.surge_multiplier),
-    rider_name: data.rider_name || undefined,
-    rider_rating: _num(data.rider_rating),
-    countdown_seconds: _num(data.countdown_seconds),
-    offer_expires_at: data.offer_expires_at || undefined,
-    offer_card_url: data.offer_card_url || undefined,
-    // Absent on the store-built reclaim offer; notifeeService keeps the last one.
-    ring_mode: data.ring_mode || undefined,
-  }, { silent, muted, reclaim }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+  // sound (audio only — the card and full-screen wake still fire). Also muted
+  // while Android Auto rings the offer through the car (carOfferRing.ts), so
+  // exactly one tone sounds.
+  const muted = !useAlertPrefsStore.getState().soundEffects || isCarRingOwner();
+  // Field mapping shared with carOfferRing's hand-back card.
+  const posted = display(toRideOfferDisplayData(data), { silent, muted, reclaim })
+    .catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 
   // First delivery: nothing more to do. rideState is legitimately still 'idle'
   // here — the WS/FCM handlers surface the card before setIncomingRide — so the
@@ -520,6 +509,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setOfferSoundUrl((driverConfigQuery.data as { ride_offer_sound_url?: string | null }).ride_offer_sound_url ?? null);
     alwaysLocationGateRef.current =
       (driverConfigQuery.data as { always_location_required?: boolean }).always_location_required === true;
+    // Migration 482, default off: ring offers through Android Auto's speakers.
+    // Set here too so a phone-open session that connects a car has it without
+    // waiting for the car session's own config fetch.
+    setCarOfferToneEnabled(
+      (driverConfigQuery.data as { android_auto_offer_tone_enabled?: boolean }).android_auto_offer_tone_enabled === true,
+    );
   }, [driverConfigQuery.data, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
@@ -2063,7 +2058,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // consumePendingOffer and the AppState re-election effect below so the two
   // can't re-run the same handover against each other (each handover cancels
   // and re-posts the card, so a redundant one is a visible blink).
-  const audioOwnerRef = useRef<{ rideId: string; owner: 'app' | 'os' } | null>(null);
+  const audioOwnerRef = useRef<{ rideId: string; owner: 'app' | 'os' | 'car' } | null>(null);
 
   const consumePendingOffer = useCallback(async () => {
     // consumePendingRideOffer() resolves true only when a still-live offer was
@@ -2162,8 +2157,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // backgrounded-but-alive. So on the single most common path the handover was
   // unreachable: the loud insistent notification kept looping next to the
   // in-app tone with no code able to stop it until the offer expired.
+  //
+  //   car        → Android Auto rings the offer through the car speakers
+  //                (lib/androidAuto/carOfferRing.ts). Both phone sources go
+  //                quiet: the loop stops and the card is re-posted silent.
+  //                Re-elected whenever car ownership changes; when the car
+  //                gives the ring back, the phone re-rings via the same path.
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (next) => {
+    const reelect = (next: string) => {
       const { rideState: rs, incomingRide: offer } = useDriverStore.getState();
       if (rs !== 'ride_offered' || !offer?.ride_id) {
         audioOwnerRef.current = null;
@@ -2176,7 +2177,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // stop the tone and re-ring the notification every time the driver pulls
       // the shade down to look at the very offer they are deciding on.
       if (next !== 'active' && next !== 'background') return;
-      const owner: 'app' | 'os' = next === 'active' ? 'app' : 'os';
+      const owner: 'app' | 'os' | 'car' = isCarRingOwner() ? 'car' : next === 'active' ? 'app' : 'os';
       const prev = audioOwnerRef.current;
       // Idempotent. iOS emits inactive→active around every interruption (and
       // both platforms can repeat a state), and re-running a handover cancels
@@ -2184,7 +2185,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (prev && prev.rideId === offer.ride_id && prev.owner === owner) return;
       audioOwnerRef.current = { rideId: offer.ride_id, owner };
 
-      if (owner === 'app') {
+      if (owner === 'car') {
+        offerSound.stop();
+        // Cancels a loud card and re-posts it silent (handover).
+        void _surfaceOfferNotification(offer, true);
+      } else if (owner === 'app') {
         // Silence the OS ring first, then ring in-app — same ordering reason as
         // consumePendingOffer. .finally, not .then: the tone starts even if the
         // handover failed, so a broken cancel degrades to a double ring rather
@@ -2203,8 +2208,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           void _surfaceOfferNotification(offer, false, true);
         }
       }
-    });
-    return () => sub.remove();
+    };
+    const sub = AppState.addEventListener('change', reelect);
+    const unsubCar = subscribeCarRingOwner(() => reelect(AppState.currentState));
+    // How carOfferRing gives the ring back (flag off, car disconnected, car
+    // tone failed): the same election, which now lands on 'app' or 'os'.
+    const unregisterPhoneRing = registerPhoneRingHandler(() => reelect(AppState.currentState));
+    return () => {
+      sub.remove();
+      unsubCar();
+      unregisterPhoneRing();
+    };
     // offerSound is permanently stable (see useRideOfferSound's useMemo note).
   }, [offerSound]);
 

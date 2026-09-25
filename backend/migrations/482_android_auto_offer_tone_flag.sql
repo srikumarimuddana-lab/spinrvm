@@ -8,8 +8,8 @@
 -- Rollback (operational, no mobile release):
 -- UPDATE public.settings SET android_auto_offer_tone_enabled = false
 -- WHERE id = 'app_settings';
--- The car session re-reads /drivers/config about every 5 minutes; the next
--- offer after that rings on the phone as before.
+-- Settings cache is 60s; the car session re-reads /drivers/config about every
+-- 5 minutes, so the next offer after that rings on the phone as before.
 -- Optional schema rollback, after retiring readers:
 -- ALTER TABLE public.settings DROP COLUMN android_auto_offer_tone_enabled;
 -- Existing table permissions/RLS remain unchanged. No new query or index.

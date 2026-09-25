@@ -155,7 +155,7 @@ Scenarios:
   - **pytest was NOT run.** fastapi is not installed and the PyPI registry is blocked in this session. Only `python3 -m py_compile` was run on the changed backend files, and it passed.
   - **jest was NOT run.** `node_modules` is not installed and the npm registry is blocked.
   - As a partial substitute, a minimal jest-compatible shim, written for this session, ran some suites by transpiling with the global `typescript` package. It is **not jest** and is not equivalent to a real run:
-    - `lib/androidAuto/__tests__/carOfferRing.test.ts`: 41/41 passed.
+    - `lib/androidAuto/__tests__/carOfferRing.test.ts`: 41/41 passed; 45/45 after the review fixes.
     - `lib/androidAuto/__tests__/carSession.test.ts`: 38/38 passed, including the pre-existing cases. `zustand` was stubbed.
     - `__tests__/services/backgroundMessaging.android.test.ts`: the new car-owner cases and the surrounding handler cases passed. Several pre-existing cases could not run because the shim lacks `expect.stringContaining` / `expect.anything`.
     - Mutation checks confirmed the shim catches regressions: making `blocked_call` hand back, removing the phone-handler guard on expiry, and dropping `|| carOwner` each failed the matching test.
@@ -169,7 +169,10 @@ Scenarios:
 - **Manual:** no DHU (Desktop Head Unit) and no real-car check.
 - **Blast-radius greps:** `ride_offer_alarm_channel_enabled` (the pattern mirrored), `setCountdown(`, `displayRideOfferNotification|dismissRideOfferNotification`, `useRideOfferSound|alertPrefsStore`, `drivers/config`, and `docs/known-forks.md` (no entries for the touched files).
 - **Feature flag:** the tone is behind `android_auto_offer_tone_enabled`, default off. The expiry fix is deliberately un-flagged (see §8).
-- **Review:** no `spinr-*` reviewer agent or `/code-review` was run from this session (no sub-agent tool available). **Recommended before merge.**
+- **Review:** `spinr-dispatch-reviewer`, `spinr-edge-case-reviewer`, and `spinr-migration-reviewer` were run against the diff (migration: SAFE TO APPLY). Two findings were fixed:
+  - **Silent offer (edge-case, blocker):** the native hard stop could fire while the module was still waiting out a nav prompt, with less than about 3 s of the offer left. It resolved `'cancelled'` without any JS supersede. The car then kept ownership while nothing played, and the phone loop and card stayed muted. **Fix:** a same-generation `'cancelled'` now takes the error path and hands back to the phone (`af99f77`).
+  - **Stuck offer (dispatch, major):** the car-only expiry backstop bailed whenever the phone dashboard was mounted, even when it was backgrounded (the usual Android Auto case: the WS closes after 3 s and the countdown may not tick). **Fix:** it now defers only to a *foreground* phone screen, and re-checks every 2 s instead of giving up (`632c9ba`). A duplicate decline is rejected by the backend's decline guards (403/409, since the ride is no longer this driver's), and `declineRide` resets to idle either way.
+  - Both have regression tests. `carOfferRing.test.ts` is 45/45 on the same shim, and a mutation check (reverting the `'cancelled'` fix) failed the new test.
 
 ### What was NOT verified
 
@@ -180,6 +183,9 @@ Scenarios:
 - Expo SDK 57 autolinking of a `modules/` local module without a `package.json`. It follows the documented default `nativeModulesDir: "./modules"` and the local-module template, but it has not been built. The `expo-module-gradle-plugin` build.gradle form was written from the local-module template, not copied from an SDK 57 install.
 - **JS timers on a car-only launch.** The car-only expiry timer relies on JS timers running while the app is backgrounded. The existing car session makes the same assumption with its 60 s interval, and this change does not prove it.
 - **Reconnect mid-offer on a car-only launch.** On disconnect, the hand back posts a loud reclaim card. If the car reconnects before the offer ends, the car rings again but that card is not re-muted, so both may sound until the offer ends. This is a rare window and was left unhandled.
+- **Clock skew (accepted, parity with the phone):** the car deadline uses the server's `offer_expires_at` against the device clock. A forward-skewed clock expires the offer early. The phone screen (`app/driver/(tabs)/index.tsx:668-671`) computes expiry the same way, so this is existing exposure, not new.
+- **Headless FCM and car session in the same JS context:** `backgroundMessaging` mutes the card by reading `isCarRingOwner()` from module state that `register.ts` sets. If some OEM ran the FCM handler in a fresh JS context, it would read `false`. The failure mode is a double ring, not silence. Check on a real head unit.
+- **Call in progress:** with `blocked_call`, nothing rings on either the car or the phone for that offer; only the visual alert and card show. This is intentional: never ring over a call. It is tracked by the per-session telemetry.
 - **No visual regression tooling** exists for driver-app. There are no UI changes.
 
 ## 10. Sign-off

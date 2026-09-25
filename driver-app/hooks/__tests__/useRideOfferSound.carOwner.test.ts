@@ -114,6 +114,22 @@ it('pauses a tone already sounding when the car takes the ring mid-offer', async
   unmount();
 });
 
+it('rings at once when the car hands the ring back after taking it mid-offer', async () => {
+  const { result, unmount } = renderHook(() => useRideOfferSound());
+  act(() => result.current.play());
+  await flush();
+  mockPlayer.play.mockClear();
+
+  mockCarOwner = true;
+  act(() => mockOwnerCb?.(true)); // car takes the ring
+  mockCarOwner = false;
+  act(() => result.current.play()); // the dashboard's hand-back re-election
+  await flush();
+  expect(mockPlayer.play).toHaveBeenCalledTimes(1); // immediately, not on the next tick
+  act(() => result.current.stop());
+  unmount();
+});
+
 it('does not pause when ownership goes back to the phone', () => {
   const { unmount } = renderHook(() => useRideOfferSound());
   act(() => mockOwnerCb?.(false));

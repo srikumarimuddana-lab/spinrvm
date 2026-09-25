@@ -158,15 +158,13 @@ export function useRideOfferSound(): RideOfferSoundControls {
     }, []);
 
     // The car taking the ring mid-offer (car connected, flag turned on) must
-    // silence a tone that is already sounding, not just the next replay.
+    // silence a tone that is already sounding, not just the next replay. A
+    // full stop, not a pause: a replay interval left installed would make the
+    // hand-back's play() a no-op (idempotent guard) and leave the phone silent
+    // until the next tick.
     useEffect(() => subscribeCarRingOwner((owner) => {
-        if (!owner) return;
-        try {
-            _player?.pause();
-        } catch {
-            // pause on a never-loaded player throws; ignore.
-        }
-    }), []);
+        if (owner) stop();
+    }), [stop]);
 
     useEffect(() => {
         return () => {

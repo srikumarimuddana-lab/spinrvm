@@ -2435,6 +2435,10 @@ async def ride_search_timeout(r_id: str, timeout_seconds: Optional[int] = _DEFAU
                     "type": "ride_cancelled",
                     "ride_id": r_id,
                     "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
+                    # Machine-readable twin of the DB attribution above: the
+                    # rider app keys its "No drivers available" sheet on it
+                    # (``reason`` is display text here, not a code).
+                    "cancellation_type": "no_drivers_found",
                 },
                 f"rider_{current_ride['rider_id']}",
             )
@@ -2443,6 +2447,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: Optional[int] = _DEFAU
                 RideStatus.CANCELLED,
                 rider_id=current_ride["rider_id"],
                 reason="no_drivers_found",
+                cancellation_type="no_drivers_found",
                 is_auto=True,
             )
             try:
@@ -2460,7 +2465,12 @@ async def ride_search_timeout(r_id: str, timeout_seconds: Optional[int] = _DEFAU
                 current_ride["rider_id"],
                 "Ride Cancelled ❌",
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
+                {
+                    "type": "ride_cancelled",
+                    "ride_id": r_id,
+                    "is_auto": "true",
+                    "cancellation_type": "no_drivers_found",
+                },
                 target_app="rider",
             )
             if current_ride.get("guest_booking"):

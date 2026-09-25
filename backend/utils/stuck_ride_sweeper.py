@@ -159,6 +159,9 @@ async def _sweep() -> None:
                         "type": "ride_cancelled",
                         "ride_id": ride_id,
                         "reason": "no_drivers_found",
+                        # Same field ride_search_timeout sends; the rider app
+                        # keys its "No drivers available" sheet on it.
+                        "cancellation_type": "no_drivers_found",
                         "message": "No nearby drivers found. Please try again.",
                     },
                     f"rider_{rider_id}",
@@ -174,7 +177,7 @@ async def _sweep() -> None:
                     rider_id,
                     "No drivers available",
                     "We couldn't find a driver nearby. Please try again.",
-                    {"ride_id": str(ride_id), "type": "ride_cancelled"},
+                    {"ride_id": str(ride_id), "type": "ride_cancelled", "cancellation_type": "no_drivers_found"},
                     target_app="rider",
                 )
             except Exception as exc:

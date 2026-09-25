@@ -131,7 +131,8 @@ def main() -> int:
             )
             raise
         (riders if kind == "rider" else drivers).append(record)
-        print(f"  [{idx + 1}/{total}] {kind} {phone} -> token cached")
+        last4 = phone[-4:]
+        print(f"  [{idx + 1}/{total}] {kind} ending in ***{last4} -> token cached")
         if idx < total - 1:
             time.sleep(delay_s)
 

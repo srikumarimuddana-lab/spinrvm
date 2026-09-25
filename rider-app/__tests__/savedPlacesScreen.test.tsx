@@ -57,6 +57,7 @@ jest.mock('@shared/hooks/usePlacesAutocomplete', () => ({
 const mockFetchSavedAddresses = jest.fn();
 const mockAddSavedAddress = jest.fn();
 const mockDeleteSavedAddress = jest.fn();
+const mockUpdateSavedAddress = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({
   useRideStore: () => mockRideState,
@@ -114,6 +115,7 @@ beforeEach(() => {
     fetchSavedAddresses: mockFetchSavedAddresses,
     addSavedAddress: mockAddSavedAddress,
     deleteSavedAddress: mockDeleteSavedAddress,
+    updateSavedAddress: mockUpdateSavedAddress,
     userLocation: null,
   };
   mockFetchSavedAddresses.mockResolvedValue(undefined);
@@ -367,6 +369,36 @@ describe('SavedPlacesScreen', () => {
       confirmBtn.props.onPress();
     });
     expect(mockDeleteSavedAddress).toHaveBeenCalledWith('p1');
+  });
+
+  it('edits a place: a rename sends only name/type, not the location', async () => {
+    mockRideState.savedAddresses = [{ id: 'g1', name: 'Gym', address: '55 Fit Ave', lat: 50.1, lng: -104.1, icon: 'gym' }];
+    mockUpdateSavedAddress.mockResolvedValue(undefined);
+    const r = await renderScreen();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'Edit Gym' }).props.onPress(); });
+    const labelInput = r.root.findByProps({ placeholder: "e.g. Home, Mom's house" });
+    expect(labelInput.props.value).toBe('Gym');
+    act(() => { labelInput.props.onChangeText('Downtown gym'); });
+    await act(async () => { await findButtonByText(r, 'Save Place').props.onPress(); await flush(); });
+    expect(mockUpdateSavedAddress).toHaveBeenCalledWith('g1', { name: 'Downtown gym', icon: 'gym' });
+    expect(mockAddSavedAddress).not.toHaveBeenCalled();
+  });
+
+  it('edits a place: picking a new address sends the new location and place_id', async () => {
+    mockRideState.savedAddresses = [{ id: 'g1', name: 'Gym', address: '55 Fit Ave', lat: 50.1, lng: -104.1, icon: 'gym' }];
+    mockUpdateSavedAddress.mockResolvedValue(undefined);
+    mockApiGet.mockResolvedValue({ data: { lat: 50.45, lng: -104.6, formatted_address: '100 Main St, Regina, SK' } });
+    const r = await renderScreen();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'Edit Gym' }).props.onPress(); });
+    // Typing in the address field drops the old selection and searches again.
+    act(() => { r.root.findByProps({ placeholder: 'Search for an address' }).props.onChangeText('100 Main'); });
+    mockPredictions = [{ place_id: 'pred-2', description: '100 Main St', structured_formatting: undefined }];
+    act(() => { r.update(<SavedPlacesScreen />); });
+    await act(async () => { await findButtonByText(r, '100 Main St').props.onPress(); await flush(); });
+    await act(async () => { await findButtonByText(r, 'Save Place').props.onPress(); await flush(); });
+    expect(mockUpdateSavedAddress).toHaveBeenCalledWith('g1', {
+      name: 'Gym', icon: 'gym', address: '100 Main St, Regina, SK', lat: 50.45, lng: -104.6, place_id: 'pred-2',
+    });
   });
 
   it('shows a message when deleting fails', async () => {

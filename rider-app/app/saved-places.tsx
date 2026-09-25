@@ -7,7 +7,7 @@ import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useRideStore } from '../store/rideStore';
+import { useRideStore, type SavedAddress } from '../store/rideStore';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -24,10 +24,13 @@ export default function SavedPlacesScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const {
-    savedAddresses, savedAddressesLoadFailed, fetchSavedAddresses, addSavedAddress, deleteSavedAddress, userLocation,
+    savedAddresses, savedAddressesLoadFailed, fetchSavedAddresses, addSavedAddress, updateSavedAddress,
+    deleteSavedAddress, userLocation,
   } = useRideStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  // Set while the form edits an existing place (PATCH) instead of adding one.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Add form state
@@ -113,17 +116,25 @@ export default function SavedPlacesScreen() {
     const name = placeName.trim() || selectedType;
     const icon = selectedType.toLowerCase();
     // The rider keeps one Home and one Work: the server replaces the old one.
-    const replaces = savedAddresses.some((a) => savedPlaceType(a) === icon);
+    const replaces = savedAddresses.some((a) => a.id !== editingId && savedPlaceType(a) === icon);
     setSaving(true);
     try {
-      await addSavedAddress({
-        name,
+      const location = {
         address: selectedPlace.address,
         lat: selectedPlace.lat,
         lng: selectedPlace.lng,
-        icon,
         ...(selectedPlace.place_id ? { place_id: selectedPlace.place_id } : {}),
-      });
+      };
+      if (editingId) {
+        // Only send the location when the rider picked a new address — the
+        // server re-verifies address+coordinates whenever they change.
+        const original = savedAddresses.find((a) => a.id === editingId);
+        const moved = !original || original.address !== location.address
+          || original.lat !== location.lat || original.lng !== location.lng;
+        await updateSavedAddress(editingId, { name, icon, ...(moved ? location : {}) });
+      } else {
+        await addSavedAddress({ name, icon, ...location });
+      }
       if (replaces) showToast(`${selectedType} Updated`, `Your ${icon} address was replaced.`, 'success');
       setShowAdd(false);
       resetForm();
@@ -157,9 +168,25 @@ export default function SavedPlacesScreen() {
 
   const resetForm = () => {
     setPlaceName(''); setSelectedType('Home'); setSearchText(''); setSelectedPlace(null); clearPredictions();
+    setEditingId(null);
   };
 
-  const renderPlace = ({ item }: { item: any }) => {
+  const startEdit = (item: SavedAddress) => {
+    setEditingId(item.id);
+    setSelectedType(savedPlaceConfig(item).key);
+    setPlaceName(item.name || '');
+    setSelectedPlace({
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+      ...(item.place_id ? { place_id: item.place_id } : {}),
+    });
+    setSearchText(item.address);
+    clearPredictions();
+    setShowAdd(true);
+  };
+
+  const renderPlace = ({ item }: { item: SavedAddress }) => {
     const config = savedPlaceConfig(item);
     return (
       <View style={styles.placeItem}>
@@ -170,6 +197,14 @@ export default function SavedPlacesScreen() {
           <Text style={styles.placeName}>{item.name}</Text>
           <Text style={styles.placeAddr} numberOfLines={1}>{item.address}</Text>
         </View>
+        <TouchableOpacity
+          onPress={() => startEdit(item)}
+          style={{ padding: SPACING.sm }}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit ${item.name}`}
+        >
+          <Ionicons name="create-outline" size={18} color="#CCC" />
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => handleDelete(item.id, item.name)} style={{ padding: SPACING.sm }}>
           <Ionicons name="trash-outline" size={18} color="#CCC" />
         </TouchableOpacity>
@@ -200,7 +235,7 @@ export default function SavedPlacesScreen() {
               savedAddressesLoadFailed ? (
                 <View style={styles.empty}>
                   <Ionicons name="cloud-offline-outline" size={48} color="#DDD" />
-                  <Text style={styles.emptyTitle}>Couldn't load your saved places</Text>
+                  <Text style={styles.emptyTitle}>{"Couldn't load your saved places"}</Text>
                   <Text style={styles.emptySub}>Check your connection and try again.</Text>
                   <TouchableOpacity style={styles.retryBtn} onPress={loadData} accessibilityRole="button" accessibilityLabel="Retry loading saved places">
                     <Text style={styles.retryText}>Retry</Text>

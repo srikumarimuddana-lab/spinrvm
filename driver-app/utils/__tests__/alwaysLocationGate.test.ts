@@ -10,8 +10,14 @@ const mockRequireAlways = jest.fn(async () => true);
 const mockCaptureException = jest.fn();
 const mockOpenSettings = jest.fn(() => Promise.resolve());
 
+// Platform too: jest-expo's lazy global fetch loads expo-modules-core, which
+// reads Platform.select at import and crashed this suite before any test ran.
 jest.mock('react-native', () => ({
   Linking: { openSettings: () => mockOpenSettings() },
+  Platform: {
+    OS: 'android',
+    select: (spec: Record<string, unknown>) => spec.android ?? spec.native ?? spec.default,
+  },
 }));
 
 jest.mock('expo-location', () => ({

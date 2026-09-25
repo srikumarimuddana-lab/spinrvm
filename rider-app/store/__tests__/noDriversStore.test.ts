@@ -22,7 +22,10 @@ import {
 import { registerLogoutCallback } from '@shared/store/authStore';
 
 // Captured at import time, before beforeEach's clearAllMocks wipes the calls.
-const onLogout = (registerLogoutCallback as jest.Mock).mock.calls[0]?.[0] as (() => void) | undefined;
+// The last registration is this store's: it imports rideStore, which registers
+// its own logout callback first.
+const logoutCalls = (registerLogoutCallback as jest.Mock).mock.calls;
+const onLogout = logoutCalls[logoutCalls.length - 1]?.[0] as (() => void) | undefined;
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),

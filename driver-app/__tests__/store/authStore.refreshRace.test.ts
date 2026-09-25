@@ -27,6 +27,16 @@ import apiClient, {
 import { useAuthStore } from '../../../shared/store/authStore';
 import { installSessionLock } from '../../../shared/auth/sessionLock';
 
+// See authStore.initialize.test.ts for why this is required: refreshTokens()
+// unconditionally calls refreshProposalFor() (shared/auth/refreshProposal.ts),
+// which lazily requires the real expo-crypto native module unless mocked.
+// All-equal bytes make refreshProposalFor() resolve to null (this suite
+// predates X8 and its assertions expect plain, proposal-less /auth/refresh
+// calls).
+jest.mock('expo-crypto', () => ({
+  getRandomBytes: jest.fn((n: number) => new Uint8Array(n).fill(1)),
+}));
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));

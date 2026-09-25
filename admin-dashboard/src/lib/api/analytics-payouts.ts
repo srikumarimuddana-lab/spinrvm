@@ -272,6 +272,7 @@ export const getBlockedPayoutDrivers = (limit = 50, serviceAreaId?: string) => {
 };
 
 /* ── Disputes (resolve) ─────────────────── */
-export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
-    request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });
+// resolveDispute was removed 2026-09-25: in-app disputes are disabled and
+// PUT /api/admin/disputes/{id}/resolve answers 410. See
+// docs/change-log/2026-09-25-disable-in-app-disputes.md.
 

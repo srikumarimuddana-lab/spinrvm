@@ -1,7 +1,7 @@
 // Promotions CRUD, ride disputes, the safety incident queue, and support
 // tickets. Extracted from the monolithic lib/api.ts as part of the
-// per-domain split. (deleteDispute lives in api/rides.ts — see its header
-// comment; the rest of the disputes CRUD is here.)
+// per-domain split. (The disputes read/CRUD helpers are here; there is no
+// deleteDispute -- the backend's hard-delete route was removed 2026-09-25.)
 
 import { request } from "./client";
 

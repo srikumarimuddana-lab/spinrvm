@@ -567,6 +567,9 @@ class SettingsUpdateRequest(BaseModel):
     # to change a closed company's status and compare-and-set on the status
     # read. False restores the old unconditional status write.
     corporate_kyb_refuses_closed_company: Optional[bool] = None
+    # Migration 482 / C136. Default false: driver destination mode hidden,
+    # dispatch skips the destination filter, POST /drivers/destination 409s.
+    destination_mode_enabled: Optional[bool] = None
     # Forced-upgrade gate (ACTION_ITEMS.md E3) — core/middleware.py's
     # ForcedUpgradeMiddleware rejects any request whose X-App-Version header
     # is below this with 426. Empty string (default) = enforcement off for

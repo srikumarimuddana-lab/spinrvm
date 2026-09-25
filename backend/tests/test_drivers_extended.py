@@ -2074,6 +2074,19 @@ class TestRateRider:
 
 
 class TestDestinationMode:
+    @pytest.fixture(autouse=True)
+    def _destination_mode_switch_on(self):
+        # These tests pin the flag-ON contract (C136). The flag-OFF path
+        # (migration 482 default) is covered in test_destination_mode_flag_endpoints.py.
+        with (
+            patch(
+                "backend.routes.drivers.profile.get_app_settings",
+                AsyncMock(return_value={"destination_mode_enabled": True}),
+            ),
+            patch("backend.routes.drivers.profile.log_user_action", AsyncMock()),
+        ):
+            yield
+
     def test_set_destination_success(self):
         from backend.routes import drivers as drv
 
@@ -2199,8 +2212,10 @@ class TestDestinationMode:
             "destination_set_at",
             "destination_expires_at",
             "active",
+            "enabled",
         }
         assert result["active"] is True
+        assert result["enabled"] is True
         assert isinstance(result["destination_expires_at"], str)
 
     def test_get_destination_active_false_when_expired(self):

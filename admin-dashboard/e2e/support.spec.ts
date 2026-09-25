@@ -1,6 +1,6 @@
 /**
  * Admin dashboard E2E — /dashboard/support interaction coverage.
- * The page is a 7-tab shell (Tickets/Disputes/Complaints/Lost & Found/
+ * The page is a 7-tab shell (Tickets/Chargebacks/Complaints/Lost & Found/
  * Flags/FAQs/Legal) each lazy-loaded via next/dynamic; drives the default
  * Tickets tab's search/create/reply flow plus tab-switch smoke checks for
  * the rest. All network calls mocked — no live backend.
@@ -73,7 +73,7 @@ test.describe('admin dashboard: support — interaction', () => {
     await expect(page.getByPlaceholder('Issue title')).toBeVisible({ timeout: 10000 });
   });
 
-  for (const tab of ['Disputes', 'Complaints', 'Lost & Found', 'Flags', 'FAQs', 'Legal']) {
+  for (const tab of ['Chargebacks', 'Complaints', 'Lost & Found', 'Flags', 'FAQs', 'Legal']) {
     test(`${tab} tab switches without crashing`, async ({ page }) => {
       await mockSupport(page);
       await page.goto('/dashboard/support');

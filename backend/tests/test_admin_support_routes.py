@@ -143,19 +143,19 @@ def test_dispute_stats_total_refunded_uses_round_half_up(client, _set_admin, mon
     assert resp.json()["total_refunded"] == 10.13
 
 
-def test_create_dispute(client, _set_admin, monkeypatch):
-    monkeypatch.setattr(m.db_supabase, "insert_one", AsyncMock(return_value=None))
+def test_create_dispute_is_disabled_410(client, _set_admin, monkeypatch):
+    """In-app disputes disabled 2026-09-25: no row, no Zoho ticket, no audit."""
+    insert_one = AsyncMock(return_value=None)
+    monkeypatch.setattr(m.db_supabase, "insert_one", insert_one)
     resp = client.post(
         "/api/admin/disputes",
         json={"ride_id": "r1", "user_id": "u1", "reason": "no-show", "description": "d"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-    assert body["dispute"]["status"] == "pending"
-    assert "user_name" not in body["dispute"]
-    m.log_admin_action.assert_awaited_once()
-    assert m.log_admin_action.call_args.args[1] == "dispute_created"
+    assert resp.status_code == 410, resp.text
+    assert "read-only" in resp.text
+    insert_one.assert_not_called()
+    m.create_ticket_for_dispute.assert_not_called()
+    m.log_admin_action.assert_not_called()
 
 
 def test_get_dispute_details_not_found(client, _set_admin, monkeypatch):
@@ -172,111 +172,41 @@ def test_get_dispute_details_found(client, _set_admin, monkeypatch):
     assert resp.json()["ride_details"]["id"] == "r1"
 
 
-def test_update_dispute_no_fields_skips_write(client, _set_admin, monkeypatch):
+@pytest.mark.parametrize("body", [{}, {"status": "resolved", "refund_amount": 5}])
+def test_update_dispute_is_disabled_410(client, _set_admin, monkeypatch, body):
     update_one = AsyncMock()
     monkeypatch.setattr(m.db_supabase, "update_one", update_one)
-    resp = client.put("/api/admin/disputes/d1", json={})
-    assert resp.status_code == 200
+    resp = client.put("/api/admin/disputes/d1", json=body)
+    assert resp.status_code == 410, resp.text
+    update_one.assert_not_called()
+    m.log_admin_action.assert_not_called()
+
+
+# PUT /disputes/{id}/resolve is served by routes/disputes.py (admin_router,
+# require_module("disputes")). In-app disputes were disabled 2026-09-25: it now
+# answers 410 with no DB/Stripe/push call. The full behaviour (status code,
+# no side effects, module gate) is pinned in test_disputes_disabled.py; this
+# test only pins that support.py does not shadow it again.
+def test_resolve_route_is_served_by_disputes_py_and_disabled(client, _set_admin, monkeypatch):
+    update_one = AsyncMock()
+    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
+    resp = client.put(
+        "/api/admin/disputes/d1/resolve",
+        json={"resolution": "approved", "refund_amount": 10, "admin_note": "goodwill"},
+    )
+    assert resp.status_code == 410, resp.text
     update_one.assert_not_called()
 
 
-def test_update_dispute_with_fields(client, _set_admin, monkeypatch):
-    update_one = AsyncMock()
-    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
-    resp = client.put("/api/admin/disputes/d1", json={"status": "resolved", "refund_amount": 5})
-    assert resp.status_code == 200
-    update_one.assert_called_once()
-    assert update_one.call_args.args[2]["status"] == "resolved"
-    m.log_admin_action.assert_awaited_once()
-    assert m.log_admin_action.call_args.args[1] == "dispute_updated"
-
-
-def _patch_dispute_resolve(monkeypatch, *, refunds_enabled):
-    """Stub routes/disputes.py's dependencies for an HTTP resolve call."""
-    import routes.disputes as d
-    import services.admin_money_caps as caps
-
-    dispute = {"id": "d1", "ride_id": "ride-1", "user_id": "rider-1", "status": "open", "original_fare": 25.00}
-
-    async def get_rows(table, filters=None, **kwargs):
-        assert table == "disputes", table
-        return [dict(dispute)]
-
-    update_one = AsyncMock()
-    monkeypatch.setattr(d.db_supabase, "get_rows", get_rows)
-    monkeypatch.setattr(
-        d.db_supabase,
-        "get_ride",
-        AsyncMock(return_value={"id": "ride-1", "rider_id": "rider-1", "stripe_charge_id": "pi_1"}),
-    )
-    monkeypatch.setattr(d.db_supabase, "update_one", update_one)
-    monkeypatch.setattr(
-        d,
-        "get_app_settings",
-        AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": refunds_enabled}),
-    )
-    monkeypatch.setattr(d, "log_admin_action", AsyncMock())
-    monkeypatch.setattr(d, "send_push_notification", AsyncMock())
-    monkeypatch.setattr(caps, "get_app_settings", AsyncMock(return_value={}))
-    return update_one
-
-
-# The admin dashboard's exact payload (admin-dashboard/src/lib/api/analytics-payouts.ts resolveDispute).
-_DASHBOARD_RESOLVE = {"resolution": "approved", "refund_amount": 10, "admin_note": "goodwill"}
-
-
-def test_resolve_route_is_served_by_disputes_py(client, _set_admin, monkeypatch):
-    """N23: a duplicate PUT /disputes/{id}/resolve in support.py used to be
-    registered first and shadow routes/disputes.py, silently ignoring the
-    dashboard's resolution/refund_amount. The real app must now route the
-    dashboard payload to routes/disputes.py's handler."""
-    from unittest.mock import MagicMock, patch
-
-    update_one = _patch_dispute_resolve(monkeypatch, refunds_enabled=True)
-    refund_create = MagicMock(return_value=MagicMock(status="succeeded", id="re_1"))
-    with patch("stripe.Refund.create", refund_create):
-        resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["refund_issued"] is True and body["refund"]["refund_id"] == "re_1"
-    assert refund_create.call_args.kwargs["amount"] == 1000
-    updates = update_one.call_args.args[2]
-    assert updates["resolution"] == "approved" and updates["status"] == "resolved"
-    assert updates["resolved_by"] == "admin-1"
-    assert "resolution_status" not in updates  # the old support.py write
-
-
-def test_resolve_route_flag_off_records_without_refund(client, _set_admin, monkeypatch):
-    from unittest.mock import MagicMock, patch
-
-    _patch_dispute_resolve(monkeypatch, refunds_enabled=False)
-    refund_create = MagicMock()
-    with patch("stripe.Refund.create", refund_create):
-        resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["refund_issued"] is False
-    refund_create.assert_not_called()
-
-
-@pytest.mark.parametrize(("modules", "status"), [(["support"], 403), (["disputes"], 200)])
-def test_resolve_route_now_requires_disputes_module(client, app_fixture, monkeypatch, modules, status):
-    """Permission change: the route used to be gated by require_module("support")
-    (support.py's router); it is now require_module("disputes")."""
-    from dependencies import get_admin_user
-
-    _patch_dispute_resolve(monkeypatch, refunds_enabled=False)
-    app_fixture.dependency_overrides[get_admin_user] = lambda: {"id": "admin-2", "role": "admin", "modules": modules}
-    resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
-    assert resp.status_code == status, resp.text
-
-
-def test_delete_dispute(client, _set_admin, monkeypatch):
+def test_delete_dispute_route_removed(client, _set_admin, monkeypatch):
+    """The hard DELETE broke 7-year financial retention; it no longer exists.
+    GET/PUT still match the path, so DELETE is 405 and nothing is deleted."""
     delete_many = AsyncMock()
     monkeypatch.setattr(m.db_supabase, "delete_many", delete_many)
     resp = client.delete("/api/admin/disputes/d1")
-    assert resp.status_code == 200
-    delete_many.assert_called_once_with("disputes", {"id": "d1"})
-    m.log_admin_action.assert_awaited_once_with(_ADMIN, "dispute_deleted", "disputes", "d1", {})
+    assert resp.status_code == 405, resp.text
+    delete_many.assert_not_called()
+    m.log_admin_action.assert_not_called()
 
 
 # ---------- Support Tickets ----------

@@ -7,7 +7,7 @@ import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useRideStore } from '../store/rideStore';
+import { useRideStore, type SavedAddress } from '../store/rideStore';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -15,7 +15,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction as Prediction } from '@shared/api/places';
-import { SAVED_PLACE_TYPES, savedPlaceConfig } from '../utils/savedPlaceIcon';
+import { SAVED_PLACE_TYPES, savedPlaceConfig, savedPlaceType } from '../utils/savedPlaceIcon';
 import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function SavedPlacesScreen() {
@@ -23,16 +23,21 @@ export default function SavedPlacesScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const { savedAddresses, fetchSavedAddresses, addSavedAddress, deleteSavedAddress, userLocation } = useRideStore();
+  const {
+    savedAddresses, savedAddressesLoadFailed, fetchSavedAddresses, addSavedAddress, updateSavedAddress,
+    deleteSavedAddress, userLocation,
+  } = useRideStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  // Set while the form edits an existing place (PATCH) instead of adding one.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Add form state
   const [placeName, setPlaceName] = useState('');
   const [selectedType, setSelectedType] = useState('Home');
   const [searchText, setSearchText] = useState('');
-  const [selectedPlace, setSelectedPlace] = useState<{ address: string; lat: number; lng: number } | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<{ address: string; lat: number; lng: number; place_id?: string } | null>(null);
 
   // Bias to the rider's GPS so a "Walmart" search returns the nearby store
   // instead of generic matches across Canada. Previously this screen sent
@@ -93,25 +98,44 @@ export default function SavedPlacesScreen() {
           address: data.formatted_address,
           lat: data.lat,
           lng: data.lng,
+          // Saved with the place so a later tap can re-resolve fresh coordinates.
+          place_id: prediction.place_id,
         });
         setSearchText(prediction.structured_formatting?.main_text || prediction.description);
         clearPredictions();
+      } else {
+        showToast('Location Unavailable', "We couldn't find the location of that address. Try another result.", 'warning');
       }
-    } catch {}
+    } catch (err: unknown) {
+      showToast('Location Unavailable', getApiErrorMessage(err, "We couldn't look up that address. Please try again."), 'danger');
+    }
   };
 
   const handleSave = async () => {
     if (!selectedPlace) { showToast('Address Required', 'Please search for and select an address', 'warning'); return; }
     const name = placeName.trim() || selectedType;
+    const icon = selectedType.toLowerCase();
+    // The rider keeps one Home and one Work: the server replaces the old one.
+    const replaces = savedAddresses.some((a) => a.id !== editingId && savedPlaceType(a) === icon);
     setSaving(true);
     try {
-      await addSavedAddress({
-        name,
+      const location = {
         address: selectedPlace.address,
         lat: selectedPlace.lat,
         lng: selectedPlace.lng,
-        icon: selectedType.toLowerCase(),
-      });
+        ...(selectedPlace.place_id ? { place_id: selectedPlace.place_id } : {}),
+      };
+      if (editingId) {
+        // Only send the location when the rider picked a new address — the
+        // server re-verifies address+coordinates whenever they change.
+        const original = savedAddresses.find((a) => a.id === editingId);
+        const moved = !original || original.address !== location.address
+          || original.lat !== location.lat || original.lng !== location.lng;
+        await updateSavedAddress(editingId, { name, icon, ...(moved ? location : {}) });
+      } else {
+        await addSavedAddress({ name, icon, ...location });
+      }
+      if (replaces) showToast(`${selectedType} Updated`, `Your ${icon} address was replaced.`, 'success');
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
@@ -126,7 +150,17 @@ export default function SavedPlacesScreen() {
       message: `Remove "${name}" from saved places?`,
       variant: 'warning',
       buttons: [
-        { text: 'Remove', style: 'destructive', onPress: () => deleteSavedAddress(id) },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteSavedAddress(id);
+            } catch (err: unknown) {
+              showToast('Remove Failed', getApiErrorMessage(err, 'Could not remove this place. Please try again.'), 'danger');
+            }
+          },
+        },
         { text: 'Cancel', style: 'cancel' },
       ],
     });
@@ -134,9 +168,25 @@ export default function SavedPlacesScreen() {
 
   const resetForm = () => {
     setPlaceName(''); setSelectedType('Home'); setSearchText(''); setSelectedPlace(null); clearPredictions();
+    setEditingId(null);
   };
 
-  const renderPlace = ({ item }: { item: any }) => {
+  const startEdit = (item: SavedAddress) => {
+    setEditingId(item.id);
+    setSelectedType(savedPlaceConfig(item).key);
+    setPlaceName(item.name || '');
+    setSelectedPlace({
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+      ...(item.place_id ? { place_id: item.place_id } : {}),
+    });
+    setSearchText(item.address);
+    clearPredictions();
+    setShowAdd(true);
+  };
+
+  const renderPlace = ({ item }: { item: SavedAddress }) => {
     const config = savedPlaceConfig(item);
     return (
       <View style={styles.placeItem}>
@@ -147,6 +197,14 @@ export default function SavedPlacesScreen() {
           <Text style={styles.placeName}>{item.name}</Text>
           <Text style={styles.placeAddr} numberOfLines={1}>{item.address}</Text>
         </View>
+        <TouchableOpacity
+          onPress={() => startEdit(item)}
+          style={{ padding: SPACING.sm }}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit ${item.name}`}
+        >
+          <Ionicons name="create-outline" size={18} color="#CCC" />
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => handleDelete(item.id, item.name)} style={{ padding: SPACING.sm }}>
           <Ionicons name="trash-outline" size={18} color="#CCC" />
         </TouchableOpacity>
@@ -174,11 +232,22 @@ export default function SavedPlacesScreen() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.list}
             ListEmptyComponent={
-              <View style={styles.empty}>
-                <Ionicons name="bookmark-outline" size={48} color="#DDD" />
-                <Text style={styles.emptyTitle}>No saved places yet</Text>
-                <Text style={styles.emptySub}>Add your home, work, or favourite spots for faster booking</Text>
-              </View>
+              savedAddressesLoadFailed ? (
+                <View style={styles.empty}>
+                  <Ionicons name="cloud-offline-outline" size={48} color="#DDD" />
+                  <Text style={styles.emptyTitle}>{"Couldn't load your saved places"}</Text>
+                  <Text style={styles.emptySub}>Check your connection and try again.</Text>
+                  <TouchableOpacity style={styles.retryBtn} onPress={loadData} accessibilityRole="button" accessibilityLabel="Retry loading saved places">
+                    <Text style={styles.retryText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.empty}>
+                  <Ionicons name="bookmark-outline" size={48} color="#DDD" />
+                  <Text style={styles.emptyTitle}>No saved places yet</Text>
+                  <Text style={styles.emptySub}>Add your home, work, or favourite spots for faster booking</Text>
+                </View>
+              )
             }
             ListFooterComponent={
               showAdd ? (
@@ -190,7 +259,11 @@ export default function SavedPlacesScreen() {
                       <TouchableOpacity
                         key={t.key}
                         style={[styles.typeChip, selectedType === t.key && { backgroundColor: t.bg, borderColor: t.color }]}
-                        onPress={() => { setSelectedType(t.key); if (!placeName) setPlaceName(t.key); }}
+                        onPress={() => {
+                          // Keep the label in step with the type until the rider types their own.
+                          if (!placeName.trim() || placeName === selectedType) setPlaceName(t.key);
+                          setSelectedType(t.key);
+                        }}
                       >
                         <Ionicons name={t.icon as any} size={16} color={selectedType === t.key ? t.color : colors.textDim} />
                         <Text style={[styles.typeChipText, selectedType === t.key && { color: t.color }]}>{t.key}</Text>
@@ -302,6 +375,8 @@ function createStyles(colors: ThemeColors) {
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
     emptySub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs, textAlign: 'center', paddingHorizontal: 20 },
+    retryBtn: { marginTop: SPACING.md, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, backgroundColor: colors.primary },
+    retryText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#FFF' },
 
     // Add button
     addBtn: {

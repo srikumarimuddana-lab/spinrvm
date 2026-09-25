@@ -438,11 +438,31 @@ describe('destination mode row state (C136 T2)', () => {
     expect(screen.getByTestId('settings-destination-mode-state').props.children).toBe('settings.destinationModeOff');
   });
 
-  it('falls back to the description when the fetch fails (no toast)', async () => {
+  // Migration 482: the row is an entry point to a feature that is off by
+  // default, so it only appears once the server says it is available.
+  it('hides the row when the fetch fails (availability unknown, no toast)', async () => {
     mockApiGet.mockImplementation(routeGet(new Error('offline')));
     const screen = render(<SettingsScreen />);
     await flush();
-    expect(screen.getByTestId('settings-destination-mode-state').props.children).toBe('settings.destinationModeDesc');
+    expect(screen.queryByTestId('settings-destination-mode-state')).toBeNull();
+    expect(screen.queryByText('settings.destinationModeTitle')).toBeNull();
+  });
+
+  it('hides the row when the server reports destination mode disabled', async () => {
+    mockApiGet.mockImplementation(routeGet({
+      destination_mode: true, destination_address: 'Home', active: false, enabled: false,
+    }));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(screen.queryByTestId('settings-destination-mode-state')).toBeNull();
+    expect(screen.queryByText('settings.destinationModeTitle')).toBeNull();
+  });
+
+  it('shows the row when the server reports destination mode enabled', async () => {
+    mockApiGet.mockImplementation(routeGet({ destination_mode: false, destination_address: null, active: false, enabled: true }));
+    const screen = render(<SettingsScreen />);
+    await flush();
+    expect(screen.getByText('settings.destinationModeTitle')).toBeTruthy();
   });
 });
 

@@ -33,7 +33,7 @@ Prompt-level only, in the `search_faqs` ToolSpec (`backend/ai/tools_support.py`)
 ## 4. Risk & impact on existing functionality
 
 - Consumers of this ToolSpec: the in-app orchestrator (rider + driver), the public website assistant (`ai/public_assistant.py`), and the MCP server (`ai/mcp_server.py` exposes the same description). No code or test depends on the description text.
-- Iteration budget: a re-search adds one tool round. In-app cap is `ai_max_tool_iterations` = 6; website cap is `MAX_TOOL_ITERATIONS = 3` (search → re-search → answer fits exactly). If the model re-searches AND calls another tool on the website, it could hit the cap and log a warning.
+- Iteration budget: a re-search adds one model call. In-app cap is `ai_max_tool_iterations` = 6 (ample). The website cap `MAX_TOOL_ITERATIONS` was 3 — search → re-search → answer would have used every call, and any extra call would have hit the cap and returned no final answer — so it is raised to 4 (`ai/public_assistant.py`), per `spinr-ai-guardrail-reviewer`. Cost: at most one more model call per website turn, still bounded by the 6/min per-IP limit.
 - Latency: a miss now costs one extra LLM round trip (~1–2 s) instead of an immediate "not found". Hits are unchanged.
 - Cost: at most one extra LLM call per missed search.
 - Response cache (`ai_faq_cache_enabled`) is off in production; unaffected either way (keyed on the user's question, not the tool query).
@@ -47,6 +47,7 @@ Riders, drivers and website visitors should get the correct FAQ answer more ofte
 | File path | What changed | Why |
 |---|---|---|
 | backend/ai/tools_support.py | `search_faqs` description + `query` schema description | Steer the model to keyword queries and one re-search |
+| backend/ai/public_assistant.py | `MAX_TOOL_ITERATIONS` 3 → 4 | Headroom so a re-search can't exhaust the website tool loop |
 
 ## 7. Before / after
 

@@ -84,11 +84,14 @@ NO_ANSWER_MESSAGE = "I couldn't find an answer to that one. Email support@spinr.
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_MESSAGE_CHARS = 2000
 
-# Tool-loop bounds. Two iterations is enough for the only shape this audience
-# can produce (search_faqs → answer, occasionally a second lookup); the FAQ
-# tools hit our own database, not a paid upstream, so the ceiling is about
+# Tool-loop bounds. Each iteration is one model call. The expected shapes are
+# search_faqs → answer, and — since search_faqs' description asks the model to
+# re-search once with different terms on a miss — search → re-search → answer.
+# 4 leaves one call of headroom above that (e.g. a get_company_info lookup) so
+# a re-search can't push the turn into the cap and lose its final answer. The
+# FAQ tools hit our own database, not a paid upstream, so the ceiling is about
 # bounding latency and provider spend rather than API cost.
-MAX_TOOL_ITERATIONS = 3
+MAX_TOOL_ITERATIONS = 4
 MAX_TOOL_CALLS_PER_ITERATION = 3
 
 

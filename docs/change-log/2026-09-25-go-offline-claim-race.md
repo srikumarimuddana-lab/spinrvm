@@ -23,10 +23,10 @@ This predates #5775. Every go-offline hits it, the manual toggle included. #5775
 
 ## 3. Fix / remediation
 
-- **Compare-and-set.** The online → offline write filters on the `is_available` value the checks saw (`{"id": driver_id, "is_available": <pre-read value>}`). `claim_driver_atomic` conditions on the same column of the same row (`is_available = true`), so only one of the two writes can win:
+- **Compare-and-set.** When the pre-read shows the driver available (`is_available` true), the online → offline write filters on `{"id": driver_id, "is_available": true}`. A driver already unavailable keeps the plain filter: from false the only possible change is a release, which must not read as an offer arriving (dispatch-review finding on the first version). `claim_driver_atomic` conditions on the same column of the same row (`is_available = true`), so only one of the two writes can win:
   - Offline first: the claim finds `is_available=false` and does not claim.
   - Claim first: the offline write matches zero rows.
-- **Detection.** The handler already re-reads the row after writing. If the driver is still online and `is_available` changed, it returns **409** ("A ride offer just arrived…") before any insurance-period write. That case previously fell through to the "silent no-op" 500.
+- **Detection.** The handler already re-reads the row after writing. If the driver is still online and `is_available` is no longer true, it returns **409** ("A ride offer just arrived…") before any insurance-period write. That case previously fell through to the "silent no-op" 500.
 - **Claim in flight.** If the pre-read row already shows `is_available=false` with an `availability_claimed_at` younger than 30 s and no offer row yet, the request returns **409** up front. Release clears the stamp. An older unreleased stamp is an orphan for the claim reaper and does not block.
 - Go-online writes and offline re-asserts (driver already offline) keep the plain `{"id"}` filter.
 
@@ -42,7 +42,8 @@ The row-level compare-and-set reuses the claim's own guard column and needs no s
 - New 409s:
   - (a) A claim won the race. The driver now holds an offer and must accept or decline it, which is correct.
   - (b) A claim is in flight, for at most 30 s.
-  - (c) Rare false positive: some other writer changed `is_available` in the milliseconds between the pre-read and the write, for example a release. The driver taps again and it succeeds.
+  - A release (false → true) no longer causes a false 409, because the guard only applies from true.
+  - Residual gap: for a driver who was already unavailable, a release and then a fresh claim inside the same request can still be overwritten. That is the pre-fix behaviour, for an orphan-claim driver only.
 - Driver app: the toggle already maps 409 to "Cannot go offline — Decline the offer or finish the trip first" using the server's reason, and #5775's forced-offline reports it to Sentry and retries on the next resume.
 - Stuck-online risk: a driver with `is_available=false` and a fresh unreleased claim stamp but no offer is blocked for up to 30 s. After that the stamp counts as an orphan.
 - The 30 s window is a heuristic, not a bound on dispatch latency (insurance-period audit).
@@ -63,7 +64,7 @@ The row-level compare-and-set reuses the claim's own guard column and needs no s
 | File path | What changed | Why |
 |---|---|---|
 | `backend/routes/drivers/status.py` | `_claim_in_flight` pre-check; conditional offline write; 409 on a lost write | Close the claim/offline race |
-| `backend/tests/test_go_offline_claim_race.py` | 6 tests: conditional filter, lost-write 409 with no period write, re-assert filter, in-flight 409, orphan stamp, stale stamp on an available driver | Regression |
+| `backend/tests/test_go_offline_claim_race.py` | 6 tests: conditional filter, lost-write 409 with no period write, re-assert filter, in-flight 409, orphan stamp with plain filter, stale stamp on an available driver | Regression |
 
 ## 7. Before / after
 
@@ -72,12 +73,13 @@ The row-level compare-and-set reuses the claim's own guard column and needs no s
 await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
 
 # After: online -> offline only if the claim column is unchanged
+_claim_guard = status_flipped and not is_online and driver.get("is_available") is True
 _write_filters = {"id": driver_id}
-if _offline_flip:
-    _write_filters["is_available"] = driver.get("is_available")
+if _claim_guard:
+    _write_filters["is_available"] = True
 await db_supabase.update_one("drivers", _write_filters, _payload)
 ...
-if _offline_flip and verify.get("is_online") and verify.get("is_available") != driver.get("is_available"):
+if _claim_guard and verify.get("is_online") and verify.get("is_available") is not True:
     raise HTTPException(409, "A ride offer just arrived. …")
 ```
 

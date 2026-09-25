@@ -1206,15 +1206,16 @@ async def update_driver_status(
             # (it retries with _base only) and the offline flip still lands.
             _intent_payload.update(_DESTINATION_MODE_CLEARED)
     _payload = {**_base, **_intent_payload}
-    # Online -> offline: write only if is_available is still what the checks
-    # above saw. A dispatch claim in between (claim_driver_atomic flips it
+    # Online -> offline from an available driver: write only if is_available
+    # is still true. A dispatch claim in between (claim_driver_atomic flips it
     # true -> false) makes this match zero rows, and the verify below returns
-    # 409 instead of taking an obligated driver offline. A None filter is
-    # IS NULL, so a legacy null row still matches itself.
-    _offline_flip = status_flipped and not is_online
+    # 409 instead of taking an obligated driver offline. Only this direction
+    # is a claim; a driver already unavailable can only be released, which
+    # must not look like an offer arriving, so it keeps the plain filter.
+    _claim_guard = status_flipped and not is_online and driver.get("is_available") is True
     _write_filters = {"id": driver_id}
-    if _offline_flip:
-        _write_filters["is_available"] = driver.get("is_available")
+    if _claim_guard:
+        _write_filters["is_available"] = True
     try:
         await db_supabase.update_one("drivers", _write_filters, _payload)
     except Exception as _col_exc:
@@ -1277,10 +1278,10 @@ async def update_driver_status(
     if verify is None:
         logger.error(f"[go-online] driver row disappeared immediately after update: driver_id={driver_id}")
         raise HTTPException(status_code=500, detail="Driver row missing after status update.")
-    if _offline_flip and verify.get("is_online") and verify.get("is_available") != driver.get("is_available"):
-        # The conditional write lost to a concurrent availability change —
-        # almost always a dispatch claim. Not the silent no-op below: the
-        # driver may now hold an offer, so they stay online and decide.
+    if _claim_guard and verify.get("is_online") and verify.get("is_available") is not True:
+        # The conditional write lost to a dispatch claim. Not the silent no-op
+        # below: the driver may now hold an offer, so they stay online and
+        # decide.
         logger.info(f"[go-offline] availability changed during go-offline; staying online driver_id={driver_id}")
         raise HTTPException(
             status_code=409,

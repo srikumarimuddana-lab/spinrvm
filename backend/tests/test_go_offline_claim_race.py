@@ -146,11 +146,14 @@ class TestClaimInFlight:
 
     @pytest.mark.anyio
     async def test_old_unreleased_claim_is_an_orphan_and_does_not_block(self):
+        # Plain filter: from is_available=false the only possible change is a
+        # release (reaper, decline, timeout), which must not read as an offer
+        # arriving (spinr-dispatch-reviewer finding on the first version).
         pre = _driver(is_online=True, is_available=False, claimed_seconds_ago=status_mod.CLAIM_IN_FLIGHT_SECONDS + 60)
         _, error, update_one, _ = await _run(pre, _driver(is_online=False, is_available=False))
 
         assert error is None
-        assert update_one.await_args_list[0].args[1] == {"id": DRIVER_ID, "is_available": False}
+        assert update_one.await_args_list[0].args[1] == {"id": DRIVER_ID}
 
     @pytest.mark.anyio
     async def test_available_driver_with_a_stale_stamp_is_not_in_flight(self):

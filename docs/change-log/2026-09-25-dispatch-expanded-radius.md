@@ -120,6 +120,7 @@ variable.
 
 | File path | What changed | Why |
 |---|---|---|
+| `backend/migrations/469_settings_dispatch_expanded_radius.sql` | New `settings` columns `dispatch_expanded_radius_enabled` (default false), `_after_seconds` (45), `_multiplier` (1.5), `_max_km` (20), with CHECK bounds. Added in `e231a0a`; admin fields in `backend/routes/admin/settings.py`. | Flag and tuning for the wider pass |
 | `backend/routes/rides/matching.py` | In `_match_driver_to_ride_attempt`, compute the effective radius right after `resolve_matching_config` (behind the flag), then log and count the expansion. | Phase 4 wider second pass |
 | `backend/tests/test_dispatch_expanded_radius.py` | New. Covers flag off (columns absent, and false with aggressive values), before and after the delay, `after_seconds=0`, cap at `max_km`, never below normal, missing timestamp, and scheduled-ride timing. Each test checks that all six consumers, cascade included, got the same radius. | Regression coverage |
 | `docs/change-log/2026-09-25-dispatch-expanded-radius.md` | This file | CLAUDE.md gate |

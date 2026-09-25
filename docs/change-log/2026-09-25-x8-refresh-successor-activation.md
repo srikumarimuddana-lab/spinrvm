@@ -25,7 +25,7 @@
 ## 3. Fix / remediation
 
 Server, only when `refresh_successor_commitment_enabled` is on and the body carries a valid proposal:
-- **Proposal becomes the successor only on a cookie-less request.** On `no_match`, the proposal becomes the successor's secret only when the request carried no `refresh_token` cookie. The party that presented the parent is then the party receiving the response, so choosing the successor grants nothing new.
+- **Proposal becomes the successor only on a native-app request** (`_is_native_refresh_request`): no `refresh_token` cookie, no `Origin` or `Referer`, `Sec-Fetch-Site` absent or `none`, and `Content-Type: application/json`. On `no_match` the proposal then becomes the successor's secret. The party that presented the parent is the party receiving the response, so choosing the successor grants nothing new. Cookie absence alone is not enough: the refresh cookies are SameSite=Strict, so a signed-in victim's browser omits them on a cross-site forged POST. Browsers always send `Origin` on a POST, and a cross-site form cannot send JSON.
 - **A cookie is never overridden.** Any request with a cookie keeps today's cookie-first parent and a server-random successor. That keeps the 2026-09-24 attack closed and blocks the session-fixation variant found in review (see §9).
 
 Client:
@@ -118,11 +118,13 @@ if not parent_from_body:   # a request with a cookie never chooses its successor
 - [ ] No device or staging test. The "native stacks re-send the refresh cookie" claim is reasoned from React Native's networking defaults, not observed.
 - [x] Blast-radius grep for every `/auth/refresh` caller: shared auth store, driver background auth, and a rider `utils/apiClient.ts` cookie-only call that is unchanged.
 - [x] `spinr-security-auditor` on the first version: **blocker found and fixed.** That version preferred a body token over a present cookie. A forged browser request (XSS, or a cross-site `text/plain` form, since `/auth/refresh` checks no CSRF token) could then carry the attacker's own refresh token plus a proposal. The attacker's session and chosen successor would be set as cookies in the victim's browser (session fixation). Fixed: the proposal is only committed on a request with no refresh cookie, and a cookie is never overridden. `test_cookie_is_never_overridden_by_a_forged_body_token` pins it. The client helper, RNG and storage were reviewed as sound.
+- [x] Re-review of that fix: **second blocker found and fixed.** Cookie absence is what a cross-site forged POST from a signed-in victim looks like (SameSite=Strict withholds the cookie), so it still reached the commit path. The commit now also requires no `Origin`/`Referer`, a `Sec-Fetch-Site` of none or absent, and a JSON `Content-Type`. `test_browser_request_without_cookie_never_uses_the_proposal` covers each signal, and a stdlib harness checked the helper against 10 header combinations.
 
 ## 10. What was NOT verified
 
-- Real-device confirmation that iOS and Android re-send the `refresh_token` cookie.
+- Real-device confirmation that iOS and Android re-send the `refresh_token` cookie, and that `credentials: 'omit'` suppresses it.
+- Real-device confirmation that native `fetch` sends no `Origin`, `Referer` or `Sec-Fetch-Site`. If it does, the server fails safe: it never commits the proposal, and renewals behave as today.
 - The rider build with `expo-crypto`. The lockfile entry was added by hand from the driver app's identical resolution, because yarn cannot run here. CI's `--frozen-lockfile` install is the check.
 - Whether jest-expo's automatic `expo-crypto` mock returns bytes. If it does, three exact-body assertions will need `objectContaining`.
 - The X8 audit gate in the 2026-09-24 security note still applies before the flag is enabled.
-- **Pre-existing, not introduced here:** a cookie-less browser (signed out) can already be logged into an attacker's account by a cross-site form posting the attacker's refresh token in the body (login CSRF). That happens because `/auth/refresh` accepts a body token when no cookie is present and checks no CSRF token. X8 adds nothing to it (the attacker already owns that account), but it should get its own fix, e.g. require a JSON `Content-Type` or a custom header on `/auth/refresh`.
+- **Pre-existing, not introduced here, needs its own fix:** `/auth/refresh` falls back to a body refresh token whenever no cookie arrives and checks no CSRF token. A cross-site form (SameSite=Strict withholds the victim's cookie even when they are signed in) can therefore post the attacker's own refresh token and plant the attacker's session cookies in the victim's browser (login CSRF / session fixation), with a server-random successor. X8 adds nothing to it. Changing that fallback could affect a web build served from a different site than the API, so it is left for a decision. Candidate fix: apply the same native-request check (or require JSON) before using a body token.

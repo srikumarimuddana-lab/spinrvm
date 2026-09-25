@@ -17,8 +17,10 @@ USER = {"id": "u1", "phone": "+13065550100", "token_version": 2, "current_sessio
 pytestmark = pytest.mark.asyncio
 
 
-def _request(cookie: str | None = None) -> StarletteRequest:
-    headers = [(b"user-agent", b"DriverApp/1.0")]
+def _request(cookie: str | None = None, extra_headers: dict[str, str] | None = None) -> StarletteRequest:
+    # What the native apps send: JSON, no Origin/Referer/Sec-Fetch-* headers.
+    merged = {"user-agent": "DriverApp/1.0", "content-type": "application/json", **(extra_headers or {})}
+    headers = [(k.encode(), v.encode()) for k, v in merged.items() if v is not None]
     if cookie is not None:
         headers.append((b"cookie", f"refresh_token={cookie}".encode()))
     return StarletteRequest(
@@ -59,10 +61,10 @@ def _patches(auth, *, flag=True, verdict=("no_match", None), settings_exc=None):
     }
 
 
-async def _call(auth, patches, body, cookie=None):
+async def _call(auth, patches, body, cookie=None, headers=None):
     started = {name: p.start() for name, p in patches.items()}
     try:
-        result = await auth.refresh_access_token(request=_request(cookie), response=MagicMock(), body=body)
+        result = await auth.refresh_access_token(request=_request(cookie, headers), response=MagicMock(), body=body)
     finally:
         for p in patches.values():
             p.stop()
@@ -132,6 +134,27 @@ async def test_cookie_is_never_overridden_by_a_forged_body_token():
     _result, m = await _call(auth, _patches(auth), _body(refresh_token="attacker-own-token"), cookie="victim-cookie")
     m["classify"].assert_awaited_once_with("victim-cookie", PROPOSED)
     m["lookup"].assert_awaited_once_with("victim-cookie")
+    assert "raw" not in m["issue"].await_args.kwargs
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"origin": "https://attacker.example"},
+        {"origin": "null"},
+        {"referer": "https://attacker.example/page"},
+        {"sec-fetch-site": "cross-site"},
+        {"content-type": "text/plain"},
+    ],
+    ids=["origin", "null-origin", "referer", "sec-fetch-site", "text-plain"],
+)
+async def test_browser_request_without_cookie_never_uses_the_proposal(headers):
+    """A signed-in victim's browser omits the SameSite=Strict refresh cookie on
+    a cross-site forged POST, so a missing cookie does not mean a native app.
+    Any browser signal keeps the successor server-random."""
+    from backend.routes import auth
+
+    _result, m = await _call(auth, _patches(auth), _body(), headers=headers)
     assert "raw" not in m["issue"].await_args.kwargs
 
 

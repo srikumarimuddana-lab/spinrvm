@@ -7,7 +7,6 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
-import { MAX_FONT_SCALE } from '@shared/utils/responsive';
 import {
   GLOW_DP,
   GLOW_SETTLED_OPACITY,
@@ -383,9 +382,12 @@ export default function BrandSplash({
           style={[styles.mark, markStyle]}
         />
 
+        {/* font-scale-lock: decorative splash shown for about two seconds.
+            The tagline and provenance use a fixed lineHeight tuned to stop
+            descender clipping; a scaled font would reintroduce it. */}
         <Animated.Text
           testID="brand-splash-tagline"
-          maxFontSizeMultiplier={MAX_FONT_SCALE}
+          allowFontScaling={false}
           style={[
             styles.tagline,
             { opacity: taglineOpacity, transform: [{ translateY: taglineY }] },
@@ -394,9 +396,10 @@ export default function BrandSplash({
           {SPLASH_TAGLINE}
         </Animated.Text>
 
+        {/* font-scale-lock: see the tagline above. */}
         <Animated.Text
           testID="brand-splash-provenance"
-          maxFontSizeMultiplier={MAX_FONT_SCALE}
+          allowFontScaling={false}
           style={[
             styles.provenance,
             { opacity: provenanceOpacity, transform: [{ translateY: provenanceY }] },

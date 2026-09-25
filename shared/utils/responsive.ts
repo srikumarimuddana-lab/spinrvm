@@ -52,7 +52,9 @@ export const MIN_TOUCH = 44;
 // (fare lines, pills, stat blocks). Use `maxFontSizeMultiplier={MAX_FONT_SCALE}`
 // instead of `allowFontScaling={false}`, which ignores the setting entirely
 // (WCAG 2.1 SC 1.4.4). Separate from `createScaledFont` below, which scales by
-// screen width, not by the user's preference.
+// screen width, not by the user's preference. 1.5x is a deliberate cap
+// (UX program decision D1), not WCAG's full 200% resize: it trades some
+// headroom for layouts that hold. Raise it only with a device check.
 export const MAX_FONT_SCALE = 1.5;
 
 // ── Dynamic font scaling ─────────────────────────────────────────────────────

@@ -147,3 +147,14 @@ daily_data[date_str]["tips"] += _d(r.get("tip_amount") or 0)
   2. `routes/rides/receipts.py:103-107`: the raw-float fallback `receipt_grand_total`.
   3. SR-03 still only matches `float(...)`. It cannot see raw `sum()`, `+=` or `round()` over DB floats (the shapes of MONEY-001 and MONEY-006), so these fixes are guarded by the new tests, not by the rule.
 - The `spinr-money-auditor` agent itself was not run. The review was a self-review against its checklist.
+
+## Addendum: money-auditor pass
+
+`spinr-money-auditor` verdict: **safe to merge, 0 blockers.** It confirmed that `grand_total` is byte-identical (500,000 random triples, 0 differences), that the corporate `rides.grand_total` write is unaffected, that `_f` is a plain `float()`, and that there is no risk of a Decimal/float `TypeError`. Its follow-ups were fixed in commit "Decimal on the driver_daily_stats tip path":
+
+- **Primary weekly/monthly path.** Whenever `driver_daily_stats` has rows, weekly and monthly earnings come from that table, and its earnings and tips were still summed as raw floats. They now use Decimal and are cast to float at the response. Two new tests fail on the old code and pass on the new. **MONEY-001 is now closed on both paths.**
+- **Fee reads.** The `airport_fee` read and the `/area-config` fee echo are converted instead of exempted with `nosemgrep`. Output values are unchanged; 4 `nosemgrep` markers remain (GPS and three tax *rates*).
+
+**Still open, as a separate follow-up:** `routes/rides/receipts.py:103-107` adds raw floats in its receipt-total fallback.
+
+**Verification:** 276 passed across float-money, earnings coverage and snapshot, features, fares, fees tax and drivers-extended. Semgrep found 0 findings on the changed files, and `ruff` is clean.

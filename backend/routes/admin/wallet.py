@@ -69,7 +69,7 @@ class AdminCreditRequest(BaseModel):
 
 class AdminDebitRequest(BaseModel):
     user_id: str
-    amount: float = Field(..., gt=0, le=10_000)
+    amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("10000"))
     reason: str = Field(..., min_length=3, max_length=200)
     idempotency_key: str | None = Field(
         None,

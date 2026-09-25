@@ -67,7 +67,7 @@ const PROMPT = {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useNoDriversStore.setState({ prompt: null, _shownRideId: null, _openScheduleOnArrival: false });
+  useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null, _openScheduleOnArrival: false });
 });
 
 function raise() {

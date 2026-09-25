@@ -149,6 +149,10 @@ single-surface. No ride state transition, no DB write, no money path changed.
 
 | File path | What changed | Why |
 |---|---|---|
+| `backend/migrations/470_settings_rider_no_drivers_sheet.sql` | New `settings.rider_no_drivers_sheet_enabled BOOLEAN NOT NULL DEFAULT FALSE` | Rollout switch |
+| `backend/routes/settings.py` | `GET /settings` returns `rider_no_drivers_sheet_enabled` | App reads the switch |
+| `backend/routes/admin/settings.py` | `rider_no_drivers_sheet_enabled` field (+ drift-test snapshot) | Admin can flip it |
+| `backend/tests/test_public_settings_no_drivers_sheet.py` | New | Public key, default off |
 | `backend/routes/rides/matching.py` | `cancellation_type` on rider WS, status broadcast and push data in `ride_search_timeout` (payload section only) | App needs a machine-readable cause |
 | `backend/utils/stuck_ride_sweeper.py` | `cancellation_type` on WS and push data (payload section only) | Same payload as the timer, by design |
 | `backend/tests/test_no_drivers_cancel_payload.py` | New | Pins both senders |
@@ -157,8 +161,8 @@ single-surface. No ride state transition, no DB write, no money path changed.
 | `rider-app/store/rideStore.ts` | `Ride.cancellation_type?` type field only | Typed access to a field the API already returns |
 | `rider-app/components/NoDriversSheetHost.tsx` (+test) | New root host using `ConfirmSheet` | The sheet |
 | `rider-app/i18n/en-CA.json`, `fr-CA.json` | `ride.no_drivers_*` | Copy |
-| `rider-app/hooks/useRiderSocket.ts` (+ new test) | `ride_cancelled` no-drivers branch, `driver_timeout` toast removed, `ride_status_changed` extra | Raise path + calm searching |
-| `rider-app/app/_layout.tsx` | Mount host; push-tap and foreground-resume raise paths | Raise paths |
+| `rider-app/hooks/useRiderSocket.ts` (+ new test) | `ride_cancelled` no-drivers branch, `driver_timeout` toast skipped only while the switch is on, `ride_status_changed` extra | Raise path + calm searching |
+| `rider-app/app/_layout.tsx` | Mount host; push-tap and foreground-resume raise paths; read `rider_no_drivers_sheet_enabled` from `GET /settings` | Raise paths + switch |
 | `rider-app/app/driver-arriving.tsx` (+test cases) | Status effect raises the prompt for `no_drivers_found` | Poll / status-event raise path |
 | `rider-app/app/ride-options.tsx` | Mount-only effect opens `SchedulePicker` when requested | Schedule for later |
 
@@ -204,14 +208,16 @@ booking; booking creates a new ride and a new card hold.
 
 - **Backend**: nothing to roll back in data. The new key is ignored by older
   clients; removing it is a code revert with no data remediation.
-- **Rider app**: there is **no runtime flag**. The task scope excluded
-  `settings`/migrations, so the existing `app_settings` → `GET /settings`
-  flag pattern (e.g. `RidelessSosEnabledContext`) could not be used. Rollback
-  is republishing the previous JS bundle via EAS Update (`eas update:rollback`
-  or re-publishing the prior update to the channel) — an OTA publish, not a
-  store build, but it is still a deploy. **This departs from CLAUDE.md
-  pre-merge gate 3 (feature-flag user-visible, non-trivial UX); a human should
-  decide whether to add an `app_settings` flag before merging.**
+- **Rider app**: runtime switch `settings.rider_no_drivers_sheet_enabled`
+  (migration 470, default **false**), served by `GET /settings` and read in
+  `app/_layout.tsx` into `useNoDriversStore.enabled`. Off:
+  `offerNoDriversPrompt` and `raiseNoDriversPromptAfterResume` return false
+  before doing anything (no sheet, no resume `GET /rides/{id}`), the
+  `ride_cancelled` path shows today's toast, and the per-round
+  `driver_timeout` toast is shown again — the app behaves as before this
+  change. Rollback: `UPDATE settings SET rider_no_drivers_sheet_enabled = false;`
+  (60 s settings cache; the app picks it up on its next launch / settings
+  fetch). A rider already looking at the sheet keeps it until dismissed.
 - No ride state, Stripe or wallet data is written by this change, so no data
   remediation is needed in either direction.
 
@@ -237,7 +243,7 @@ booking; booking creates a new ride and a new card hold.
 - [x] Reviewed against CLAUDE.md: state machine (no transition added), money
   (no new money path; fresh quote before booking; surge shown before booking),
   PIPEDA (no new logging of addresses/coords), observability (no new logs).
-- [ ] Feature flag: not added — see §8.
+- [x] Feature flag: `rider_no_drivers_sheet_enabled`, default off — see §8. Jest cases for the off state added in `noDriversStore.test.ts` and `useRiderSocket.noDrivers.test.ts`; `test_public_settings_no_drivers_sheet.py` covers the public key.
 - [ ] `spinr-*` reviewer agents (dispatch, accessibility, design-consistency)
   were **not run**; no agent-dispatch tool was available in this session.
 

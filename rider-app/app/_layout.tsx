@@ -20,7 +20,7 @@ import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
 import { isNoDriversCancellation } from '../utils/noDriversSignal';
-import { offerNoDriversPrompt, raiseNoDriversPromptAfterResume } from '../store/noDriversStore';
+import { offerNoDriversPrompt, raiseNoDriversPromptAfterResume, useNoDriversStore } from '../store/noDriversStore';
 import { NoDriversSheetHost } from '../components/NoDriversSheetHost';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
@@ -409,6 +409,7 @@ function RootLayout() {
           posthog_api_key?: string;
           posthog_host?: string;
           min_tip_amount?: string;
+          rider_no_drivers_sheet_enabled?: boolean;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -416,6 +417,7 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        useNoDriversStore.getState().setEnabled(res.data?.rider_no_drivers_sheet_enabled === true);
         const minTip = Number(res.data?.min_tip_amount);
         if (Number.isFinite(minTip) && minTip >= 0) setMinTipAmount(minTip);
         const posthogFactory = tryCreateNativePostHogClient();

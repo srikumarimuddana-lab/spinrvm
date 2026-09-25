@@ -373,7 +373,7 @@ describe('DriverArrivingScreen', () => {
   // Phase 3 (2026-09-25): a no-match auto-cancel learned from the poll raises
   // the "No drivers available" sheet; any other cancel still does not.
   it('raises the no-drivers prompt when the ride on screen was auto-cancelled for no drivers', async () => {
-    useNoDriversStore.setState({ prompt: null, _shownRideId: null });
+    useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null });
     const searching = { ...RIDE_WITH_DRIVER, status: 'searching', driver_accepted_at: null };
     mockRideState.currentRide = searching;
     await renderScreen();
@@ -395,7 +395,7 @@ describe('DriverArrivingScreen', () => {
   });
 
   it('does not raise the no-drivers prompt for a rider cancel', async () => {
-    useNoDriversStore.setState({ prompt: null, _shownRideId: null });
+    useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null });
     mockRideState.currentRide = RIDE_WITH_DRIVER;
     await renderScreen();
     await act(async () => {

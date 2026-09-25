@@ -62,7 +62,7 @@ const prompt: NoDriversPrompt = {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useNoDriversStore.setState({ prompt: null, _shownRideId: null, _openScheduleOnArrival: false });
+  useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null, _openScheduleOnArrival: false });
   useRideStore.setState({
     currentRide: null,
     _clearedRideId: null,
@@ -93,6 +93,12 @@ describe('offerNoDriversPrompt', () => {
     useNoDriversStore.getState().dismiss();
     offerNoDriversPrompt(ride('ride-2'));
     expect(useNoDriversStore.getState().prompt?.rideId).toBe('ride-2');
+  });
+
+  it('returns false and raises nothing with the sheet switched off', () => {
+    useNoDriversStore.setState({ enabled: false });
+    expect(offerNoDriversPrompt(ride())).toBe(false);
+    expect(useNoDriversStore.getState().prompt).toBeNull();
   });
 
   it('refuses a ride without coordinates', () => {
@@ -154,6 +160,16 @@ describe('prepareRebookDraft', () => {
 
 describe('raiseNoDriversPromptAfterResume', () => {
   const searching = { ...ride(), status: 'searching', cancellation_type: null };
+
+  it('does nothing, and makes no request, with the sheet switched off', async () => {
+    useNoDriversStore.setState({ enabled: false });
+    useRideStore.setState({ currentRide: searching } as any);
+
+    await expect(raiseNoDriversPromptAfterResume(searching)).resolves.toBe(false);
+
+    expect(mockApi.get).not.toHaveBeenCalled();
+    expect(useNoDriversStore.getState().prompt).toBeNull();
+  });
 
   it('raises the prompt and retires the ride when it ended for no drivers', async () => {
     useRideStore.setState({ currentRide: searching } as any);

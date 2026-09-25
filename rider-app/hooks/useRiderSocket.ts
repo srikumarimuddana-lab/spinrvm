@@ -9,7 +9,7 @@ import { API_URL } from '@shared/config';
 import { RideStatus } from '../constants/rideStatus';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
 import { isNoDriversCancellation, NO_DRIVERS_FOUND } from '../utils/noDriversSignal';
-import { offerNoDriversPrompt } from '../store/noDriversStore';
+import { offerNoDriversPrompt, useNoDriversStore } from '../store/noDriversStore';
 import { queryClient, queryKeys } from '@shared/api/queryClient';
 
 /**
@@ -181,11 +181,19 @@ export function useRiderSocket() {
       }
 
       // Driver didn't respond in time — backend is re-dispatching.
-      // No toast: in batch dispatch this fires every ~15 s (one per offer
-      // round) and read as a failure, while the searching screen already
-      // shows the steady "Looking for a driver" state. Just refetch so the
-      // UI settles back on "searching".
+      // With the no-drivers sheet on, no toast: in batch dispatch this fires
+      // every ~15 s (one per offer round) and read as a failure, while the
+      // searching screen already shows the steady "Looking for a driver"
+      // state. Switched off, keep the original toast (R-P1-16). Either way
+      // refetch so the UI settles back on "searching".
       case 'driver_timeout':
+        if (!useNoDriversStore.getState().enabled) {
+          showToast(
+            'Driver Unavailable',
+            'The driver did not respond in time. Finding another driver\u2026',
+            'info',
+          );
+        }
         if (rideId) fetchRide(rideId);
         break;
 

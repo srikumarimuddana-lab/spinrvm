@@ -93,7 +93,7 @@ const mockApply = jest.fn();
 beforeEach(() => {
   instances.length = 0;
   jest.clearAllMocks();
-  useNoDriversStore.setState({ prompt: null, _shownRideId: null });
+  useNoDriversStore.setState({ enabled: true, prompt: null, _shownRideId: null });
   state = {
     currentRide: RIDE_NEW,
     _clearedRideId: null,
@@ -173,6 +173,32 @@ describe('useRiderSocket — no-drivers ending', () => {
     await connectAndSend({ type: 'driver_timeout', ride_id: 'ride-new', message: "Driver didn't respond." });
     expect(showToast).not.toHaveBeenCalled();
     expect(mockFetchRide).toHaveBeenCalledWith('ride-new');
+  });
+
+  describe('with the sheet switched off (rider_no_drivers_sheet_enabled false)', () => {
+    beforeEach(() => useNoDriversStore.setState({ enabled: false }));
+
+    it('keeps the original toast and raises no prompt for a no-drivers cancel', async () => {
+      await connectAndSend({
+        type: 'ride_cancelled',
+        ride_id: 'ride-new',
+        reason: 'auto_cancelled',
+        cancellation_type: 'no_drivers_found',
+      });
+      expect(useNoDriversStore.getState().prompt).toBeNull();
+      expect(showToast).toHaveBeenCalledWith('Ride Cancelled', 'No drivers were available. Please try again.', 'warning');
+      expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)');
+    });
+
+    it('driver_timeout keeps its original toast', async () => {
+      await connectAndSend({ type: 'driver_timeout', ride_id: 'ride-new', message: "Driver didn't respond." });
+      expect(showToast).toHaveBeenCalledWith(
+        'Driver Unavailable',
+        'The driver did not respond in time. Finding another driver\u2026',
+        'info',
+      );
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-new');
+    });
   });
 
   it('ride_status_changed(cancelled, no_drivers_found) carries the cause onto the ride', async () => {

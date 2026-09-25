@@ -157,6 +157,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "ride_offer_timeout_seconds",
         "ride_search_timeout_seconds",
         "rideless_sos_enabled",
+        "rider_no_drivers_sheet_enabled",
         "rider_show_pickup_leg_enabled",
         "route_booked_dropoff_anchor_enabled",
         "route_finalize_grace_seconds",

@@ -566,6 +566,8 @@ class SettingsUpdateRequest(BaseModel):
     location_marker_write_gate_enabled: Optional[bool] = None
     p2_route_geometry_enabled: Optional[bool] = None
     rider_show_pickup_leg_enabled: Optional[bool] = None
+    # Migration 470 — rider-app "No drivers available right now" sheet. Public via GET /settings.
+    rider_no_drivers_sheet_enabled: Optional[bool] = None
     location_health_push_nudge_enabled: Optional[bool] = None
     stale_p3_autoclose_enabled: Optional[bool] = None
     route_booked_dropoff_anchor_enabled: Optional[bool] = None

@@ -30,6 +30,13 @@ export interface NoDriversPrompt {
 }
 
 interface NoDriversState {
+  /**
+   * settings.rider_no_drivers_sheet_enabled (GET /settings, set in
+   * app/_layout.tsx). Off by default: no sheet, no resume lookup, and the
+   * existing toasts, exactly as before this sheet existed.
+   */
+  enabled: boolean;
+  setEnabled: (enabled: boolean) => void;
   prompt: NoDriversPrompt | null;
   /**
    * The last ride a prompt was raised for. The WS message, the push and the
@@ -47,6 +54,8 @@ interface NoDriversState {
 }
 
 export const useNoDriversStore = create<NoDriversState>((set, get) => ({
+  enabled: false,
+  setEnabled: (enabled) => set({ enabled }),
   prompt: null,
   _shownRideId: null,
   _openScheduleOnArrival: false,
@@ -77,10 +86,12 @@ const isCoord = (v: unknown): v is number => typeof v === 'number' && Number.isF
 
 /**
  * Raise the prompt from a snapshot of the cancelled ride. Call it BEFORE
- * clearRide(), which drops the ride. Returns false when the ride lacks the
- * addresses Try again needs, so the caller keeps today's toast instead.
+ * clearRide(), which drops the ride. Returns false when the sheet is switched
+ * off or the ride lacks the addresses Try again needs, so the caller keeps
+ * today's toast instead.
  */
 export function offerNoDriversPrompt(ride: RideAddresses | null | undefined): boolean {
+  if (!useNoDriversStore.getState().enabled) return false;
   if (!ride?.id) return false;
   if (!isCoord(ride.pickup_lat) || !isCoord(ride.pickup_lng)) return false;
   if (!isCoord(ride.dropoff_lat) || !isCoord(ride.dropoff_lng)) return false;
@@ -103,6 +114,7 @@ export function offerNoDriversPrompt(ride: RideAddresses | null | undefined): bo
 export async function raiseNoDriversPromptAfterResume(
   rideBefore: { id?: string; status?: string } | null | undefined,
 ): Promise<boolean> {
+  if (!useNoDriversStore.getState().enabled) return false;
   if (!rideBefore?.id) return false;
   if (rideBefore.status !== 'searching' && rideBefore.status !== 'driver_assigned') return false;
   // A newer ride replaced it meanwhile — not the ride on screen any more.

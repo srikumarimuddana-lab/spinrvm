@@ -24,9 +24,9 @@ function renderHead(sort: SortState, onSort = vi.fn()) {
 }
 
 describe("SortableHead aria-sort", () => {
-    it('is "none" when the column is not the active sort', () => {
+    it("is omitted when the column is not the active sort", () => {
         const { th } = renderHead({ key: "amount", dir: "asc" });
-        expect(th).toHaveAttribute("aria-sort", "none");
+        expect(th).not.toHaveAttribute("aria-sort");
     });
 
     it('is "ascending" for the active column sorted ascending', () => {

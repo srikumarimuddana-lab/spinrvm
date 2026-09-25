@@ -12,10 +12,15 @@
 const mockSupported = jest.fn<boolean, []>(() => true);
 const mockStart = jest.fn<Promise<string>, [number, number]>(() => Promise.resolve('playing'));
 const mockStop = jest.fn();
+const mockToneEnded: { listener: ((reason: string) => void) | null } = { listener: null };
 jest.mock('../../../modules/ride-offer-tone', () => ({
   isRideOfferToneSupported: () => mockSupported(),
   startRideOfferTone: (maxMs: number, gapMs: number) => mockStart(maxMs, gapMs),
   stopRideOfferTone: () => mockStop(),
+  subscribeRideOfferToneEnded: (l: (reason: string) => void) => {
+    mockToneEnded.listener = l;
+    return () => {};
+  },
 }));
 
 const mockSetCountdown = jest.fn();
@@ -331,6 +336,7 @@ describe('hand back to the phone', () => {
     makeOwner();
     offerLive(offer('r1'));
     await flush();
+    mockDisplay.mockClear(); // the silent re-post when the car took the ring
 
     ring.setCarConnected(false);
 
@@ -344,6 +350,7 @@ describe('hand back to the phone', () => {
     makeOwner();
     offerLive(offer('r1'));
     await flush();
+    mockDisplay.mockClear();
     mockPrefs.soundEffects = false;
     ring.setCarConnected(false);
     expect(mockDisplay.mock.calls[0][1]).toEqual({ reclaim: true, muted: true });
@@ -437,9 +444,85 @@ describe('hand back to the phone', () => {
     makeOwner();
     offerLive(offer('r1'));
     await flush();
+    mockDisplay.mockClear();
     ring.setCarOfferToneEnabled(false);
     expect(handler).not.toHaveBeenCalled();
     expect(mockDisplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('a tone that ends on permanent focus loss hands the ring back to the phone', async () => {
+    const handler = jest.fn();
+    ring.registerPhoneRingHandler(handler);
+    makeOwner();
+    const o = offer('r1');
+    offerLive(o);
+    await flush();
+    expect(ring.isCarRingOwner()).toBe(true);
+
+    mockToneEnded.listener?.('focus_loss');
+
+    expect(ring.isCarRingOwner()).toBe(false);
+    expect(handler).toHaveBeenCalledWith(o);
+    expect(mockRecordNonFatal).not.toHaveBeenCalled(); // the driver's choice, not a fault
+  });
+
+  it('a tone ending on a playback error hands back and is reported', async () => {
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    mockDisplay.mockClear();
+    mockToneEnded.listener?.('error');
+    expect(mockDisplay).toHaveBeenCalledWith(expect.objectContaining({ ride_id: 'r1' }), {
+      reclaim: true,
+      muted: false,
+    });
+    expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a tone-ended event when no car tone is playing for the live offer', async () => {
+    const handler = jest.fn();
+    ring.registerPhoneRingHandler(handler);
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    offerEnds();
+    mockToneEnded.listener?.('focus_loss');
+    let resolveStart: (r: string) => void = () => {};
+    mockStart.mockImplementation(() => new Promise((r) => { resolveStart = r; }));
+    offerLive(offer('r2')); // start still in flight: an event from the old tone
+    mockToneEnded.listener?.('focus_loss');
+    resolveStart('playing');
+    await flush();
+    expect(handler).not.toHaveBeenCalled();
+    expect(ring.isCarRingOwner()).toBe(true);
+  });
+
+  it('silences the phone card once the car tone plays with no phone UI mounted', async () => {
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    expect(mockDisplay).toHaveBeenCalledWith(expect.objectContaining({ ride_id: 'r1' }), { silent: true });
+  });
+
+  it('a reconnect mid-offer on a car-only launch re-mutes the reclaimed card', async () => {
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    ring.setCarConnected(false); // reclaim: loud card
+    mockDisplay.mockClear();
+    ring.setCarConnected(true);
+    offerLive(offer('r1'));
+    await flush();
+    expect(mockDisplay).toHaveBeenCalledTimes(1);
+    expect(mockDisplay.mock.calls[0][1]).toEqual({ silent: true });
+  });
+
+  it('leaves the card to the dashboard when a phone UI is mounted', async () => {
+    ring.registerPhoneRingHandler(jest.fn());
+    makeOwner();
+    offerLive(offer('r1'));
+    await flush();
+    expect(mockDisplay).not.toHaveBeenCalled();
   });
 
   it('flag switched ON mid-offer: the car takes the ring for the live offer', async () => {

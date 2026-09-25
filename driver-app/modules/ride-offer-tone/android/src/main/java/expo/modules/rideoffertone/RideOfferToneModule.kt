@@ -30,7 +30,10 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * - waits up to 3 s for an in-flight navigation prompt or voice call stream
  *   before the first play, so it never cuts off a turn instruction;
  * - loops with a gap until maxMs, then stops on its own;
- * - pauses on a transient focus loss (a nav prompt) and resumes on regain.
+ * - pauses on a transient focus loss (a nav prompt) and resumes on regain;
+ * - emits onToneEnded when a tone that already resolved start() as playing
+ *   stops for any reason other than stop() or its own maxMs, so JS can hand
+ *   the ring back to the phone instead of believing the car still rings.
  *
  * All state lives on the main looper; the exported functions only post to it.
  */
@@ -56,6 +59,8 @@ class RideOfferToneModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("RideOfferTone")
+
+    Events(TONE_ENDED_EVENT)
 
     Function("isSupported") {
       isSupported()
@@ -204,7 +209,7 @@ class RideOfferToneModule : Module() {
         player?.start()
       } catch (e: Exception) {
         Log.e(TAG, "replay failed", e)
-        stopOnMain()
+        endAbnormally("error")
       }
     }
   }
@@ -225,11 +230,27 @@ class RideOfferToneModule : Module() {
             mp.start()
           }
         }
-        AudioManager.AUDIOFOCUS_LOSS -> stopOnMain()
+        AudioManager.AUDIOFOCUS_LOSS -> endAbnormally("focus_loss")
       }
     } catch (e: Exception) {
       Log.e(TAG, "focus change $change handling failed", e)
-      stopOnMain()
+      endAbnormally("error")
+    }
+  }
+
+  /**
+   * Stop, and tell JS if the tone had already been reported as playing. A stop
+   * before start() resolved needs no event: resolvePending("cancelled") inside
+   * stopOnMain() already answers that call.
+   */
+  private fun endAbnormally(reason: String) {
+    val wasPlaying = pendingStart == null && player != null
+    stopOnMain()
+    if (!wasPlaying) return
+    try {
+      sendEvent(TONE_ENDED_EVENT, mapOf("reason" to reason))
+    } catch (e: Exception) {
+      Log.e(TAG, "onToneEnded send failed", e)
     }
   }
 
@@ -268,6 +289,7 @@ class RideOfferToneModule : Module() {
 
   companion object {
     private const val TAG = "RideOfferTone"
+    private const val TONE_ENDED_EVENT = "onToneEnded"
     private const val MIN_MAX_MS = 1_000
     private const val MAX_MAX_MS = 60_000
     private const val MAX_GAP_MS = 10_000

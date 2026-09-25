@@ -85,6 +85,9 @@ let ringDeadlineAt = 0;
 let carRingHandled = false;
 // Bumped on every change of offer; async work checks it before acting.
 let ringGen = 0;
+// ringGen whose car tone the native side reported as playing; null otherwise.
+// Only a tone JS believes is playing can be ended early by onToneEnded.
+let tonePlayingGen: number | null = null;
 let stopTimer: ReturnType<typeof setTimeout> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOwner = false;
@@ -100,6 +103,7 @@ function tone(): ToneModule | null {
     // module transitively (useRideOfferSound, backgroundMessaging).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     toneModule = require('../../modules/ride-offer-tone') as ToneModule;
+    toneModule.subscribeRideOfferToneEnded?.(onToneEnded);
   } catch (e) {
     logError('ride-offer-tone module failed to load:', e);
     toneModule = null;
@@ -155,6 +159,44 @@ export function offerDeadlineMs(
   return Math.min(MAX_TONE_MS, Math.max(MIN_TONE_MS, ms));
 }
 
+/**
+ * The native tone ended on its own after reporting playing: permanent audio
+ * focus loss (the driver started music in another app) or a playback error.
+ * The car no longer rings, so give the live offer's ring back to the phone —
+ * otherwise isCarRingOwner() stays true and every phone source stays muted.
+ */
+function onToneEnded(reason: string): void {
+  if (tonePlayingGen === null || tonePlayingGen !== ringGen) return;
+  tonePlayingGen = null;
+  log('car offer tone ended early:', reason, ringingRideId);
+  if (reason !== 'focus_loss') reportOnce(`ended_${reason}`);
+  clearStopTimer();
+  carRingHandled = false;
+  toneFailed = true;
+  refreshOwner(); // owner → false → handBack
+}
+
+/**
+ * The car tone is now ringing for this offer and no phone screen is mounted
+ * to hand the card over (car-only launch). Re-post the card silent — cancel
+ * first, then the silent channel — so a loud card posted before the car took
+ * the ring (a push before the car connected, or a reclaim before a reconnect)
+ * does not ring alongside the car. The dashboard's 'car' election does the
+ * same when it is mounted. Never throws.
+ */
+function silenceOfferCard(offer: CarOffer): void {
+  if (phoneRingHandler || Platform.OS !== 'android') return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const notifee = require('../../services/notifeeService');
+    Promise.resolve(
+      notifee.displayRideOfferNotification(toRideOfferDisplayData(offer), { silent: true }),
+    ).catch((e: unknown) => logError('silencing the offer card failed:', e));
+  } catch (e) {
+    logError('silencing the offer card failed:', e);
+  }
+}
+
 /** Give the ring back to the phone. Never throws. */
 function handBack(offer: CarOffer): void {
   try {
@@ -198,6 +240,7 @@ function refreshOwner(): void {
   setDebugFact('offerToneOwner', owner ? 'car' : 'phone');
   const offer = liveOffer();
   if (!owner) {
+    tonePlayingGen = null;
     if (carRingHandled) {
       stopTone();
       carRingHandled = false;
@@ -312,10 +355,15 @@ function startCarTone(offer: CarOffer, gen: number): void {
         return;
       }
       if (result === 'playing' || result === 'playing_unfocused') {
+        tonePlayingGen = gen;
+        silenceOfferCard(offer);
         clearStopTimer();
         stopTimer = setTimeout(() => {
           stopTimer = null;
-          if (gen === ringGen) stopTone();
+          if (gen === ringGen) {
+            tonePlayingGen = null;
+            stopTone();
+          }
         }, ms);
       }
       // 'blocked_call': never ring over a call, and no hand back either — the
@@ -333,6 +381,7 @@ function startCarTone(offer: CarOffer, gen: number): void {
 /** End whatever the car was doing for the current offer. */
 function resetRing(): void {
   ringGen += 1;
+  tonePlayingGen = null;
   if (carRingHandled) {
     stopTone();
     carRingHandled = false;

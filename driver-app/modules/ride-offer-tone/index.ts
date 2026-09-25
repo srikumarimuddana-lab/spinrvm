@@ -20,6 +20,8 @@ type NativeRideOfferTone = {
   isSupported(): boolean;
   start(maxMs: number, gapMs: number): Promise<string> | string;
   stop(): void;
+  // Expo native modules are event emitters (expo-modules-core).
+  addListener?(event: string, listener: (e: { reason?: string }) => void): { remove(): void };
 };
 
 const RESULTS: readonly ToneResult[] = [
@@ -88,5 +90,29 @@ export function stopRideOfferTone(): void {
     mod.stop();
   } catch (e) {
     console.error('[ride-offer-tone] stop failed:', e);
+  }
+}
+
+/**
+ * Called when a tone that already started as 'playing' / 'playing_unfocused'
+ * ends early natively: permanent audio-focus loss (the driver started music
+ * elsewhere) or a playback error. Not called for stop() or the tone reaching
+ * its own maxMs. Returns an unsubscribe function; a no-op when unsupported.
+ */
+export function subscribeRideOfferToneEnded(listener: (reason: string) => void): () => void {
+  const mod = nativeModule();
+  if (!mod || typeof mod.addListener !== 'function') return () => {};
+  try {
+    const sub = mod.addListener('onToneEnded', (e) => listener(String(e?.reason ?? 'unknown')));
+    return () => {
+      try {
+        sub.remove();
+      } catch (e) {
+        console.error('[ride-offer-tone] listener remove failed:', e);
+      }
+    };
+  } catch (e) {
+    console.error('[ride-offer-tone] addListener failed:', e);
+    return () => {};
   }
 }

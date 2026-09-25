@@ -630,9 +630,6 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
       4. Insert an audit_logs row tagged action='refresh_token_reuse_detected'
          so admin dashboard + the 7y forensic record both surface it.
 
-    With app_settings.refresh_reuse_chain_scope_enabled, a rotated rider/driver
-    token revokes only its own rotation chain instead (_revoke_rotation_chain).
-
     Caller (lookup_refresh_token) returns None to the auth route either
     way, so the client sees a generic 401. No oracle leakage.
     """
@@ -646,23 +643,6 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         f"original_revoked_at={row.get('revoked_at')} replaced_by={row.get('replaced_by')}"
     )
     _capture_reuse_event(row, repeated=False)
-
-    if audience in _USERS_TABLE_AUDIENCES and row.get("replaced_by") and await _chain_scope_enabled():
-        chain_ids = await _revoke_rotation_chain(row)
-        if chain_ids is not None:
-            await _insert_reuse_audit(
-                row,
-                {
-                    "scope": "rotation_chain",
-                    "cascade_token_version": None,
-                    "cascade_refresh_revoked": len(chain_ids),
-                    "cascade_revoked_row_ids": chain_ids,
-                    "cascade_ok": True,
-                },
-            )
-            return
-        # Chain could not be resolved or revoked: fall through to the
-        # all-sessions cascade rather than leave a successor live.
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None
@@ -736,97 +716,22 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         except Exception as e:
             logger.error(f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}")
 
-    # Step 4: audit_logs row.
-    await _insert_reuse_audit(
-        row,
-        {
+    # Step 4: audit_logs row. Production schema (migration 57):
+    # id TEXT PK / action / entity_type / entity_id / actor_id / details TEXT.
+    try:
+        details_payload = {
+            "replayed_row_id": row_id,
+            "audience": audience,
+            "replayed_user_agent": row.get("user_agent"),
+            "replayed_ip": row.get("ip"),
+            "original_revoked_at": row.get("revoked_at"),
+            "replaced_by": row.get("replaced_by"),
             "cascade_token_version": new_version,
             "cascade_refresh_revoked": revoked_count,
             "cascade_revoked_row_ids": revoked_ids,
             # Read back by _reuse_already_handled: a repeat replay of this row
             # skips the cascade only when both destructive steps succeeded.
             "cascade_ok": bump_ok and revoke_ok,
-        },
-    )
-
-
-REUSE_CHAIN_SCOPE_FLAG = "refresh_reuse_chain_scope_enabled"
-
-
-async def _chain_scope_enabled() -> bool:
-    """app_settings flag; unreadable counts as off (the all-sessions cascade)."""
-    try:
-        app_settings = await db.find_one("settings", {"id": "app_settings"})
-    except Exception:
-        logger.opt(exception=True).error("reuse-cascade: could not read chain-scope flag; using full cascade")
-        return False
-    return (app_settings or {}).get(REUSE_CHAIN_SCOPE_FLAG) is True
-
-
-async def _revoke_rotation_chain(row: dict) -> Optional[list[str]]:
-    """Revoke every live token rotated forward from ``row``; return their ids.
-
-    A rotated rider/driver token replayed after the grace window comes, in
-    production, from one device that lost a refresh response and kept the old
-    value (audit_logs 2026-09: replays 12 min to 24 h after rotation, one
-    cascade killing 11 sessions). Only the successors of that token can be in
-    an attacker's hands, so revoking them is the OAuth2 BCP §4.14.2 response
-    without logging the user's other devices out.
-
-    Returns None when the chain cannot be followed or a revoke fails; the
-    caller then runs the all-sessions cascade.
-    """
-    user_id = row.get("user_id") or ""
-    try:
-        rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
-    except Exception:
-        logger.opt(exception=True).error(f"reuse-chain: refresh_tokens scan failed (user={user_id})")
-        return None
-    by_id = {str(r.get("id")): r for r in rows or [] if r.get("id")}
-    now_iso = datetime.now(timezone.utc).isoformat()
-    revoked: list[str] = []
-    seen: set[str] = set()
-    next_id = str(row.get("replaced_by") or "")
-    while next_id:
-        if next_id in seen:
-            logger.error(f"reuse-chain: rotation cycle at {next_id} (user={user_id})")
-            return None
-        seen.add(next_id)
-        successor = by_id.get(next_id)
-        if successor is None:
-            logger.error(f"reuse-chain: successor {next_id} not found (user={user_id})")
-            return None
-        if not successor.get("revoked_at"):
-            try:
-                await db.update_one(
-                    "refresh_tokens",
-                    {"id": next_id},
-                    {"$set": {"revoked_at": now_iso, "revocation_reason": "reuse_rotation_chain"}},
-                )
-            except Exception:
-                logger.opt(exception=True).error(f"reuse-chain: could not revoke {next_id} (user={user_id})")
-                return None
-            revoked.append(next_id)
-        next_id = str(successor.get("replaced_by") or "")
-    return revoked
-
-
-async def _insert_reuse_audit(row: dict, outcome: dict) -> None:
-    """Write the refresh_token_reuse_detected row _reuse_already_handled reads.
-
-    Production schema (migration 57): id TEXT PK / action / entity_type /
-    entity_id / actor_id / details TEXT. Best-effort; never raises.
-    """
-    user_id = row.get("user_id") or ""
-    try:
-        details_payload = {
-            "replayed_row_id": row.get("id") or "",
-            "audience": row.get("audience") or "",
-            "replayed_user_agent": row.get("user_agent"),
-            "replayed_ip": row.get("ip"),
-            "original_revoked_at": row.get("revoked_at"),
-            "replaced_by": row.get("replaced_by"),
-            **outcome,
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one(

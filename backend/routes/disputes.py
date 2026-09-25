@@ -333,6 +333,8 @@ async def admin_resolve_dispute(
         "refund_amount": req.refund_amount or 0,
         "admin_note": req.admin_note or "",
         "resolved_at": datetime.now(timezone.utc).isoformat(),
+        # F-32: carried over from support.py's removed duplicate handler.
+        "resolved_by": current_admin["id"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if refund_result:

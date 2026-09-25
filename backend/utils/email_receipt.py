@@ -76,6 +76,11 @@ try:
 except ImportError:
     from utils.cancellation_receipt import cancellation_charge, is_cancelled  # type: ignore
 
+try:
+    from .receipt_pdf import flag_missing_tax_breakdown
+except ImportError:
+    from utils.receipt_pdf import flag_missing_tax_breakdown  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
@@ -257,9 +262,13 @@ def _build_fare_rows(
             rate_str = f" ({rate:.0f}%)" if rate > 0 else ""
             rows.append(_line(f"{label}{rate_str}", f"${_fmt(amount)}"))
     else:
-        # Legacy fallback — show a single combined tax line if present.
+        # No breakdown — show the stored tax_amount as a single "Tax" line
+        # (no GST/PST split is derived: no per-ride rate is stored, so it
+        # would be a guess) and flag it loudly, since a combined line falls
+        # short of the separate-line-items rule (MONEY-002 / ROADMAP X8).
         tax_amount = _d(ride.get("tax_amount", 0))
         if tax_amount > 0:
+            flag_missing_tax_breakdown(ride, tax_amount, "email_receipt")
             rows.append(_line("Tax", f"${_fmt(tax_amount)}"))
             tax_total = tax_amount
 

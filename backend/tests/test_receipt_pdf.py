@@ -46,10 +46,10 @@ def test_grand_total_includes_tax_and_tip():
     assert "Tip" in labels
 
 
-def test_tax_fallback_from_grand_total_gap():
-    ride = {**_RIDE, "tax_breakdown": {}}  # legacy ride: no itemised tax
+def test_tax_fallback_from_stored_tax_amount():
+    ride = {**_RIDE, "tax_breakdown": {}, "tax_amount": "1.21"}  # no itemised tax
     rows, grand = _fare_lines(ride, Decimal("0"))
-    # gap = 12.21 - 11.00 = 1.21 surfaced as a single Tax line
+    # MONEY-002: the stored tax_amount (not a grand_total gap) as a single Tax line
     assert ("Tax", "$1.21") in rows
     assert grand == Decimal("12.21")
 
@@ -288,6 +288,7 @@ def test_tax_gap_fallback_correctly_separates_tax_from_discount():
     ride = {
         **_RIDE,
         "tax_breakdown": {},
+        "tax_amount": "1.21",
         "discount_amount": "2.00",
         # True tax is 1.21 (as in _RIDE's GST+PST); grand_total reflects
         # subtotal(11.00) + tax(1.21) - discount(2.00) = 10.21.

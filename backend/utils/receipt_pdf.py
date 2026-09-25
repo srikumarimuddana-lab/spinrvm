@@ -51,6 +51,42 @@ def _money(v: Any) -> str:
     return f"${_q(_d(v)):.2f}"
 
 
+def flag_missing_tax_breakdown(ride: Dict[str, Any], tax_amount: Decimal, renderer: str) -> None:
+    """MONEY-002 / ROADMAP X8: loudly flag a receipt that had to fall back to
+    a single combined "Tax" line because the ride has a nonzero stored
+    ``tax_amount`` but no usable ``tax_breakdown``.
+
+    Rider receipts must show GST and PST as separate line items (CLAUDE.md,
+    Saskatchewan section). No current write path produces this state —
+    ``tax_amount`` and ``tax_breakdown`` are always written together from
+    ``features.calculate_all_fees`` — so reaching here means out-of-band
+    data (manual edit, a bad backfill) that needs fixing at the source. The
+    split is not derived at render time: no per-ride rate is stored when the
+    breakdown is missing, so it would be a guess. Mirrors
+    ``corporate_statement_pdf._log_combined_tax_fallback`` (A29).
+
+    Only the ride id and the amount are logged — no PII (PIPEDA). Never
+    raises: telemetry must not block a rider's receipt.
+    """
+    ride_id = str(ride.get("id") or "unknown")
+    logger.error(
+        "receipt tax fallback: nonzero tax_amount with no itemised tax_breakdown renderer=%s ride_id=%s tax_amount=%s",
+        renderer,
+        ride_id,
+        tax_amount,
+    )
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "receipt_gst_pst_breakdown_missing",
+            level="error",
+            tags={"domain": "payments", "surface": "backend", "ride_id": ride_id, "renderer": renderer},
+        )
+    except Exception as sentry_err:  # pragma: no cover - telemetry must never break a receipt
+        logger.debug("receipt tax fallback: Sentry capture unavailable: %s", sentry_err)
+
+
 def _split_surge_delta(
     dist: Decimal, time_: Decimal, surge: Decimal, min_fare_uplift: Decimal
 ) -> tuple[Decimal, Decimal, Decimal]:
@@ -163,16 +199,12 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     # Promo discount (C102): applies to ride fare (driver earnings) only —
     # never fees or taxes — mirroring routes/rides/_shared.py::_build_fare_breakdown,
     # the JSON receipt's equivalent builder, which already discloses this line.
-    # Computed before the tax gap fallback below so that fallback isn't fooled
-    # into mislabeling (tax - discount) as pure tax on a discounted ride with
-    # no persisted tax_breakdown.
     raw_discount = _d(ride.get("discount_amount"))
     ride_fare_for_discount_cap = base + dist + time_ + min_fare_uplift
     capped_discount = min(raw_discount, ride_fare_for_discount_cap) if ride_fare_for_discount_cap > 0 else raw_discount
     promo_label = f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
 
-    # GST/PST as separate line items from the persisted breakdown; fall back to
-    # the grand_total gap so the lines reconcile to what was actually charged.
+    # GST/PST as separate line items from the persisted breakdown.
     tax_breakdown = ride.get("tax_breakdown") or {}
     tax_total = Decimal("0")
     had_tax = False
@@ -189,14 +221,21 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
             rate_str = f" ({rate:.0f}%)" if rate > 0 else ""
             rows.append((f"{label}{rate_str}", _money(amount)))
 
+    # No usable breakdown (MONEY-002 / ROADMAP X8): show the STORED
+    # tax_amount as one "Tax" line, never a figure reconstructed from
+    # grand_total. The old reconstruction (grand_total - subtotal + discount)
+    # also swept in area fees, because this subtotal is total_fare, which
+    # excludes them — so a ride with area fees and no tax (e.g. a legacy
+    # import with gst=0) got a fabricated "Tax" line equal to its fees.
+    # Plain "Tax", not "Tax (GST/PST)": that label claims a known mix of both
+    # taxes — same decision as corporate_statement_pdf.py's fallback (#4259).
+    stored_tax = _d(ride.get("tax_amount"))
+    if not had_tax and stored_tax > 0:
+        flag_missing_tax_breakdown(ride, stored_tax, "receipt_pdf")
+        tax_total = stored_tax
+        rows.append(("Tax", _money(stored_tax)))
+
     persisted_grand = ride.get("grand_total")
-    if not had_tax and persisted_grand not in (None, "", 0):
-        # grand_total = subtotal + tax - discount, so the implied tax is the
-        # persisted-vs-subtotal gap plus whatever discount already reduced it by.
-        gap = _d(persisted_grand) - subtotal + capped_discount
-        if gap > Decimal("0.005"):
-            tax_total = gap
-            rows.append(("Tax", _money(gap)))
 
     if capped_discount > 0:
         rows.append((promo_label, f"-{_money(capped_discount)}"))

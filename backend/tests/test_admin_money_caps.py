@@ -26,14 +26,17 @@ def _row(action, **details):
     return {"action": action, "details": details}
 
 
-# admin-A's own rows today: $40 credit, $25 debit, $30 approved refund = $95.
-# The rejected dispute and support.py's no-refund resolve row move nothing.
+# admin-A's own rows today: $40 credit, $25 debit, $30 issued refund = $95.
+# Rows where no refund was issued move nothing: rejected, approved while
+# admin_dispute_refunds_enabled was off, and a legacy row with no
+# refund_issued key.
 TODAY_ROWS = [
     _row("wallet_credit", amount="40.00"),
     _row("wallet_debit", amount="25.00"),
-    _row("dispute_resolved", resolution="approved", refund_amount="30.00"),
-    _row("dispute_resolved", resolution="rejected", refund_amount="50.00"),
-    _row("dispute_resolved", status="resolved", notes="support.py resolve"),
+    _row("dispute_resolved", resolution="approved", refund_amount="30.00", refund_issued=True),
+    _row("dispute_resolved", resolution="rejected", refund_amount="50.00", refund_issued=False),
+    _row("dispute_resolved", resolution="approved", refund_amount="70.00", refund_issued=False),
+    _row("dispute_resolved", resolution="partial_refund", refund_amount="60.00"),
 ]
 
 

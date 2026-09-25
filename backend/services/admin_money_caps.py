@@ -14,13 +14,17 @@ Call :func:`enforce_admin_money_action_cap` immediately before the money moves.
   it, the action is still allowed (subject to the cap) but raises a warning
   log, an ``audit_logs`` row and a Sentry event tagged ``domain=admin``.
 
-Both NULL (the shipped default) = no extra query, behaviour unchanged.
+Both NULL (the shipped default) = no DB query for the daily sum (the
+settings themselves are still read, from settings_loader's 60s cache), and
+behaviour is unchanged.
 
 "Already moved today" is summed from ``audit_logs``, which every covered
 endpoint already writes with ``actor_id`` = the admin: ``wallet_credit`` /
 ``wallet_debit`` rows carry ``details.amount``; ``dispute_resolved`` rows carry
-``details.refund_amount`` and count only when ``details.resolution`` is a
-refunding one. No new table. Super-admins are NOT exempt — the point is to
+``details.refund_amount`` and count only when ``details.refund_issued`` is
+True (a Stripe refund was actually created — not a rejected dispute, not one
+resolved while admin_dispute_refunds_enabled was off, not manual_required).
+No new table. Super-admins are NOT exempt — the point is to
 bound what one compromised admin session can move, and a super-admin session
 is the most valuable one to compromise.
 
@@ -49,8 +53,9 @@ logger = logging.getLogger(__name__)
 _TWO_PLACES = Decimal("0.01")
 _PAGE = 1000
 
+# admin_money_threshold_alert / admin_money_cap_blocked rows (written below)
+# are deliberately NOT counted: they record attempts, not money moved.
 _COUNTED_ACTIONS = ["wallet_credit", "wallet_debit", "dispute_resolved"]
-_REFUND_RESOLUTIONS = ("approved", "partial_refund")
 
 _UNAVAILABLE = "Admin money-action limits could not be checked, so nothing was moved. Retry shortly."
 
@@ -80,9 +85,8 @@ def _row_amount(row: Dict[str, Any]) -> Decimal:
     """Absolute money moved by one audit_logs row (0 if it moved none)."""
     details = row.get("details") or {}
     if row.get("action") == "dispute_resolved":
-        # support.py's resolve also writes dispute_resolved, with no
-        # resolution/refund_amount; rejected disputes refund nothing.
-        if details.get("resolution") not in _REFUND_RESOLUTIONS:
+        # Only rows where routes/disputes.py actually issued a refund count.
+        if details.get("refund_issued") is not True:
             return Decimal("0")
         raw = details.get("refund_amount")
     else:

@@ -348,6 +348,7 @@ export default function SafetyPage() {
                     <Input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
+                        aria-label="Search safety reports by description"
                         placeholder="Search description"
                         className="h-8 text-xs w-[240px]"
                     />

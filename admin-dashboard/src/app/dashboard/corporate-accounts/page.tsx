@@ -403,6 +403,7 @@ export default function CorporateAccountsPage() {
                 <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
+                        aria-label="Search corporate accounts"
                         placeholder="Search accounts..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}

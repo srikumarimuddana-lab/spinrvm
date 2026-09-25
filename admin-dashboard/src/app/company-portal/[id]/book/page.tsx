@@ -132,6 +132,7 @@ function AddressPicker({
                 <MapPin className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                     className="pl-8"
+                    aria-label={label}
                     placeholder="Search address…"
                     value={query}
                     onChange={(e) => {

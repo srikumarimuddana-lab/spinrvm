@@ -191,7 +191,7 @@ export default function RideList({
                 <div className="flex items-center gap-2 mt-3">
                     <div className="relative flex-1">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="Search by ride code, name, phone, address, or ID..."
+                        <Input aria-label="Search rides" placeholder="Search by ride code, name, phone, address, or ID..."
                             value={search} onChange={e => onSearchChange(e.target.value)}
                             className="pl-9 h-9 text-sm bg-background" />
                     </div>

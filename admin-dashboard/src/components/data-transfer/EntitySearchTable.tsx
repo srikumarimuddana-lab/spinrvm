@@ -148,6 +148,7 @@ export function EntitySearchTable({ selection }: { selection: EntitySelectionSta
             <div className="flex flex-wrap gap-2 items-end">
                 <div className="flex-1 min-w-[200px] flex items-center gap-1.5">
                     <Input
+                        aria-label="Search by name, email, or phone"
                         placeholder="Search name, email, or phone…"
                         value={q}
                         onChange={(e) => setQ(e.target.value)}

@@ -79,8 +79,16 @@ export function SortableHead({
 }) {
     const active = sort.key === column;
     const Icon = !active ? ChevronsUpDown : sort.dir === "asc" ? ChevronUp : ChevronDown;
+    // aria-sort on the sorted column's header cell lets screen readers announce
+    // the current sort ("sorted ascending"); the chevron icon alone does not.
+    // Omitted on unsorted columns, per the WAI-ARIA APG sortable-table pattern,
+    // so each unsorted header isn't announced as "not sorted".
+    const ariaSort = !active ? undefined : sort.dir === "asc" ? "ascending" : "descending";
     return (
-        <TableHead className={cn(align === "right" && "text-right", align === "center" && "text-center", className)}>
+        <TableHead
+            aria-sort={ariaSort}
+            className={cn(align === "right" && "text-right", align === "center" && "text-center", className)}
+        >
             <button
                 type="button"
                 onClick={() => onSort(column)}

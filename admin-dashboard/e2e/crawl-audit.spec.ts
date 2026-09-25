@@ -111,17 +111,24 @@ const ROUTE_FIXTURES: Record<string, (url: string) => any> = {
       { id: 'usr-4', name: 'Rider Pending Deletion', email: 'pending@example.com', phone: '+13065550123', role: 'rider', status: 'pending_deletion', created_at: '2026-01-01T00:00:00Z' },
     ];
   },
+  // In-app disputes disabled 2026-09-25: the page now renders only
+  // ChargebacksTab (GET /api/admin/disputes/chargebacks), so seed
+  // chargeback-shaped rows covering each status badge.
   '/dashboard/disputes': (url) => {
-    if (!url.includes('/api/admin/disputes')) return undefined;
-    return ['open', 'under_review', 'resolved', 'rejected'].map((status, i) => ({
-      id: `dsp-${i}`,
-      user_name: 'Test Rider',
-      user_phone: '+13065550130',
-      reason: 'overcharged',
-      original_fare: 20,
-      requested_amount: 5,
+    if (!url.includes('/api/admin/disputes/chargebacks')) return undefined;
+    return ['needs_response', 'under_review', 'won', 'lost'].map((status, i) => ({
+      id: `cb-${i}`,
+      stripe_dispute_id: `dp_test_${i}`,
+      ride_id: `ride-${i}`,
+      ride_code: `RIDE-${i}`,
+      amount_cents: 2000,
+      reason: 'fraudulent',
       status,
+      evidence_due_by: '2026-10-01T00:00:00Z',
+      evidence_submitted_at: null,
+      days_remaining: 5,
       created_at: '2026-09-01T00:00:00Z',
+      updated_at: '2026-09-01T00:00:00Z',
     }));
   },
   '/dashboard/corporate-accounts': (url) => {

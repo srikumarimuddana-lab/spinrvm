@@ -172,7 +172,14 @@ Scenarios:
 - **Review:** `spinr-dispatch-reviewer`, `spinr-edge-case-reviewer`, and `spinr-migration-reviewer` were run against the diff (migration: SAFE TO APPLY). Two findings were fixed:
   - **Silent offer (edge-case, blocker):** the native hard stop could fire while the module was still waiting out a nav prompt, with less than about 3 s of the offer left. It resolved `'cancelled'` without any JS supersede. The car then kept ownership while nothing played, and the phone loop and card stayed muted. **Fix:** a same-generation `'cancelled'` now takes the error path and hands back to the phone (`af99f77`).
   - **Stuck offer (dispatch, major):** the car-only expiry backstop bailed whenever the phone dashboard was mounted, even when it was backgrounded (the usual Android Auto case: the WS closes after 3 s and the countdown may not tick). **Fix:** it now defers only to a *foreground* phone screen, and re-checks every 2 s instead of giving up (`632c9ba`). A duplicate decline is rejected by the backend's decline guards (403/409, since the ride is no longer this driver's), and `declineRide` resets to idle either way.
-  - Both have regression tests. `carOfferRing.test.ts` is 45/45 on the same shim, and a mutation check (reverting the `'cancelled'` fix) failed the new test.
+  - Both have regression tests.
+- **Codex review** (6 P2 findings on `ada7cce`). Five were fixed; one was answered as not applicable:
+  - Permanent audio-focus loss or a replay error stopped the native tone while JS still believed the car rang, so the phone stayed muted. The module now emits `onToneEnded`, and `carOfferRing` hands the ring back (`98aa133`).
+  - A loud card could ring beside the car tone: one posted before the car took the ring, or a reclaim before a reconnect. The card is now re-posted silent once the car tone plays with no phone UI mounted (`98aa133`).
+  - A valid `offer_expires_at` already in the past fell back to a 15–60 s countdown, so a delayed push rang the car for a dead offer. It now expires at once with no tone (`70dc2a9`).
+  - Tone successes were sent to Sentry as non-fatal exceptions. They are now logs, and only real failures are reported (`70dc2a9`).
+  - The phone loop's replay interval survived a car takeover, which delayed the phone tone by up to 2.5 s on hand-back. Takeover now fully stops the loop (`93dddb8`).
+  - **Not applicable:** the claim that `getActivePlaybackConfigurations()` needs `MODIFY_AUDIO_ROUTING`. It is public API (26+). Unprivileged callers get anonymized copies that keep the usage attribute. Not verified on device. `carOfferRing.test.ts` is 45/45 on the same shim, and a mutation check (reverting the `'cancelled'` fix) failed the new test.
 
 ### What was NOT verified
 
@@ -182,7 +189,6 @@ Scenarios:
 - **Android 17 background-audio hardening.** A further restriction on background `MediaPlayer` without a foreground service could make the tone fail (`error` → hand back to the phone) or play silently. The silent case would not be detected by JS.
 - Expo SDK 57 autolinking of a `modules/` local module without a `package.json`. It follows the documented default `nativeModulesDir: "./modules"` and the local-module template, but it has not been built. The `expo-module-gradle-plugin` build.gradle form was written from the local-module template, not copied from an SDK 57 install.
 - **JS timers on a car-only launch.** The car-only expiry timer relies on JS timers running while the app is backgrounded. The existing car session makes the same assumption with its 60 s interval, and this change does not prove it.
-- **Reconnect mid-offer on a car-only launch.** On disconnect, the hand back posts a loud reclaim card. If the car reconnects before the offer ends, the car rings again but that card is not re-muted, so both may sound until the offer ends. This is a rare window and was left unhandled.
 - **Clock skew (accepted, parity with the phone):** the car deadline uses the server's `offer_expires_at` against the device clock. A forward-skewed clock expires the offer early. The phone screen (`app/driver/(tabs)/index.tsx:668-671`) computes expiry the same way, so this is existing exposure, not new.
 - **Headless FCM and car session in the same JS context:** `backgroundMessaging` mutes the card by reading `isCarRingOwner()` from module state that `register.ts` sets. If some OEM ran the FCM handler in a fresh JS context, it would read `false`. The failure mode is a double ring, not silence. Check on a real head unit.
 - **Call in progress:** with `blocked_call`, nothing rings on either the car or the phone for that offer; only the visual alert and card show. This is intentional: never ring over a call. It is tracked by the per-session telemetry.

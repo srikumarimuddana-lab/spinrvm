@@ -36,9 +36,9 @@ def _apply_wallet_debit(dsn, barrier, wallet_id, ride_id):
         conn.close()
 
 
-def test_concurrent_same_wallet_ride_debits_preserve_balance_and_ledger(money_pg_cur, pg_conn):
+def test_concurrent_same_wallet_ride_debits_preserve_balance_and_ledger(money_pg_cur, pg_dsn):
     wallet_id = _seed_wallet(money_pg_cur)
-    dsn = pg_conn.dsn
+    dsn = pg_dsn
     barrier = Barrier(2)
     with ThreadPoolExecutor(max_workers=2) as pool:
         rows = list(
@@ -102,7 +102,7 @@ def _seed_member_allowance(cur, wallet_id, cap="100.00"):
     return member_id, allowance_id
 
 
-def test_concurrent_allowance_debits_enforce_cap_and_keep_paired_ledger(money_pg_cur, pg_conn):
+def test_concurrent_allowance_debits_enforce_cap_and_keep_paired_ledger(money_pg_cur, pg_dsn):
     wallet_id = _seed_wallet(money_pg_cur)
     member_id, allowance_id = _seed_member_allowance(money_pg_cur, wallet_id)
     barrier = Barrier(2)
@@ -110,7 +110,7 @@ def test_concurrent_allowance_debits_enforce_cap_and_keep_paired_ledger(money_pg
         results = list(
             pool.map(
                 lambda _index: _apply_allowance_debit(
-                    pg_conn.dsn, barrier, wallet_id, allowance_id, member_id, str(uuid4())
+                    pg_dsn, barrier, wallet_id, allowance_id, member_id, str(uuid4())
                 ),
                 range(2),
             )
@@ -132,14 +132,14 @@ def test_concurrent_allowance_debits_enforce_cap_and_keep_paired_ledger(money_pg
     }
 
 
-def test_concurrent_same_ride_payment_replay_dedupes_under_wallet_lock(money_pg_cur, pg_conn):
+def test_concurrent_same_ride_payment_replay_dedupes_under_wallet_lock(money_pg_cur, pg_dsn):
     wallet_id = _seed_wallet(money_pg_cur)
     ride_id = str(uuid4())
     barrier = Barrier(2)
     with ThreadPoolExecutor(max_workers=2) as pool:
         rows = list(
             pool.map(
-                lambda _index: _apply_wallet_debit(pg_conn.dsn, barrier, wallet_id, ride_id),
+                lambda _index: _apply_wallet_debit(pg_dsn, barrier, wallet_id, ride_id),
                 range(2),
             )
         )

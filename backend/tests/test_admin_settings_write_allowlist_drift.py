@@ -121,6 +121,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "lms_api_key",
         "location_health_push_nudge_enabled",
         "location_marker_write_gate_enabled",
+        "login_supersede_driver_app_only_enabled",
         "marketing_from_email",
         "max_simultaneous_offers",
         "meta_capi_access_token",

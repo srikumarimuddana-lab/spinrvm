@@ -561,6 +561,9 @@ class SettingsUpdateRequest(BaseModel):
     # Migration 471. Android ride offers on the alarm-volume channel; read by
     # utils/ride_offer_ring.py when building offer payloads.
     ride_offer_alarm_channel_enabled: Optional[bool] = None
+    # Migration 472. True = only a driver-app login signs the account's other
+    # devices out; read by routes/auth.py _login_supersedes_other_devices.
+    login_supersede_driver_app_only_enabled: Optional[bool] = None
     # Migration 467. Android Allow-all-the-time gate; served to the driver app
     # as always_location_required on /drivers/config.
     driver_always_location_gate_enabled: Optional[bool] = None

@@ -15,8 +15,14 @@ def availability_db(pg_cur):
     pg_cur.execute("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()")
     for migration_name in ("42_drivers_last_status_changed_at.sql", "97_driver_intent_timestamps.sql"):
         _apply_migration_sql(pg_cur, (migrations / migration_name).read_text(encoding="utf-8"))
-    migration = migrations / "457_driver_availability_epoch.sql"
-    _apply_migration_sql(pg_cur, migration.read_text(encoding="utf-8"))
+    # 457-464 are now applied once, session-scoped, by conftest.py's own
+    # _MIGRATION_FILES (previously not -- this fixture re-applied 457 alone
+    # on every test as the only way it ever landed, which is why it isn't
+    # listed here). Re-applying 457 here now would overwrite the later
+    # 458-464 fixes (transition_driver_availability's hardened body,
+    # driver_ready_window(), get_driver_availability_snapshot's
+    # readiness_enforced/controller_rebound fields, etc.) back down to
+    # 457's original behavior on every single test in this file.
     pg_cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0")
@@ -247,7 +253,13 @@ def test_failed_insurance_result_rolls_back_availability_transition(availability
         assert cur.fetchone() == (0, None)
     finally:
         migrations = Path(__file__).resolve().parents[2] / "migrations"
-        from scripts.run_migrations import _split_sql_statements
+        try:
+            from backend.scripts.run_migrations import _split_sql_statements
+        except ImportError:  # pragma: no cover - import style varies by entrypoint
+            import sys as _sys
+
+            _sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+            from backend.scripts.run_migrations import _split_sql_statements
 
         for statement in _split_sql_statements(
             (migrations / "421_insurance_period_ride_identity.sql").read_text(encoding="utf-8")

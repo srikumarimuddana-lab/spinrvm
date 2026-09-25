@@ -233,6 +233,26 @@ _MIGRATION_FILES = (
     # 448 replaces timestamp ordering with durable claim UUIDs and adds a
     # transactionally safe stale-claim recovery RPC.
     "448_durable_dispatch_claim_identity.sql",
+    # 457-464: the driver-availability-v2 rollout (epoch/controller fencing,
+    # offer-decision atomicity, delivery receipts, readiness policy, X8
+    # refresh-successor commitment, transition-function hardening). This
+    # list previously stopped at 448, so every direct_pool run against
+    # transition_driver_availability/driver_ready_window etc. was exercising
+    # pre-rollout behavior -- explaining UndefinedFunction on
+    # driver_ready_window() and status-code mismatches (e.g. expected
+    # OBLIGATION_ACTIVE/OK, got CONTROLLER_SESSION_MISMATCH) against
+    # already-shipped, intentional v2 behavior. 464's own header notes it
+    # replaces 457's transition function while "458-463 bodies are
+    # unchanged" -- so the full contiguous range is applied, in order, to
+    # match what run_migrations.py would actually do against a fresh DB.
+    "457_driver_availability_epoch.sql",
+    "458_driver_availability_f2_fixes.sql",
+    "459_driver_claim_epoch_fence.sql",
+    "460_offer_decision_atomicity.sql",
+    "461_offer_delivery_receipts.sql",
+    "462_driver_readiness_policy.sql",
+    "463_refresh_successor_commitment.sql",
+    "464_driver_availability_transition_hardening.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

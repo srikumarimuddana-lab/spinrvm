@@ -246,9 +246,12 @@ async def test_settings_reenrollment_does_not_mint_new_session():
     returns backup_codes only — no refresh_token to desync the live session."""
     secret = pyotp.random_base32()
     staff = _staff_row(mfa_secret_pending=secret)
-    session_header = "Bearer " + admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
-    )[0]
+    session_header = (
+        "Bearer "
+        + admin_auth._mint_admin_access_token(
+            user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
+        )[0]
+    )
 
     class _Body:
         totp_code = pyotp.TOTP(secret).now()
@@ -260,9 +263,7 @@ async def test_settings_reenrollment_does_not_mint_new_session():
         patch.object(admin_auth, "issue_refresh_token", AsyncMock()) as issue,
         patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
-        result = await admin_auth.admin_mfa_confirm(
-            request=_make_request(), body=_Body(), authorization=session_header
-        )
+        result = await admin_auth.admin_mfa_confirm(request=_make_request(), body=_Body(), authorization=session_header)
 
     assert result == {"backup_codes": result["backup_codes"]}
     assert "refresh_token" not in result and "token" not in result
@@ -379,9 +380,12 @@ async def test_mfa_disable_blocked_under_enforcement():
     recovery is the super-admin reset path."""
     secret = pyotp.random_base32()
     enrolled = _staff_row(mfa_enabled=True, mfa_secret=secret, password_hash="bcrypt$x")
-    header = "Bearer " + admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
-    )[0]
+    header = (
+        "Bearer "
+        + admin_auth._mint_admin_access_token(
+            user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
+        )[0]
+    )
 
     class _Body:
         totp_code = pyotp.TOTP(secret).now()
@@ -435,3 +439,60 @@ async def test_jti_revoked_admin_token_rejected_by_mfa_helper():
     ):
         staff = await admin_auth._require_staff_from_token(f"Bearer {token}")
     assert staff["id"] == STAFF_ID
+
+
+# ── SEC-A2-003: ADMIN_REVOCATION_FAIL_CLOSED also covers the MFA helper ──────
+#
+# _require_staff_from_token (mfa/status, enroll, confirm, disable) runs its own
+# copy of the admin:revoked:{jti} check. It must honour the same switch as
+# dependencies._verify_admin_payload, or a revoked admin token could still
+# reach the MFA endpoints during a Redis outage with the flag on.
+
+
+def _access_header() -> str:
+    token = admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
+    )[0]
+    return f"Bearer {token}"
+
+
+@pytest.mark.anyio
+async def test_mfa_helper_redis_error_fails_open_with_flag_off(monkeypatch):
+    monkeypatch.setattr(admin_auth.settings, "ADMIN_REVOCATION_FAIL_CLOSED", False)
+    monkeypatch.setattr(admin_auth, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable")))
+    metric = MagicMock()
+    monkeypatch.setattr(admin_auth, "_metric_inc", metric)
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(token_version=0))):
+        staff = await admin_auth._require_staff_from_token(_access_header())
+    assert staff["id"] == STAFF_ID
+    metric.assert_called_once_with("spinr_auth_revocation_check_error_total", {"outcome": "fail_open"})
+
+
+@pytest.mark.anyio
+async def test_mfa_helper_redis_error_returns_503_with_flag_on(monkeypatch):
+    monkeypatch.setattr(admin_auth.settings, "ADMIN_REVOCATION_FAIL_CLOSED", True)
+    monkeypatch.setattr(admin_auth, "redis_get", AsyncMock(side_effect=RuntimeError("Upstash unreachable")))
+    metric = MagicMock()
+    monkeypatch.setattr(admin_auth, "_metric_inc", metric)
+    find_one = AsyncMock(return_value=_staff_row(token_version=0))
+    with patch.object(admin_auth.db, "find_one", find_one):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(_access_header())
+    assert exc_info.value.status_code == 503
+    assert "Upstash" not in exc_info.value.detail and "Redis" not in exc_info.value.detail
+    metric.assert_called_once_with("spinr_auth_revocation_check_error_total", {"outcome": "fail_closed"})
+    find_one.assert_not_awaited()  # rejected before the staff lookup
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("fail_closed", [False, True])
+async def test_mfa_helper_revoked_jti_rejected_in_both_modes(monkeypatch, fail_closed):
+    monkeypatch.setattr(admin_auth.settings, "ADMIN_REVOCATION_FAIL_CLOSED", fail_closed)
+    monkeypatch.setattr(admin_auth, "redis_get", AsyncMock(return_value="1"))
+    metric = MagicMock()
+    monkeypatch.setattr(admin_auth, "_metric_inc", metric)
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(token_version=0))):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(_access_header())
+    assert exc_info.value.status_code == 401
+    metric.assert_not_called()

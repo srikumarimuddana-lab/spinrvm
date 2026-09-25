@@ -92,7 +92,7 @@ Supporting objections:
 
 | Strongest objection | Holds? | Required change |
 |---|---|---|
-| The lanes filed live regulatory and PIPEDA obligations. The blueprint either has no card step for them or leaves them out entirely. A grep of the blueprint for `COMP-0` ids finds 001, 002, 003, 004, 007, 008, 013, 014, 015 and 018. Of these, 001–004 and 013 appear only in §9 questions or H7's list. COMP-005 (SGI monthly km return), COMP-009 (unsigned ICA), COMP-010 (WAV alternative), COMP-011 (accessibility contact not provisioned) and COMP-017 (SGI quarterly report) are not cited at all. COMP-013 is a past exposure of driver records, still reachable on many branches per the lane. It survives only as §9 Q22 ("is the purge request submitted?"). STRAT-004 is VERIFIED, HIGH and priority 100: a Meta ad SDK plus a per-ride `Purchase` conversion carrying value and hashed identity, undisclosed in the privacy policy and subprocessor list. It is a live collision with CLAUDE.md's "never add third-party ad SDKs", yet it appears only inside §6's "should NOT be built" list, framed as "a removal, not a build", with no card step and no §9 question. The inventory has no epic for driver eligibility or regulatory reporting, so these items had no card to land in. | **VERIFIED** (checked the blueprint text against the lane cards) | Add a card, or a §4 annex, called "Regulatory obligations" with a Now step per item. At minimum: STRAT-004 disclosure plus a founder decision (card 15 or a new card), COMP-013 closure evidence, COMP-002's dark eligibility rules (with the licence-class question left ASSUMED), COMP-005/-017 SGI reporting schedule, COMP-009 ICA e-signature, and COMP-011's contact. Add STRAT-004 to §9. |
+| The lanes filed live regulatory and PIPEDA obligations. The blueprint either has no card step for them or leaves them out entirely. A grep of the blueprint for `COMP-0` ids finds 001, 002, 003, 004, 007, 008, 013, 014, 015 and 018. Of these, 001–004 and 013 appear only in §9 questions or H7's list. COMP-005 (SGI monthly km return), COMP-009 (unsigned ICA), COMP-010 (WAV alternative), COMP-011 (accessibility contact not provisioned) and COMP-017 (SGI quarterly report) are not cited at all. COMP-013, a past exposure of driver records, survives only as §9 Q22 ("is the purge request submitted?"), phrased as an open question. `05-escalations.md` §E records it as **owner-managed, closed by owner statement 2026-09-24, not independently verified**, and says it is not re-opened (see §2.4). STRAT-004 is VERIFIED, HIGH and priority 100: a Meta ad SDK plus a per-ride `Purchase` conversion carrying value and hashed identity, undisclosed in the privacy policy and subprocessor list. It is a live collision with CLAUDE.md's "never add third-party ad SDKs", yet it appears only inside §6's "should NOT be built" list, framed as "a removal, not a build", with no card step and no §9 question. The inventory has no epic for driver eligibility or regulatory reporting, so these items had no card to land in. | **VERIFIED** (checked the blueprint text against the lane cards) | Add a card, or a §4 annex, called "Regulatory obligations" with a Now step per item. At minimum: STRAT-004 disclosure plus a founder decision (card 15 or a new card), COMP-002's dark eligibility rules (with the licence-class question left ASSUMED), COMP-005/-017 SGI reporting schedule, COMP-009 ICA e-signature, and COMP-011's contact. Add STRAT-004 to §9. |
 
 Supporting objections:
 - **Life-safety and CRITICAL items are outside the ranking.** TSF-001 (no automated SOS page fires anywhere; the runbook describes a system that does not exist) and SEC-R10-001 (CRITICAL: the leaked service-role key cannot be shown to have been rotated) sit under "not in the top five". The §7 ranking formula scores architectural closure. It has no term for harm. Under the tie-breaker "safe over fast", these precede every delta. **VERIFIED** (blueprint §7 text) / **INFERRED** (ranking judgement).
@@ -173,11 +173,24 @@ Supporting objections:
 
 ### 2.4 Blueprint vs the synthesis files on disk
 
-When this pass started and again when §2 was written (last mtime 2026-09-25 02:37), `EXECUTIVE_SUMMARY.md`, `ROADMAP.md`, `05-escalations.md` and `06-operating-model.md` held only a heading and a "draft in progress" line, three lines each. There is no content to contradict yet. §7 records a final re-check. **The synthesizer should check its own drafts against §5 before publishing**, above all for:
+**State at the final re-check (2026-09-25).** `05-escalations.md` is written (mtime 02:51, about 31 KB). `EXECUTIVE_SUMMARY.md`, `ROADMAP.md` and `06-operating-model.md` are still three-line placeholders (mtime 02:37), so they could not be compared. `05-escalations.md` references a `ROADMAP.md` item "X8" that does not exist on disk yet.
+
+| # | `05-escalations.md` says | Blueprint says | Which is right / action |
+|---|---|---|---|
+| S-1 | §0 and "the five that cannot wait": E-S1 key rotation, E-F4 SOS paging, E-S2/E-S3 LogRocket **and Meta**, E-T1 PST, E-R1 licence class | §7 top 5 is all architecture; TSF-001 and SEC-R10-001 are "not in the top five"; STRAT-004 (Meta) has no card step or §9 question | The escalations file is right about priority. The blueprint should add §7.0 (correction 10) and STRAT-004 (correction 9). |
+| S-2 | §E: COMP-013 is **owner-managed, closed by owner statement 2026-09-24, not re-opened** | §9 Q22 asks "Is the GitHub purge request ... submitted? Has privacy counsel made the RROSH determination?" as an open question | The blueprint re-opens a standing owner decision. Q22 should point to `05` §E and be marked recorded (correction 29). |
+| S-3 | E-R7 names DRIVER-004's undisclosed acceptance-rate effect and recommends **disclose, not remove** | No card step for DRIVER-004 | The escalations file is right. Correction 6 adds the step. |
+| S-4 | E-F15 asks the founder to approve "a 4-digit trip PIN (default-on or opt-in)" and recommends "trip PIN next" | Card 2/8 BUILD PIN | **Both are wrong against the code.** The pickup OTP already is that PIN (§1.1). E-F15's PIN clause should become "confirm the existing pickup code is presented to riders as a safety check, and decide the NULL-code support path". This is for the synthesizer; this lane does not edit `05`. |
+| S-5 | §G maps the JWT key pair (old E14) to "Engineering, `ROADMAP.md` X8 (flagged, dual-accept window). Not a founder escalation." | Card 6 steps 5–8 schedule ES256/JWKS as Next | Consistent with each other, but both skip the superseding ADR to ADR-005 and the issuer-separation problem (§2.1 I-10, correction 15). An ADR is an engineering record, not a founder escalation, so the two files need not change category, only content. |
+| S-6 | E-F9: "Eight or more migrations are pending (including a security hardening migration)"; §F asks whether 379, 450 and the C125 set are applied | §1 and §3: "8 pending incl. RLS enable" | The escalations wording is the careful one and matches SEC-R10-002. The blueprint's §1/§3 wording should follow it (correction 1). |
+| S-7 | E-F7: second approver above a threshold, a daily cap, and "who holds the `finance` and `support` presets today?" | Card 7: threshold "any amount", 14 days dark | The escalations file leaves the threshold to the founder, which is right. The blueprint's "any amount" pre-empts that decision and would deadlock a two-admin team (correction 20). |
+| S-8 | E-F10 says Codex review "resumed on 2026-09-16" | (Not a blueprint claim) | Out of scope for the blueprint. It contradicts CLAUDE.md's "PR review handling" status block (silent since 30 July), so the synthesizer should cite its source or drop it. |
+
+Once `ROADMAP.md` and `EXECUTIVE_SUMMARY.md` land, the synthesizer should check them for the same four inherited errors:
 - trip PIN as a gap;
 - the money guard described as covering all writers;
 - "8 pending incl. RLS enable";
-- the top-5 order.
+- the §7 top-5 order.
 
 ---
 
@@ -220,3 +233,139 @@ Each row gives what the blueprint says, its label as corrected here, and the evi
 | 55-route `load_ride_for()` refactor (card 6 step 3) | **Keep the helper and the static test; refactor only routes being touched** | A mechanical 55-route change touches rides, auth and payments files across several tracks at once. The static test (warn, then block for *new* routes) gets the recurrence protection. |
 | Law-enforcement request tooling (card 8 step 8) and damage-fee flow (card 8 step 7) | **Later** (already), confirm no Next slot | A new money surface and a process with no volume evidence. |
 | Envelope encryption with a Canadian KMS (card 18 step 10) | **Keep Later**; keep "run the rotation runbook on a branch" Now | Correctly scoped already. Listed so it is not pulled forward. |
+
+---
+
+## §5 Required corrections — for the orchestrator to apply to `04-blueprint.md`
+
+Each item gives the location, the change to make, and the reason.
+
+1. **§1 HIST-006 row, §3 "Schema" row, §5.2 #1.** Replace "8 pending incl. RLS enable" with "8 pending per C125 plus 450 (SEC-R10-008). C43's RLS enable is live but untracked (SEC-R10-002); whether 379 is in `schema_migrations` is UNKNOWN." *Why:* internal contradiction I-1.
+2. **Card 2 (Fulfillment), card 8 (Safety), §5.1 Track B "Later", §5.3 "Trip PIN" row, §5's mid-session list, §8 absence list, §7 "Not in the top five" context.**
+   - Remove "BUILD trip PIN". Change the verdict to **KEEP** the pickup OTP (`dependencies/__init__.py:78-80`, `routes/drivers/ride_flow.py:1165-1210`, rider screens `driver-arriving.tsx:779`, `ride-status.tsx:440`, `driver-arrived.tsx:346`).
+   - Replace the build with two residual checks: the NULL/blank-OTP 409 support path, and the rider-verifies-driver direction.
+   - Delete the `trip_pin_enabled` row.
+
+   *Why:* the absence is refuted (U-2). TSF-010/BENCH-001 need a re-verification note like QUAL-003's.
+3. **Card 3 "First reversible step", H2 "Smallest first step", §5.3 "Money write guard" row, top-5 #2.**
+   - Replace "every writer passes through them, so the guard sees all" with: "about 71 direct `.table()` writes bypass `_base.py`, incl. `rides` (`ride_repo.py:260,276`) and `payouts` (`stripe_payout_sync_service.py:457,464`), plus about 90 RPC calls."
+   - Add a step 0: a write-site coverage inventory.
+   - Route `ride_repo` and the payout sync through the guard first.
+   - Set the exit criterion to "100 % coverage of registered columns and zero rejections".
+   - Keep the semgrep allowlist until coverage is complete.
+
+   *Why:* U-1 / I-6 would otherwise give false assurance on a money path.
+4. **Card 2 "Clean-sheet Spinr would" and "How".** Rider recovery must not unblock booking while the ride is `in_progress`. Either unblock after admin completion to `completed`, or record an explicit exception to the one-active-ride invariant with a state-machine test and a gate-4 dry run. Add driver notice, a fare floor and a driver dispute path. Link §9 Q16. *Why:* CLAUDE.md invariant (§1.3) and the driver objection (§1.2).
+5. **Card 1 "First reversible step" and top-5 #1.**
+   - Replace the blast-radius text with: sending `ride_status_changed`/`driver_assigned` renders the rider app's existing "Driver confirming" state (`ride-status.tsx:216`) and reverts on timeout (`useRiderSocket.ts:177-184`); a new type is a logged no-op (`:251-252`).
+   - Present DISPATCH-001's (a) emit versus (b) doc fix as a product decision.
+   - Require the "User experience effect" field.
+
+   *Why:* U-8 / F-2.
+6. **Card 1 (or card 4) "Incremental path".** Add a **Now** step for DRIVER-004: in-app and FAQ disclosure that declining affects offer priority. Add a §9 legal question on acceptance-rate ranking and classification (ASSUMED). *Why:* a re-verified finding with no step (F-4).
+7. **Card 4 "When"/"Incremental path" (cash-out UI) and card 3 step 3 (rider dispute screen).**
+   - Gate the cash-out UI on a per-driver velocity cap or clearing rule, TSF-004's chargeback count, and the first `trust_signals` detector.
+   - Add the velocity cap as a **Now** item, because the endpoint is already callable.
+   - Ship the rider dispute screen only with ADMIN-OPS-001's interim per-admin daily cap and alert.
+
+   *Why:* fraudster sequencing (§1.4).
+8. **Card 5 step 1 and "First reversible step".** Derive the wind-down key from the sorted Stripe refund ids rather than the wallet id alone. Add CORP-001 part (2), a conditional close transition (`.eq("status", current)`). *Why:* partial-refund divergence (§1.4) and a dropped half of the finding (F-3).
+9. **New §4 annex "Regulatory obligations" (or steps inside cards 8, 15, 18).**
+   - Add Now steps for STRAT-004 (Meta disclosure plus founder decision), COMP-002 dark eligibility rules, COMP-005/-017 SGI reporting schedule, COMP-009 ICA e-signature, and COMP-010/-011.
+   - Add STRAT-004 to §9.
+   - Keep every tax or legal conclusion ASSUMED.
+
+   *Why:* F-5/F-6, §1.5.
+10. **§7.** Insert a "§7.0 Precedes every delta" list: TSF-001 paging target and runbook, SEC-R10-001 rotation evidence, STRAT-004 disclosure, and the STRAT-001/-002 model memo. Re-rank the top 5 per §6 below. *Why:* safe over fast. The current formula has no harm term (§1.5).
+11. **§5.1.**
+    - Assign card 9-backend, card 10 and card 14 to tracks.
+    - Delete "share no files by construction" and list the real overlaps: card 14 ↔ Track A `earnings.py` and promotions; card 18 CAS helper ↔ Track A `_base.py`.
+    - Add a WIP limit of at most two tracks active.
+
+    *Why:* I-4, §1.6, §1.8.
+12. **§5.2 #4.** Make v1 insurance-writer deletion depend on v2 RPC coverage of every Period 2/3 opening site, not on the `ride_status_events` helper. *Why:* I-5. A regulatory fix should not wait on a discretionary programme.
+13. **§5.2 #5.** Add: "Except live PII or safety fixes (e.g. SKB-001/-002), which flip under the Change Impact Log alone." *Why:* F-8.
+14. **§7 closing paragraph and card 4 "Advantage type".** Relabel "they would build *this* system", "could not copy the 0 % fare", "structurally cannot" and "the one genuinely defensible edge" as ASSUMED, or delete them. *Why:* U-5/U-6.
+15. **Card 6.**
+    - Remove "HS256 was chosen when there was one process (ADR-005)".
+    - Move steps 5–8 (ES256/JWKS) to **Later**, behind a superseding ADR to ADR-005.
+    - Promote the card's "Simpler" (separate OTP pepper and rate-limiter key, `kid`-tagged dual HS256 secrets) to **Next**.
+    - Remove "a leaked replica env no longer mints" unless a separate issuer is designed and costed.
+
+    *Why:* A-1, I-10, U-3/U-4.
+16. **H5, card 17 step 1, top-5 #3.** Replace "flip check 11 to blocking" with "add a PR-level CI parity check with a PR-body override; the per-fork contract test is the definition of done". Keep the local hook as warn-only. *Why:* a local hook is not a gate, and its own comment says why it cannot block (§1.6).
+17. **§5.3 "Migrate-on-deploy" row and card 18 step 4.** Rollback: "variable back to `dry_run` stops future applies; an applied migration is reversed only by its rollback SQL". Add "`auto` mode applies only expand-only migrations; contract steps always go through `approve`". *Why:* not a real rollback for applied data (§1.6).
+18. **Card 18 step 5.** Delete timestamp prefixes, or move them to Later with the U-13 evidence requirement. *Why:* scope creep.
+19. **H2.** Relabel `total_fare`, `tip_amount` and `driver_earnings` FLOAT8 as INFERRED. Add rollback SQL and a compatibility view for the step-6 rename. *Why:* U-7, §1.7.
+20. **Card 7 step 3 and §5.3 "Money approvals" row.** Replace threshold "any amount" with "a threshold above routine support refunds, set by founder/finance". State that with two admins, dual approval can block refunds, and keep the daily cap as the enforced interim. *Why:* COO (§1.8).
+21. **Cards 2, 3, 9, 17 (mobile "behind a flag").** Name the delivery path for each client flag (a backend response field, as `rideless_sos_enabled` does) and the behaviour of older binaries. Change mobile rollbacks to "OTA republish; effective on next launch". *Why:* I-3, U-12.
+22. **H1, card 8 and card 7 (new tables).** Give `ride_status_events`, `trust_signals` and the approvals table a retention class and a purge step (COMP-007), and state the purpose of `trust_signals` for PIPEDA openness (ASSUMED). *Why:* §1.5.
+23. **Top-5 #1 and H1.** Relabel "gives the regulator a queryable trail" as ASSUMED. Add the calendar cost (≈ 13 × 21 days serial) beside "Cost M". *Why:* U-10/U-11.
+24. **Top-5 #5.** Change "closes the six process families" to "reduces HIST-004/-005/-008 and -013 (with C21); HIST-007 and HIST-014 are not addressed in-repo". *Why:* U-9.
+25. **§0.** Add one line: "44 loops + the watchdog = 45 `LOOP_CATALOG` entries (REL-001/-003); CLAUDE.md's 42 is stale." *Why:* removes an apparent contradiction.
+26. **Card 11.** Defer the pass redesign's contents to the founder model memo (STRAT-001), and note the tension between "priority support" and §6's "premium ... priority tiers". *Why:* I-8.
+27. **Card 16.** Reword the "replacing prose rules in CLAUDE.md" sentence to "backing prose rules with tests", matching the card's own later sentence and §9 Q28. *Why:* I-7.
+28. **Cards 10, 11, 17.** Replace the three new reviewer agents with extensions of existing charters. *Why:* §1.8.
+29. **§9 Q22.** Replace the open question with a pointer to `05-escalations.md` §E: COMP-013 is owner-managed, closed by owner statement 2026-09-24, not independently verified, and not re-opened by this audit. *Why:* the blueprint contradicts a recorded owner decision (S-2).
+
+---
+
+## §6 What survives the attack
+
+The blueprint's core stance holds up well. It favours boundary fixes over domain rewrites. It keeps the state machine, `calculate_fare`, the surge cap, the corporate RPC pair, the outbox and ADR-011. Its §6 "do not rebuild" table and its rejections (no 11-state machine, no broker, no flag vendor, no generated full client, no hosted ledger) survived every persona. So did H3, H4 and H6 as scoped. The main correction is to the **order**, plus the §5 fixes. Recommended order:
+
+**0. Before any delta: human decisions, no code or days of code.**
+- TSF-001: a paging target and a true runbook.
+- SEC-R10-001: rotation evidence.
+- STRAT-004: disclosure now, founder decision on the `Purchase` stream.
+- STRAT-001/-002: the pricing-model memo.
+- The C21 branch-protection answer.
+- The "what is applied" answer (CARTO-005).
+
+None is architecture. Each is higher-consequence than anything in the top 5. (VERIFIED as findings; the ranking is PROPOSED.)
+
+1. **Money boundary, corrected** (was #2). Start from the write-site coverage inventory, then the guard at the real writers (`ride_repo`, payout sync, RPC arguments). Include the cheap live fixes: CORP-001 (refund-set key plus conditional close), MONEY-006/-008, DRIVER-002/MONEY-001. Keep the ledger-as-constraint path and legs in staging. This is the one family (HIST-001) with a five-link recurrence chain on real money. Cost S→M; the first step stays read-only.
+2. **One schema apply path plus the process-role split** (was #4). Reconcile repo and live state, add the nightly `--status` alert, and set `SPINR_PROCESS_ROLE` on one group. Then migrate-on-deploy in `dry_run` → `approve`, with expand-only `auto` (correction 17). It unblocks the outbox, the legs projection and the RLS audit trail. Needs three human inputs.
+3. **Small shared primitives with static tests.** This is a split-out of #5 and card 13, and it covers the cheapest recurrence closures in the file:
+   - INT-001 Twilio timeout (VERIFIED this pass: `sms_service.py` constructs `Client(sid, token)` with no timeout);
+   - SKB-001's one-site FCM filter, then one exclusion function;
+   - C135's 7 unclaim sites;
+   - the loop-threshold test (REL-001);
+   - audit `request_id` (ADMIN-OPS-003);
+   - the OpenAPI snapshot diff.
+
+   Each is S, CI-only or one-site, and reversible by revert.
+4. **Fraud and ops controls before new money surfaces.** ADMIN-OPS-001's interim daily cap and alert, TSF-004 surfacing, the instant-payout velocity cap, then the rider dispute screen and the cash-out UI behind them. This pairs trust features with the controls they need.
+5. **Shared package parity via contract tests and a CI check, plus a11y primitives** (was #3). Primitives ship with zero consumers first. CarMarker reconciliation still waits on a device (human). UXA11Y-001/-002 are the two HIGH a11y findings and belong here.
+6. **Ride-state event log, additive only** (was #1). Add the table and the helper, use them for new sites and sites already being edited, and fix DISPATCH-002/-003 directly. Finish insurance v2 on its own dependency (correction 12). The full ~13-site migration moves to Later. It closes a real class, but at a calendar cost out of proportion to the live defects it removes today.
+
+Unchanged and endorsed:
+- H7 as registry plus lifecycle, with no vendor.
+- H3 scoped to durable effects, with WS and the offer push staying in-request.
+- H4's "mandatory at the wrapper" plus optimistic versions on admin editors.
+- Card 15's removal of the pre-approved `git push origin main` (re-verified).
+- Card 7's STRAT-005 removal of `platform_fee_percent`. VERIFIED this pass: its only references are the schema default `0.0` (`schemas.py:303`) and an admin update field accepting 0–1.0 (`routes/admin/settings.py:267`), with no reader. Remove it from the API and schema, and leave any column in place (additive-over-destructive).
+
+---
+
+## §7 Not verified
+
+- **Production state, all of it.**
+  - Flag values, including `minimal_fcm_offer_payload_enabled`, `ledger_*` and `fare_lock_enabled`.
+  - `schema_migrations`; whether 379/450 are applied.
+  - Secrets, including `ALERT_WEBHOOK_URL`, `SPINR_PROCESS_ROLE` and `sos_paging_webhook_url`.
+  - The Stripe, Sentry, Twilio and Redis consoles. Those connectors failed to connect in this session.
+- **Absence claims made in this file.**
+  - No clearing or velocity logic in `routes/drivers/payouts.py`: one grep, INFERRED.
+  - No CI job referencing `known-forks`: grep of `.github/workflows/*.yml`, VERIFIED for that directory only.
+  - No retention class for the proposed new tables: they do not exist yet, so this is a design gap, not a code defect.
+- **Write-site counts** are single-line grep lower bounds: 71 direct `.table()` writes, 41 under `routes/`, about 90 `supabase.rpc(`. Multi-line chains are missed. I did not check which of these touch a registered money column beyond `rides` and `payouts`.
+- **Booking-path behaviour** under the rider-recovery proposal was reasoned from CLAUDE.md's invariant and card 1's "Keep" line, not from re-reading the booking pre-check.
+- **`corporate_wallet_apply_delta`'s behaviour on a repeated key with a different amount** (§1.4) was not read. The partial-refund objection is INFERRED.
+- **Team size** comes from a shallow clone (history from 2026-09-21) and card 6's "2 users". INFERRED.
+- **Competitor practice** (per-trip transparency, PIN practice): nothing was fetched. The competitor objections rest on the blueprint's lack of sources, not on counter-sources.
+- **Tax, legal and regulatory effects** (classification, PIPEDA profiling, SGI reporting): all ASSUMED.
+- **Synthesis files.** Only `05-escalations.md` had content at the final re-check. `EXECUTIVE_SUMMARY.md`, `ROADMAP.md` and `06-operating-model.md` were still placeholders, so §2.4 compares the blueprint with `05` only. `05` references a `ROADMAP.md` item (X8) that could not be read.
+- **No test, build or command with side effects** was run. No file other than this one was written.
+
+*End of file. Written by the Step 6 hostile-review lane, 2026-09-25.*

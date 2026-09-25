@@ -28,7 +28,8 @@ import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
 import { RiderSOS } from '../../components/RiderSOS';
-import { RidelessSosEnabledContext } from '../_layout';
+import { RidelessSosEnabledContext, SavedPlaceShortcutsEnabledContext } from '../_layout';
+import { isHomePlace, isWorkPlace } from '../../utils/savedPlaceIcon';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
@@ -68,8 +69,9 @@ const PROMO_ROTATE_MS = 6000;
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, triggerRidelessEmergency, fetchActiveRide, resetBookingDraft } = useRideStore();
+  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, triggerRidelessEmergency, fetchActiveRide, resetBookingDraft, savedAddresses, setDropoff } = useRideStore();
   const ridelessSosEnabled = useContext(RidelessSosEnabledContext);
+  const savedPlaceShortcutsEnabled = useContext(SavedPlaceShortcutsEnabledContext);
   const { t } = useTranslation();
 
   // Home is a navigation root: the Android back button must background the app,
@@ -365,8 +367,50 @@ export default function HomeScreen() {
     }
   };
 
-  const handleQuickAction = (_type: string) => {
-    openNewSearch();
+  // Owner decision 2026-09-25: Home/Work with a saved place pre-fill the
+  // drop-off and open the booking flow (the rider still confirms pickup);
+  // not saved yet → Saved Places to add it. "Saved" opens Saved Places.
+  // Flag off → the previous behaviour (all three just open search).
+  const handleQuickAction = async (type: string) => {
+    if (!savedPlaceShortcutsEnabled) {
+      openNewSearch();
+      return;
+    }
+    if (type === 'saved') {
+      router.push('/saved-places' as any);
+      return;
+    }
+    const matches = type === 'home' ? isHomePlace : isWorkPlace;
+    let place = (savedAddresses ?? []).find(matches);
+    if (!place) {
+      // The list may not have loaded yet (tap right after launch) or may be
+      // stale (saved on another device): check the server once before
+      // telling the rider they have no Home/Work.
+      const fresh = await fetchSavedAddresses();
+      place = (fresh ?? []).find(matches);
+    }
+    if (!place) {
+      showToast(
+        type === 'home' ? 'Add your home' : 'Add your work',
+        `Save your ${type} address to book it in one tap.`,
+        'info',
+      );
+      router.push('/saved-places' as any);
+      return;
+    }
+    // A live ride owns the draft — never overwrite its drop-off from here.
+    if (currentRide) {
+      openNewSearch();
+      return;
+    }
+    resetBookingDraft();
+    setDropoff({
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+      ...(place.place_id ? { place_id: place.place_id } : {}),
+    });
+    router.push('/search-destination' as any);
   };
 
   const handleLocationPress = async () => {

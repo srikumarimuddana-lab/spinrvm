@@ -378,8 +378,15 @@ class TestSMSBoundedExecutor:
             assert isinstance(_occupied(sms_mod, pool), (int, float))
 
         release = threading.Event()
-        records: list = []
-        sink_id = logger.add(lambda m: records.append(m.record), level="ERROR")
+        # Capture the tags at the module's own logger.bind() rather than via a
+        # loguru sink: in the full suite other tests reconfigure the global
+        # loguru logger (handlers/patchers), so a sink added here saw nothing.
+        bound: list = []
+        real_bind = logger.bind
+
+        def _spy_bind(**kwargs):
+            bound.append(kwargs)
+            return real_bind(**kwargs)
 
         def _hang(**_kwargs):
             release.wait(5)
@@ -388,6 +395,7 @@ class TestSMSBoundedExecutor:
         try:
             with (
                 patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.1),
+                patch.object(sms_mod.logger, "bind", side_effect=_spy_bind),
                 patch("twilio.http.http_client.TwilioHttpClient"),
                 patch("twilio.rest.Client") as mock_client_cls,
             ):
@@ -403,9 +411,8 @@ class TestSMSBoundedExecutor:
                     assert _occupied(sms_mod, pool) == _capacity(sms_mod._SMS_POOLS[pool])
         finally:
             release.set()
-            logger.remove(sink_id)
 
-        tags = {r["extra"].get("sms_pool"): r["extra"].get("domain") for r in records if "sms_pool" in r["extra"]}
+        tags = {b.get("sms_pool"): b.get("domain") for b in bound if "sms_pool" in b}
         assert tags == {"sos": "safety", "otp": "auth"}
 
     @pytest.mark.asyncio

@@ -18,6 +18,17 @@ export interface DestinationModeResponse {
   destination_expires_at?: string | null;
   /** Server-computed (mode on + coords + expiry in future). Missing on pre-C136 backends. */
   active?: boolean;
+  /**
+   * settings.destination_mode_enabled (migration 482). false → the feature is
+   * hidden: no entry points, no banner, and POST is refused. Missing on older
+   * backends (which have no switch) → treated as available.
+   */
+  enabled?: boolean;
+}
+
+/** Whether destination mode may be offered to this driver at all. */
+export function isDestinationModeAvailable(d: DestinationModeResponse | null | undefined): boolean {
+  return !!d && d.enabled !== false;
 }
 
 /** Epoch ms of the expiry, or null when absent/unparseable. */
@@ -31,6 +42,8 @@ export function destinationExpiryMs(d: DestinationModeResponse | null | undefine
  * Whether the destination filter is currently limiting this driver's offers.
  *
  * Decision (C136 T2), in order:
+ *  0. `enabled === false` → off. The feature is switched off server-side
+ *     (migration 482); dispatch ignores any stored destination.
  *  1. `active === false` → off. The server is authoritative.
  *  2. `active === true` → on, UNLESS the expiry we were given has since passed
  *     on the device clock (the response was fetched earlier and the 2h TTL ran
@@ -46,6 +59,7 @@ export function isDestinationActive(
   nowMs: number = Date.now(),
 ): boolean {
   if (!d) return false;
+  if (d.enabled === false) return false;
   const exp = destinationExpiryMs(d);
   if (d.active === false) return false;
   if (d.active === true) return exp === null || exp > nowMs;

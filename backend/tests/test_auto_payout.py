@@ -11,7 +11,7 @@ Covers the review-fleet findings for PR #3925:
   escalation to manual reconcile
 - Eligibility gates (CRA GST/SIN, payouts-disabled, suspended), $10/$5,000
   bounds, Transfer call kwargs (idempotency key, cents, transfer_group)
-- Instant payout kill switch (gate unit + endpoint wiring) and the 410 stub
+- The standard-cashout 410 stub (instant payout is retired: test_instant_payout.py)
 """
 
 from __future__ import annotations
@@ -1344,97 +1344,6 @@ class TestAdminRunNow:
             await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
             fn, args, kwargs = bg.tasks[0]
             await fn(*args, **kwargs)  # must not raise
-
-
-# ── Instant payout kill switch ─────────────────────────────────────────
-
-
-class TestInstantPayoutKillSwitch:
-    @pytest.mark.anyio
-    async def test_blocks_when_disabled_for_service_area(self):
-        from backend.routes.drivers.payouts import _require_instant_payout_enabled
-
-        async def mock_get_rows(table, filters, **kw):
-            return [{"id": "sa_001", "instant_payout_enabled": False}] if table == "service_areas" else []
-
-        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", side_effect=mock_get_rows):
-            with pytest.raises(HTTPException) as exc_info:
-                await _require_instant_payout_enabled({"service_area_id": "sa_001"})
-            assert exc_info.value.status_code == 403
-
-    @pytest.mark.anyio
-    async def test_allows_when_enabled_for_service_area(self):
-        from backend.routes.drivers.payouts import _require_instant_payout_enabled
-
-        async def mock_get_rows(table, filters, **kw):
-            return [{"id": "sa_001", "instant_payout_enabled": True}] if table == "service_areas" else []
-
-        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", side_effect=mock_get_rows):
-            await _require_instant_payout_enabled({"service_area_id": "sa_001"})
-
-    @pytest.mark.anyio
-    @pytest.mark.parametrize("sa_id", [None, ""])
-    async def test_blocks_when_no_service_area(self, sa_id):
-        # ROADMAP N22: a driver with no area used to pass straight through,
-        # so a market's kill switch never reached them. Fails closed now,
-        # without a DB read.
-        from backend.routes.drivers.payouts import _require_instant_payout_enabled
-
-        get_rows = AsyncMock(return_value=[])
-        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", get_rows):
-            with pytest.raises(HTTPException) as exc_info:
-                await _require_instant_payout_enabled({"service_area_id": sa_id})
-        assert exc_info.value.status_code == 403
-        assert "service area" in exc_info.value.detail
-        get_rows.assert_not_awaited()
-
-    @pytest.mark.anyio
-    async def test_blocks_when_service_area_missing_from_db(self):
-        # A driver can write any service_area_id via PUT /drivers/me; an id
-        # that resolves to no row must not bypass the switch either.
-        from backend.routes.drivers.payouts import _require_instant_payout_enabled
-
-        async def mock_get_rows(table, filters, **kw):
-            return []
-
-        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", side_effect=mock_get_rows):
-            with pytest.raises(HTTPException) as exc_info:
-                await _require_instant_payout_enabled({"service_area_id": "sa_missing"})
-        assert exc_info.value.status_code == 403
-
-    @pytest.mark.anyio
-    async def test_returns_service_area_row_when_enabled(self):
-        from backend.routes.drivers.payouts import _require_instant_payout_enabled
-
-        row = {"id": "sa_001", "instant_payout_enabled": True, "timezone": "America/Regina"}
-        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", AsyncMock(return_value=[row])):
-            assert await _require_instant_payout_enabled({"service_area_id": "sa_001"}) == row
-
-    @pytest.mark.anyio
-    async def test_endpoint_wires_the_gate(self):
-        """Deleting the gate call in request_instant_payout must fail a test —
-        every prior endpoint test used drivers with no service_area_id, so the
-        gate could have been unwired without CI noticing."""
-        from starlette.requests import Request as StarletteRequest
-
-        from backend.routes.drivers import InstantPayoutRequest, request_instant_payout
-
-        async def mock_get_rows(table, filters=None, **kw):
-            filters = filters or {}
-            if table == "drivers":
-                return [_driver(service_area_id="sa_001")]
-            if table == "service_areas":
-                return [{"id": "sa_001", "instant_payout_enabled": False}]
-            return []
-
-        req = InstantPayoutRequest(amount=Decimal("50.00"))
-        request = StarletteRequest(
-            {"type": "http", "method": "POST", "path": "/drivers/payouts/instant", "query_string": b"", "headers": []}
-        )
-        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=mock_get_rows)):
-            with pytest.raises(HTTPException) as exc_info:
-                await request_instant_payout(req=req, request=request, current_user={"id": "user_auto_001"})
-        assert exc_info.value.status_code == 403
 
 
 # ── Standard cashout 410 ──────────────────────────────────────────────

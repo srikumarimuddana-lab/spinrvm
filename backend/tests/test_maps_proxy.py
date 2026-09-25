@@ -218,6 +218,51 @@ async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypat
 
 
 @pytest.mark.anyio
+async def test_autocomplete_logs_never_contain_typed_address_result_text_or_coords(mock_redis, monkeypatch, caplog):
+    """PIPEDA: the typed input and the top prediction are addresses, and the
+    bias point is raw lat/lng — none may reach a log line (C136 follow-up)."""
+    import logging
+
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(
+        return_value=_mock_httpx_response(
+            {
+                "suggestions": [
+                    {
+                        "placePrediction": {
+                            "placeId": "ChIJ_987",
+                            "text": {"text": "987 Privacy Crescent, Saskatoon, SK"},
+                        }
+                    }
+                ]
+            }
+        )
+    )
+
+    with caplog.at_level(logging.DEBUG), patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        await maps_proxy.places_autocomplete(
+            request=_fake_request(),
+            input="987 privacy cres",
+            session_token="tok",
+            location="52.1234,-106.5678",
+            radius=50000,
+            current_user={"id": "driver_1"},
+        )
+
+    messages = [r.getMessage() for r in caplog.records if r.name.endswith("maps_proxy")]
+    assert any("autocomplete(new) input_len=16" in m for m in messages), messages
+    assert any("results=1 top_has_place_id=True" in m for m in messages), messages
+    blob = "\n".join(messages).lower()
+    for leaked in ("987 privacy", "privacy crescent", "52.1234", "-106.5678"):
+        assert leaked not in blob, leaked
+
+
+@pytest.mark.anyio
 async def test_details_uses_new_api_and_records_essentials_charge(mock_redis, monkeypatch):
     from routes import maps_proxy
     from utils import maps_budget

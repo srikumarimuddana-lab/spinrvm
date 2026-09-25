@@ -87,6 +87,12 @@ export const RidelessSosEnabledContext = React.createContext<boolean>(false);
 // skips a screen's on-device MapViewDirections fallback before the flag is
 // confirmed on.
 export const DirectionsProxyEnabledContext = React.createContext<boolean>(false);
+// Home-screen Home/Work/Saved shortcuts (2026-09-25 saved-places fix), served
+// from GET /settings saved_place_shortcuts_enabled. True while loading and by
+// default — unlike the ship-dark flags above, this repairs buttons that were
+// broken (all three just opened search), so only an explicit `false` from the
+// backend turns the repair off and restores that old behaviour.
+export const SavedPlaceShortcutsEnabledContext = React.createContext<boolean>(true);
 
 // Keep the native splash up until BrandSplash has painted its first frame.
 // Both draw the same picture (halo + mark), so the handoff is invisible — but
@@ -365,6 +371,7 @@ function RootLayout() {
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const [ridelessSosEnabled, setRidelessSosEnabled] = useState<boolean>(false);
   const [directionsProxyEnabled, setDirectionsProxyEnabled] = useState<boolean>(false);
+  const [savedPlaceShortcutsEnabled, setSavedPlaceShortcutsEnabled] = useState<boolean>(true);
   const [minTipAmount, setMinTipAmount] = useState<number>(1);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
@@ -414,6 +421,7 @@ function RootLayout() {
           posthog_host?: string;
           min_tip_amount?: string;
           rider_no_drivers_sheet_enabled?: boolean;
+          saved_place_shortcuts_enabled?: boolean;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -421,6 +429,7 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        setSavedPlaceShortcutsEnabled(res.data?.saved_place_shortcuts_enabled !== false);
         useNoDriversStore.getState().setEnabled(res.data?.rider_no_drivers_sheet_enabled === true);
         const minTip = Number(res.data?.min_tip_amount);
         if (Number.isFinite(minTip) && minTip >= 0) setMinTipAmount(minTip);
@@ -955,7 +964,7 @@ function RootLayout() {
           }}
         >
           <ThemeProvider>
-            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} minTipAmount={minTipAmount} directionsProxyEnabled={directionsProxyEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
+            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} minTipAmount={minTipAmount} directionsProxyEnabled={directionsProxyEnabled} savedPlaceShortcutsEnabled={savedPlaceShortcutsEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
           </ThemeProvider>
         </PersistQueryClientProvider>
       ) : null}
@@ -1042,6 +1051,7 @@ function RootLayoutInner({
   ridelessSosEnabled,
   minTipAmount,
   directionsProxyEnabled,
+  savedPlaceShortcutsEnabled,
   wsState,
   confirmSheet,
   setConfirmSheet,
@@ -1054,6 +1064,7 @@ function RootLayoutInner({
   ridelessSosEnabled: boolean;
   minTipAmount: number;
   directionsProxyEnabled: boolean;
+  savedPlaceShortcutsEnabled: boolean;
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
@@ -1079,6 +1090,7 @@ function RootLayoutInner({
           <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>
           <MinTipAmountContext.Provider value={minTipAmount}>
           <DirectionsProxyEnabledContext.Provider value={directionsProxyEnabled}>
+          <SavedPlaceShortcutsEnabledContext.Provider value={savedPlaceShortcutsEnabled}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
             screenOptions={{
@@ -1136,6 +1148,7 @@ function RootLayoutInner({
             <Stack.Screen name="lost-and-found-chat" />
           </Stack>
           </MaybeStripeProvider>
+          </SavedPlaceShortcutsEnabledContext.Provider>
           </DirectionsProxyEnabledContext.Provider>
           </MinTipAmountContext.Provider>
           </RidelessSosEnabledContext.Provider>

@@ -54,6 +54,20 @@ def test_registered_before_dispute_id_path_param(client, _set_admin, monkeypatch
     assert get_rows.call_args.args[0] == "stripe_disputes"
 
 
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_chargebacks_path_not_captured_by_dispute_id_write_routes(client, _set_admin, monkeypatch, method):
+    """In-app disputes disabled 2026-09-25: PUT /disputes/{dispute_id} now
+    answers 410 and DELETE was removed. Neither may be reachable through the
+    literal `chargebacks` segment as if it were a dispute id, and the
+    read-only GET must still reach the chargebacks handler."""
+    get_rows = AsyncMock(return_value=[])
+    monkeypatch.setattr(m.db_supabase, "get_rows", get_rows)
+    resp = client.get("/api/admin/disputes/chargebacks")
+    assert resp.status_code == 200
+    assert get_rows.call_args.args[0] == "stripe_disputes"
+    assert getattr(client, method)("/api/admin/disputes/chargebacks").status_code in (405, 410)
+
+
 def test_filters_status(client, _set_admin, monkeypatch):
     get_rows = AsyncMock(return_value=[])
     monkeypatch.setattr(m.db_supabase, "get_rows", get_rows)

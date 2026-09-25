@@ -26,6 +26,15 @@ const MIN_QUERY_LEN = 3;
 export interface UsePlacesAutocompleteResult {
   predictions: PlacePrediction[];
   loading: boolean;
+  /**
+   * 'unavailable' when the latest request failed (429 rate limit, 5xx /
+   * budget breaker, network) — distinct from a successful search that simply
+   * returned no predictions. null otherwise. Additive; existing callers that
+   * ignore it keep the old "failure looks like no results" behaviour.
+   */
+  error: 'unavailable' | null;
+  /** True once the latest request for the current input has completed successfully. */
+  searched: boolean;
   /** Drop all current results — call when the caller selects a prediction. */
   clear: () => void;
   /** Mint a fresh session token after closing one with a details call. */
@@ -40,6 +49,8 @@ export function usePlacesAutocomplete(
 ): UsePlacesAutocompleteResult {
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<'unavailable' | null>(null);
+  const [searched, setSearched] = useState(false);
   const sessionTokenRef = useRef<string>(newPlacesSessionToken());
   // Bump on bias/input change so a late-arriving response can't overwrite a newer one.
   const requestSeqRef = useRef(0);
@@ -47,6 +58,9 @@ export function usePlacesAutocomplete(
 
   useEffect(() => {
     const searchInput = input.trim();
+    // Any input/bias change invalidates the previous outcome.
+    setError(null);
+    setSearched(false);
     if (searchInput.length < MIN_QUERY_LEN) {
       setPredictions([]);
       setLoading(false);
@@ -71,9 +85,11 @@ export function usePlacesAutocomplete(
         // Discard if a newer request has started since this one fired.
         if (mySeq !== requestSeqRef.current) return;
         setPredictions(data?.predictions ?? []);
+        setSearched(true);
       } catch {
         if (mySeq !== requestSeqRef.current) return;
         setPredictions([]);
+        setError('unavailable');
       } finally {
         if (mySeq === requestSeqRef.current) setLoading(false);
       }
@@ -87,6 +103,8 @@ export function usePlacesAutocomplete(
   const clear = useCallback(() => {
     setPredictions([]);
     setLoading(false);
+    setError(null);
+    setSearched(false);
   }, []);
 
   const rotateSessionToken = useCallback(() => {
@@ -96,6 +114,8 @@ export function usePlacesAutocomplete(
   return {
     predictions,
     loading,
+    error,
+    searched,
     clear,
     rotateSessionToken,
     sessionToken: sessionTokenRef.current,

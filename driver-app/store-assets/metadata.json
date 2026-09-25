@@ -15,9 +15,9 @@
     "price_tier": "0",
     "localizations": {
       "en-CA": {
-        "description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n• Go online instantly — one tap to start accepting rides\n• Clear turn-by-turn navigation to pickup and dropoff\n• OTP handshake confirms the right rider every time\n• Live earnings dashboard — see today's total in real time\n• Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n• Quest challenges with bonus payouts for hitting trip targets\n• Loyalty points redeemable for fuel discounts and accessories\n• Driver wallet for instant payouts\n• Push notifications for new ride requests even when backgrounded\n• Dark mode and accessible design",
+        "description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n• Go online instantly — one tap to start accepting rides\n• Clear turn-by-turn navigation to pickup and dropoff\n• OTP handshake confirms the right rider every time\n• Live earnings dashboard — see today's total in real time\n• Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n• Quest challenges with bonus payouts for hitting trip targets\n• Loyalty points redeemable for fuel discounts and accessories\n• Weekly automatic payouts to your bank\n• Push notifications for new ride requests even when backgrounded\n• Dark mode and accessible design",
         "keywords": "driver,rideshare,earn,gig,Saskatchewan,Regina,Saskatoon,taxi,cab,income,0 commission",
-        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Wallet with instant payout\n• Accessibility improvements throughout\n• Dark mode",
+        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Weekly automatic payouts\n• Accessibility improvements throughout\n• Dark mode",
         "promotional_text": "Saskatchewan's first 0% commission rideshare. Sign up now — no weekly fees, ever."
       }
     },
@@ -36,8 +36,8 @@
       "en-CA": {
         "title": "Spinr Driver",
         "short_description": "Drive in Saskatchewan. Keep 100% of every fare.",
-        "full_description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n● Go online instantly — one tap to start accepting rides\n● Clear turn-by-turn navigation to pickup and dropoff\n● OTP handshake confirms the right rider every time\n● Live earnings dashboard — see today's total in real time\n● Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n● Quest challenges with bonus payouts for hitting trip targets\n● Loyalty points redeemable for fuel discounts and accessories\n● Driver wallet for instant payouts\n● Push notifications for new ride requests even when backgrounded\n● Dark mode and accessible design",
-        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Wallet with instant payout\n• Accessibility improvements throughout\n• Dark mode"
+        "full_description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n● Go online instantly — one tap to start accepting rides\n● Clear turn-by-turn navigation to pickup and dropoff\n● OTP handshake confirms the right rider every time\n● Live earnings dashboard — see today's total in real time\n● Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n● Quest challenges with bonus payouts for hitting trip targets\n● Loyalty points redeemable for fuel discounts and accessories\n● Weekly automatic payouts to your bank\n● Push notifications for new ride requests even when backgrounded\n● Dark mode and accessible design",
+        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Weekly automatic payouts\n• Accessibility improvements throughout\n• Dark mode"
       }
     },
     "service_account_key": "TODO: path to play-service-account.json (see docs/deploy/04-mobile-eas.md)"

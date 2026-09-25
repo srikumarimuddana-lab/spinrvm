@@ -421,6 +421,10 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # against the same table.
         app_settings = await _deps.get_app_settings()
         _availability_v2 = bool(app_settings.get("driver_availability_v2_enabled"))
+        # C136 / migration 482: destination mode is off unless an admin turned
+        # it on. `is True` so a missing key or a non-bool never enables the
+        # hard destination filter.
+        _destination_mode_enabled = app_settings.get("destination_mode_enabled") is True
         # Compute offer timeout early so it can be embedded in dispatch payloads —
         # driver-app uses this for the per-offer countdown instead of a cached
         # value, which drifted when admin changed the setting mid-session.
@@ -970,6 +974,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 search_radius,
                 allowed_area_ids=_area_ids,
                 allow_unassigned_area=_allow_unassigned_area,
+                destination_mode_enabled=_destination_mode_enabled,
             )
             logger.info(
                 f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
@@ -1134,6 +1139,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             search_radius,
                             allowed_area_ids=_area_ids,
                             allow_unassigned_area=_allow_unassigned_area,
+                            destination_mode_enabled=_destination_mode_enabled,
                         )
                         if drivers_with_distance:
                             logger.info(

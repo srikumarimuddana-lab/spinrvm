@@ -25,8 +25,10 @@ _USER_ID = "user-exp-1"
 _RIDE_ID = "ride-exp-1"
 
 
-def _driver():
-    return {"id": _DRIVER_ID, "user_id": _USER_ID, "status": "active", "is_online": True}
+def _driver(**kw):
+    base = {"id": _DRIVER_ID, "user_id": _USER_ID, "status": "active", "is_online": True}
+    base.update(kw)
+    return base
 
 
 def _ride(status="searching", driver_id=None):
@@ -39,12 +41,12 @@ def _request(body):
     return req
 
 
-def _get_rows(pending_offer_rows):
+def _get_rows(pending_offer_rows, driver):
     """get_rows fake: the drivers lookup, then the pending ride_offers lookup."""
 
     async def _fake(table, filters=None, **_kw):
         if table == "drivers":
-            return [_driver()]
+            return [driver]
         if table == "ride_offers":
             assert filters == {"ride_id": _RIDE_ID, "driver_id": _DRIVER_ID, "status": "pending"}
             return pending_offer_rows
@@ -57,8 +59,9 @@ class _Env:
     """Patches every side effect of the legacy decline path so each test can
     assert which ones ran."""
 
-    def __init__(self, *, flag, pending_offer_rows, ride, offer_update_rows=None, settings_error=None):
+    def __init__(self, *, flag, pending_offer_rows, ride, offer_update_rows=None, settings_error=None, driver=None):
         self.flag = flag
+        self.driver = driver or _driver()
         self.pending_offer_rows = pending_offer_rows
         self.ride = ride
         self.offer_update_rows = offer_update_rows if offer_update_rows is not None else []
@@ -71,7 +74,8 @@ class _Env:
             if self.settings_error
             else AsyncMock(return_value={"offer_expired_decline_as_miss_enabled": self.flag})
         )
-        self.get_rows = _get_rows(self.pending_offer_rows)
+        self.get_rows = _get_rows(self.pending_offer_rows, self.driver)
+        self.decline_v2 = AsyncMock(return_value=None)
         self.run_sync = AsyncMock(return_value=MagicMock(data=self.offer_update_rows))
         self.acceptance = AsyncMock()
         self.release = AsyncMock(return_value=1)
@@ -93,6 +97,7 @@ class _Env:
             ("backend.utils.redis_client.redis_set", self.redis_set),
             ("backend.routes.drivers._deps.spawn", MagicMock(side_effect=lambda coro: coro.close())),
             ("backend.routes.rides.match_driver_to_ride", AsyncMock()),
+            ("backend.services.driver_offer_service.decline_offer_v2", self.decline_v2),
         ):
             self._stack.enter_context(patch(target, mock))
         return self
@@ -165,6 +170,29 @@ async def test_assigned_driver_keeps_the_decline_path():
     assert result == {"success": True}
     env.release.assert_awaited_once()
     assert all(call.args[0] != "ride_offers" for call in env.get_rows.await_args_list)
+    # Still not a response: the revert runs, but the miss streak is not wiped.
+    env.reset_streak.assert_not_awaited()
+
+
+async def test_assigned_driver_manual_decline_still_resets_streak():
+    ride = _ride(status="driver_assigned", driver_id=_DRIVER_ID)
+    with _Env(flag=True, pending_offer_rows=[], ride=ride, offer_update_rows=[]) as env:
+        result = await _decline({})
+
+    assert result == {"success": True}
+    env.reset_streak.assert_awaited_once_with(_DRIVER_ID)
+
+
+async def test_v2_driver_pending_offer_is_left_before_the_v2_decline():
+    # The branch must run before the is_v2_driver path: a v2 decline RPC would
+    # reset the streak inside resolve_driver_offer.
+    driver = _driver(controller_session_id="sess-1")
+    with _Env(flag=True, pending_offer_rows=[{"id": "offer-1"}], ride=_ride(), driver=driver) as env:
+        result = await _decline({"reason": "offer_expired"})
+
+    assert result == {"success": True, "outcome": "left_to_expire", "already_resolved": False}
+    env.decline_v2.assert_not_awaited()
+    env.reset_streak.assert_not_awaited()
 
 
 async def test_settings_read_failure_is_treated_as_flag_off():

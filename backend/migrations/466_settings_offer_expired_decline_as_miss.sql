@@ -13,6 +13,12 @@
 -- expire_offer_v2): miss streak up, auto-offline at the threshold, no
 -- decline audit row.
 --
+-- Scope: legacy offers are counted as a miss. A v2 offer (online_epoch set)
+-- counts as a miss only when the driver app recorded a 'presented' delivery
+-- receipt (offer_expiry_counts_as_miss, migration 461); the driver app does
+-- not send receipts yet, so for v2 drivers the streak is kept (no longer
+-- reset) but not incremented.
+--
 -- Plan: .claude/plans/2026-09-25-dispatch-reoffer-and-search-window.md (Phase 0)
 --
 -- Default false: nothing changes until an admin turns it on.

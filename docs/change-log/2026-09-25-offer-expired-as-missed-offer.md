@@ -65,10 +65,31 @@ Blast radius: dispatch, cross-surface (backend + driver-app), flag-gated.
 - Expiry path reused, not modified: `process_expired_offer`,
   `_batch_offer_timeout_handler`, `offer_expiry_reaper` (10 s loop, runs on
   every replica, restart-safe), `expire_offer_v2`.
-- Not changed: assigned drivers (admin direct-assignment / single-offer,
-  `is_assigned`) keep the decline path, because that path is what reverts the
-  ride to `searching`. Requests with no pending offer (server already
-  expired it) fall through to today's handling, including today's 403.
+- Assigned drivers (admin direct-assignment / single-offer, `is_assigned`)
+  keep the decline path, because that path is what reverts the ride to
+  `searching`. With the flag on, an `offer_expired` decline there no longer
+  resets the miss streak (it is not counted as a miss either — no offer row
+  exists for the expiry path to count). Requests with no pending offer
+  (server already expired it) fall through to today's handling, including
+  today's 403.
+- **v2 drivers (partial fix).** For a v2 offer (`online_epoch` set,
+  `controller_session_id` on the driver), `resolve_driver_offer('expire')`
+  counts a miss only when a `'presented'` delivery receipt exists
+  (`offer_expiry_counts_as_miss`, migration 461). The driver app never calls
+  `POST /drivers/offers/{id}/receipts`, so v2 expiries resolve as
+  `expired_delivery_unknown` / `expired_availability_changed` with the streak
+  **kept**. Before this change the v2 decline RPC **reset** it. So for v2
+  drivers this stops the wipe but does not add a miss; full auto-offline for
+  them needs the driver app to send delivery receipts (driver-availability v2
+  work, out of scope here).
+- Re-dispatch timing: when this driver's auto-decline is the last pending
+  offer, the decline path used to re-dispatch immediately. Now re-dispatch
+  happens when the batch timeout handler or the reaper expires the offer —
+  both anchored to the same `expires_at`, so a sub-second to ≤10 s delay.
+- Session check: the new branch only checks that a pending offer exists for
+  this driver; it does not validate a v2 session. It writes nothing, and the
+  expiry RPC re-checks the session when it decides the outcome, so a stale
+  session just gets a 200 instead of a rejection.
 - Driver availability: the driver stays claimed (`is_available` false,
   Period 2 open) from the app's auto-decline until the server expiry at
   `expires_at`. That is normally under a second, bounded by the offer
@@ -101,8 +122,8 @@ Blast radius: dispatch, cross-surface (backend + driver-app), flag-gated.
 | `backend/migrations/466_settings_offer_expired_decline_as_miss.sql` | New settings column, default false | Flag |
 | `backend/routes/admin/settings.py` | `offer_expired_decline_as_miss_enabled` field | Admin can set the flag |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Column added to the snapshot | Drift guard |
-| `backend/routes/drivers/ride_flow.py` | `_offer_expired_as_miss_enabled()` + early return in `decline_ride`; two comments updated | The fix |
-| `backend/tests/test_decline_offer_expired_as_miss.py` | New: 6 cases | Coverage |
+| `backend/routes/drivers/ride_flow.py` | `_offer_expired_as_miss_enabled()` + early return in `decline_ride`; assigned path skips `reset_miss_streak` for `offer_expired`; two comments updated | The fix |
+| `backend/tests/test_decline_offer_expired_as_miss.py` | New: 8 cases (incl. v2 driver ordering, assigned-path streak) | Coverage |
 | `driver-app/store/driverStore.ts` | Countdown auto-decline passes `'offer_expired'` | Signal the backend |
 | `driver-app/store/__tests__/driverStore.test.ts` | 2 new cases | Coverage |
 
@@ -154,8 +175,16 @@ Column drop SQL is in the migration header.
       insurance periods (Period 2 closed by the expiry path), observability
       (info log on the new branch; settings read failure logged at error).
 - [x] Feature-flagged, default off.
-- [ ] `spinr-dispatch-reviewer` and `spinr-insurance-period-auditor` — running
-      on the diff at time of writing; this entry is updated with their findings.
+- [x] `spinr-insurance-period-auditor`: no blockers — Period 2 is always
+      closed by the expiry path (reaper covers a lost in-process timer), the
+      idle-but-Period-2 window is jitter-bounded, Period 0 is recorded on
+      auto-offline, no double writes. Verdict: safe to merge.
+- [x] `spinr-dispatch-reviewer`: no state-corrupting blockers. Findings and
+      what was done: (1) v2 drivers are not counted as a miss (receipts) —
+      documented above as a partial fix, not widened; (2) assigned path still
+      reset the streak on `offer_expired` — fixed, with a test; (3) no v2
+      driver test — added; (4) re-dispatch timing and (5) session check —
+      documented above.
 - No production build of driver-app was run (no node_modules available).
 
 ## What was NOT verified

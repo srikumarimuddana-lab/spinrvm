@@ -253,6 +253,10 @@ _MIGRATION_FILES = (
     "462_driver_readiness_policy.sql",
     "463_refresh_successor_commitment.sql",
     "464_driver_availability_transition_hardening.sql",
+    # 486 replaces 464's transition_driver_availability body (CR-2026-094:
+    # controller rebind, controller_rebound/server_time, replayed flag).
+    # Same append-only pattern as 403 over 402 and 421 over 253 above.
+    "486_driver_availability_controller_rebind.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

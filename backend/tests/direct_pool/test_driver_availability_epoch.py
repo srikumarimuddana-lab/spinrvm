@@ -23,13 +23,6 @@ def availability_db(pg_cur):
     # driver_ready_window(), get_driver_availability_snapshot's
     # readiness_enforced/controller_rebound fields, etc.) back down to
     # 457's original behavior on every single test in this file.
-    # 486 (CR-2026-094) replaces 464's transition body and is not yet in
-    # conftest.py's _MIGRATION_FILES, so apply it here; it is the newest
-    # definition, so re-applying it per test never rolls anything back.
-    _apply_migration_sql(
-        pg_cur,
-        (migrations / "486_driver_availability_controller_rebind.sql").read_text(encoding="utf-8"),
-    )
     pg_cur.execute("UPDATE settings SET driver_availability_v2_enabled=false WHERE id='app_settings'")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_session_id text")
     pg_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0")

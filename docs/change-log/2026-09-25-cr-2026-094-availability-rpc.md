@@ -63,9 +63,12 @@
 - Refund test now asserts what the SQL guarantees: `held == 5` (only the seeded row), the only
   clawback row is the seeded one (no new hold written), and the refund still projected
   (`rides.refund_amount == 5`).
-- `test_driver_availability_epoch.py`'s fixture applies 486 per test (it is the newest
-  definition, so re-applying it never rolls anything back), because `direct_pool/conftest.py`'s
-  `_MIGRATION_FILES` allowlist stops at 464 and was outside this change's file scope.
+- `direct_pool/conftest.py`'s session-scoped `_MIGRATION_FILES` now lists 486 right after 464
+  (same append-only precedent as 403 over 402 and 421 over 253), so every direct_pool file runs
+  against the current definition. `test_offer_decision_atomicity.py`'s `offer_db` fixture, which
+  re-applies 457-464 per test, now also applies 486 after 464 so it does not roll the function
+  back. (An earlier revision applied 486 ad hoc in the epoch fixture; that leaked across files via
+  the autocommit session connection and was replaced after reviewer feedback.)
 
 ## 4. Risk & impact on existing functionality
 
@@ -107,7 +110,9 @@
 | File path | What changed | Why |
 |---|---|---|
 | `backend/migrations/486_driver_availability_controller_rebind.sql` | New `CREATE OR REPLACE` of `transition_driver_availability` from 464 + rebind, `controller_rebound`/`server_time`, `replayed` | Restore the lost 457 edits append-only (CR-2026-094, owner decision) |
-| `backend/tests/direct_pool/test_driver_availability_epoch.py` | Fixture applies 486; system-actor misuse tests assert returned `UNAUTHORIZED_SESSION` + no mutation + no saved request | Exercise the current definition; keep 464's return-a-code behaviour per owner |
+| `backend/tests/direct_pool/conftest.py` | `_MIGRATION_FILES` adds 486 after 464 | Whole direct_pool tier runs against the current function definition |
+| `backend/tests/direct_pool/test_offer_decision_atomicity.py` | `offer_db` applies 486 after its 457-464 re-apply | Its per-test re-apply would otherwise roll the function back to 464 |
+| `backend/tests/direct_pool/test_driver_availability_epoch.py` | System-actor misuse tests assert returned `UNAUTHORIZED_SESSION` + no mutation + no saved request | Keep 464's return-a-code behaviour per owner |
 | `backend/tests/direct_pool/test_atomic_driver_refund_holds.py` | Cash-paid test asserts `held == 5`, no new clawback row, refund still projected | Test asserted an unreachable value; SQL is correct |
 | `docs/change-log/2026-09-25-cr-2026-094-availability-rpc.md` | This entry | Mandatory change log |
 
@@ -173,8 +178,11 @@ Concrete scenario (flag on): driver online with `controller_session_id='sess-A'`
   transient failures in unrelated `test_offer_decision_atomicity_resolve.py` race tests with
   `RuntimeError: can't start new thread` — host thread exhaustion from parallel workstreams;
   both passed on the next two full runs and in the baseline).
-- [x] 486 applied repeatedly (once per test in the availability fixture) on top of 457-464 with
-  no error — `CREATE OR REPLACE` is re-runnable.
+- [x] After moving 486 into `conftest.py`'s `_MIGRATION_FILES` and `offer_db`: one sequential
+  full direct_pool run (no xdist, `timeout 900`): **181 passed, 1 skipped, 0 failed** across all
+  files.
+- [x] 486 applied repeatedly (once per `offer_db` test, after 457-464) with no error —
+  `CREATE OR REPLACE` is re-runnable.
 - [x] Mocked suite subset: `pytest -o addopts="" -k "availability or go_online or driver_presence or refund_hold"`
   (excluding `tests/rls`, `tests/direct_pool`): 137 passed, 1 skipped.
 - [x] `ruff check` / `ruff format --check` on both changed test files: clean.
@@ -189,9 +197,22 @@ Concrete scenario (flag on): driver online with `controller_session_id='sess-A'`
   `driver-availability-db.yml` job (postgres:15) is the CI confirmation.
 - Production state (flag off, 0 rows/drivers) is taken from the CR-2026-094 report, not
   re-queried by this change. Migration 486 has not been applied to any shared database.
-- `direct_pool/conftest.py`'s `_MIGRATION_FILES` still stops at 464; 486 is applied by the
-  availability test fixture instead. Adding it to the allowlist is a follow-up for whoever owns
-  that file.
+- Pre-existing, not changed here: `test_driver_availability_presence_epoch.py`'s `presence_db`
+  fixture re-applies **457 alone** per test on the autocommit session connection, so every
+  direct_pool file that runs after it in collection order (the readiness files, until
+  `offer_db` re-applies 457-464+486) exercises 457's transition body, not 486's. Those files
+  pass either way today, but the fixture should stop re-applying 457 (the fix #5770 already made
+  for the epoch file).
+
+## Pre-rollout follow-ups (not in this PR — before `driver_availability_v2_enabled` is turned on)
+
+From the dispatch review of this change:
+
+1. No proactive WebSocket notice to a displaced device: after a rebind, the old phone only learns
+   it lost control on its next call (`UNAUTHORIZED_SESSION` / `ONLINE_EPOCH_STALE`).
+2. `displace_controller` has no `OBLIGATION_ACTIVE` guard. It is unreachable today (no caller
+   sends it), but needs an owner acknowledgement or a ticket before v2 is enabled.
+3. Get one green `driver-availability-db.yml` run on postgres:15 (local verification was PG16).
 - No end-to-end driver-app flow was exercised (v2 is dark; the app has no visual tooling).
 
 ## Sign-off

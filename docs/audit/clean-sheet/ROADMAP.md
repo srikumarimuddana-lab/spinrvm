@@ -28,7 +28,7 @@ These come before any architecture work, whatever their score, because each is h
 | 0.3 | **Meta disclosure decision** — stop per-ride purchase events now; decide the SDK's future; disclose what is kept | STRAT-004 | N3 | E-S3 |
 | 0.4 | **Pricing and revenue-model memo** — booking fee, minimum fare, per-minute rate, class multipliers, what the documents promise | STRAT-001, STRAT-002, STRAT-008 | N14, X19 | E-F1, E-F2 |
 | 0.5 | **Branch-protection answer** — what `main` actually requires | C21 (HIST-013/-014) | N4 | E-F10 |
-| 0.6 | **"What is applied in production"** — migration status read on production | CARTO-005, SEC-R10-002 | N24 | E-F9 |
+| 0.6 | **"What is applied in production"** — migration status read on production. *Partly answered live 2026-09-25 (`10-live-checks.md` §2, LIVE-001): about 32 applied files have no tracking row, so do **not** run the migration runner against production until N25 back-fills them.* | CARTO-005, SEC-R10-002, LIVE-001 | N24, N25 | E-F9 |
 
 ### §1.1 Now items
 
@@ -60,6 +60,40 @@ These come before any architecture work, whatever their score, because each is h
 | **N24** | **"What is applied in production" answer:** the DB owner runs the migration runner's `--status` read-only on production and records whether 379, 450 and the C125 set are applied; publishes the result against CARTO-005. **Human-only** (needs `DATABASE_URL`). | CARTO-005, SEC-R10-002 (RR-08) | DB-OWNER | none (read-only) | n/a | N21 (owner named) | HUMAN / OPS |
 
 **Now items that can start today, fully in parallel (disjoint lanes):** N1 (OPS) · N5 (AGENT-CFG) · N8 (AUTH) · N9 and N10 (HUMAN) · N17 (OBS) · N19 (MONEY) · N20 (CORP). N4's workflow change (CI) is also disjoint from all of these; N19's semgrep edit is in `.semgrep/`, not the workflow files N4 touches.
+
+### §1.2 Additions from the live checks and research sessions (2026-09-25)
+
+The live read-only checks (`10-live-checks.md`) and the five research sessions (`research/`) ran after this roadmap was written. They add the rows below and change the urgency of some rows above. Nothing here reorders §1.0.
+
+**Rows above that the live checks made firmer:**
+- **N7:** the SOS paging webhook is **empty in production** (VERIFIED-LIVE). A real SOS pages no one today.
+- **N3:** the Meta token and rider dataset are both set in production, so per-ride events are very likely being sent. Note that the live table is `settings`, not `app_settings`.
+- **N22:** instant payout is enabled in **all 6** service areas.
+- **N19:** nine `rides` money columns are `double precision` in production; only `grand_total` is `numeric` (MONEY-006 VERIFIED-LIVE).
+- **N6 and N1:** set `OTP_PEPPER` **before or in the same window as** any `JWT_SECRET` rotation. The pepper falls back to `JWT_SECRET` (`backend/utils/crypto.py:28`), so rotating the secret first also breaks every in-flight OTP (research Session 5, SESS5-01).
+- **N5:** `git push origin main` is still on the agent allowlist (`.claude/settings.json:29`, re-confirmed).
+
+**New Now rows:**
+
+| # | Item | Closes | Owner role | Flag / switch | Rollback | Depends on | Lane |
+|---|---|---|---|---|---|---|---|
+| **N25** | **Back-fill the migration tracking table.** For each of the about 32 files numbered 424+ with no `schema_migrations` row, confirm its objects exist with a read-only query, then insert the tracking row with the runner's own checksum logic. Until then, no one runs `run_migrations` against production. It must land before migration 450 and before any migrate-on-deploy plan. **Human-only** (needs `DATABASE_URL`). | LIVE-001, SESS5-03 | DB-OWNER | none | Delete the inserted tracking rows | N21 (owner named) | HUMAN / OPS |
+| **N26** | **Set the forced-upgrade floor.** `min_rider_app_version` and `min_driver_app_version` are empty in production, so no old app build is ever blocked. Set them to the oldest build still safe to run, after checking that released binaries send `X-App-Version`. | Session 4 MR-10 | MOBILE + SRE | `settings` row (no deploy) | Clear the two values | Header rollout confirmed | OPS |
+| **N27** | **SOS paging service and triage runbook** as specified in Session 3 §3 ranks 1–2: a free-tier paging tool, an on-call rota, a weekly synthetic test page, and paging from the check-in and route-deviation paths too. This is how N7 gets done. | TSF-001, CS-11 | T&S + FOUNDER | `sos_paging_webhook_url` | Unset the webhook | E-F4 | OPS + DOCS |
+| **N28** | **Turn on incentive window and budget enforcement** (`incentive_eligibility_enforced`, off live) after auditing live campaigns and telling drivers. | CS-7, TSF-002 | BE-PAY + T&S | existing flag | Flag off | Campaign audit | OPS |
+| **N29** | **Supply-chain quick wins:** remove the `\|\| true` hash-check fallback from the three `ci-guardrails.yml` steps (`ci.yml` is already strict); SBOM and SLSA L2 provenance in the image-scan job; decide the unused root `Dockerfile`. | Session 5 §3 | CI | none | Revert the workflow lines | none | CI |
+| **N30** | **Rider-facing escalation on a stale in-progress ride**, and the shared `Text` font-scaling bound with a `Money` variant on the ~15 money figures. | RIDERJ-002, UXA11Y-001 | MOBILE | OTA bundle | Republish the prior bundle | none | RIDER + SHARED |
+
+**New Next rows (weeks 3–8):**
+- **LIVE-002:** set an explicit `search_path` on the 16 flagged functions, starting with `match_and_claim_driver` and the `audit_logs` / `financial_events` immutability guards. This needs a migration, so it goes after N25.
+- **LIVE-003:** revoke `EXECUTE` on `is_party_to_lost_and_found_case` from `authenticated`.
+- **Session 2 write-site inventory** (H2 step 0) as a read-only script, before the money write guard.
+- **Session 3 `trust_signals` table and one review queue.** This is the only true traceability gap (fraud detection, S-safety-05, `matrices/traceability-reconciliation.md`).
+- **Session 1 dispatch disclosure pack:** disclose the acceptance-rate penalty; name and replay-test the `0.1` ceiling at `services/dispatch_service.py:94`; surface the existing `eta_error` metric.
+- **Session 4 offline trip completion:** queue the completion call. Today `driver-app/store/driverStore.ts:802-812` posts it directly, with no offline queue.
+- **Session 5 token hardening:** narrow the Sentry-triage agent's SQL grant (SESS5-02), and make the admin jti denylist fail closed.
+
+**Lane check for §1.2:** N25 (HUMAN), N26 and N28 (OPS config), N29 (CI: `ci-guardrails.yml` and the image-scan job only, **not** the two summary-job expressions N4 edits; sequence N29 after N4 if one person does both), and N30 (RIDER + SHARED) are disjoint from each other and from the §1.1 parallel set.
 
 ---
 
@@ -201,7 +235,8 @@ Cut or moved to Later by the hostile review and not scheduled here: timestamp mi
 
 ## §8 Status of inputs at the time of writing (2026-09-25)
 
-- `04-blueprint.md`: complete (§0–§9), **without** the corrections in `08-hostile-review.md` §5 applied; this roadmap applies them (see §5).
+- `04-blueprint.md`: complete (§0–§10). It now carries all 29 hostile-review corrections in its §10 changelog. The live check reverses one of them, correction 19: `total_fare`, `tip_amount` and `driver_earnings` are float in production (`10-live-checks.md` §1).
+- `10-live-checks.md` and `research/session-1` to `session-5`: added after first writing; see §1.2.
 - `08-hostile-review.md`: final; its §2.4 comparisons were applied to `05-escalations.md` and here.
 - `07-reverification.md` §4 corrections: applied (INT-003, SKB-007, COMP-018, CORP-002, DRIVER-004, SEC-R10-012, BENCH-006, count refreshes).
 - **Error tally.** Across the independent re-verification, the orchestrator's checks and the hostile review, **four core claims have been refuted, all of the same kind — an absence or "everywhere" claim broader than the search behind it:** QUAL-003 (the test exists), TSF-010/BENCH-001 (the pickup code already is a trip PIN), a traceability-matrix row calling driver navigation weak (it is built and tested: `driver-app/lib/navigation/launchNavigation.ts`, used at `ActiveRidePanel.tsx:376,521`), and the blueprint's claim that every money writer passes through `repositories/_base.py`. Three more were partly wrong (INT-003, SKB-007, COMP-018). Every item above that rests on an absence claim not re-checked by a second agent should be re-grepped with several spellings before work starts.

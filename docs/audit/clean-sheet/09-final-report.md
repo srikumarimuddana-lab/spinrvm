@@ -91,13 +91,13 @@ The full list, with options and who can answer each, is in [`05-escalations.md`]
 
 ## 4. What was not verified
 
-- **Live state.** No production data, flag values, secrets or vendor consoles were read. Unknowns include:
+- **Live state, partly.** A later read-only pass checked production database metadata and settings flags ([`10-live-checks.md`](10-live-checks.md)). No table rows, personal data or secret values were read. Still unknown:
   - whether the key was rotated;
-  - whether the alert webhook is set;
+  - whether the alert webhook and `OTP_PEPPER` are set (they live in the hosting providers, not the database);
   - the backup tier;
   - whether Render is live;
-  - which migrations are applied;
-  - what branch protection requires.
+  - what branch protection requires;
+  - 24 of the 32 untracked migrations (a sample of 8 was checked).
 - **Execution.** No test suite run, no load test and no Semgrep run. The only execution was a test-collection count.
 - **The rider and driver apps.** They have no screenshot tooling, so every app claim is reasoned from code.
 - **Tax, legal and regulatory.** Government sites were unreachable, so every such claim is labelled assumed.
@@ -184,9 +184,26 @@ Session 2 (pricing, payments and tax) matters as much. But its hardest questions
 - Step 6, both halves: the 16-card independent re-check and the hostile review.
 - This report.
 
-**Not done:**
-- **Tier B matrices:** integration, API inventory, event/WebSocket inventory, agent permissions, dependency graph, test coverage, docs coverage, compliance, incident and tech-debt register.
-- **Traceability:** reconciling the 769 orphan rows in `traceability.csv`.
-- **Live checks:** any check against production.
-- **The five research sessions.**
-- **Nothing else from the programme is open.** The blueprint carries all 29 hostile-review corrections (its §10 changelog), and its §7 order matches this report and the roadmap.
+**Also done, after this report was first written:**
+- **Tier B matrices:** all ten are in `matrices/`: integration, API inventory, event/WebSocket inventory, agent permissions, dependency graph, test coverage, docs coverage, compliance, incident and tech-debt register.
+- **Traceability:** the 769 orphan rows are reconciled in [`matrices/traceability-reconciliation.md`](matrices/traceability-reconciliation.md): 285 story, 457 infrastructure, 0 dead code, and 27 behaviours with no document. The one real gap is fraud detection (S-safety-05).
+- **Live checks:** [`10-live-checks.md`](10-live-checks.md) (see §9 below).
+- **All five research sessions:** in [`research/`](research/).
+- **ROADMAP §1.2:** turns all of the above into new Now and Next rows (N25–N30).
+
+**Not done:** nothing from the programme. The blueprint carries all 29 hostile-review corrections (its §10 changelog). The live check reverses one of them (correction 19; see §9).
+
+## 9. What the live checks and research sessions changed
+
+- **SOS paging is confirmed off in production.** The paging webhook is empty, so a real SOS pages no one today. This was top-3 already; it is now verified, not inferred.
+- **New HIGH finding, LIVE-001.** The production migration tracking table misses about 32 changes that are applied. Running the migration runner against production now would try to replay them out of order. Do not run it until the rows are back-filled (ROADMAP N25).
+- **Meta per-ride events are very likely live.** The token and dataset are both set.
+- **Instant payout is on in all 6 service areas**, which makes the velocity cap (N22) urgent.
+- **Float money columns are live.** Nine `rides` money columns are `double precision` in production. This reverses hostile-review correction 19, which had downgraded three of them to "inferred".
+- **The forced-upgrade floor is empty**, so no old app version is blocked (N26).
+- **Two smaller database findings:** 16 functions with a mutable `search_path`, including the dispatch claim function (LIVE-002, MEDIUM); and one helper callable by the `authenticated` role (LIVE-003, LOW).
+- **Research spot-checks.** Each session had at least one load-bearing claim re-checked against code or live data. Two needed a fix:
+  - **Session 1:** a line reference had drifted (`dispatch_service.py:74` → `:94`). Corrected.
+  - **Session 5:** said a hash-check fallback was in three CI files. It is in one, and the main `ci.yml` is strict. Corrected inline.
+
+  None was refuted. The error pattern is unchanged: over-broad "everywhere" or "nowhere" claims are the weak spot.

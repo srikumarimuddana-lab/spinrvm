@@ -563,7 +563,7 @@ class SettingsUpdateRequest(BaseModel):
     # status, just a log line + metric an admin can act on manually.
     corporate_kyb_reverification_enabled: Optional[bool] = None
     corporate_kyb_reverify_after_months: Optional[int] = Field(default=None, ge=1, le=60)
-    # Migration 478. Kill switch (default true): KYB review / resubmit refuse
+    # Migration 481. Kill switch (default true): KYB review / resubmit refuse
     # to change a closed company's status and compare-and-set on the status
     # read. False restores the old unconditional status write.
     corporate_kyb_refuses_closed_company: Optional[bool] = None

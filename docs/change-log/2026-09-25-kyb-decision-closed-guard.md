@@ -8,7 +8,7 @@
 | Author | Claude Code (session_01PPGd1wK6WRzbtxcGj3qNkX) |
 | Surface(s) | backend |
 | Domain (Sentry tag) | corporate |
-| PR / commit link | branch `claude/fix-kyb-decision-reopens-closed` (local, not pushed) — c7a15e4, b7a0192, b8e5a68, d36ab5d, e997f31, f472d2b, c6cdc9e (renumber to 478), 3dbf734 (admin-writable flag), 15347a9, 7a02e87, 3dd711f (staff-suspension guard, §3a) |
+| PR / commit link | branch `claude/fix-kyb-decision-reopens-closed` — c7a15e4, b7a0192, b8e5a68, d36ab5d, e997f31, f472d2b, c6cdc9e (renumber to 478, later 481), 3dbf734 (admin-writable flag), 15347a9, 7a02e87, 3dd711f (staff-suspension guard, §3a) |
 | Related issue or gap ID | spinr-corporate-billing-reviewer finding; follow-up to PR #5793 (status compare-and-set, CORP-001) |
 
 ## 1. Issue / gap identified
@@ -30,7 +30,7 @@
 - **KYB resubmit.**
   - The flip passes `expected_status=<status read>`. If the CAS loses and the re-read shows a different status, the route returns 409. If the status is unchanged, it still returns the existing 503.
   - The closed-company 409 now says the account is closed, instead of "Verification is already complete". The status code is unchanged.
-- **Kill switch.** `corporate_kyb_refuses_closed_company` is added as a settings column by migration 478 and defaults to TRUE. Code reads it with `.get(..., True)`, so the guard is on even before the migration is applied. Setting it to false restores the old unconditional writes on both paths. `domain-corporate.md`'s flag convention requires a default-true kill switch when "the un-flagged behavior was the bug".
+- **Kill switch.** `corporate_kyb_refuses_closed_company` is added as a settings column by migration 481 and defaults to TRUE. Code reads it with `.get(..., True)`, so the guard is on even before the migration is applied. Setting it to false restores the old unconditional writes on both paths. `domain-corporate.md`'s flag convention requires a default-true kill switch when "the un-flagged behavior was the bug".
 - **Decision on the audit trail for a refused closed-company decision: nothing is written.**
   - The "decision row" is the `kyb_reviewed_at`/`kyb_reviewed_by`/`kyb_last_decision`/`kyb_review_note` columns on the `corporate_accounts` row itself; there is no separate decisions table.
   - Stamping those columns on a closed account would overwrite the record of the last real review with a decision that had no effect. It would also leave `kyb_last_decision='rejected'` on a terminal row.
@@ -127,7 +127,7 @@ Blast-radius grep: `record_kyb_decision`, `update_corporate_account_status`, `ky
 | `backend/repositories/corporate_repo.py` | `record_kyb_decision(..., expected_status=None)` filters on status when given | CAS primitive for the route |
 | `backend/routes/corporate_accounts.py` | `kyb_review`: flag read, pre-read, closed → 409, CAS, loser → 409/404 | Core fix |
 | `backend/routes/corporate_company_kyb.py` | Resubmit flip passes `expected_status`; loser → 409; `_not_submittable_detail()` names `closed`; dual-import `get_app_settings` | Race fix + clearer refusal |
-| `backend/migrations/478_settings_corporate_kyb_refuses_closed_company.sql` | New `settings` column, default TRUE, rollback SQL in header | Kill switch without redeploy |
+| `backend/migrations/481_settings_corporate_kyb_refuses_closed_company.sql` | New `settings` column, default TRUE, rollback SQL in header | Kill switch without redeploy |
 | `backend/tests/test_corporate_repo_guards.py` | +3 repo CAS tests | Regression |
 | `backend/tests/test_corporate_kyb.py` | Pre-read mocks; +8 guard tests (closed approve/reject, open statuses, CAS loser 409, row-gone 404, kill switch off) | Regression |
 | `backend/tests/test_corporate_company_kyb.py` | Updated flip-args assertion; +4 tests (closed submit, closed upload-url message, CAS loser 409, kill switch off) | Regression |
@@ -198,7 +198,7 @@ Concrete scenarios:
 ## 10. What was NOT verified
 
 - Not tested against live or staging Supabase; tests used mocked clients only. The CAS relies on PostgREST applying both `.eq()` filters to the UPDATE. #5793 makes the same assumption for `update_corporate_account_status`.
-- Migration 478 was not applied anywhere, including `--dry-run`, because no `DATABASE_URL` was available. It was renumbered from 477, which `claude/fix-admin-money-action-caps` already uses (`477_disputes_resolution_columns.sql`). The highest number on `origin/main` is 473, and 474–477 are held by in-flight PRs. CHECK B will flag a collision if one lands first.
+- Migration 481 was not applied anywhere, including `--dry-run`, because no `DATABASE_URL` was available. It was renumbered twice: from 477, because `477_disputes_resolution_columns.sql` took that number, and then from 478 to 481, because 479 merged to `main` first and CHECK B rejects a new file numbered below `main`'s highest. 480 is left free for #5782, which also needs a slot above 479. CHECK B will flag a collision if another PR lands 481 first.
 - The admin-dashboard rendering of the new 409 detail and of the new toast was not exercised in a browser. The existing Playwright test (`e2e/corporate.spec.ts`) mocks the KYB-review response without `status_unchanged`, so it covers the unchanged path only. `kyb-queue` is not one of the 6 seeded visual-regression pages.
 - Reviewer agents (gate 10): `spinr-migration-reviewer` and `spinr-corporate-billing-reviewer` reviewed the closed-company guard, and `spinr-corporate-billing-reviewer` reviewed the §3a delta separately. All returned SAFE with no blockers. Their should-fix items are addressed here: admin-writable flag, queue toast, wallet dependency comment. The one exception is the product question in §5.
 - §3a's staff-suspension rule was not checked against production data. Nobody has counted how many suspended companies carry each `kyb_last_decision` value, so the misclassification edge in §3a is reasoned about, not measured.

@@ -19,6 +19,9 @@ import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { shouldLeaveScreenForRideCancelled } from '../utils/rideCancelSignal';
+import { isNoDriversCancellation } from '../utils/noDriversSignal';
+import { offerNoDriversPrompt, raiseNoDriversPromptAfterResume, useNoDriversStore } from '../store/noDriversStore';
+import { NoDriversSheetHost } from '../components/NoDriversSheetHost';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import { useDelayedReconnectWarning } from '../hooks/useDelayedReconnectWarning';
@@ -185,6 +188,13 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
     case 'ride_cancelled': {
       const rideState = useRideStore.getState();
       if (!shouldLeaveScreenForRideCancelled(ride_id, rideState.currentRide?.id, rideState._clearedRideId)) break;
+      // No driver accepted in time: explain it and offer Try again /
+      // Schedule over home (components/NoDriversSheetHost). Once the sheet
+      // holds its snapshot, retire the local ride — on a cold-start tap the
+      // resume handler would otherwise re-open the stale searching ride.
+      if (isNoDriversCancellation(data) && offerNoDriversPrompt(rideState.currentRide)) {
+        rideState.clearRide();
+      }
       router.replace('/(tabs)' as any);
       break;
     }
@@ -403,6 +413,7 @@ function RootLayout() {
           posthog_api_key?: string;
           posthog_host?: string;
           min_tip_amount?: string;
+          rider_no_drivers_sheet_enabled?: boolean;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -410,6 +421,7 @@ function RootLayout() {
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
         setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
+        useNoDriversStore.getState().setEnabled(res.data?.rider_no_drivers_sheet_enabled === true);
         const minTip = Number(res.data?.min_tip_amount);
         if (Number.isFinite(minTip) && minTip >= 0) setMinTipAmount(minTip);
         const posthogFactory = tryCreateNativePostHogClient();
@@ -828,8 +840,18 @@ function RootLayout() {
       }
 
       try {
+        // Snapshot first: fetchActiveRide() clears a ride the server no longer
+        // reports as active, and /rides/active doesn't say why it ended.
+        const rideBefore = useRideStore.getState().currentRide;
         const result = await useRideStore.getState().fetchActiveRide();
-        if (!result?.active || !result.ride) return;
+        if (!result?.active || !result.ride) {
+          // The search ended for no drivers while the app was backgrounded:
+          // show the "No drivers available" sheet over home.
+          if (await raiseNoDriversPromptAfterResume(rideBefore)) {
+            router.replace('/(tabs)' as any);
+          }
+          return;
+        }
         const target = targetPathForRideStatus(result.ride.status);
         if (!target) return;
         if (target === '/ride-completed') {
@@ -1131,6 +1153,9 @@ function RootLayoutInner({
               absolutely-positioned SOS overlay — see
               store/safetySheetStore.ts. Same placement as ConfirmSheet/Toast. */}
           <SafetySheetHost />
+          {/* "No drivers available right now" after a no-match auto-cancel —
+              see store/noDriversStore.ts. */}
+          <NoDriversSheetHost />
           <Toast />
         </SafeAreaProvider>
       </GestureRootWrapper>

@@ -36,9 +36,18 @@ def _call(batch, *, flag, active_ride, driver):
             captured.update(data)
         return driver
 
+    async def _update_driver_location(driver_id, lat, lng, heading=None, *, captured_at=None, extra_fields=None, **kw):
+        if extra_fields:
+            captured.update(extra_fields)
+        return True
+
     with (
         patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+        patch(
+            "backend.routes.drivers._deps.db_supabase.update_driver_location",
+            AsyncMock(side_effect=_update_driver_location),
+        ),
         patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         patch("backend.utils.location_integrity.check_location_integrity", AsyncMock(return_value=(True, None))),
         # Imported inline inside the handler, so patch the source modules.

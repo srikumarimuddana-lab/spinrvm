@@ -24,10 +24,17 @@ class FakeRedis:
         if int(location_deadline_ms) > old_location_deadline_ms:
             fields["location_valid_until_ms"] = str(location_deadline_ms)
         fields["expires_at_ms"] = str(max(int(contact_deadline_ms), old_contact_deadline_ms))
-        return [part for pair in fields.items() for part in (pair[0].encode(), pair[1].encode()) if pair[0] != "expires_at_ms"]
+        return [
+            part
+            for pair in fields.items()
+            for part in (pair[0].encode(), pair[1].encode())
+            if pair[0] != "expires_at_ms"
+        ]
 
     async def hgetall(self, key):
-        return {name.encode(): value.encode() for name, value in self.hashes.get(key, {}).items() if name != "expires_at_ms"}
+        return {
+            name.encode(): value.encode() for name, value in self.hashes.get(key, {}).items() if name != "expires_at_ms"
+        }
 
     async def delete(self, key):
         self.hashes.pop(key, None)
@@ -105,10 +112,15 @@ async def test_scoped_renewal_maps_fence_conflicts_without_writing_redis(monkeyp
         AsyncMock(return_value={"status": "stale_epoch", "code": "CONTROLLER_SESSION_MISMATCH", "online_epoch": "18"}),
     )
     result = await driver_presence.renew_driver_presence("driver-3", "old-session", 17)
+    # F2-8a: a controller mismatch when the caller IS the current session
+    # means the stored controller is stale, not the caller -- mapped to
+    # ONLINE_EPOCH_STALE (with the original code preserved as reason_code) so
+    # the newest login is no longer incorrectly told SESSION_SUPERSEDED.
     assert result == {
         "status": "stale_epoch",
-        "code": "SESSION_SUPERSEDED",
+        "code": "ONLINE_EPOCH_STALE",
         "online_epoch": "18",
+        "reason_code": "CONTROLLER_SESSION_MISMATCH",
     }
 
 

@@ -139,8 +139,7 @@ class TestAcceptRideRejectsExpiredLegacyDocumentField:
 
         update = AsyncMock(return_value={"id": DRIVER_ID, "status": "suspended"})
         lookup = AsyncMock(return_value=[{"user_id": DRIVER_USER_ID}])
-        pause = AsyncMock(return_value={"code": "OK", "is_online": True, "accepting_requests": False,
-                                       "has_trip": True})
+        pause = AsyncMock(return_value={"code": "OK", "is_online": True, "accepting_requests": False, "has_trip": True})
         insurance = AsyncMock()
         with (
             patch.object(_shared.db_supabase, "update_one", update),
@@ -156,6 +155,31 @@ class TestAcceptRideRejectsExpiredLegacyDocumentField:
         assert pause.await_args.args == (DRIVER_USER_ID,)
         insurance.assert_not_awaited()
         assert pause.return_value["has_trip"] is True
+
+    def test_v2_document_suspend_logs_loudly_when_user_id_lookup_is_empty(self):
+        """The status write already landed by this point, so the 12h sweep's
+        own CAS (status != 'suspended') will never re-match this driver and
+        retry the pause -- an empty user_id lookup must never be a silent
+        no-op (CLAUDE.md: never swallow a DB/auth error silently)."""
+        from backend.routes.drivers import _shared
+        from backend.services import driver_availability_service
+
+        update = AsyncMock(return_value={"id": DRIVER_ID, "status": "suspended"})
+        lookup = AsyncMock(return_value=[])  # no row -> user_id is None
+        pause = AsyncMock()
+        with (
+            patch.object(_shared.db_supabase, "update_one", update),
+            patch.object(_shared.db_supabase, "get_rows", lookup),
+            patch.object(driver_availability_service, "driver_availability_v2_enabled", AsyncMock(return_value=True)),
+            patch.object(driver_availability_service, "pause_driver_for_policy", pause),
+            patch.object(_shared.logger, "error") as log_error,
+        ):
+            asyncio.run(_shared._suspend_driver_for_expired_documents(DRIVER_ID, ["Driver's License"]))
+
+        pause.assert_not_awaited()
+        assert log_error.call_count >= 1
+        logged = " ".join(str(c) for c in log_error.call_args_list)
+        assert DRIVER_ID in logged
 
     def test_expired_insurance_blocks_accept(self):
         from backend.utils.error_handling import SpinrException

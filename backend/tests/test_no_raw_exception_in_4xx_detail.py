@@ -69,7 +69,6 @@ _KNOWN_OFFENDERS = frozenset(
         "routes/admin/wallet_import.py",
         "routes/drivers/appeals.py",
         "routes/drivers/profile.py",
-        "routes/drivers/tax_exports.py",
     }
 )
 

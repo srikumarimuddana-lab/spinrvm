@@ -123,28 +123,31 @@ class TestDriverLocation:
     async def test_update_driver_location(self, mock_supabase_client):
         """Test updating driver location.
 
-        The RPC had a text/uuid type mismatch so db_supabase bypasses
-        it with a direct table("drivers").update().eq("id").execute()
-        write (see db_supabase.py:260-270). The test name stays as
-        ``_rpc`` for continuity; the assertion follows the real code.
+        Migration 445 (DB capture-time guard) replaced the old direct
+        table("drivers").update().eq("id").execute() write with a call
+        through update_live_driver_marker (or the fenced variant when an
+        authenticated session/epoch is supplied) — see
+        repositories/driver_repo.py's update_driver_location. Same override
+        rationale as test_find_nearby_drivers below: the autouse .rpc mock
+        is an AsyncMock, but this call is synchronous inside run_sync.
         """
         from backend.db_supabase import update_driver_location
 
         mock_response = MagicMock()
-        mock_response.data = [{"id": "driver_123"}]
-        mock_query = MagicMock()
-        mock_query.update.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
+        mock_response.data = True
+        mock_rpc = MagicMock()
+        mock_rpc.return_value.execute = MagicMock(return_value=mock_response)
+        mock_supabase_client.rpc = mock_rpc
 
         result = await update_driver_location("driver_123", 52.2, -106.7)
 
         assert result is True
-        mock_supabase_client.table.assert_called_with("drivers")
-        payload = mock_query.update.call_args[0][0]
-        assert payload["lat"] == 52.2
-        assert payload["lng"] == -106.7
+        mock_rpc.assert_called_once()
+        rpc_name, params = mock_rpc.call_args.args
+        assert rpc_name == "update_live_driver_marker"
+        assert params["p_driver_id"] == "driver_123"
+        assert params["p_values"]["lat"] == 52.2
+        assert params["p_values"]["lng"] == -106.7
 
     @pytest.mark.asyncio
     async def test_find_nearby_drivers(self, mock_supabase_client):

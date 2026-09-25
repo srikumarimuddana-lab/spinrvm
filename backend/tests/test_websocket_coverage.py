@@ -448,7 +448,10 @@ async def test_location_batch_successful_persist_fans_out_to_riders(app_with_ws)
         patch("backend.routes.websocket.manager.update_driver_location", new=AsyncMock(return_value=None)),
         patch(
             "backend.routes.websocket.db_supabase.get_rows",
-            new=AsyncMock(side_effect=[[_DRIVER_PROFILE], [active_ride]]),
+            # Call order: driver profile lookup, availability_v2 app_settings
+            # flag check (added by the driver-availability-v2 rollout), then
+            # the batch-fanout active-rides lookup this test is exercising.
+            new=AsyncMock(side_effect=[[_DRIVER_PROFILE], [], [active_ride]]),
         ),
         patch("backend.routes.websocket.get_cached_ride_eta", new=AsyncMock(return_value=None)),
         patch("backend.routes.websocket.refresh_ride_eta", new=AsyncMock(return_value=None)),
@@ -556,7 +559,10 @@ async def test_location_batch_drops_implausible_middle_point_but_live_marker_unc
         patch("backend.routes.websocket.manager.update_driver_location", new=AsyncMock(return_value=None)),
         patch(
             "backend.routes.websocket.db_supabase.get_rows",
-            new=AsyncMock(side_effect=[[_DRIVER_PROFILE], []]),
+            # Call order: driver profile lookup, availability_v2 app_settings
+            # flag check (added by the driver-availability-v2 rollout), then
+            # the batch-fanout active-rides lookup (empty: no fanout expected).
+            new=AsyncMock(side_effect=[[_DRIVER_PROFILE], [], []]),
         ),
         patch("backend.routes.websocket.manager.broadcast_driver_location_to_admins", new=AsyncMock(return_value=None)),
     ]
@@ -856,7 +862,7 @@ async def test_heartbeat_revokes_on_bumped_token_version():
             "backend.routes.websocket._read_token_version",
             new=AsyncMock(return_value=5),
         ),
-        patch("backend.routes.websocket.clear_presence", new=AsyncMock(return_value=None)) as clear_pres,
+        patch("backend.routes.websocket.clear_ws_presence", new=AsyncMock(return_value=None)) as clear_pres,
     ):
         await heartbeat_task(ws, key, conn_state, user_id="u1", driver_id="d1", claim_token_version=1)
 

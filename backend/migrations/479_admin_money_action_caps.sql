@@ -32,13 +32,13 @@
 -- dashboard before this migration is applied would fail with PGRST204, so
 -- apply the migration first.
 --
--- Operational rollback (no deploy; settings cache is 60s):
+-- Rollback, operational (no deploy; settings cache is 60s):
 --   UPDATE public.settings
 --      SET admin_money_daily_cap_per_admin = NULL,
 --          admin_money_alert_threshold = NULL,
 --          admin_dispute_refunds_enabled = FALSE
 --    WHERE id = 'app_settings';
--- Schema rollback (ONLY after reverting the backend code that reads/writes
+-- Rollback, schema (ONLY after reverting the backend code that reads/writes
 -- these columns -- SettingsUpdateRequest would otherwise PGRST204 on save):
 --   ALTER TABLE public.settings
 --     DROP COLUMN IF EXISTS admin_dispute_refunds_enabled,

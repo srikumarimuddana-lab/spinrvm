@@ -514,6 +514,12 @@ class SettingsUpdateRequest(BaseModel):
     # cap, no masking/super-admin gate needed to change it (same posture as
     # dual_approval_exports_enabled above — a process control, not a secret).
     corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    # Migration 475 (N23 / ADMIN-OPS-001). Per-admin daily cap across admin
+    # wallet credits/debits and dispute refunds, plus a single-action alert
+    # threshold; enforced by services/admin_money_caps.py. Unset (NULL) =
+    # disabled. Same process-control posture as the corporate cap above.
+    admin_money_daily_cap_per_admin: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    admin_money_alert_threshold: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
     # Ships dark (default false / unset): gates POST
     # /admin/corporate-accounts/{id}/subscription (routes/corporate_subscriptions.py),
     # which starts a real recurring Stripe charge against a company. Flip on

@@ -148,6 +148,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "require_driver_subscription",
         "resend_api_key",
         "resend_from_email",
+        "ride_offer_alarm_channel_enabled",
         "ride_offer_sound_url",
         "ride_offer_timeout_seconds",
         "rideless_sos_enabled",

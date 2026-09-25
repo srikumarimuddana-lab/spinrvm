@@ -546,6 +546,9 @@ class SettingsUpdateRequest(BaseModel):
     background_location_fanout_enabled: Optional[bool] = None
     driver_stationary_tracking_enabled: Optional[bool] = None
     period1_distance_tracking_enabled: Optional[bool] = None
+    # Migration 466. Android ride offers on the alarm-volume channel; read by
+    # utils/ride_offer_ring.py when building offer payloads.
+    ride_offer_alarm_channel_enabled: Optional[bool] = None
     # Migration 370. Driver location marker write gate (utils/
     # location_write_gate.py): False = shadow mode (count-only), True =
     # coalesced REST marker writes actually skip. Added in the same PR as

@@ -316,40 +316,6 @@ async def test_lost_and_found_autocreate_skips(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_dispute_autocreate_happy(monkeypatch):
-    import services.zoho_desk_integration as integ
-
-    db = MagicMock()
-    db.find_one = AsyncMock(
-        side_effect=[
-            {"id": "default", "enabled": True},  # config
-            {"id": "u1", "name": "Sam Rider", "email": "s@x.ca"},  # user
-        ]
-    )
-    db.update_one = AsyncMock()
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock(return_value={"id": "zt7"})
-    monkeypatch.setattr(integ.zoho, "create_ticket", created)
-
-    await integ.create_ticket_for_dispute(
-        {
-            "id": "d1",
-            "user_id": "u1",
-            "reason": "Overcharged",
-            "description": "x",
-            "requested_amount": 12,
-            "original_fare": 20,
-            "ride_id": "r1",
-        },
-        {"ride_code": "SPN-9"},
-    )
-    created.assert_awaited_once()
-    assert created.call_args.kwargs["category"] == "Payment"
-    assert created.call_args.kwargs["priority"] == "High"
-    assert db.update_one.call_args.args[2] == {"zoho_ticket_id": "zt7"}
-
-
-@pytest.mark.anyio
 async def test_support_escalation(monkeypatch):
     import services.zoho_desk_integration as integ
     from services.zoho_desk_service import ZohoDeskError as ZErr
@@ -399,6 +365,7 @@ async def test_reverse_close_links(monkeypatch):
     import services.zoho_desk_integration as integ
 
     db = MagicMock()
+
     # complaints has one open row linked to a closed ticket; flags one active row
     async def _get_rows(table, *a, **k):
         if table == "complaints":

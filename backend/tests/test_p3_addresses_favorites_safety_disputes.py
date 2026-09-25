@@ -402,78 +402,21 @@ class TestSafety:
 # ──────────────────────────────── disputes ───────────────────────────────────
 
 
-RIDE_ROW = {
-    "id": "ride_1",
-    "rider_id": "user_1",
-    "status": "completed",
-    "total_fare": "25.50",
-}
-
-DISPUTE_ROW = {
-    "id": "disp_1",
-    "ride_id": "ride_1",
-    "user_id": "user_1",
-    "reason": "overcharged",
-    "description": "Fare was higher than estimated",
-    "status": "open",
-    "created_at": "2026-01-01T00:00:00Z",
-}
-
-
 class TestDisputes:
-    # In-app disputes disabled 2026-09-25: every create scenario that used to
-    # return 200/404/403/400 now answers 410 before touching the DB. The
-    # original handler (kept undecorated for the cleanup PR) is still covered
-    # by direct calls in test_routes_disputes_coverage.py.
+    # In-app disputes were disabled 2026-09-25 and their handlers (and the
+    # rider/driver GET list/detail, which no client ever called) deleted the
+    # same day. POST answers 410 for any body; the side-effect-free contract,
+    # the removed GETs and the admin routes are pinned in
+    # test_disputes_disabled.py.
     @pytest.mark.parametrize(
-        "ride",
+        "body",
         [
-            RIDE_ROW,
-            None,
-            {**RIDE_ROW, "rider_id": "other_user"},
-            {**RIDE_ROW, "status": "in_progress"},
+            {"ride_id": "ride_1", "reason": "overcharged", "description": "Fare too high"},
+            {},
         ],
-        ids=["was_success", "was_ride_not_found", "was_unauthorized", "was_ride_not_complete"],
+        ids=["old_client_body", "empty_body"],
     )
-    def test_create_dispute_is_disabled_410(self, client, ride):
-        db = _mock_db(
-            get_ride=AsyncMock(return_value=ride),
-            get_rows=AsyncMock(return_value=[DISPUTE_ROW]),
-        )
-        with patch("routes.disputes.db_supabase", db):
-            r = client.post(
-                "/api/v1/disputes",
-                json={"ride_id": "ride_1", "reason": "overcharged", "description": "Fare too high"},
-            )
+    def test_create_dispute_is_disabled_410(self, client, body):
+        r = client.post("/api/v1/disputes", json=body)
         assert r.status_code == 410
         assert r.json()["detail"]["code"] == "IN_APP_DISPUTES_DISABLED"
-        db.get_ride.assert_not_called()
-        db.get_rows.assert_not_called()
-        db.insert_one.assert_not_called()
-
-    def test_get_user_disputes(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes")
-        assert r.status_code == 200
-        assert r.json()[0]["id"] == "disp_1"
-
-    def test_get_dispute_by_id(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/disp_1")
-        assert r.status_code == 200
-        assert r.json()["id"] == "disp_1"
-
-    def test_get_dispute_not_found(self, client):
-        db = _mock_db(get_rows=AsyncMock(return_value=[]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/missing")
-        assert r.status_code == 404
-
-    def test_get_dispute_wrong_owner(self, client):
-        other_dispute = {**DISPUTE_ROW, "user_id": "other_user"}
-        db = _mock_db(get_rows=AsyncMock(return_value=[other_dispute]))
-        with patch("routes.disputes.db_supabase", db):
-            r = client.get("/api/v1/disputes/disp_1")
-        assert r.status_code == 403

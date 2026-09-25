@@ -52,7 +52,6 @@ def _no_zoho_tasks(monkeypatch):
     # These are asyncio.create_task fire-and-forget calls in the route; stub
     # them so tests don't depend on the real Zoho Desk integration or leave
     # dangling tasks.
-    monkeypatch.setattr(m, "create_ticket_for_dispute", AsyncMock(return_value=None))
     monkeypatch.setattr(m, "create_ticket_for_flag", AsyncMock(return_value=None))
     monkeypatch.setattr(m, "create_ticket_for_complaint", AsyncMock(return_value=None))
 
@@ -154,7 +153,8 @@ def test_create_dispute_is_disabled_410(client, _set_admin, monkeypatch):
     assert resp.status_code == 410, resp.text
     assert "read-only" in resp.text
     insert_one.assert_not_called()
-    m.create_ticket_for_dispute.assert_not_called()
+    # The old handler raised a Zoho ticket; support.py no longer imports that helper.
+    assert not hasattr(m, "create_ticket_for_dispute")
     m.log_admin_action.assert_not_called()
 
 

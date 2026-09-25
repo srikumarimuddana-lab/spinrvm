@@ -745,7 +745,7 @@ export default function CloudMessagingPage() {
                         <div className="flex flex-wrap items-center gap-3">
                             <div className="relative flex-1 max-w-sm">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input placeholder="Search messages..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+                                <Input aria-label="Search messages" placeholder="Search messages..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
                             </div>
                             <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger><SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="sent">Sent</SelectItem><SelectItem value="scheduled">Scheduled</SelectItem><SelectItem value="failed">Failed</SelectItem><SelectItem value="cancelled">Cancelled</SelectItem></SelectContent></Select>
                             <Select value={audienceFilter} onValueChange={setAudienceFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Audience" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{AUDIENCE_OPTIONS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select>

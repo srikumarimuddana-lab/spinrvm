@@ -145,6 +145,17 @@ single-surface. No ride state transition, no DB write, no money path changed.
   It deliberately does not say "you were not charged": the hold release is
   best-effort and a pending authorization can show on a statement for days.
 
+- **Codex review on #5776 (fixed):** (1) logout now clears the prompt, its
+  addresses and the schedule request (`registerLogoutCallback`, as
+  `rideStore` does) — otherwise the next account on the device could see the
+  sheet and rebook the previous rider's trip; (2) a cold-start push tap
+  clears the cancelled ride once the sheet holds its snapshot, so the resume
+  handler does not reopen it as "searching"; (3) the prompt carries the
+  ride's intermediate stops and Try again / Schedule restore them when the
+  draft is rebuilt. Not changed: the switch loads with the rest of
+  `GET /settings` after launch, so a cancel that arrives before it resolves
+  gets today's toast — the intended fail-safe default.
+
 ## 6. Files modified
 
 | File path | What changed | Why |

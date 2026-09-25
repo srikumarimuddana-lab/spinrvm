@@ -40,6 +40,7 @@ jest.mock('../ConfirmSheet', () => (props: any) => {
 });
 
 jest.mock('@shared/api/client', () => ({ __esModule: true, default: { get: jest.fn(), post: jest.fn() } }));
+jest.mock('@shared/store/authStore', () => ({ registerLogoutCallback: jest.fn() }));
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush, replace: jest.fn() }) }));

@@ -19,6 +19,10 @@ import {
   raiseNoDriversPromptAfterResume,
   type NoDriversPrompt,
 } from '../noDriversStore';
+import { registerLogoutCallback } from '@shared/store/authStore';
+
+// Captured at import time, before beforeEach's clearAllMocks wipes the calls.
+const onLogout = (registerLogoutCallback as jest.Mock).mock.calls[0]?.[0] as (() => void) | undefined;
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
@@ -95,6 +99,14 @@ describe('offerNoDriversPrompt', () => {
     expect(useNoDriversStore.getState().prompt?.rideId).toBe('ride-2');
   });
 
+  it('carries the ride\'s stops (only ones with coordinates) into the prompt', () => {
+    offerNoDriversPrompt({
+      ...ride(),
+      stops: [{ address: 'Stop', lat: 52.125, lng: -106.66 }, { address: 'Bad', lat: null, lng: null }],
+    });
+    expect(useNoDriversStore.getState().prompt?.stops).toEqual([{ address: 'Stop', lat: 52.125, lng: -106.66 }]);
+  });
+
   it('returns false and raises nothing with the sheet switched off', () => {
     useNoDriversStore.setState({ enabled: false });
     expect(offerNoDriversPrompt(ride())).toBe(false);
@@ -136,6 +148,12 @@ describe('prepareRebookDraft', () => {
     expect(s.pickup).toEqual(prompt.pickup);
     expect(s.dropoff).toEqual(prompt.dropoff);
     expect(s.stops).toEqual([]);
+  });
+
+  it('restores the cancelled ride\'s stops when rebuilding the trip', () => {
+    const stop = { address: 'Stop', lat: 52.125, lng: -106.66 };
+    prepareRebookDraft({ ...prompt, stops: [stop] });
+    expect(useRideStore.getState().stops).toEqual([stop]);
   });
 
   it('never books or quotes by itself', () => {
@@ -212,5 +230,20 @@ describe('schedule-on-arrival request', () => {
     s.requestScheduleOnArrival();
     expect(useNoDriversStore.getState().consumeScheduleOnArrival()).toBe(true);
     expect(useNoDriversStore.getState().consumeScheduleOnArrival()).toBe(false);
+  });
+});
+
+describe('logout', () => {
+  it('registers a logout callback that drops the prompt and its addresses', () => {
+    expect(onLogout).toBeInstanceOf(Function);
+    offerNoDriversPrompt(ride());
+    useNoDriversStore.getState().requestScheduleOnArrival();
+
+    onLogout!();
+
+    const s = useNoDriversStore.getState();
+    expect(s.prompt).toBeNull();
+    expect(s._shownRideId).toBeNull();
+    expect(s._openScheduleOnArrival).toBe(false);
   });
 });

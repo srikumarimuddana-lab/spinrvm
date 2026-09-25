@@ -189,8 +189,12 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
       const rideState = useRideStore.getState();
       if (!shouldLeaveScreenForRideCancelled(ride_id, rideState.currentRide?.id, rideState._clearedRideId)) break;
       // No driver accepted in time: explain it and offer Try again /
-      // Schedule over home (components/NoDriversSheetHost).
-      if (isNoDriversCancellation(data)) offerNoDriversPrompt(rideState.currentRide);
+      // Schedule over home (components/NoDriversSheetHost). Once the sheet
+      // holds its snapshot, retire the local ride — on a cold-start tap the
+      // resume handler would otherwise re-open the stale searching ride.
+      if (isNoDriversCancellation(data) && offerNoDriversPrompt(rideState.currentRide)) {
+        rideState.clearRide();
+      }
       router.replace('/(tabs)' as any);
       break;
     }

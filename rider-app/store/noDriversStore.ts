@@ -14,6 +14,7 @@
  */
 import { create } from 'zustand';
 import api from '@shared/api/client';
+import { registerLogoutCallback } from '@shared/store/authStore';
 import { useRideStore } from './rideStore';
 import { isNoDriversCancellation } from '../utils/noDriversSignal';
 
@@ -27,6 +28,8 @@ export interface NoDriversPrompt {
   rideId: string;
   pickup: NoDriversPlace;
   dropoff: NoDriversPlace;
+  /** Intermediate stops of the cancelled ride, when it had any. */
+  stops?: NoDriversPlace[];
 }
 
 interface NoDriversState {
@@ -80,6 +83,7 @@ interface RideAddresses {
   dropoff_address?: string | null;
   dropoff_lat?: number | null;
   dropoff_lng?: number | null;
+  stops?: { address?: string | null; lat?: number | null; lng?: number | null }[] | null;
 }
 
 const isCoord = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -95,10 +99,14 @@ export function offerNoDriversPrompt(ride: RideAddresses | null | undefined): bo
   if (!ride?.id) return false;
   if (!isCoord(ride.pickup_lat) || !isCoord(ride.pickup_lng)) return false;
   if (!isCoord(ride.dropoff_lat) || !isCoord(ride.dropoff_lng)) return false;
+  const stops: NoDriversPlace[] = (ride.stops ?? [])
+    .filter((st): st is { address?: string | null; lat: number; lng: number } => isCoord(st?.lat) && isCoord(st?.lng))
+    .map((st) => ({ address: st.address ?? '', lat: st.lat, lng: st.lng }));
   useNoDriversStore.getState().show({
     rideId: ride.id,
     pickup: { address: ride.pickup_address ?? '', lat: ride.pickup_lat, lng: ride.pickup_lng },
     dropoff: { address: ride.dropoff_address ?? '', lat: ride.dropoff_lat, lng: ride.dropoff_lng },
+    ...(stops.length > 0 ? { stops } : {}),
   });
   return true;
 }
@@ -157,7 +165,17 @@ export function prepareRebookDraft(prompt: NoDriversPrompt): void {
     rides.setPickup({ ...prompt.pickup });
     rides.setDropoff({ ...prompt.dropoff });
     rides.clearStops();
+    // Keep a multi-stop trip multi-stop: Try again must not quietly quote a
+    // direct pickup-to-dropoff ride instead.
+    for (const stop of prompt.stops ?? []) rides.addStop({ ...stop });
   }
   rides.setScheduledTime(null);
   rides.clearEstimates();
 }
+
+// Per-session state: the prompt holds the cancelled ride's addresses, so a
+// logout must drop it — otherwise the next account on this device could see
+// the sheet and rebook the previous rider's trip. Same pattern as rideStore.
+registerLogoutCallback(() => {
+  useNoDriversStore.setState({ prompt: null, _shownRideId: null, _openScheduleOnArrival: false });
+});

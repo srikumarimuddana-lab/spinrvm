@@ -16,6 +16,7 @@
  */
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { NoDriversSheetHost } from '../NoDriversSheetHost';
 import { useNoDriversStore } from '../../store/noDriversStore';
 
@@ -87,6 +88,17 @@ describe('NoDriversSheetHost', () => {
     getByText('Try again');
     getByText('Schedule for later');
     getByText('Not now');
+  });
+
+  it('announces the sheet to screen readers once per ride', () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    render(<NoDriversSheetHost />);
+    expect(announce).not.toHaveBeenCalled();
+
+    raise();
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce.mock.calls[0][0]).toMatch(/^No drivers available right now\. /);
+    announce.mockRestore();
   });
 
   it('Try again wipes the old quote and opens ride-options without booking', async () => {

@@ -10,7 +10,8 @@
  * trip and an empty quote, so the rider sees a fresh price before booking.
  * Neither books anything on its own.
  */
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
+import { AccessibilityInfo } from 'react-native';
 import { useRouter } from 'expo-router';
 import ConfirmSheet from './ConfirmSheet';
 import { useTranslation } from '../i18n';
@@ -21,6 +22,17 @@ export function NoDriversSheetHost() {
   const { t } = useTranslation();
   const prompt = useNoDriversStore((s) => s.prompt);
   const dismiss = useNoDriversStore((s) => s.dismiss);
+
+  // The sheet opens on its own (WS, push, poll or resume), never from a tap,
+  // so a screen reader gets no cue from focus. Announce it once per ride,
+  // the same way Toast announces its unprompted messages.
+  const promptRideId = prompt?.rideId;
+  useEffect(() => {
+    if (!promptRideId) return;
+    AccessibilityInfo.announceForAccessibility(`${t('ride.no_drivers_title')}. ${t('ride.no_drivers_msg')}`);
+    // t is stable for a render tree; the ride id is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promptRideId]);
 
   const reopenBooking = useCallback((schedule: boolean) => {
     if (!prompt) return;

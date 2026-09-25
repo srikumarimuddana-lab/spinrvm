@@ -151,6 +151,7 @@ single-surface. No ride state transition, no DB write, no money path changed.
 |---|---|---|
 | `backend/migrations/470_settings_rider_no_drivers_sheet.sql` | New `settings.rider_no_drivers_sheet_enabled BOOLEAN NOT NULL DEFAULT FALSE` | Rollout switch |
 | `backend/routes/settings.py` | `GET /settings` returns `rider_no_drivers_sheet_enabled` | App reads the switch |
+| `rider-app/components/NoDriversSheetHost.tsx` (+test) | Screen-reader announcement when the sheet opens | Accessibility review blocker |
 | `backend/routes/admin/settings.py` | `rider_no_drivers_sheet_enabled` field (+ drift-test snapshot) | Admin can flip it |
 | `backend/tests/test_public_settings_no_drivers_sheet.py` | New | Public key, default off |
 | `backend/routes/rides/matching.py` | `cancellation_type` on rider WS, status broadcast and push data in `ride_search_timeout` (payload section only) | App needs a machine-readable cause |
@@ -244,8 +245,18 @@ booking; booking creates a new ride and a new card hold.
   (no new money path; fresh quote before booking; surge shown before booking),
   PIPEDA (no new logging of addresses/coords), observability (no new logs).
 - [x] Feature flag: `rider_no_drivers_sheet_enabled`, default off — see §8. Jest cases for the off state added in `noDriversStore.test.ts` and `useRiderSocket.noDrivers.test.ts`; `test_public_settings_no_drivers_sheet.py` covers the public key.
-- [ ] `spinr-*` reviewer agents (dispatch, accessibility, design-consistency)
-  were **not run**; no agent-dispatch tool was available in this session.
+- [x] `spinr-accessibility-reviewer` (2026-09-25): one blocker — the sheet
+  opens unprompted (no tap) with no screen-reader cue. **Fixed** in
+  `components/NoDriversSheetHost.tsx`: `AccessibilityInfo.announceForAccessibility`
+  of title + message once per ride, the same pattern `Toast.tsx` uses; test
+  added. **Not fixed here** (shared `ConfirmSheet`, also used by
+  `profile-setup.tsx` and other screens, so a separate change):
+  no `accessibilityViewIsModal`/focus move into the sheet, no explicit
+  `accessibilityRole="button"` on its buttons, and the `info` variant's
+  hard-coded `#1a73e8` button with white 16px text is ≈4.5:1 by hand
+  calculation — needs a contrast-tool check before the switch is turned on.
+  French strings verified equivalent; touch targets ≈46–48pt.
+- [ ] `spinr-design-consistency-reviewer` — running at time of writing.
 
 ## What was NOT verified
 

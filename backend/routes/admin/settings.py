@@ -514,6 +514,11 @@ class SettingsUpdateRequest(BaseModel):
     # cap, no masking/super-admin gate needed to change it (same posture as
     # dual_approval_exports_enabled above — a process control, not a secret).
     corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    # Migration 473 / ROADMAP N22: per-driver daily cap (CAD) on instant
+    # payouts (routes/drivers/payouts.py::request_instant_payout). NULL = no
+    # cap. A process control, not a secret — same posture as the corporate
+    # cap above. Clearing it back to NULL is a SQL update (None is dropped).
+    instant_payout_daily_cap_cad: Optional[Decimal] = Field(default=None, gt=0, le=50000, decimal_places=2)
     # Ships dark (default false / unset): gates POST
     # /admin/corporate-accounts/{id}/subscription (routes/corporate_subscriptions.py),
     # which starts a real recurring Stripe charge against a company. Flip on

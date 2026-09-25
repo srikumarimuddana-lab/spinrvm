@@ -78,3 +78,15 @@
 | **Rollback plan** | For each of the 16 functions, `ALTER FUNCTION public.<fn>(<types>) RESET search_path;`. The full list is in the migration header. Delete the tracking row. This needs no deploy and takes seconds. |
 | **Verification performed** | After apply: 16 of 16 functions pinned, the post-condition passed, the tracking row is present, the same three calls succeed with identical results, and `get_advisors(security)` no longer reports any `function_search_path_mutable` finding. The remaining security lints are the expected ones: `rls_enabled_no_policy` INFO on 61 tables, a consequence of the service-role access model; and the documented LIVE-003 exception on `is_party_to_lost_and_found_case`. |
 | **What was NOT verified** | `match_and_claim_driver` was not called, because it has no production caller and calling it would claim a driver. The 10 trigger functions were not fired, because that needs writes. Their bodies use only `pg_catalog` built-ins. Latency after the change was not measured. |
+
+## 7. Recorded migration 476 (`route_deviation_alert_enabled`, merged in #5786, LIVE-004)
+
+| Field | Entry |
+|---|---|
+| **Issue/gap identified** | Production had the column `settings.route_deviation_alert_enabled`, and it was live (`true`), but no repo migration created it. #5786 added `476_route_deviation_alert_enabled_setting.sql`, which restores the missing source for it. |
+| **Fix/remediation** | Owner-approved earlier in the session. The file's statements were run verbatim under `lock_timeout = '5s'`: `ADD COLUMN IF NOT EXISTS …` (a no-op, because the column exists) and its `COMMENT`. The tracking row was inserted in the same transaction, with checksum `bcebd9eb…` (runner `_checksum`) and `applied_by = 'claude-audit-apply-2026-09-25'`. |
+| **Risk & impact** | None. `IF NOT EXISTS` skipped the add, so the live value was untouched. The only reader is `route_deviation_alerter._deviation_alert_enabled()`. |
+| **User experience effect** | None. Route-deviation safety alerts stay **on**. |
+| **Rollback plan** | Delete the tracking row only. **Never drop the column in production**, because it is the live kill switch. |
+| **Verification performed** | Afterwards `route_deviation_alert_enabled` still reads `true`. There are 6 tracked `47x` rows, and 561 tracked rows in total. The orphaned `415_route_deviation_alert_enabled_setting.sql` row stays as history. |
+| **What was NOT verified** | Nothing further was needed; the database change was a no-op. |

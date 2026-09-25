@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, AppState, AppStateStatus, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, AppStateStatus, Pressable, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
@@ -7,12 +8,16 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 
 const RETRY_INTERVAL_MS = 5000;
+// Same escape as driver-app/app/index.tsx: after ~15s of silent retries
+// (offline, or App Check failing on this device) offer a way to /login.
+const ATTEMPTS_BEFORE_ESCAPE = 3;
 
 export default function Index() {
   const router = useRouter();
-  const { isInitialized, token, user, sessionRecoverable, initialize } = useAuthStore();
+  const { isInitialized, token, user, sessionRecoverable, initialize, logout } = useAuthStore();
   const { colors } = useTheme();
   const retryingRef = useRef(false);
+  const [attempts, setAttempts] = useState(0);
 
   // App Check (and other transient refresh failures) leave the 30-day login
   // in secure storage and set sessionRecoverable. Sending the rider to
@@ -21,6 +26,7 @@ export default function Index() {
     if (retryingRef.current) return;
     if (!useAuthStore.getState().sessionRecoverable) return;
     retryingRef.current = true;
+    setAttempts((n) => n + 1);
     try {
       await initialize();
     } finally {
@@ -39,8 +45,14 @@ export default function Index() {
     return () => {
       clearInterval(id);
       sub.remove();
+      setAttempts(0);
     };
   }, [sessionRecoverable, retryAuth]);
+
+  const handleSignInInstead = useCallback(async () => {
+    await logout();
+    router.replace('/login');
+  }, [logout, router]);
 
   useEffect(() => {
     if (!isInitialized) return;
@@ -110,6 +122,21 @@ export default function Index() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }}>
       {sessionRecoverable ? <ActivityIndicator color={colors.primary} accessibilityLabel="Reconnecting" /> : null}
+      {sessionRecoverable && attempts >= ATTEMPTS_BEFORE_ESCAPE ? (
+        <>
+          <Text style={{ marginTop: 16, color: colors.textSecondary, textAlign: 'center' }}>
+            Still having trouble connecting.
+          </Text>
+          <Pressable
+            onPress={handleSignInInstead}
+            accessibilityRole="button"
+            accessibilityLabel="Sign in instead"
+            style={{ marginTop: 12, paddingVertical: 10, paddingHorizontal: 20 }}
+          >
+            <Text style={{ color: colors.primary, fontWeight: '600' }}>Sign in instead</Text>
+          </Pressable>
+        </>
+      ) : null}
     </View>
   );
 }

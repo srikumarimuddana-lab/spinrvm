@@ -107,6 +107,37 @@ describe('Index (rider-app cold start routing)', () => {
     expect(initialize).toHaveBeenCalled();
   });
 
+  it('offers "Sign in instead" after repeated failed retries', async () => {
+    jest.useFakeTimers();
+    try {
+      const initialize = jest.fn().mockResolvedValue(undefined);
+      const logout = jest.fn().mockResolvedValue(undefined);
+      useAuthStore.setState({
+        isInitialized: true, token: null, user: null, sessionRecoverable: true, initialize, logout,
+      } as any);
+      const r = await renderScreen();
+      const escape = () => r.root.findAll((n) => n.props.accessibilityLabel === 'Sign in instead');
+      expect(escape()).toHaveLength(0);
+
+      for (let i = 0; i < 2; i++) {
+        await act(async () => {
+          jest.advanceTimersByTime(5000);
+          await flush();
+        });
+      }
+      expect(initialize).toHaveBeenCalledTimes(3);
+      expect(escape().length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await escape()[0].props.onPress();
+      });
+      expect(logout).toHaveBeenCalled();
+      expect(mockReplace).toHaveBeenCalledWith('/login');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('routes to /profile-setup when the profile is incomplete', async () => {
     useAuthStore.setState({
       isInitialized: true, token: 't',

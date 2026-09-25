@@ -22,7 +22,10 @@ import {
 import { registerLogoutCallback } from '@shared/store/authStore';
 
 // Captured at import time, before beforeEach's clearAllMocks wipes the calls.
-const onLogout = (registerLogoutCallback as jest.Mock).mock.calls[0]?.[0] as (() => void) | undefined;
+// rideStore (imported by noDriversStore) registers its own callback first, so
+// run every registered callback the way authStore.logout() does.
+const logoutCallbacks = (registerLogoutCallback as jest.Mock).mock.calls.map((c) => c[0] as () => void);
+const onLogout = () => logoutCallbacks.forEach((cb) => cb());
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
@@ -235,11 +238,11 @@ describe('schedule-on-arrival request', () => {
 
 describe('logout', () => {
   it('registers a logout callback that drops the prompt and its addresses', () => {
-    expect(onLogout).toBeInstanceOf(Function);
+    expect(logoutCallbacks.length).toBeGreaterThanOrEqual(2); // rideStore + noDriversStore
     offerNoDriversPrompt(ride());
     useNoDriversStore.getState().requestScheduleOnArrival();
 
-    onLogout!();
+    onLogout();
 
     const s = useNoDriversStore.getState();
     expect(s.prompt).toBeNull();

@@ -562,6 +562,10 @@ class AppSettings(BaseModel):
     # brand-new safety-team-paging behavior, not an established one, so it
     # defaults OFF: ship dark, verify in staging, then flip on.
     route_deviation_alert_enabled: bool = False
+    # Driver destination ("heading home") mode switch (migration 482, C136).
+    # Defaults OFF: dispatch skips the destination hard-filter and drivers
+    # cannot set a destination until an admin deliberately re-enables it.
+    destination_mode_enabled: bool = False
     # ── Notification throttling (quiet hours + daily cap) ────────────────
     # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
     # unchanged until an admin opts in after staging verification. Global for

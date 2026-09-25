@@ -72,13 +72,13 @@ def test_login_rpc_is_not_executable_by_clients(session_db):
     assert session_db.fetchone()[0] is True
 
 
-def test_concurrent_driver_logins_get_distinct_generations(session_db, pg_conn):
+def test_concurrent_driver_logins_get_distinct_generations(session_db, pg_dsn):
     import psycopg2
 
     session_db.execute("UPDATE settings SET driver_single_session_enabled=true WHERE id='app_settings'")
 
     def login(session_id):
-        with psycopg2.connect(pg_conn.dsn) as conn, conn.cursor() as cur:
+        with psycopg2.connect(pg_dsn) as conn, conn.cursor() as cur:
             cur.execute("SELECT begin_driver_session('login-user', %s)", (session_id,))
             return cur.fetchone()[0]["token_version"]
 

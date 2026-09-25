@@ -398,6 +398,26 @@ def pg_conn(pg_test_dbname):
     bootstrap.close()
 
 
+@pytest.fixture(scope="session")
+def pg_dsn(pg_conn, pg_test_dbname) -> str:
+    """Real DSN (with a working password) for the scratch database `pg_conn`
+    is connected to. A test opening its own separate connection (a worker
+    thread in a concurrency test) must depend on this instead of reading
+    `pg_conn.dsn`: since psycopg2 2.8, `Connection.dsn` masks the password
+    as the literal string `password=xxx` (a deliberate leak-prevention
+    measure, not a bug) rather than returning the real one, so reconnecting
+    with it always fails with "password authentication failed for user
+    postgres" -- reproduces identically outside CI, on any Postgres, not a
+    CI-environment quirk. `pg_conn` is listed as a dependency (even though
+    unused directly) purely to order fixture setup so the scratch database
+    already exists. Same fixture, same reasoning, as tests/rls/conftest.py's
+    pg_dsn -- these are two separate fixture directories (different
+    pg_test_dbname prefixes, different migration sets) so it's duplicated
+    here rather than shared.
+    """
+    return _dsn_with_dbname(_DSN, pg_test_dbname)
+
+
 @pytest.fixture()
 def pg_cur(pg_conn):
     """Function-scoped cursor: truncates the tables under test before each

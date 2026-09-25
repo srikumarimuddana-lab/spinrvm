@@ -12,9 +12,9 @@ except ImportError:  # pragma: no cover - package-style test invocation
     from backend.scripts.run_migrations import _acquire_apply_lock
 
 
-def test_apply_lock_is_session_owned_across_commit_and_released_on_close(pg_conn):
-    first = psycopg.connect(pg_conn.dsn, autocommit=False)
-    second = psycopg.connect(pg_conn.dsn, autocommit=False)
+def test_apply_lock_is_session_owned_across_commit_and_released_on_close(pg_dsn):
+    first = psycopg.connect(pg_dsn, autocommit=False)
+    second = psycopg.connect(pg_dsn, autocommit=False)
     try:
         assert _acquire_apply_lock(first) is True
         assert _acquire_apply_lock(second) is False

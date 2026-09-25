@@ -241,6 +241,8 @@ function _surfaceOfferNotification(data: any, forceSilent = false, reclaim = fal
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
     offer_card_url: data.offer_card_url || undefined,
+    // Absent on the store-built reclaim offer; notifeeService keeps the last one.
+    ring_mode: data.ring_mode || undefined,
   }, { silent, muted, reclaim }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 
   // First delivery: nothing more to do. rideState is legitimately still 'idle'

@@ -105,6 +105,7 @@ export function offerDisplayDataFromFcm(data: any): Record<string, any> | null {
     countdown_seconds: toNum(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
     offer_card_url: data.offer_card_url || undefined,
+    ring_mode: data.ring_mode || undefined,
   };
 }
 

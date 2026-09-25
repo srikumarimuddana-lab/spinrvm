@@ -4,6 +4,8 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from . import earnings
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -858,6 +860,90 @@ async def _require_instant_payout_enabled(driver: dict) -> dict:
     return sa_rows[0]
 
 
+# Instant-payout rows that moved no money: excluded from the daily cap sum.
+# Every other status (reserved, transfer_completed, completed, stranded) has
+# money in flight or already gone, so it counts.
+_INSTANT_CAP_NO_MONEY_STATUSES = frozenset({"failed", "reversed"})
+# Hitting this many rows today means the sum may be truncated, so the cap
+# check fails closed rather than under-count (each row is >= $5.00).
+_INSTANT_CAP_ROW_LIMIT = 500
+
+
+def _instant_cap_day_start_utc(service_area: dict) -> datetime:
+    """Start of "today" for the daily cap, as a UTC instant.
+
+    The module had no day-boundary logic before N22, so "today" is the
+    driver's service-area calendar day (service_areas.timezone, NOT NULL
+    DEFAULT 'America/Regina', migration 105), falling back to UTC when the
+    value is missing or not a valid IANA name."""
+    tz_name = service_area.get("timezone")
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "instant payout cap: invalid service-area timezone, using UTC",
+            extra={"service_area_id": service_area.get("id")},
+        )
+        tz = timezone.utc
+    local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc)
+
+
+async def _require_within_instant_payout_daily_cap(
+    driver: dict, service_area: dict, amount: Decimal, settings: dict
+) -> None:
+    """Reject an instant payout that would take the driver past
+    settings.instant_payout_daily_cap_cad for today (ROADMAP N22, migration
+    473). NULL cap = no cap and no extra query — behaviour before N22.
+
+    Runs before the payout row is reserved and before any Stripe call, so a
+    rejection never transfers anything. Residual race: the partial unique
+    index (migration 250) allows one in-flight instant payout per driver, so
+    a second request can only slip past this sum if the first reserves, runs
+    both Stripe calls and reaches a terminal status inside the few ms between
+    this read and the second request's reserve INSERT."""
+    raw_cap = settings.get("instant_payout_daily_cap_cad")
+    if raw_cap in (None, ""):
+        return
+    cap = Decimal(str(raw_cap))
+
+    rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "driver_id": driver["id"],
+            "payout_type": "instant",
+            "created_at": {"$gte": _instant_cap_day_start_utc(service_area).isoformat()},
+        },
+        columns="amount,status",
+        limit=_INSTANT_CAP_ROW_LIMIT,
+    )
+    if len(rows) >= _INSTANT_CAP_ROW_LIMIT:
+        logger.error(
+            "instant payout cap: row limit hit, failing closed",
+            extra={"driver_id": driver["id"], "rows": len(rows)},
+        )
+        raise HTTPException(status_code=429, detail="Daily instant payout limit reached. Try again tomorrow.")
+
+    used = sum(
+        (Decimal(str(r.get("amount") or 0)) for r in rows if r.get("status") not in _INSTANT_CAP_NO_MONEY_STATUSES),
+        Decimal("0"),
+    )
+    if used + amount > cap:
+        remaining = max(cap - used, Decimal("0"))
+        logger.info(
+            "instant payout rejected by daily cap",
+            extra={"driver_id": driver["id"], "cap": str(cap), "used": str(used), "requested": str(amount)},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Instant payouts are limited to ${_money_str(cap)} per day. "
+                f"You can cash out up to ${_money_str(remaining)} more today. "
+                "The rest of your balance is paid out automatically every Sunday."
+            ),
+        )
+
+
 @router.post("/payouts")
 async def request_payout(
     current_user: dict = Depends(get_current_user),
@@ -1128,7 +1214,7 @@ async def request_instant_payout(
 
     # Per-service-area kill switch: ops can disable instant payouts in
     # specific markets without a code deploy (migration 314).
-    await _require_instant_payout_enabled(driver)
+    service_area = await _require_instant_payout_enabled(driver)
 
     # CRA: rideshare drivers must be GST/HST-registered from their first fare.
     _require_gst_for_payout(driver)
@@ -1171,6 +1257,10 @@ async def request_instant_payout(
     stripe_secret = settings.get("stripe_secret_key", "")
     if not stripe_secret:
         raise HTTPException(status_code=503, detail="Payouts temporarily unavailable")
+
+    # ROADMAP N22 velocity cap: last check before the reserve INSERT, so a
+    # rejection writes no row and makes no Stripe call. NULL cap = no-op.
+    await _require_within_instant_payout_daily_cap(driver, service_area, req.amount, settings)
 
     payout_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()

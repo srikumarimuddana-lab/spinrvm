@@ -17,7 +17,7 @@ rider and driver login end-to-end. See Railway traceback:
 
 These tests exercise /send-otp with both branches of the DB-settings
 fetch (dict returned, exception thrown) using the real production phone
-number that triggered the reports: +13065203304.
+number that triggered the reports: +13065550192.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-PHONE = "+13065203304"
+PHONE = "+13065550192"
 
 
 def _resolve_inner(fn):
@@ -88,7 +88,7 @@ async def _call_send_otp(db_settings_return=None, db_settings_raise=None):
 
 class TestSendOtpShadowingRegression:
     """Prove /send-otp doesn't crash when get_app_settings returns a dict
-    OR raises. Phone: +13065203304 (real production report).
+    OR raises. Phone: +13065550192 (placeholder; the real number from the production report was redacted).
 
     Uses asyncio.run() rather than pytest-asyncio so the test runs in
     any environment without needing the plugin installed."""

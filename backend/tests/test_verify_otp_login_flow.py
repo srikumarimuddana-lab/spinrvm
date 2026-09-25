@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-PHONE = "+13065203304"
+PHONE = "+13065550192"
 CODE = "1234"
 
 

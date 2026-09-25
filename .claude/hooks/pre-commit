@@ -23,7 +23,7 @@ echo -e "${BLUE}spinr pre-commit security check...${NC}"
 BLOCKED=0
 
 # 1. Gitleaks (entropy + pattern based, if installed)
-echo "1/11 Running gitleaks (if installed)..."
+echo "1/12 Running gitleaks (if installed)..."
 if command -v gitleaks >/dev/null 2>&1; then
   if ! gitleaks protect --staged --config .gitleaks.toml --redact; then
     echo -e "${RED}  BLOCKED — gitleaks found a likely secret${NC}"
@@ -34,7 +34,7 @@ else
 fi
 
 # 2. Secrets (pattern fallback — catches common cases even without gitleaks)
-echo "2/11 Scanning for secrets (pattern fallback)..."
+echo "2/12 Scanning for secrets (pattern fallback)..."
 PATTERNS=(
   "sk_live_[a-zA-Z0-9]+"
   "pk_live_[a-zA-Z0-9]+"
@@ -65,7 +65,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 3. Forbidden files
-echo "3/11 Checking forbidden files..."
+echo "3/12 Checking forbidden files..."
 FORBIDDEN=(".env" ".env.local" ".env.production" ".env.staging" "*.pem" "*.key" "serviceAccountKey.json")
 FOUND=0
 for f in "${FORBIDDEN[@]}"; do
@@ -78,7 +78,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 4. PII in logs
-echo "4/11 Checking for PII in logs..."
+echo "4/12 Checking for PII in logs..."
 PII_PATTERNS=(
   "print.*lat.*lng"
   "print.*latitude"
@@ -98,7 +98,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 5. Branch protection
-echo "5/11 Checking branch..."
+echo "5/12 Checking branch..."
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   echo -e "${RED}  BLOCKED — direct commits to $BRANCH not allowed${NC}"
@@ -110,7 +110,7 @@ else
 fi
 
 # 6. Float money check
-echo "6/11 Checking money arithmetic..."
+echo "6/12 Checking money arithmetic..."
 FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE "(fare|price|amount|earning|payout)\s*[+\-\*\/]\s*[0-9]*\.[0-9]+" 2>/dev/null)
 if [ -n "$FLOAT" ]; then
   echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
@@ -119,7 +119,7 @@ else
 fi
 
 # 7. Python lint (staged backend/*.py — folded in from .husky/pre-commit)
-echo "7/11 Running ruff (staged backend/*.py)..."
+echo "7/12 Running ruff (staged backend/*.py)..."
 STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.py$' || true)
 if [ -n "$STAGED_PY" ]; then
   if command -v ruff >/dev/null 2>&1; then
@@ -138,7 +138,7 @@ else
 fi
 
 # 8. TypeScript lint (staged admin-dashboard/src — folded in from .husky/pre-commit)
-echo "8/11 Running eslint (staged admin-dashboard/src)..."
+echo "8/12 Running eslint (staged admin-dashboard/src)..."
 STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep '^admin-dashboard/src/.*\.\(ts\|tsx\)$' || true)
 if [ -n "$STAGED_TS" ]; then
   # shellcheck disable=SC2001  # per-line ^-anchored strip; a bash-native
@@ -160,7 +160,7 @@ fi
 # Warning-only: reports backtick-quoted paths that look like repo files/dirs
 # but don't exist on disk. Never blocks a commit while in this mode.
 # TODO(2026-09-01): flip to blocking (exit 1) once the warning backlog is clear.
-echo "9/11 Checking doc-cited file paths (warning only)..."
+echo "9/12 Checking doc-cited file paths (warning only)..."
 DOC_PATH_TMP=$(mktemp 2>/dev/null)
 check_doc_paths() {
   set -e
@@ -214,7 +214,7 @@ rm -f "$DOC_PATH_TMP"
 # ci-guardrails.yml's own Change Impact Log check verifies), so this can only
 # nudge: flag a staged file that looks shared and hasn't been paired with a
 # new docs/change-log/ entry in the same commit, never block on it.
-echo "10/11 Checking shared-component Change Impact Log reminder (warning only)..."
+echo "10/12 Checking shared-component Change Impact Log reminder (warning only)..."
 SHARED_DIRS='^(admin-dashboard/src/components/|rider-app/components/|driver-app/components/|shared/)'
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 STAGED_SHARED=$(printf '%s\n' "$STAGED_FILES" | grep -E "$SHARED_DIRS" | grep -viE '__tests__|\.(test|spec)\.' 2>/dev/null)
@@ -250,7 +250,7 @@ fi
 # left a live-tested rider-facing bug unfixed for a full day. This can only
 # nudge (a fork registry entry doesn't know whether a given change actually
 # needs porting), never block.
-echo "11/11 Checking known-fork registry (warning only)..."
+echo "11/12 Checking known-fork registry (warning only)..."
 FOUND=0
 if [ -f docs/known-forks.md ]; then
   STAGED_FILES=${STAGED_FILES:-$(git diff --cached --name-only --diff-filter=ACM)}
@@ -276,6 +276,89 @@ else
 fi
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 [ $FOUND -eq 1 ] && echo -e "${YELLOW}  (warning-only — not blocking commit; use judgment on whether this specific change applies to the sibling)${NC}"
+
+# 12. North-American phone numbers in added lines (blocking)
+# 2026-09-25 (PR #5812): real driver phone numbers had been committed to
+# ACTION_ITEMS.md, two audit docs and three backend test fixtures. Check 4
+# only looks at log calls, so nothing caught them. This scans every ADDED
+# line of every staged text file (docs included) for a NANP number in any
+# common shape — +1 AAA EEE LLLL, (AAA) EEE-LLLL, AAA-EEE-LLLL, AAA.EEE.LLLL,
+# AAAEEELLLL, +1AAAEEELLLL — and blocks unless it is in the reserved-for-
+# fiction range 555-0100..555-0199 (any area code). Use that range for
+# fixtures and examples. Area code and exchange must start 2-9 (NANP rule),
+# which is what keeps Unix timestamps (1xxxxxxxxx) out; a match must not
+# touch a letter, digit, "_" or a leading "." (hex/UUID/Stripe-ID fragments,
+# longer numeric IDs, decimal fractions). Also allowed: a bare digit run
+# right after "-" (URL IDs such as issuecomment-NNNNNNNNNN) and the int32/
+# uint32 limits. Lockfiles and binary/asset files are skipped. Output shows
+# only the last 4 digits — never echo the full number. Mirrored for CI as the
+# `spinr-nanp-phone-number` rule in .gitleaks.toml; keep the two in step.
+# No per-line bypass by design (a bypass marker is exactly what a real number
+# would get pasted next to); a confirmed false positive uses --no-verify.
+echo "12/12 Scanning added lines for real phone numbers..."
+# shellcheck disable=SC2016  # awk program, $-fields are awk's, not the shell's
+PHONE_AWK='
+BEGIN {
+  D = "[0-9]"; N = "[2-9]"
+  PHONE_RE = "(\\+?1[ .-]?)?(\\(" N D D "\\)|" N D D ")[ .-]?" N D D "[ .-]?" D D D D
+  file = "(unknown file)"; ln = 0; hdr = 0; skip = 0; hits = 0
+}
+/^diff --git / { hdr = 1; next }
+hdr && /^\+\+\+ / {
+  file = substr($0, 5); sub(/^b\//, "", file)
+  skip = (file == "/dev/null" \
+    || file ~ /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Pipfile\.lock|Cargo\.lock|Gemfile\.lock|composer\.lock)$/ \
+    || file ~ /\.(lock|svg|png|jpe?g|gif|ico|webp|pdf|ttf|otf|woff2?|mp3|mp4|zip|gz|map)$/)
+  next
+}
+/^@@ / {
+  hdr = 0; h = $0
+  sub(/^@@ -[0-9,]+ \+/, "", h); sub(/[, ].*$/, "", h); ln = h + 0
+  next
+}
+hdr { next }
+/^-/ { next }
+/^\+/ { if (!skip) scan(substr($0, 2)); ln++; next }
+{ ln++ }
+function scan(line,    off, rest, s, e, cand, prev, nxt, nxt2, d) {
+  off = 0; rest = line
+  while (match(rest, PHONE_RE)) {
+    s = off + RSTART; e = s + RLENGTH - 1
+    cand = substr(line, s, RLENGTH)
+    prev = (s > 1) ? substr(line, s - 1, 1) : ""
+    nxt = substr(line, e + 1, 1); nxt2 = substr(line, e + 2, 1)
+    off = s; rest = substr(line, s + 1)
+    if (prev ~ /[0-9A-Za-z_.]/) continue
+    if (nxt ~ /[0-9A-Za-z_]/) continue
+    if (nxt == "." && nxt2 ~ /[0-9]/) continue
+    if (prev == "-" && cand ~ /^[0-9]+$/) continue
+    d = cand; gsub(/[^0-9]/, "", d)
+    if (length(d) == 11) d = substr(d, 2)
+    if (substr(d, 4, 3) == "555" && substr(d, 7, 2) == "01") continue
+    if (d == "2147483647" || d == "4294967295") continue
+    printf "%s:%s: ***-***-%s\n", file, ln, substr(d, 7, 4)
+    hits++
+    off = e; rest = substr(line, e + 1)
+  }
+}
+'
+# Fail closed: this check blocks, so a diff/awk failure (e.g. fork failure,
+# awk missing) must not read as "no numbers found".
+PHONE_SCAN_OK=1
+PHONE_DIFF=$(git diff --cached -U0 --no-color --no-ext-diff) || PHONE_SCAN_OK=0
+PHONE_HITS=$(printf '%s\n' "$PHONE_DIFF" | awk "$PHONE_AWK") || PHONE_SCAN_OK=0
+if [ "$PHONE_SCAN_OK" -eq 0 ]; then
+  echo -e "${RED}  BLOCKED — phone-number scan could not run (git diff or awk failed)${NC}"
+  BLOCKED=1
+elif [ -n "$PHONE_HITS" ]; then
+  while IFS= read -r hit; do
+    echo -e "${RED}  BLOCKED — phone number in added line: $hit${NC}"
+  done <<< "$PHONE_HITS"
+  echo -e "${RED}  Use the fictional range 555-0100..555-0199 (e.g. +1 306 555 0142) for fixtures and examples. Never commit a real person's number.${NC}"
+  BLOCKED=1
+else
+  echo -e "${GREEN}  ✅ Clean${NC}"
+fi
 
 echo ""
 if [ $BLOCKED -eq 1 ]; then

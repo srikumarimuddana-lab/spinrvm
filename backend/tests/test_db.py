@@ -365,32 +365,35 @@ class TestDatabaseSupabaseFunctions:
     async def test_update_driver_location_rpc(self, mock_supabase_client):
         """Test updating driver location.
 
-        Historical note: this function USED to call an
-        ``update_driver_location`` RPC, but the Supabase RPC had a
-        text/uuid type mismatch so it was bypassed in favour of a
-        direct ``table("drivers").update(...).eq("id", ...)`` write
-        (see db_supabase.py:260-270). The test name still says "rpc"
-        for continuity; the assertion reflects the real code path.
+        Historical note: this function used to bypass a broken
+        ``update_driver_location`` RPC in favour of a direct
+        ``table("drivers").update(...).eq("id", ...)`` write. Migration 445
+        (DB capture-time guard) replaced that direct write with a call
+        through ``update_live_driver_marker`` (or the fenced variant,
+        ``update_live_driver_marker_fenced``, when an authenticated
+        session/epoch is supplied) — see repositories/driver_repo.py's
+        ``update_driver_location``. Same override rationale as
+        ``test_find_nearby_drivers_rpc`` above: the autouse ``.rpc`` mock is
+        an AsyncMock, but this call is synchronous inside ``run_sync``.
         """
         from backend.db_supabase import update_driver_location
 
         mock_response = MagicMock()
-        mock_response.data = [{"id": "driver_123"}]
+        mock_response.data = True
 
-        mock_query = MagicMock()
-        mock_query.update.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
+        mock_rpc = MagicMock()
+        mock_rpc.return_value.execute = MagicMock(return_value=mock_response)
+        mock_supabase_client.rpc = mock_rpc
 
         result = await update_driver_location("driver_123", 52.2, -106.7)
 
         assert result is True
-        mock_supabase_client.table.assert_called_with("drivers")
-        # Verify update payload includes the new coordinates.
-        update_call_args = mock_query.update.call_args[0][0]
-        assert update_call_args["lat"] == 52.2
-        assert update_call_args["lng"] == -106.7
+        mock_rpc.assert_called_once()
+        rpc_name, params = mock_rpc.call_args.args
+        assert rpc_name == "update_live_driver_marker"
+        assert params["p_driver_id"] == "driver_123"
+        assert params["p_values"]["lat"] == 52.2
+        assert params["p_values"]["lng"] == -106.7
 
     @pytest.mark.asyncio
     async def test_claim_driver_atomic(self, mock_supabase_client):

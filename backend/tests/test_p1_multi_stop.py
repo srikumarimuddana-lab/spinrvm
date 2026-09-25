@@ -198,7 +198,11 @@ class TestAddStopMidTrip:
 
         async def _capture_update(table, filter_doc, update_doc):
             updated_calls.append(update_doc)
-            return {}
+            # A CAS "0 rows matched" is falsy (e.g. {} or None) and the route
+            # correctly raises 409 on that -- this mock must return a
+            # truthy row to represent a successful update, matching the
+            # sibling tests above (which use `updated_ride`).
+            return {"id": RIDE_ID}
 
         with (
             patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
@@ -246,7 +250,7 @@ class TestRemoveStopMidTrip:
 
         with (
             patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.remove_stop_mid_trip(
@@ -273,7 +277,7 @@ class TestRemoveStopMidTrip:
 
         with (
             patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
             patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             await rides_mod.remove_stop_mid_trip(

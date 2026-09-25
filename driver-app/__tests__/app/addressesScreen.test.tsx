@@ -168,7 +168,7 @@ describe('AddressesScreen', () => {
       await flush();
     });
     expect(mockApiPost).toHaveBeenCalledWith('/addresses', {
-      name: 'Home', address: '100 Main St', lat: 50.45, lng: -104.6, icon: 'home',
+      name: 'Home', address: '100 Main St', lat: 50.45, lng: -104.6, icon: 'location',
     });
     expect(mockShowToast).toHaveBeenCalledWith('success', 'Address Saved', 'Address has been saved.');
   });

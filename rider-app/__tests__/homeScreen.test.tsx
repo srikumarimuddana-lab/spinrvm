@@ -17,7 +17,9 @@
  *    can be dismissed
  *  - nearby drivers at (nearly) the same coordinate are spread onto a
  *    small ring so they render as distinct markers instead of one
- *  - quick actions and search all route to /search-destination
+ *  - search routes to /search-destination; Home/Work pre-fill the saved
+ *    drop-off (else open /saved-places), Saved opens /saved-places; with
+ *    SavedPlaceShortcutsEnabledContext false all three just open search
  *  - RiderSOS gets the current ride id (or undefined) and the
  *    ridelessSosEnabled flag from RidelessSosEnabledContext
  */
@@ -117,6 +119,7 @@ const mockTriggerEmergency = jest.fn();
 const mockTriggerRidelessEmergency = jest.fn();
 const mockFetchActiveRide = jest.fn();
 const mockResetBookingDraft = jest.fn();
+const mockSetDropoff = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({ useRideStore: () => mockRideState }));
 
@@ -138,6 +141,7 @@ jest.mock('../components/RiderSOS', () => ({ RiderSOS: (props: any) => {
 
 jest.mock('../app/_layout', () => ({
   RidelessSosEnabledContext: require('react').createContext(false),
+  SavedPlaceShortcutsEnabledContext: require('react').createContext(true),
 }));
 
 const mockCheckNotificationPermission = jest.fn();
@@ -152,7 +156,7 @@ jest.mock('@shared/services/firebase', () => ({
 import { Platform, Linking } from 'react-native';
 import { CarMarker } from '@shared/components/CarMarker';
 import HomeScreen from '../app/(tabs)/index';
-import { RidelessSosEnabledContext } from '../app/_layout';
+import { RidelessSosEnabledContext, SavedPlaceShortcutsEnabledContext } from '../app/_layout';
 
 const flush = async () => {
   await Promise.resolve();
@@ -163,11 +167,13 @@ const flush = async () => {
 const LOCATION = { coords: { latitude: 52.1, longitude: -106.6, heading: 0 } };
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
-async function renderScreen(ridelessSosEnabled = false) {
+async function renderScreen(ridelessSosEnabled = false, savedPlaceShortcutsEnabled = true) {
   await act(async () => {
     renderer = TestRenderer.create(
       <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>
-        <HomeScreen />
+        <SavedPlaceShortcutsEnabledContext.Provider value={savedPlaceShortcutsEnabled}>
+          <HomeScreen />
+        </SavedPlaceShortcutsEnabledContext.Provider>
       </RidelessSosEnabledContext.Provider>,
     );
     await flush();
@@ -195,9 +201,12 @@ beforeEach(() => {
     triggerRidelessEmergency: mockTriggerRidelessEmergency,
     fetchActiveRide: mockFetchActiveRide,
     resetBookingDraft: mockResetBookingDraft,
+    savedAddresses: [],
+    setDropoff: mockSetDropoff,
   };
   mockAiChatState = { enabled: true, mode: 'enabled', loadConfig: jest.fn() };
   mockFetchActiveRide.mockResolvedValue({ active: false });
+  mockFetchSavedAddresses.mockResolvedValue([]);
   mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
   mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
   mockGetCurrentPositionAsync.mockResolvedValue(LOCATION);
@@ -301,15 +310,95 @@ describe('HomeScreen', () => {
     expect(mockPush).toHaveBeenCalledWith('/notifications');
   });
 
-  it('routes the Work and Saved quick actions to /search-destination', async () => {
-    const r = await renderScreen();
-    const workAction = findButtonByLabel(r, 'Go to work');
-    act(() => { workAction.props.onPress(); });
-    expect(mockPush).toHaveBeenCalledWith('/search-destination');
-    mockPush.mockClear();
-    const savedAction = findButtonByLabel(r, 'Saved places');
-    act(() => { savedAction.props.onPress(); });
-    expect(mockPush).toHaveBeenCalledWith('/search-destination');
+  describe('Home / Work / Saved quick actions', () => {
+    const HOME = { id: 'h1', name: 'My house', address: '1 Test St', lat: 50.1, lng: -104.1, icon: 'home', place_id: 'pid_h' };
+    const WORK = { id: 'w1', name: 'Work', address: '2 Test St', lat: 50.2, lng: -104.2, icon: 'location' };
+
+    it('Home with a saved Home (found by type, label "My house") pre-fills the drop-off and opens search', async () => {
+      mockRideState.savedAddresses = [HOME];
+      const r = await renderScreen();
+      act(() => { findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockResetBookingDraft).toHaveBeenCalled();
+      expect(mockSetDropoff).toHaveBeenCalledWith({ address: '1 Test St', lat: 50.1, lng: -104.1, place_id: 'pid_h' });
+      expect(mockPush).toHaveBeenCalledWith('/search-destination');
+      // Reset must run before the pre-fill, or it would wipe it.
+      expect(mockResetBookingDraft.mock.invocationCallOrder[0]).toBeLessThan(mockSetDropoff.mock.invocationCallOrder[0]);
+    });
+
+    it('Work with a saved Work (untyped row, label "Work") pre-fills the drop-off', async () => {
+      mockRideState.savedAddresses = [HOME, WORK];
+      const r = await renderScreen();
+      act(() => { findButtonByLabel(r, 'Go to work').props.onPress(); });
+      expect(mockSetDropoff).toHaveBeenCalledWith({ address: '2 Test St', lat: 50.2, lng: -104.2 });
+      expect(mockPush).toHaveBeenCalledWith('/search-destination');
+    });
+
+    it('Home with no saved Home opens Saved Places to add one', async () => {
+      mockRideState.savedAddresses = [WORK];
+      mockFetchSavedAddresses.mockResolvedValue([WORK]);
+      const r = await renderScreen();
+      mockFetchSavedAddresses.mockClear();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      // Checked the server once before deciding there is no Home.
+      expect(mockFetchSavedAddresses).toHaveBeenCalledTimes(1);
+      expect(mockPush).toHaveBeenCalledWith('/saved-places');
+      expect(mockSetDropoff).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith('Add your home', 'Save your home address to book it in one tap.', 'info');
+    });
+
+    it('Work with no saved Work opens Saved Places', async () => {
+      mockRideState.savedAddresses = [];
+      const r = await renderScreen();
+      await act(async () => { await findButtonByLabel(r, 'Go to work').props.onPress(); });
+      expect(mockPush).toHaveBeenCalledWith('/saved-places');
+    });
+
+    it('a Home tap before the saved list has loaded uses the freshly fetched list', async () => {
+      // Store still empty (initial fetch not back yet); the server has a Home.
+      mockRideState.savedAddresses = [];
+      mockFetchSavedAddresses.mockResolvedValue([HOME]);
+      const r = await renderScreen();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockSetDropoff).toHaveBeenCalledWith({ address: '1 Test St', lat: 50.1, lng: -104.1, place_id: 'pid_h' });
+      expect(mockPush).toHaveBeenCalledWith('/search-destination');
+      expect(mockPush).not.toHaveBeenCalledWith('/saved-places');
+      expect(mockShowToast).not.toHaveBeenCalled();
+    });
+
+    it('a Home tap with the Home already loaded does not refetch', async () => {
+      mockRideState.savedAddresses = [HOME];
+      const r = await renderScreen();
+      mockFetchSavedAddresses.mockClear();
+      await act(async () => { await findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockFetchSavedAddresses).not.toHaveBeenCalled();
+    });
+
+    it('Saved opens Saved Places', async () => {
+      const r = await renderScreen();
+      act(() => { findButtonByLabel(r, 'Saved places').props.onPress(); });
+      expect(mockPush).toHaveBeenCalledWith('/saved-places');
+    });
+
+    it('never overwrites a live ride draft: with a current ride Home just opens search', async () => {
+      mockRideState.savedAddresses = [HOME];
+      mockRideState.currentRide = { id: 'ride-1' };
+      const r = await renderScreen();
+      act(() => { findButtonByLabel(r, 'Go home').props.onPress(); });
+      expect(mockSetDropoff).not.toHaveBeenCalled();
+      expect(mockResetBookingDraft).not.toHaveBeenCalled();
+      expect(mockPush).toHaveBeenCalledWith('/search-destination');
+    });
+
+    it('flag off (saved_place_shortcuts_enabled=false): all three fall back to opening search', async () => {
+      mockRideState.savedAddresses = [HOME, WORK];
+      const r = await renderScreen(false, false);
+      for (const label of ['Go home', 'Go to work', 'Saved places']) {
+        mockPush.mockClear();
+        act(() => { findButtonByLabel(r, label).props.onPress(); });
+        expect(mockPush).toHaveBeenCalledWith('/search-destination');
+      }
+      expect(mockSetDropoff).not.toHaveBeenCalled();
+    });
   });
 
   it('opens /ai-assistant when the AI feature is enabled', async () => {
@@ -333,16 +422,10 @@ describe('HomeScreen', () => {
     expect(() => findButtonByLabel(r, 'AI assistant')).toThrow();
   });
 
-  it('routes the search bar and every quick action to /search-destination', async () => {
+  it('routes the search bar to /search-destination with a fresh draft', async () => {
     const r = await renderScreen();
     const searchBar = findButtonByLabel(r, 'Where to? Search for a destination');
     act(() => { searchBar.props.onPress(); });
-    expect(mockPush).toHaveBeenCalledWith('/search-destination');
-    expect(mockResetBookingDraft).toHaveBeenCalled();
-    mockPush.mockClear();
-    mockResetBookingDraft.mockClear();
-    const homeAction = findButtonByLabel(r, 'Go home');
-    act(() => { homeAction.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith('/search-destination');
     expect(mockResetBookingDraft).toHaveBeenCalled();
   });

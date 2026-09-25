@@ -554,13 +554,53 @@ describe('Favourites and Saved Places rows', () => {
   });
 
   it("uses a Favourite's own saved icon instead of always showing a star", async () => {
-    // Name alone ("Downtown Office") wouldn't match any known type by
-    // substring — only the persisted icon field ("work") identifies it.
-    // Before this fix every Favourite always rendered a star regardless.
+    // Name alone ("Downtown Fitness") wouldn't match any known type by
+    // substring — only the persisted icon field ("gym") identifies it.
+    mockSavedAddressesResponse = [{ name: 'Downtown Fitness', address: '5 Gym Way', lat: 50.4, lng: -104.6, icon: 'gym' }];
+    const renderer = await renderScreen();
+    expect(renderer.root.findAllByType(Text).some((t) => t.props.children === 'Favourites')).toBe(true);
+    const icons = renderer.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'fitness')).toBe(true);
+  });
+
+  it('a place typed Work is the Work chip even when its label is not "Work"', async () => {
+    // Previously this row ("Downtown Office", icon work) landed under
+    // Favourites and the Work chip said "not set": Home/Work were matched by
+    // exact label only.
     mockSavedAddressesResponse = [{ name: 'Downtown Office', address: '5 Office Way', lat: 50.4, lng: -104.6, icon: 'work' }];
     const renderer = await renderScreen();
-    const icons = renderer.root.findAllByType(Ionicons as any);
-    expect(icons.some((n) => n.props.name === 'briefcase')).toBe(true);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Work — 5 Office Way' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Work — not set' })).toHaveLength(0);
+    expect(renderer.root.findAllByType(Text).some((t) => t.props.children === 'Favourites')).toBe(false);
+  });
+
+  it('finds the Home chip by type when the label is "My house", and selects it', async () => {
+    mockSavedAddressesResponse = [{ name: 'My house', address: '10 Home St', lat: 50.4, lng: -104.6, icon: 'home' }];
+    const renderer = await renderScreen();
+    const homeChip = renderer.root.findAllByProps({ accessibilityLabel: 'Home — 10 Home St' })[0];
+    await act(async () => { await homeChip.props.onPress(); });
+    expect(useRideStore.getState().dropoff).toMatchObject({ address: '10 Home St', lat: 50.4, lng: -104.6 });
+  });
+
+  it('a place labelled "Home" but typed Gym stays a Favourite, not the Home chip', async () => {
+    mockSavedAddressesResponse = [{ name: 'Home', address: '7 Gym Rd', lat: 50.4, lng: -104.6, icon: 'gym' }];
+    const renderer = await renderScreen();
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Home — not set' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByType(Text).some((t) => t.props.children === 'Favourites')).toBe(true);
+  });
+
+  it('a saved place with a place_id re-resolves fresh coordinates on tap', async () => {
+    mockSavedAddressesResponse = [
+      { name: 'Gym', address: '123 Fitness Blvd', lat: 1, lng: 1, icon: 'gym', place_id: 'saved_pid' },
+    ];
+    mockDetails.mockResolvedValue({ data: { lat: 50.9, lng: -104.9, formatted_address: '123 Fitness Blvd, Fresh' } });
+    const renderer = await renderScreen();
+    const gymRow = renderer.root.findAllByProps({ accessibilityLabel: 'Gym — 123 Fitness Blvd' })[0];
+    await act(async () => { await gymRow.props.onPress(); });
+    expect(mockDetails).toHaveBeenCalledWith(expect.stringContaining('place_id=saved_pid'));
+    expect(useRideStore.getState().dropoff).toMatchObject({
+      address: '123 Fitness Blvd, Fresh', lat: 50.9, lng: -104.9, place_id: 'saved_pid',
+    });
   });
 });
 

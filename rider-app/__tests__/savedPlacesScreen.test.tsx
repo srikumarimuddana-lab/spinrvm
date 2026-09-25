@@ -2,8 +2,8 @@
  * app/saved-places.tsx — rider's saved-address book. Pins:
  *  - fetchSavedAddresses on mount
  *  - the empty state renders when there are no saved places
- *  - the add form: type-chip selection also seeds the label (only if the
- *    label is still empty); Save is disabled until a place is selected
+ *  - the add form: type-chip selection also seeds the label (only while the
+ *    label is empty or still the previous type's name); Save is disabled until a place is selected
  *    from autocomplete; a save failure toasts and leaves the form open
  *  - selecting a prediction geocodes via /maps/places/details, rotates
  *    the autocomplete session token, and shows the resolved address
@@ -57,6 +57,7 @@ jest.mock('@shared/hooks/usePlacesAutocomplete', () => ({
 const mockFetchSavedAddresses = jest.fn();
 const mockAddSavedAddress = jest.fn();
 const mockDeleteSavedAddress = jest.fn();
+const mockUpdateSavedAddress = jest.fn();
 let mockRideState: any;
 jest.mock('../store/rideStore', () => ({
   useRideStore: () => mockRideState,
@@ -114,6 +115,7 @@ beforeEach(() => {
     fetchSavedAddresses: mockFetchSavedAddresses,
     addSavedAddress: mockAddSavedAddress,
     deleteSavedAddress: mockDeleteSavedAddress,
+    updateSavedAddress: mockUpdateSavedAddress,
     userLocation: null,
   };
   mockFetchSavedAddresses.mockResolvedValue(undefined);
@@ -252,8 +254,56 @@ describe('SavedPlacesScreen', () => {
       lat: 50.45,
       lng: -104.6,
       icon: 'home',
+      place_id: 'pred-1',
     });
     expect(allText(r)).toContain('Add New Place');
+    // No Home existed, so nothing was replaced.
+    expect(mockShowToast).not.toHaveBeenCalledWith('Home Updated', expect.anything(), 'success');
+  });
+
+  it('tells the rider when saving a Home replaces their existing Home', async () => {
+    mockRideState.savedAddresses = [{ id: 'h1', name: 'My house', address: '1 Old St', icon: 'home' }];
+    mockApiGet.mockResolvedValue({
+      data: { lat: 50.45, lng: -104.6, formatted_address: '100 Main St, Regina, SK' },
+    });
+    mockPredictions = [{ place_id: 'pred-1', description: '100 Main St', structured_formatting: undefined }];
+    mockAddSavedAddress.mockResolvedValue(undefined);
+    const r = await renderScreen();
+    act(() => { findButtonByText(r, 'Add New Place').props.onPress(); });
+    await act(async () => { await findButtonByText(r, '100 Main St').props.onPress(); await flush(); });
+    await act(async () => { await findButtonByText(r, 'Save Place').props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Home Updated', 'Your home address was replaced.', 'success');
+  });
+
+  it('keeps the label in step with the type while it still equals the previous type name', async () => {
+    const r = await renderScreen();
+    act(() => { findButtonByText(r, 'Add New Place').props.onPress(); });
+    act(() => { findButtonByText(r, 'Work').props.onPress(); });
+    act(() => { findButtonByText(r, 'Gym').props.onPress(); });
+    expect(r.root.findByProps({ placeholder: "e.g. Home, Mom's house" }).props.value).toBe('Gym');
+  });
+
+  it('tells the rider when the picked suggestion has no coordinates', async () => {
+    mockApiGet.mockResolvedValue({ data: { lat: null, lng: null, formatted_address: '' } });
+    mockPredictions = [{ place_id: 'pred-1', description: '100 Main St', structured_formatting: undefined }];
+    const r = await renderScreen();
+    act(() => { findButtonByText(r, 'Add New Place').props.onPress(); });
+    await act(async () => { await findButtonByText(r, '100 Main St').props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Location Unavailable', "We couldn't find the location of that address. Try another result.", 'warning',
+    );
+    expect(findButtonByText(r, 'Save Place').props.disabled).toBe(true);
+  });
+
+  it('tells the rider when the place lookup itself fails', async () => {
+    mockApiGet.mockRejectedValue(new Error('network'));
+    mockPredictions = [{ place_id: 'pred-1', description: '100 Main St', structured_formatting: undefined }];
+    const r = await renderScreen();
+    act(() => { findButtonByText(r, 'Add New Place').props.onPress(); });
+    await act(async () => { await findButtonByText(r, '100 Main St').props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Location Unavailable', "We couldn't look up that address. Please try again.", 'danger',
+    );
   });
 
   it('shows a toast and leaves the form open on a save failure', async () => {
@@ -319,6 +369,66 @@ describe('SavedPlacesScreen', () => {
       confirmBtn.props.onPress();
     });
     expect(mockDeleteSavedAddress).toHaveBeenCalledWith('p1');
+  });
+
+  it('edits a place: a rename sends only name/type, not the location', async () => {
+    mockRideState.savedAddresses = [{ id: 'g1', name: 'Gym', address: '55 Fit Ave', lat: 50.1, lng: -104.1, icon: 'gym' }];
+    mockUpdateSavedAddress.mockResolvedValue(undefined);
+    const r = await renderScreen();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'Edit Gym' }).props.onPress(); });
+    const labelInput = r.root.findByProps({ placeholder: "e.g. Home, Mom's house" });
+    expect(labelInput.props.value).toBe('Gym');
+    act(() => { labelInput.props.onChangeText('Downtown gym'); });
+    await act(async () => { await findButtonByText(r, 'Save Place').props.onPress(); await flush(); });
+    expect(mockUpdateSavedAddress).toHaveBeenCalledWith('g1', { name: 'Downtown gym', icon: 'gym' });
+    expect(mockAddSavedAddress).not.toHaveBeenCalled();
+  });
+
+  it('edits a place: picking a new address sends the new location and place_id', async () => {
+    mockRideState.savedAddresses = [{ id: 'g1', name: 'Gym', address: '55 Fit Ave', lat: 50.1, lng: -104.1, icon: 'gym' }];
+    mockUpdateSavedAddress.mockResolvedValue(undefined);
+    mockApiGet.mockResolvedValue({ data: { lat: 50.45, lng: -104.6, formatted_address: '100 Main St, Regina, SK' } });
+    const r = await renderScreen();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'Edit Gym' }).props.onPress(); });
+    // Typing in the address field drops the old selection and searches again.
+    act(() => { r.root.findByProps({ placeholder: 'Search for an address' }).props.onChangeText('100 Main'); });
+    mockPredictions = [{ place_id: 'pred-2', description: '100 Main St', structured_formatting: undefined }];
+    act(() => { r.update(<SavedPlacesScreen />); });
+    await act(async () => { await findButtonByText(r, '100 Main St').props.onPress(); await flush(); });
+    await act(async () => { await findButtonByText(r, 'Save Place').props.onPress(); await flush(); });
+    expect(mockUpdateSavedAddress).toHaveBeenCalledWith('g1', {
+      name: 'Gym', icon: 'gym', address: '100 Main St, Regina, SK', lat: 50.45, lng: -104.6, place_id: 'pred-2',
+    });
+  });
+
+  it('shows a message when deleting fails', async () => {
+    mockRideState.savedAddresses = [PLACE_1];
+    mockDeleteSavedAddress.mockRejectedValue(new Error('server error'));
+    const r = await renderScreen();
+    const deleteBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByProps({ name: 'trash-outline' }).length > 0)!;
+    act(() => { deleteBtn.props.onPress(); });
+    await act(async () => {
+      await r.root.findByProps({ accessibilityLabel: 'confirm-Remove' }).props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Remove Failed', 'Could not remove this place. Please try again.', 'danger',
+    );
+  });
+
+  it('shows an error with Retry (not "No saved places yet") when loading fails', async () => {
+    mockRideState.savedAddressesLoadFailed = true;
+    const r = await renderScreen();
+    expect(allText(r)).toContain("Couldn't load your saved places");
+    expect(allText(r)).not.toContain('No saved places yet');
+    mockFetchSavedAddresses.mockClear();
+    await act(async () => {
+      await r.root.findByProps({ accessibilityLabel: 'Retry loading saved places' }).props.onPress();
+      await flush();
+    });
+    expect(mockFetchSavedAddresses).toHaveBeenCalledTimes(1);
   });
 
   it('navigates back when the back button is pressed', async () => {

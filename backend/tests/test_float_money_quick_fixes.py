@@ -250,3 +250,46 @@ async def test_earnings_total_tips_accepts_non_float_numerics(mock_supabase_clie
     result = await get_driver_earnings(period="week", current_user={"id": _USER_ID})
 
     assert result["total_tips"] == "6.60"
+
+
+# The driver_daily_stats rollup is the primary weekly/monthly path whenever the
+# table has rows; it summed tips and earnings as raw floats too (money audit
+# follow-up on this branch).
+def _dime_tip_stats():
+    day = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+    return [
+        {
+            "driver_id": _DRIVER["id"],
+            "stat_date": day,
+            "total_earnings": 0.1,
+            "total_tips": 0.1,
+            "rides_completed": 1,
+            "online_minutes": 60,
+            "total_km": 1.0,
+        }
+        for _ in range(10)
+    ]
+
+
+async def test_weekly_stats_path_tips_and_earnings_are_exact(mock_supabase_client):
+    from backend.routes.drivers import get_driver_weekly_earnings
+
+    _serve(mock_supabase_client, {"drivers": [_DRIVER], "driver_daily_stats": _dime_tip_stats()})
+    result = await get_driver_weekly_earnings(weeks=4, current_user={"id": _USER_ID})
+
+    assert len(result) == 1
+    assert result[0]["tips"] == 1.0
+    assert result[0]["earnings"] == 1.0
+    assert type(result[0]["tips"]) is float
+
+
+async def test_monthly_stats_path_tips_and_earnings_are_exact(mock_supabase_client):
+    from backend.routes.drivers import get_driver_monthly_earnings
+
+    _serve(mock_supabase_client, {"drivers": [_DRIVER], "driver_daily_stats": _dime_tip_stats()})
+    result = await get_driver_monthly_earnings(months=6, current_user={"id": _USER_ID})
+
+    assert len(result) == 1
+    assert result[0]["tips"] == 1.0
+    assert result[0]["earnings"] == 1.0
+    assert type(result[0]["tips"]) is float

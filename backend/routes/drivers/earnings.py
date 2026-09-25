@@ -728,12 +728,15 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
                     "online_hours": 0,
                     "distance_km": 0,
                 }
-            weekly_data[week_key]["earnings"] += s.get("total_earnings", 0) or 0
-            weekly_data[week_key]["tips"] += s.get("total_tips", 0) or 0
+            weekly_data[week_key]["earnings"] += _d(s.get("total_earnings", 0) or 0)
+            weekly_data[week_key]["tips"] += _d(s.get("total_tips", 0) or 0)
             weekly_data[week_key]["rides"] += s.get("rides_completed", 0) or 0
             weekly_data[week_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
             weekly_data[week_key]["distance_km"] += s.get("total_km", 0) or 0
 
+        for w in weekly_data.values():
+            w["earnings"] = _f(w["earnings"])
+            w["tips"] = _f(w["tips"])
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
 
     # Fallback: compute from rides table
@@ -839,12 +842,15 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
                     "online_hours": 0,
                     "distance_km": 0,
                 }
-            monthly_data[month_key]["earnings"] += s.get("total_earnings", 0) or 0
-            monthly_data[month_key]["tips"] += s.get("total_tips", 0) or 0
+            monthly_data[month_key]["earnings"] += _d(s.get("total_earnings", 0) or 0)
+            monthly_data[month_key]["tips"] += _d(s.get("total_tips", 0) or 0)
             monthly_data[month_key]["rides"] += s.get("rides_completed", 0) or 0
             monthly_data[month_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
             monthly_data[month_key]["distance_km"] += s.get("total_km", 0) or 0
 
+        for m in monthly_data.values():
+            m["earnings"] = _f(m["earnings"])
+            m["tips"] = _f(m["tips"])
         return sorted(monthly_data.values(), key=lambda x: x["month"])
 
     # Fallback: compute from rides table

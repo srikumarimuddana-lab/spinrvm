@@ -167,10 +167,7 @@ async def calculate_airport_fee(
 
     for area in areas:
         polygon = get_service_area_polygon(area)
-        # Config read, no arithmetic: only compared > 0 and returned; every
-        # consumer re-Decimals it (fare_service.calculate_fare's _d(airport_fee)).
-        # nosemgrep: spinr-no-float-in-money
-        fee = float(area.get("airport_fee", 0))
+        fee = _fare_f(_fare_d(area.get("airport_fee", 0) or 0))
         if fee <= 0 or len(polygon) < 3:
             continue
 
@@ -1024,10 +1021,7 @@ async def get_area_config(
                 "name": f.get("fee_name"),
                 "type": f.get("fee_type"),
                 "calc_mode": f.get("calc_mode", "flat"),
-                # Echoes the configured fee for the app's display cache; no
-                # arithmetic here (pricing uses calculate_all_fees' Decimal path).
-                # nosemgrep: spinr-no-float-in-money
-                "amount": float(f.get("amount", 0)),
+                "amount": _fare_f(_fare_d(f.get("amount", 0) or 0)),
                 "description": f.get("description", ""),
                 "conditions": f.get("conditions", {}),
             }

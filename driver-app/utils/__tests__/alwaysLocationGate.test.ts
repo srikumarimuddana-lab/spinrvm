@@ -10,7 +10,10 @@ const mockRequireAlways = jest.fn(async () => true);
 const mockCaptureException = jest.fn();
 const mockOpenSettings = jest.fn(() => Promise.resolve());
 
+// expo-modules-core reads Platform.select at import time, so the mock needs a
+// Platform stub (same pattern as hooks/__tests__/goOnlinePermission.test.ts).
 jest.mock('react-native', () => ({
+  Platform: { OS: 'android', select: (o: Record<string, unknown>) => o.android ?? o.native ?? o.default },
   Linking: { openSettings: () => mockOpenSettings() },
 }));
 

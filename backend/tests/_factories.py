@@ -42,6 +42,32 @@ def close_spawned_coro(coro: Any, *args: Any, **kwargs: Any) -> None:
         coro.close()
 
 
+def use_real_redis_package(monkeypatch: Any) -> None:
+    """Load the real ``redis`` package for one test; restore ``sys.modules`` after.
+
+    Several test modules stub ``sys.modules["redis"]`` / ``["redis.asyncio"]``
+    with a MagicMock at collection time when redis is not imported yet, and
+    those stubs last for the whole run. Under that ordering any
+    ``from redis.<submodule> import ...`` (e.g. ``redis.backoff`` in
+    ``utils.redis_client._get_redis``) fails with ModuleNotFoundError because the
+    stub is not a package. Drop the stubs for this test so the real package
+    loads; monkeypatch restores the stubs and removes the real redis modules
+    afterwards. Only ``redis*`` entries are touched.
+    """
+    import sys
+    import types
+
+    for name in [n for n in sys.modules if n == "redis" or n.startswith("redis.")]:
+        if not isinstance(sys.modules[name], types.ModuleType):
+            monkeypatch.delitem(sys.modules, name)
+    before = set(sys.modules)
+    import redis  # noqa: F401
+
+    for name in [n for n in sys.modules if n not in before and (n == "redis" or n.startswith("redis."))]:
+        # Pop first so monkeypatch records the key as absent and deletes it on undo.
+        monkeypatch.setitem(sys.modules, name, sys.modules.pop(name))
+
+
 def corporate_account_row(status_value: str = "active", **overrides: Any) -> Dict[str, Any]:
     """Build a CorporateAccountDetailResponse-shaped dict for route tests.
 

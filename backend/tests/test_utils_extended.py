@@ -701,6 +701,16 @@ class TestDatetimeUtils:
 
 
 class TestDeadlineUtils:
+    @pytest.fixture(autouse=True)
+    def _clear_deadline(self):
+        # These tests set expired deadlines on the shared contextvar. Clear it
+        # afterwards, or later tests' DB calls are rejected as "deadline expired".
+        from backend.utils.deadline import set_request_deadline
+
+        set_request_deadline(None)
+        yield
+        set_request_deadline(None)
+
     def test_get_request_deadline_returns_none_by_default(self):
         from backend.utils.deadline import get_request_deadline
 

@@ -6024,6 +6024,11 @@ expo-constants@~57.0.15, expo-constants@~57.0.16, expo-constants@~57.0.8:
   dependencies:
     "@expo/env" "~2.4.3"
 
+expo-crypto@~57.0.3:
+  version "57.0.3"
+  resolved "https://registry.yarnpkg.com/expo-crypto/-/expo-crypto-57.0.3.tgz#e232bf2775f268baa8c5afab30085dc850410bb2"
+  integrity sha512-SAWqEfF37nc8ot7bXsVmu9AFYwQdC2kGvH/eNAHiR3bmlcf1Vv8wu9AnGKT+a90r3T8YfwMpZP4QAYlo4vCn9w==
+
 expo-dev-client@~57.0.16:
   version "57.0.16"
   resolved "https://registry.yarnpkg.com/expo-dev-client/-/expo-dev-client-57.0.16.tgz#7e3c1f5e5702644d69ff02dfcb871a67ec8f40f6"

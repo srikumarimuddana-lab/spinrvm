@@ -1202,11 +1202,14 @@ class TestGetRedisDirect:
             rc._redis_url = saved_url
         assert result is mock_client
 
-    def test_creates_new_client_when_not_cached(self):
+    def test_creates_new_client_when_not_cached(self, monkeypatch):
         import os
         import sys
 
         import backend.utils.redis_client as rc
+        from backend.tests._factories import use_real_redis_package
+
+        use_real_redis_package(monkeypatch)
 
         mock_client = MagicMock()
         mock_aioredis = MagicMock()
@@ -1236,11 +1239,14 @@ class TestGetRedisDirect:
                     redis_mod.asyncio = saved_attr
         assert result is mock_client
 
-    def test_returns_none_on_connection_error(self):
+    def test_returns_none_on_connection_error(self, monkeypatch):
         import os
         import sys
 
         import backend.utils.redis_client as rc
+        from backend.tests._factories import use_real_redis_package
+
+        use_real_redis_package(monkeypatch)
 
         mock_aioredis = MagicMock()
         mock_aioredis.from_url = MagicMock(side_effect=Exception("connection refused"))

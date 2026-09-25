@@ -65,6 +65,7 @@ try:
         issue_refresh_token,
         lookup_refresh_token,
         refresh_token_generation_matches,
+        refresh_token_session_id,
         revoke_all_for_user,
         revoke_refresh_token,
     )
@@ -127,6 +128,7 @@ except ImportError:
         issue_refresh_token,
         lookup_refresh_token,
         refresh_token_generation_matches,
+        refresh_token_session_id,
         revoke_all_for_user,
         revoke_refresh_token,
     )
@@ -658,6 +660,7 @@ async def _issue_company_email_session(
                 status_code=503,
                 message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
+        per_login_sessions, owns_current_session = await _login_session_policy(request, driver_session_enabled)
         try:
             # Completing this OTP IS proof the person controls the inbox, so
             # stamp email_verified alongside the session. Without it the flag
@@ -670,12 +673,13 @@ async def _issue_company_email_session(
                 "email_verified": True,
                 "email_verified_at": datetime.now(timezone.utc).isoformat(),
             }
-            if not driver_session_enabled:
+            if owns_current_session and not driver_session_enabled:
                 _verify_patch["current_session_id"] = session_id
             await db_supabase.update_one("users", {"id": user["id"]}, _verify_patch)
             user.update(_verify_patch)
-            user["current_session_id"] = session_id
-            await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
+            if owns_current_session:
+                user["current_session_id"] = session_id
+                await _cleanup_superseded_session(user["id"], previous_session_id, session_id)
         except Exception as e:
             logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
             raise SpinrException(
@@ -686,6 +690,7 @@ async def _issue_company_email_session(
             ) from e
         is_new_user = False
     else:
+        per_login_sessions = await _driver_app_only_sessions_enabled()
         user = {
             "id": str(uuid.uuid4()),
             "phone": _synthetic_phone_for_company_email(email),
@@ -742,6 +747,7 @@ async def _issue_company_email_session(
         user_agent=user_agent,
         ip=client_ip,
         token_version=token_version if not is_new_user else int(user.get("token_version") or 0),
+        **({"session_id": session_id} if per_login_sessions else {}),
     )
     csrf = generate_csrf_token()
     set_csrf_cookie(
@@ -1155,22 +1161,24 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                     status_code=503,
                     message_key=ErrorKeys.SYSTEM_DATABASE,
                 ) from e
+            per_login_sessions, owns_current_session = await _login_session_policy(request, driver_session_enabled)
             try:
-                _session_update: dict = {"current_session_id": session_id}
+                _session_update: dict = {"current_session_id": session_id} if owns_current_session else {}
                 if existing_user.get("is_guest"):
                     # Row was provisioned by a corporate guest booking
                     # (services/guest_user_service). The phone owner just
                     # proved possession via OTP — the account and its guest
                     # ride history are theirs now.
                     _session_update["is_guest"] = False
-                if not driver_session_enabled:
+                if not driver_session_enabled and _session_update:
                     await db_supabase.update_one(
                         "users",
                         {"id": existing_user["id"]},
                         _session_update,
                     )
-                existing_user["current_session_id"] = session_id
-                if previous_session_id and str(previous_session_id) != session_id:
+                if owns_current_session:
+                    existing_user["current_session_id"] = session_id
+                if owns_current_session and previous_session_id and str(previous_session_id) != session_id:
                     try:
                         await revoke_session(str(previous_session_id))
                     except Exception:
@@ -1243,7 +1251,12 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 token_version=token_version,
             )
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
+                user_id,
+                audience="rider",
+                user_agent=user_agent,
+                ip=client_ip,
+                token_version=token_version,
+                **({"session_id": session_id} if per_login_sessions else {}),
             )
             logger.info("Token created. Validating UserProfile...")
             try:
@@ -1345,7 +1358,12 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-                user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=0
+                user_id,
+                audience="rider",
+                user_agent=user_agent,
+                ip=client_ip,
+                token_version=0,
+                **({"session_id": session_id} if await _driver_app_only_sessions_enabled() else {}),
             )
             csrf = generate_csrf_token()
             set_csrf_cookie(
@@ -1485,11 +1503,13 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
             status_code=503,
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
+    per_login_sessions, owns_current_session = await _login_session_policy(request, driver_session_enabled)
     try:
-        if not driver_session_enabled:
-            await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
-        user["current_session_id"] = session_id
-        await _cleanup_superseded_session(user_id, previous_session_id, session_id)
+        if owns_current_session:
+            if not driver_session_enabled:
+                await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
+            user["current_session_id"] = session_id
+            await _cleanup_superseded_session(user_id, previous_session_id, session_id)
     except Exception as e:
         # Same defect verify_otp and firebase_auth_login guard against: without
         # a persisted current_session_id, should_tombstone() can never match the
@@ -1512,7 +1532,12 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip, token_version=token_version
+        user_id,
+        audience="rider",
+        user_agent=user_agent,
+        ip=client_ip,
+        token_version=token_version,
+        **({"session_id": session_id} if per_login_sessions else {}),
     )
     try:
         user_obj = UserProfile(**user)
@@ -1621,6 +1646,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     session_id = str(uuid.uuid4())
     driver_session_enabled = False
     previous_session_id = None
+    per_login_sessions, owns_current_session = await _driver_app_only_sessions_enabled(), True
     if not user:
         is_new_user = True
         _now_iso = datetime.now(timezone.utc).isoformat()
@@ -1707,8 +1733,9 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 status_code=503,
                 message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
+        per_login_sessions, owns_current_session = await _login_session_policy(request, driver_session_enabled)
         try:
-            if not driver_session_enabled:
+            if owns_current_session and not driver_session_enabled:
                 await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
             # Without a persisted current_session_id, single-device login
@@ -1725,9 +1752,10 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 status_code=503,
                 message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
-        user["current_session_id"] = session_id
+        if owns_current_session:
+            user["current_session_id"] = session_id
 
-    if previous_session_id and str(previous_session_id) != session_id:
+    if owns_current_session and previous_session_id and str(previous_session_id) != session_id:
         try:
             await revoke_session(str(previous_session_id))
             try:
@@ -1746,7 +1774,12 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="driver", user_agent=user_agent, ip=client_ip, token_version=token_version
+        user_id,
+        audience="driver",
+        user_agent=user_agent,
+        ip=client_ip,
+        token_version=token_version,
+        **({"session_id": session_id} if per_login_sessions else {}),
     )
 
     try:
@@ -1920,6 +1953,13 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # rotation response is recovered instead of cascading. See
     # docs/known-forks.md; admin refresh has no twin by design.
     proposed = await _accepted_refresh_proposal(body)
+    # The proposal may become the successor's secret only on a native-app
+    # request (see _is_native_refresh_request), so the party that presented the
+    # parent is the party receiving the response. A cookie is never overridden
+    # by a body token, and no browser request qualifies: a browser stores
+    # whatever Set-Cookie comes back, so a forged body picking the parent would
+    # sign the victim into the forger's account (session fixation).
+    parent_from_body = bool(proposed and _is_native_refresh_request(request))
     if proposed:
         verdict, successor = await classify_committed_replay(refresh_token_from_cookie, proposed)
         if verdict == "recover" and successor:
@@ -1940,7 +1980,10 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
             if refresh_expires_at is None:
                 raise TokenExpiredException(message="Invalid refresh token", action_hint="Sign in again")
             _metric_inc("spinr_auth_refresh_recovered_total", {"audience": str(successor.get("audience"))})
-            return _build_refresh_response(response, user, proposed, refresh_expires_at)
+            recovered_session_id = successor.get("session_id") if await _driver_app_only_sessions_enabled() else None
+            return _build_refresh_response(
+                response, user, proposed, refresh_expires_at, session_id=recovered_session_id
+            )
         if verdict == "dead":
             raise TokenExpiredException(
                 message="Invalid refresh token",
@@ -1948,11 +1991,13 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
                 action_hint="Sign in again",
             )
         # verdict == "no_match": this parent hasn't been committed-replayed
-        # before (the normal case for every first-time refresh). Clear the
-        # client-supplied value now so it can never reach issue_refresh_token
-        # as `raw` below -- only the recover branch above (a server-committed
-        # successor, not client-chosen bytes) may ever populate that kwarg.
-        proposed = None
+        # before (the normal case for every first-time refresh). On a native
+        # request the caller sent the parent itself and receives the response,
+        # so choosing its own successor grants nothing new. A browser request
+        # (where a script or cross-site form can shape the body) must never
+        # choose its successor, so clear it.
+        if not parent_from_body:
+            proposed = None
 
     row = await lookup_refresh_token(refresh_token_from_cookie)
     if not row:
@@ -2014,6 +2059,13 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_real_client_ip(request)
 
+    # Per-login sessions (login_supersede_driver_app_only_enabled): the chain
+    # keeps its own session id instead of re-reading the shared
+    # users.current_session_id, which another app's login may have moved.
+    chain_session_id = None
+    if await _driver_app_only_sessions_enabled():
+        chain_session_id = _chain_session_id_for_rotation(row, user, request)
+
     # Rotate: issue a new refresh token and mark the old row as
     # replaced. If the user later presents the old token it'll be
     # revoked_at != null and the lookup returns None.
@@ -2024,7 +2076,8 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
         ip=client_ip,
         replaces=row.get("id"),
         token_version=row.get("token_version"),
-        # Flag off: the call is exactly today's (no ``raw`` kwarg at all).
+        # Flag off: the call is exactly today's (no ``raw``/``session_id`` kwargs).
+        **({"session_id": chain_session_id} if chain_session_id else {}),
         **({"raw": proposed} if proposed else {}),
     )
 
@@ -2054,7 +2107,27 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     # instead was considered and rejected: refresh is not a session-establishing
     # operation, and two devices refreshing concurrently would fight over
     # current_session_id and start kicking each other off.
-    return _build_refresh_response(response, user, new_raw, refresh_expires_at)
+    return _build_refresh_response(response, user, new_raw, refresh_expires_at, session_id=chain_session_id)
+
+
+def _is_native_refresh_request(request: Request) -> bool:
+    """True only for a refresh request no web page could have made.
+
+    Cookie absence alone is not enough: the refresh cookies are SameSite=Strict,
+    so a signed-in victim's browser omits them on a cross-site forged POST.
+    Browsers always send ``Origin`` on a POST, same-origin included (``null``
+    under no-referrer), so this also rules out same-origin XSS; they send
+    ``Sec-Fetch-Site`` on modern engines. Native fetch sends neither. A
+    cross-site form cannot send ``application/json``, and a cross-site script
+    cannot without passing a CORS preflight.
+    """
+    if request.cookies.get("refresh_token"):
+        return False
+    if request.headers.get("origin") is not None or request.headers.get("referer") is not None:
+        return False
+    if request.headers.get("sec-fetch-site", "none") != "none":
+        return False
+    return request.headers.get("content-type", "").split(";")[0].strip().lower() == "application/json"
 
 
 async def _accepted_refresh_proposal(body: Optional[RefreshRequest]) -> Optional[str]:
@@ -2085,12 +2158,40 @@ def _parse_refresh_expiry(value: Any) -> Optional[datetime]:
     return None
 
 
+def _chain_session_id_for_rotation(row: dict, user: dict, request: Request) -> str:
+    """Session id a rotated refresh chain carries forward.
+
+    A chain minted with per-login sessions keeps its own id. A legacy chain
+    (no session_id) adopts one on its first rotation. Only an explicit
+    driver-app request (``X-App-Platform: driver``, sent by the foreground app,
+    Android Auto and the background location task) keeps
+    users.current_session_id, the id its tokens already carry, so the driver's
+    availability controller binding survives the switch. Every other device
+    (rider app, headerless older builds, company portal) gets a fresh id, so
+    its logout can never tombstone the driver's session.
+    """
+    if row.get("session_id"):
+        return str(row["session_id"])
+    if request.headers.get("X-App-Platform") == "driver" and user.get("current_session_id"):
+        return str(user["current_session_id"])
+    return str(uuid.uuid4())
+
+
 def _build_refresh_response(
-    response: Response, user: dict, refresh_raw: str, refresh_expires_at: datetime
+    response: Response,
+    user: dict,
+    refresh_raw: str,
+    refresh_expires_at: datetime,
+    *,
+    session_id: Optional[str] = None,
 ) -> RefreshResponse:
-    """Mint the access token, CSRF and cookies shared by rotate and recover."""
+    """Mint the access token, CSRF and cookies shared by rotate and recover.
+
+    ``session_id`` is the refresh chain's own id (per-login sessions); without
+    one the token carries users.current_session_id, as before.
+    """
     # NOT `or row.get("user_agent")` -- see the note at the rotate call site.
-    session_id = user.get("current_session_id") or ""
+    session_id = session_id or user.get("current_session_id") or ""
     token_version = int(user.get("token_version") or 0)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
@@ -2285,7 +2386,16 @@ async def logout(
         # needs positive evidence. Only tombstone when this token still owns
         # users.current_session_id; otherwise another device has since logged in
         # and revoking would take that device's traffic down with it.
-        if should_tombstone(token_session_id, current_user.get("current_session_id")):
+        # Per-login sessions: a device that proves ownership of its chain (the
+        # refresh token it is signing out carries this session id) tombstones
+        # its own session even when another app's login owns current_session_id.
+        own_chain_session = None
+        if token_session_id and await _driver_app_only_sessions_enabled():
+            presented_refresh = refresh_token_from_cookie or (body.refresh_token if body else None)
+            own_chain_session = await refresh_token_session_id(presented_refresh, user_id=current_user["id"])
+        if should_tombstone(token_session_id, current_user.get("current_session_id")) or (
+            own_chain_session is not None and own_chain_session == str(token_session_id)
+        ):
             await revoke_session(str(token_session_id))
         try:
             _spawn(
@@ -2358,6 +2468,58 @@ async def _begin_driver_session_if_driver(user: dict, session_id: str) -> tuple[
     if driver:
         return await _begin_driver_session(user, session_id)
     return False, int(user.get("token_version") or 0), user.get("current_session_id")
+
+
+LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG = "login_supersede_driver_app_only_enabled"
+
+
+async def _driver_app_only_sessions_enabled() -> bool:
+    """The flag. Unreadable settings are a retryable 503, not "off".
+
+    Falling back to off would silently restore shared-session behaviour while
+    the flag is on: a rider login would overwrite current_session_id, revoke
+    the driver's session and take the driver offline.
+
+    Mutually exclusive with driver_single_session_enabled: that rollout's
+    begin_driver_session RPC runs on every driver-account login and revokes
+    the account's rider and driver refresh tokens, so per-login sessions
+    cannot hold while it is on. When both are set, single-session wins.
+    """
+    try:
+        app_settings = await get_app_settings()
+    except Exception as exc:
+        logger.error("auth: could not read %s", LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG, exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from exc
+    app_settings = app_settings or {}
+    if app_settings.get(LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG) is not True:
+        return False
+    if app_settings.get("driver_single_session_enabled"):
+        logger.error(
+            "login: %s is ignored while driver_single_session_enabled is on; turn one off",
+            LOGIN_SUPERSEDE_DRIVER_APP_ONLY_FLAG,
+        )
+        return False
+    return True
+
+
+async def _login_session_policy(request: Request, driver_session_enabled: bool) -> tuple[bool, bool]:
+    """Return ``(per_login_sessions, owns_current_session)`` for a login.
+
+    Flag off: every login owns users.current_session_id and signs the account's
+    other devices out, as before. Flag on (as Uber): only a driver-app login
+    (X-App-Platform: driver) does; rider-app, company portal and header-less
+    logins keep their own session id on their refresh chain and leave the
+    driver's session, availability controller and sockets alone. When the
+    driver single-session rollout owns the login it keeps its own rule.
+    """
+    per_login = await _driver_app_only_sessions_enabled()
+    owns_current = driver_session_enabled or not per_login or request.headers.get("X-App-Platform") == "driver"
+    return per_login, owns_current
 
 
 async def _cleanup_superseded_session(user_id: str, previous_session_id: Optional[str], session_id: str) -> None:

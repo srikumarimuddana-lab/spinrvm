@@ -23,6 +23,7 @@ import apiClient, {
   setCsrfToken,
 } from '../../../shared/api/client';
 import { registerLogoutCallback, useAuthStore } from '../../../shared/store/authStore';
+import { setAppSurface } from '../../../shared/auth/appSurface';
 import { appCache } from '../../../shared/cache';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
@@ -613,5 +614,39 @@ describe('logout / logoutAll — no second dead-token round trip', () => {
     expect(mockPut).toHaveBeenCalledWith('/drivers/d1/status', { is_online: false });
     expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'refresh' });
     expect(useAuthStore.getState().token).toBeNull();
+  });
+});
+
+// Kept last in the file: the app surface is module state and, once set, would
+// add client_type to the exact /auth/logout bodies asserted above.
+describe('logout is scoped to the app that signs out', () => {
+  const signedInDualRole = () => useAuthStore.setState({
+    token: 'access',
+    refreshToken: 'refresh',
+    user: { id: 'u1' } as never,
+    driver: { id: 'd1', is_online: true } as never,
+  });
+
+  it('rider app keeps the driver online and names its own push surface', async () => {
+    setAppSurface('rider');
+    mockPost.mockResolvedValue({ data: { success: true }, status: 200 });
+    signedInDualRole();
+
+    await useAuthStore.getState().logout();
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'refresh', client_type: 'rider' });
+  });
+
+  it('driver app goes offline and names the driver surface', async () => {
+    setAppSurface('driver');
+    mockPut.mockResolvedValue({ data: {}, status: 200 });
+    mockPost.mockResolvedValue({ data: { success: true }, status: 200 });
+    signedInDualRole();
+
+    await useAuthStore.getState().logout();
+
+    expect(mockPut).toHaveBeenCalledWith('/drivers/d1/status', { is_online: false });
+    expect(mockPost).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'refresh', client_type: 'driver' });
   });
 });

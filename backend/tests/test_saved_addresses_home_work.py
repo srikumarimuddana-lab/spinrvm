@@ -465,6 +465,31 @@ class TestConcurrentSaves:
             )
             assert len(_homes(final)) == 2, schedule
 
+    def test_home_work_swap_on_two_devices_is_a_known_gap_reported_as_409(self):
+        # Known residual gap (change log §4): two devices swapping an existing
+        # Home and Work can lose one of the two rows — making A the Work
+        # replaces the old Work (B) before B is re-typed. If B's request
+        # already started, it now gets a retryable 409 instead of a bare 404;
+        # if it starts after A finished, B is genuinely gone (404). Either
+        # way a lost row must never come back as a silent 200. This pins
+        # today's behaviour until the partial unique index lands.
+        from fastapi import HTTPException
+
+        rows = [_row("A", "home", "2026-01-01"), _row("B", "work", "2026-01-02")]
+        saw_409 = False
+        for schedule in _schedules():
+            final, results = _run_interleaved(
+                rows, schedule, _patch_req("A", icon="work"), _patch_req("B", icon="home")
+            )
+            for r in results:
+                if isinstance(r, HTTPException):
+                    assert r.status_code in (404, 409), schedule
+                    saw_409 = saw_409 or r.status_code == 409
+            lost = 2 - len([x for x in final if x["user_id"] == "user_1"])
+            failed = sum(isinstance(r, HTTPException) for r in results)
+            assert lost == failed, f"a lost row must surface as an error ({schedule})"
+        assert saw_409, "an overlapping swap should report the mid-request loss as 409"
+
     def test_sequential_saves_still_end_with_exactly_one_home(self):
         # Same fake, no overlap: A runs to completion, then B.
         rows = [_row("A", "other", "2026-01-01"), _row("B", "gym", "2026-01-02")]

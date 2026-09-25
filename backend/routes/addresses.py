@@ -203,7 +203,13 @@ async def update_saved_address(
 
     row = await db_supabase.update_one("saved_addresses", {"id": address_id, "user_id": user_id}, update)
     if not row:
-        raise HTTPException(status_code=404, detail="Address not found")
+        # The row existed above, so it vanished mid-request: another device's
+        # Home/Work save removed it (e.g. two phones swapping Home and Work at
+        # once). Say so and let the client retry, rather than a misleading 404.
+        raise HTTPException(
+            status_code=409,
+            detail="This saved place was just changed on another device. Refresh and try again.",
+        )
     return row
 
 

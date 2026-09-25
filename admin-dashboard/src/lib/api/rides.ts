@@ -1,8 +1,8 @@
 // Ride management, flags, complaints, and lost-and-found. Extracted from the
 // monolithic lib/api.ts as part of the per-domain split — grouped by original
-// file position, not a strict domain boundary (createDispute is in
-// api/safety-disputes.ts; deleteDispute was removed 2026-09-25 along with
-// the backend's hard-delete route, which broke 7-year retention).
+// file position, not a strict domain boundary (deleteDispute was removed
+// 2026-09-25 along with the backend's hard-delete route, which broke 7-year
+// retention; the other in-app dispute helpers were deleted the same day).
 
 import { request } from "./client";
 import { useAuthStore } from "@/store/authStore";

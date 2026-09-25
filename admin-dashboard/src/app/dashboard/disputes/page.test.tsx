@@ -9,17 +9,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 const getChargebacks = vi.fn();
-const getDisputes = vi.fn();
-const getDisputeStats = vi.fn();
-const resolveDispute = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   getChargebacks: (...a: unknown[]) => getChargebacks(...a),
   downloadDisputeEvidencePack: vi.fn(),
   submitDisputeEvidence: vi.fn(),
-  getDisputes: (...a: unknown[]) => getDisputes(...a),
-  getDisputeStats: (...a: unknown[]) => getDisputeStats(...a),
-  resolveDispute: (...a: unknown[]) => resolveDispute(...a),
 }));
 vi.mock("@/hooks/useRequireModule", () => ({ useRequireModule: () => ({ allowed: true }) }));
 vi.mock("@/store/authStore", () => ({
@@ -59,12 +53,23 @@ describe("DisputesPage — chargebacks only", () => {
     expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
   });
 
-  it("never loads or resolves in-app disputes", async () => {
-    render(<DisputesPage />);
-    await screen.findByText("RIDE-1");
-    expect(getDisputes).not.toHaveBeenCalled();
-    expect(getDisputeStats).not.toHaveBeenCalled();
-    expect(resolveDispute).not.toHaveBeenCalled();
+  it("no longer has in-app dispute API helpers to call", async () => {
+    // getDisputes/getDisputeStats/getDisputeDetails/createDispute/updateDispute
+    // were deleted 2026-09-25; resolveDispute/deleteDispute the same day
+    // earlier. The page can only reach the chargebacks endpoint.
+    const api = await vi.importActual<Record<string, unknown>>("@/lib/api");
+    for (const name of [
+      "getDisputes",
+      "getDisputeStats",
+      "getDisputeDetails",
+      "createDispute",
+      "updateDispute",
+      "resolveDispute",
+      "deleteDispute",
+    ]) {
+      expect(api[name], name).toBeUndefined();
+    }
+    expect(typeof api.getChargebacks).toBe("function");
   });
 
   it("points admins at the support address instead of an in-app flow", () => {

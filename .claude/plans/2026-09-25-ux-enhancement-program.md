@@ -37,7 +37,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 |---|---|---|---|---|
 | W1.1a `[x]` | Replace `allowFontScaling={false}` with `maxFontSizeMultiplier` (D1). Keep a hard lock only where a fixed box truly requires it, e.g. an OTP digit | rider-app (~28 sites) | unflagged a11y | grep = 0 unjustified sites; tsc; affected tests; `[H]` largest-text device pass |
 | W1.1b `[x]` | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
-| W1.2 `[~]` | `aria-sort` on `SortableHead` and `aria-label` on 15 unlabelled search inputs. **Sticky `thead` moved to W5.5:** tables sit inside horizontal-scroll containers, which stop `position: sticky` from following the page scroll, so it needs a table-layout change | admin | none (no visible change) | tests; build; baselines unchanged |
+| W1.2 `[x]` | `aria-sort` on `SortableHead` and `aria-label` on 15 unlabelled search inputs. **Sticky `thead` moved to W5.5:** tables sit inside horizontal-scroll containers, which stop `position: sticky` from following the page scroll, so it needs a table-layout change | admin | none (no visible change) | tests; build; baselines unchanged |
 | W1.3 `[~]` | Admin motion: a global `prefers-reduced-motion` rule (spinners exempt) and an exit animation on the alert feed. `MotionConfig` was skipped because its only consumer already uses `useReducedMotion()`; add it with the next `motion` component | admin | none | tests; build; baselines unchanged |
 | W1.4 | `/track`: honour Reduce Motion, plus a public "link expired or invalid" state instead of "Go to Dashboard" | web | none | tests; manual check |
 
@@ -104,3 +104,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - W1.1b-3 opened: offer card, turn banner, justified locks, driver guard. It also fixes SOS being partly hidden under the turn banner, using the placement you chose ("move SOS below banner").
 - Follow-up found in #5840: `shared/store/locationStore.ts:121` (`createJSONStorage(() => Platform.OS === 'web' ? localStorage : AsyncStorage)`) type-checks differently depending on which files are in the driver-app program. Adding one new test file turned it into a TS error. An explicit storage type would remove the fragility. Not yet scheduled.
 - 2026-09-25: W1.1b complete (#5838, #5840, #5841), so text-size scaling is done across both apps with guards in each. W1.2 opened: admin `aria-sort` and search-input labels.
+- 2026-09-25: W1.2 merged (#5843). W1.3 opened: admin Reduce Motion and the alert-feed exit.

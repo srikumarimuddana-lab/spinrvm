@@ -21,7 +21,7 @@ The migration that added this column to production was apparently never committe
 
 ## 3. Fix / remediation
 
-Added `backend/migrations/472_route_deviation_alert_enabled_setting.sql`, which does `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS route_deviation_alert_enabled boolean NOT NULL DEFAULT false` plus a `COMMENT ON COLUMN`. Renumbered to 472 (next free slot) rather than reusing 415, since that number is already taken in this repo and CI's CHECK B hard-fails a colliding/earlier prefix.
+Added `backend/migrations/476_route_deviation_alert_enabled_setting.sql`, which does `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS route_deviation_alert_enabled boolean NOT NULL DEFAULT false` plus a `COMMENT ON COLUMN`. Numbered 476 rather than reusing 415, since that number is already taken in this repo and CI's CHECK B hard-fails a colliding/earlier prefix. (It was first 472, then moved to 476 because the owner's PR #5782 takes 472 and open PRs #5791, #5794 and the admin money-caps branch hold 473-475.)
 
 ## 4. Risk & impact on existing functionality
 
@@ -38,7 +38,7 @@ None visible to riders or drivers. Internal-admin-facing only in the sense that 
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/472_route_deviation_alert_enabled_setting.sql` | New migration: `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS route_deviation_alert_enabled boolean NOT NULL DEFAULT false` + column comment | Restores the missing source-of-truth migration for a column that already exists in production (LIVE-004) |
+| `backend/migrations/476_route_deviation_alert_enabled_setting.sql` | New migration: `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS route_deviation_alert_enabled boolean NOT NULL DEFAULT false` + column comment | Restores the missing source-of-truth migration for a column that already exists in production (LIVE-004) |
 | `docs/change-log/2026-09-25-route-deviation-migration.md` | This log | Required for any change touching a live-tested (safety) surface |
 
 ## 7. Before / after

@@ -1,4 +1,4 @@
--- 472_route_deviation_alert_enabled_setting.sql
+-- 476_route_deviation_alert_enabled_setting.sql
 --
 -- Restores a column that already exists live in production but has no
 -- source-controlled migration creating it. Production's `settings` table

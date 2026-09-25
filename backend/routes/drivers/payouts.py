@@ -826,17 +826,28 @@ def _require_sin_for_payout(driver: dict) -> None:
         )
 
 
-async def _require_instant_payout_enabled(driver: dict) -> None:
+async def _require_instant_payout_enabled(driver: dict) -> dict:
     """Block instant payout when the driver's service area has it disabled.
+    Returns the service-area row (the daily cap reads its timezone).
 
-    Per-service-area kill switch (migration 314). Drivers without a
-    service_area_id are allowed through — the kill switch is opt-out per
-    market, not a global default-off."""
+    Per-service-area kill switch (migration 314). The kill switch stays
+    opt-out per market (DEFAULT TRUE), but it fails closed on a driver whose
+    area cannot be resolved (ROADMAP N22): no service_area_id, or one that
+    matches no row. Both used to pass straight through, so a switch ops had
+    flipped off for a market never reached those drivers — and a driver can
+    set their own service_area_id via PUT /drivers/me without it being
+    checked against service_areas."""
     sa_id = driver.get("service_area_id")
-    if not sa_id:
-        return
-    sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1)
-    if sa_rows and sa_rows[0].get("instant_payout_enabled") is False:
+    sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1) if sa_id else []
+    if not sa_rows:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Instant payouts need a service area on your driver profile. "
+                "Your earnings are paid out automatically every Sunday."
+            ),
+        )
+    if sa_rows[0].get("instant_payout_enabled") is False:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -844,6 +855,7 @@ async def _require_instant_payout_enabled(driver: dict) -> None:
                 "Your earnings are paid out automatically every Sunday."
             ),
         )
+    return sa_rows[0]
 
 
 @router.post("/payouts")

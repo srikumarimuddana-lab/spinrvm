@@ -77,7 +77,7 @@ async def test_single_topup_fully_covers_balance():
         patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=topups)),
         patch.object(svc, "get_app_settings", AsyncMock(return_value=_SETTINGS)),
         patch.object(svc.stripe.Refund, "create", return_value=refund_obj) as mock_refund,
-        patch.object(svc, "apply_adjustment", AsyncMock()) as mock_adjust,
+        patch.object(svc, "apply_adjustment", AsyncMock(return_value={"deduped": False})) as mock_adjust,
     ):
         result = await svc.refund_wallet_balance_on_close(
             company_id="c1", stripe_customer_id="cus_1", actor_user_id="admin-1"
@@ -118,7 +118,7 @@ async def test_multiple_topups_refunded_lifo_until_covered():
         patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=topups)),
         patch.object(svc, "get_app_settings", AsyncMock(return_value=_SETTINGS)),
         patch.object(svc.stripe.Refund, "create", side_effect=refund_objs) as mock_refund,
-        patch.object(svc, "apply_adjustment", AsyncMock()) as mock_adjust,
+        patch.object(svc, "apply_adjustment", AsyncMock(return_value={"deduped": False})) as mock_adjust,
     ):
         result = await svc.refund_wallet_balance_on_close(company_id="c1", stripe_customer_id="cus_1")
 
@@ -150,7 +150,7 @@ async def test_balance_exceeds_available_topups_leaves_unrefundable_remainder():
         patch.object(svc.db_supabase, "get_rows", AsyncMock(return_value=topups)),
         patch.object(svc, "get_app_settings", AsyncMock(return_value=_SETTINGS)),
         patch.object(svc.stripe.Refund, "create", return_value=refund_obj),
-        patch.object(svc, "apply_adjustment", AsyncMock()) as mock_adjust,
+        patch.object(svc, "apply_adjustment", AsyncMock(return_value={"deduped": False})) as mock_adjust,
     ):
         result = await svc.refund_wallet_balance_on_close(company_id="c1", stripe_customer_id="cus_1")
 
@@ -175,7 +175,7 @@ async def test_stripe_error_stops_and_does_not_swallow():
             "create",
             side_effect=svc.stripe.error.StripeError("card issuer declined the refund"),
         ),
-        patch.object(svc, "apply_adjustment", AsyncMock()) as mock_adjust,
+        patch.object(svc, "apply_adjustment", AsyncMock(return_value={"deduped": False})) as mock_adjust,
     ):
         result = await svc.refund_wallet_balance_on_close(company_id="c1", stripe_customer_id="cus_1")
 

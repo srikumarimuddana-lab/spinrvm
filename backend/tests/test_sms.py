@@ -6,6 +6,7 @@ Tests cover OTP SMS sending, general SMS, and Twilio integration.
 import importlib
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -98,6 +99,64 @@ class TestSMSService:
         assert result["success"] is False
         assert "3065551234" not in result["error"], "destination number leaked into the error field"
         assert result["error"] == "FakeTwilioRestException code=21211 status=400"
+
+    @pytest.mark.asyncio
+    async def test_send_sms_twilio_client_built_with_timeout(self):
+        """INT-001 regression: the Twilio client must be built with an
+        explicit HTTP timeout, not Twilio's default (unbounded) http_client —
+        a slow/unresponsive Twilio would otherwise hang the OTP/login path."""
+        import backend.sms_service as sms_mod
+
+        with (
+            patch("twilio.http.http_client.TwilioHttpClient") as mock_http_client_cls,
+            patch("twilio.rest.Client") as mock_client_cls,
+        ):
+            mock_http_client_instance = MagicMock()
+            mock_http_client_cls.return_value = mock_http_client_instance
+            mock_sms = MagicMock()
+            mock_sms.sid = "SM789"
+            mock_client_cls.return_value.messages.create.return_value = mock_sms
+
+            result = await sms_mod.send_sms(
+                "+1234567890", "Test message", twilio_sid="AC123", twilio_token="token", twilio_from="+10000000000"
+            )
+
+            assert result["success"] is True
+            mock_http_client_cls.assert_called_once_with(timeout=sms_mod._TWILIO_HTTP_TIMEOUT_S)
+            mock_client_cls.assert_called_once_with("AC123", "token", http_client=mock_http_client_instance)
+
+    @pytest.mark.asyncio
+    async def test_send_sms_twilio_hang_times_out(self):
+        """INT-001 regression: a Twilio call that hangs past the bounded
+        thread-pool wait must time out and return a clean failure rather than
+        block the caller (and the shared threadpool) forever."""
+        import backend.sms_service as sms_mod
+
+        def _hang(*_args, **_kwargs):
+            # Simulate a Twilio call that never returns within the window —
+            # sleep well past the (patched, short) thread timeout.
+            time.sleep(0.3)
+            raise AssertionError("should have been abandoned by asyncio.wait_for before returning")
+
+        with (
+            patch.object(sms_mod, "_TWILIO_THREAD_TIMEOUT_S", 0.05),
+            patch("twilio.http.http_client.TwilioHttpClient"),
+            patch("twilio.rest.Client") as mock_client_cls,
+        ):
+            mock_client_cls.return_value.messages.create.side_effect = _hang
+
+            start = time.monotonic()
+            result = await sms_mod.send_sms(
+                "+1234567890", "Test message", twilio_sid="AC123", twilio_token="token", twilio_from="+10000000000"
+            )
+            elapsed = time.monotonic() - start
+
+        assert result["success"] is False
+        assert result["provider"] == "twilio"
+        assert "TimeoutError" in result["error"]
+        # The coroutine must return promptly once the thread-pool wait times
+        # out, not wait for the hung thread itself to finish.
+        assert elapsed < 0.3
 
     @pytest.mark.asyncio
     async def test_send_otp_sms(self):

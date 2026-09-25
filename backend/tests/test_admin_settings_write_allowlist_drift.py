@@ -117,6 +117,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "id",
         "idle_breadcrumb_retention_hours",
         "idle_location_v2_enabled",
+        "instant_payout_daily_cap_cad",
         "is_referral_active",
         "legacy_consent_notice_enabled",
         "lifecycle_emails_enabled",

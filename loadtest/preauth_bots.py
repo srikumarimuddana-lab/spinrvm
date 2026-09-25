@@ -125,13 +125,15 @@ def main() -> int:
         try:
             record = _login_one(args.base_url, session, phone)
         except requests.HTTPError as exc:
+            last4 = phone[-4:]
             print(
-                f"  [{idx + 1}/{total}] FAILED login for {kind} {phone}: {exc}",
+                f"  [{idx + 1}/{total}] FAILED login for {kind} ending in ***{last4}: {exc}",
                 file=sys.stderr,
             )
             raise
         (riders if kind == "rider" else drivers).append(record)
-        print(f"  [{idx + 1}/{total}] {kind} {phone} -> token cached")
+        last4 = phone[-4:]
+        print(f"  [{idx + 1}/{total}] {kind} ending in ***{last4} -> token cached")
         if idx < total - 1:
             time.sleep(delay_s)
 

@@ -148,7 +148,7 @@ _SUPER_ADMIN_ONLY_FIELDS = frozenset(
     }
 )
 
-# N23 money controls (migration 475): the per-admin daily cap, the alert
+# N23 money controls (migration 479): the per-admin daily cap, the alert
 # threshold, and the kill switch for real dispute refunds. A settings-module
 # admin who could raise their own cap or switch refunds on would defeat the
 # control, so changing any of these requires super_admin. Compared by value
@@ -535,15 +535,20 @@ class SettingsUpdateRequest(BaseModel):
     # cap, no masking/super-admin gate needed to change it (same posture as
     # dual_approval_exports_enabled above — a process control, not a secret).
     corporate_wallet_admin_adjust_daily_cap: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
-    # Migration 475 (N23 / ADMIN-OPS-001). Per-admin daily cap across admin
+    # Migration 479 (N23 / ADMIN-OPS-001). Per-admin daily cap across admin
     # wallet credits/debits and dispute refunds, plus a single-action alert
     # threshold; enforced by services/admin_money_caps.py. Unset (NULL) =
     # disabled. Same process-control posture as the corporate cap above.
     admin_money_daily_cap_per_admin: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
     admin_money_alert_threshold: Optional[Decimal] = Field(default=None, gt=0, max_digits=12, decimal_places=2)
-    # Migration 475. Ships False: admin dispute resolve records approved
+    # Migration 479. Ships False: admin dispute resolve records approved
     # refunds but issues none until this is on (routes/disputes.py).
     admin_dispute_refunds_enabled: Optional[bool] = None
+    # Migration 473 / ROADMAP N22: per-driver daily cap (CAD) on instant
+    # payouts (routes/drivers/payouts.py::request_instant_payout). NULL = no
+    # cap. A process control, not a secret — same posture as the corporate
+    # cap above. Clearing it back to NULL is a SQL update (None is dropped).
+    instant_payout_daily_cap_cad: Optional[Decimal] = Field(default=None, gt=0, le=50000, decimal_places=2)
     # Ships dark (default false / unset): gates POST
     # /admin/corporate-accounts/{id}/subscription (routes/corporate_subscriptions.py),
     # which starts a real recurring Stripe charge against a company. Flip on

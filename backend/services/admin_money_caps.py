@@ -7,7 +7,7 @@ second-approver queue exists.
 
 Call :func:`enforce_admin_money_action_cap` immediately before the money moves.
 
-- ``admin_money_daily_cap_per_admin`` (settings, migration 475): if set and
+- ``admin_money_daily_cap_per_admin`` (settings, migration 479): if set and
   ``abs(amount)`` plus what this admin already moved today (UTC) exceeds it,
   raise 403 and nothing moves.
 - ``admin_money_alert_threshold``: if set and ``abs(amount)`` is at or above

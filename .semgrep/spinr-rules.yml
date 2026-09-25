@@ -98,6 +98,20 @@ rules:
       # drivers/_shared.py's GPS coordinates. Annotated both with an inline
       # `# nosemgrep: spinr-no-float-in-money` + reason per this rule's own
       # message, rather than leaving them to fail the newly-blocking gate.
+      #
+      # 2026-09-25 (ROADMAP N19, MONEY-005/-006/-008): added
+      # routes/drivers/earnings.py, features.py and utils/referral_payout.py.
+      # Ran semgrep before adding: 20 findings (earnings.py 7, features.py 13,
+      # referral_payout.py 0). Every Decimal->float response-boundary
+      # conversion was switched from float() to fare_service._f() (identical
+      # value, it IS float(), but the CLAUDE.md-named helper, so no rounding
+      # change). Six non-money or no-arithmetic reads in features.py (GPS
+      # lat/lng, three tax-rate percentages, the configured airport_fee, the
+      # area-fee echo in /area-config) carry `# nosemgrep:
+      # spinr-no-float-in-money` with a reason. Result: 0 findings. This rule
+      # still does not see raw float `sum()`/`+=`/`round()` over DB values
+      # (the MONEY-001/-006 shapes, fixed by hand in the same change); see
+      # docs/change-log/2026-09-25-float-money-writes.md.
       include:
         - "backend/routes/fares.py"
         - "backend/routes/payments.py"
@@ -111,17 +125,15 @@ rules:
         - "backend/utils/stripe_charge.py"
         - "backend/utils/receipt_pdf.py"
         - "backend/utils/email_receipt.py"
+        - "backend/routes/drivers/earnings.py"
+        - "backend/features.py"
+        - "backend/utils/referral_payout.py"
       # Deliberately NOT covered, with reasons — so the next person does not
       # "helpfully" add them and turn the gate red:
       #
-      #   backend/routes/drivers/earnings.py
-      #     Genuinely a money file, but its float() calls are Decimal->float at
-      #     the JSON response boundary (`"total_tax": float(_total_tax)`), which
-      #     CLAUDE.md mandates. They are not wrapped in _round()/_d() so the
-      #     pattern-nots do not clear them. Covering it needs either a boundary
-      #     pattern the rule can recognise or wrapping those conversions — the
-      #     latter changes rounding on live payout figures, so it is not a
-      #     drive-by edit.
+      #   (backend/routes/drivers/earnings.py was listed here until 2026-09-25.
+      #   Its boundary float() calls now go through fare_service._f(), which is
+      #   the same float(), so no payout figure's rounding changed.)
       #
       #   backend/routes/drivers/_shared.py
       #     Its float() calls are GPS coordinates, not money. Adding it would

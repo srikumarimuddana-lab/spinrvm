@@ -73,6 +73,19 @@ try:
 except ImportError:
     from utils.t4a_income import fetch_supplementary_income, sum_supplementary_income  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
+
+_LOOP_NAME = "t4a_annual_job (yearly Feb 28)"
+
 _SYSTEM_ACTOR = {"id": "system", "role": "system"}
 
 
@@ -83,6 +96,12 @@ async def t4a_annual_job_loop() -> None:
             await _maybe_run_tick()
         except Exception:
             logger.error("t4a_annual_job tick failed", exc_info=True)
+        # REL-001 / ROADMAP N17 (2026-09-25): heartbeat every 60s poll tick,
+        # not just on the one day a year real issuance work runs — matches
+        # the reconciliation.py/distance_reconciliation.py pattern so the
+        # loop-watchdog can actually detect a crashed/hung instance instead
+        # of sitting in "never_ticked" (not flagged unhealthy) forever.
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(_LOOP_POLL_SECONDS)
 
 
@@ -119,6 +138,9 @@ async def _run_issuance(year: int) -> None:
 
     eligible: list[dict] = []
     for driver in drivers:
+        # Progress heartbeat so the 10-minute watchdog threshold does not flag
+        # the one long-but-healthy annual batch as stale (N17 review).
+        _record_heartbeat(_LOOP_NAME)
         try:
             earnings = await _driver_annual_earnings(driver["id"], year)
         except Exception:
@@ -131,6 +153,7 @@ async def _run_issuance(year: int) -> None:
 
     notified = 0
     for item in eligible:
+        _record_heartbeat(_LOOP_NAME)
         driver = item["driver"]
         earnings = item["earnings"]
         user_id = driver.get("user_id")

@@ -1,4 +1,4 @@
--- 475: per-admin daily money-action cap + single-action alert threshold
+-- 479: per-admin daily money-action cap + single-action alert threshold
 -- (ROADMAP N23 / finding ADMIN-OPS-001).
 --
 -- Purpose: admins can credit/debit rider and driver wallets

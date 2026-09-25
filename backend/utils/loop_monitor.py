@@ -43,6 +43,66 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "push_retry (30s)": 30 * 4,  # 2 min
     "zoho_desk_sync (10min)": 10 * 60 * 4,  # 40 min
     "driver_onboarding_reminders (15min)": 15 * 60 * 3,  # 45 min — 3 missed ticks
+    # --- REL-001 / ROADMAP N17 (2026-09-25): the ~24 entries below were
+    # missing and fell back to _DEFAULT_THRESHOLD (2h) — far too loose for
+    # the safety/dispatch loops (a hung 10-30s loop could go undetected for
+    # up to 2h) and simply untuned for the rest. Sized to ~3x each loop's
+    # real per-tick cadence (~3 missed ticks), verified against each loop's
+    # own sleep/poll structure, not just its display-name suffix. Two
+    # exceptions are called out inline where a flat 3x-of-cadence would
+    # either false-alert (a slow single-heartbeat-per-day job) or leave a
+    # fast-polling loop's real staleness window uncovered.
+    # Safety and dispatch loops first (priority per ROADMAP N17).
+    "safety_checkin (30s)": 30 * 6,  # 3 min — SOS-adjacent; a bit more margin than a strict 3x
+    "route_deviation_alerter (30s)": 30 * 3,  # 90 s
+    "offer_expiry_reaper (10s)": 10 * 3,  # 30 s — dispatch-SLA backstop for the <2s offer P95
+    "driver_readiness_reconciler (20s)": 20 * 3,  # 60 s
+    "driver_claim_reaper (60s)": 60 * 3,  # 3 min
+    "stuck_ride_sweeper (60s)": 60 * 3,  # 3 min
+    "insurance_period_reconciler (10min)": 10 * 60 * 3,  # 30 min
+    "stale_in_progress_ride_alerter (5min)": 5 * 60 * 3,  # 15 min
+    "stale_intent_reconciler (15min)": 15 * 60 * 3,  # 45 min
+    # Money loops.
+    "preauth_capture (5min)": 5 * 60 * 3,  # 15 min
+    "referral_payout (5min)": 5 * 60 * 3,  # 15 min
+    "orphaned_hold_reconciler (15m)": 15 * 60 * 3,  # 45 min
+    # 3h: the loop polls hourly (auto_payout.py `interval = 3600`). The
+    # Sunday batch records a progress heartbeat per driver
+    # (run_weekly_auto_payout), so a long-but-healthy batch is not flagged.
+    "auto_payout (1h, Sundays)": 3600 * 3,  # 3 h
+    "support_sla_breach_sweep (5min)": 5 * 60 * 3,  # 15 min
+    # Everything else.
+    # 72h: single heartbeat per ~24h tick with no inner poll
+    # (kyb_reverification.py:150, `asyncio.sleep(86400 * (0.9 + jitter))`);
+    # 3x the cadence tolerates ordinary jitter without false-alerting.
+    "kyb_reverification (24h)": 24 * 3600 * 3,  # 72 h
+    # 18h: single heartbeat per 6h tick, no inner poll
+    # (dispute_evidence_reminder.py `_TICK_INTERVAL_SECONDS`).
+    "dispute_evidence_reminder (6h)": 6 * 3600 * 3,  # 18 h
+    # 18h: single heartbeat per ~6h tick, no inner poll
+    # (retention_guard_monitor.py `CHECK_INTERVAL_SECONDS` + jitter).
+    "retention_guard_monitor (6h)": 6 * 3600 * 3,  # 18 h
+    "data_export_purge (1h)": 3600 * 3,  # 3 h
+    "ledger_projection (15min)": 15 * 60 * 3,  # 45 min
+    "h3_index_reconciler (2min)": 2 * 60 * 3,  # 6 min
+    "driver_statements (30min)": 30 * 60 * 3,  # 90 min
+    "suspension_reactivation (10min)": 10 * 60 * 3,  # 30 min
+    # 48h: daily-cadence job with a fast (~60s) inner poll (reconciliation.py
+    # heartbeats every tick regardless of whether the daily job ran) — but
+    # the one tick a day that *does* run real work can legitimately take a
+    # while, so this follows the existing distance_reconciliation/
+    # stripe_reconcile convention above (2x the *daily* cycle) rather than a
+    # literal 3x of the 60s poll, to avoid flagging a slow-but-healthy daily
+    # run as stale mid-run.
+    "reconciliation (daily 02:00 UTC)": 24 * 3600 * 2,  # 48 h
+    # 10 min: t4a_annual_job now heartbeats on its own 60s inner poll (added
+    # in this change — see utils/t4a_annual_job.py); real work fires once a
+    # year, but a crashed/hung loop should still surface promptly, so this
+    # follows capacity_watchdog's pattern for a frequently-polling-but-
+    # rarely-acting loop rather than a literal 3x-of-a-year. The annual batch
+    # records a progress heartbeat per driver (_run_issuance), so a long run
+    # is not flagged; a single driver's queries hanging >10 min still is.
+    "t4a_annual_job (yearly Feb 28)": 10 * 60,  # 10 min
 }
 
 _lock = threading.Lock()

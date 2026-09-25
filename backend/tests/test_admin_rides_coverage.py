@@ -422,13 +422,12 @@ class TestAdminCreateRide:
         assert "nighil.kumar@example.com" not in push_data.values()
 
     def test_create_ride_dispatch_push_still_includes_coordinates_and_rating(self, client, as_super_admin):
-        """Documents today's unchanged behavior: unlike rider_name, precise
-        pickup/dropoff coordinates and rider_rating are NOT currently gated
-        behind any flag here — because routes/rides/matching.py's own
-        _FCM_EXCLUDE doesn't gate them either (no such flag exists in this
-        codebase). If a future change adds real flag-gated stripping of
-        these fields to matching.py, this admin path should be updated to
-        match at the same time — see C112's note in ACTION_ITEMS.md."""
+        """Documents today's default (flag off) behavior: unlike rider_name,
+        precise pickup/dropoff coordinates and rider_rating are unchanged
+        when minimal_fcm_offer_payload_enabled is False/absent — matching
+        routes/rides/matching.py's own default-off behavior for the same
+        flag (migration 424). See test_create_ride_dispatch_push_minimal_*
+        below for the flag-on case (SKB-001/N13)."""
         body = {**_CREATE_BODY, "driver_id": "drv-1"}
         push_mock = AsyncMock()
         rider = {"id": "usr-1", "first_name": "R", "rating": 4.8}
@@ -452,6 +451,56 @@ class TestAdminCreateRide:
         assert push_data["rider_rating"] == "4.8"
         assert push_data["pickup_lat"] == str(_CREATE_BODY["pickup_lat"])
         assert push_data["dropoff_lat"] == str(_CREATE_BODY["dropoff_lat"])
+        assert "offer_minimal" not in push_data
+
+    def test_create_ride_dispatch_push_minimal_flag_strips_coordinates_and_rating(self, client, as_super_admin):
+        """SKB-001/N13: with minimal_fcm_offer_payload_enabled True, the
+        admin-assign FCM push must exclude precise pickup/dropoff
+        coordinates and rider_rating — same field set matching.py's
+        _FCM_EXCLUDE adds under the flag — and must carry the
+        offer_minimal marker so the driver-app's background FCM handler
+        (backgroundMessaging.ts) refetches via
+        GET /drivers/rides/{ride_id}/offer instead of defaulting to a
+        (0,0) pin. The WS message (a different transport) is unaffected."""
+        body = {**_CREATE_BODY, "driver_id": "drv-1"}
+        push_mock = AsyncMock()
+        ws_mock = AsyncMock()
+        rider = {"id": "usr-1", "first_name": "R", "rating": 4.8}
+        with (
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("db_supabase.set_driver_available", AsyncMock()),
+            patch("utils.insurance_periods.record_period_transition", AsyncMock()),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch(
+                "routes.admin.rides.get_app_settings",
+                AsyncMock(return_value={"ride_offer_timeout_seconds": 15, "minimal_fcm_offer_payload_enabled": True}),
+            ),
+            patch("socket_manager.manager.send_personal_message", ws_mock),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push_mock),
+            patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+
+        push_data = push_mock.await_args.args[3]
+        assert "pickup_lat" not in push_data
+        assert "pickup_lng" not in push_data
+        assert "dropoff_lat" not in push_data
+        assert "dropoff_lng" not in push_data
+        assert "rider_rating" not in push_data
+        assert "rider_name" not in push_data
+        assert push_data["offer_minimal"] == "true"
+        # Untouched fields (address labels, fare, etc.) still ride the push.
+        assert push_data["pickup_address"] == _CREATE_BODY["pickup_address"]
+
+        # WS payload (foreground/connected transport) keeps full detail
+        # either way — only the FCM push shape changes with the flag.
+        ws_payload = ws_mock.await_args.args[0]
+        assert ws_payload["pickup_lat"] == _CREATE_BODY["pickup_lat"]
+        assert ws_payload["rider_rating"] == 4.8
 
     def test_create_ride_insert_failure_returns_500(self, client, as_super_admin):
         with patch("db_supabase.insert_one", AsyncMock(side_effect=RuntimeError("db down"))):

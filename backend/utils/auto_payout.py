@@ -1028,6 +1028,11 @@ async def run_weekly_auto_payout() -> dict:
     errors: list[str] = []
 
     for driver in drivers:
+        # Progress heartbeat: the loop's own heartbeat fires only after this
+        # whole batch returns, so a long-but-healthy Sunday batch would read
+        # as stale to the watchdog (ROADMAP N17 review). One cheap in-process
+        # heartbeat per driver keeps the 3h threshold meaningful for real hangs.
+        _record_heartbeat("auto_payout (1h, Sundays)")
         driver_id = driver["id"]
         area_id = driver.get("service_area_id")
 

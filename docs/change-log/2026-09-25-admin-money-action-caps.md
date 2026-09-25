@@ -42,7 +42,7 @@
 
 ## 3. Fix / remediation
 
-1. **Migration 475** adds three columns to `public.settings`:
+1. **Migration 479** adds three columns to `public.settings`:
    - `admin_money_daily_cap_per_admin NUMERIC(12,2) NULL`
    - `admin_money_alert_threshold NUMERIC(12,2) NULL`
    - `admin_dispute_refunds_enabled BOOLEAN NOT NULL DEFAULT FALSE`
@@ -163,7 +163,7 @@
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/475_admin_money_action_caps.sql` | cap, threshold, `admin_dispute_refunds_enabled` columns + comments + rollback | Settings storage, all off by default |
+| `backend/migrations/479_admin_money_action_caps.sql` | cap, threshold, `admin_dispute_refunds_enabled` columns + comments + rollback | Settings storage, all off by default |
 | `backend/routes/admin/settings.py` | 3 model fields; `_SUPER_ADMIN_ONLY_MONEY_FIELDS` + value-compare gate | Settable; super_admin-only to change (B) |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Snapshot gains 3 columns | Drift guard rule |
 | `backend/services/admin_money_caps.py` | Cap/alert service; counts only `refund_issued` dispute rows | N23 control |
@@ -216,7 +216,7 @@ elif wants_refund:
 
 ## Deploy order (required)
 
-1. Apply **475** and **477** before deploying this backend. Without 475, saving admin settings fails (PGRST204) on the new fields, because the dashboard round-trips the settings object. Without 477, dispute create and resolve fail.
+1. Apply **479** and **477** before deploying this backend. Without 479, saving admin settings fails (PGRST204) on the new fields, because the dashboard round-trips the settings object. Without 477, dispute create and resolve fail.
 2. Deploy the backend and dashboard.
 3. Only then may a super_admin turn `admin_dispute_refunds_enabled` on. **477 must be applied before the flag is turned on**, or the resolve write fails after the Stripe refund.
 
@@ -276,3 +276,5 @@ elif wants_refund:
   - A deduped wallet replay writes a second audit row, which overcounts.
   - The threshold alert row remains even if the action then fails.
 - **Reviewers.** `spinr-money-auditor` and `spinr-admin-rbac-reviewer` reviewed round 1 (orchestrator). Round 2 has not been re-reviewed.
+
+**Renumbered 475 → 479 (merge with `main`).** `main` now has 473, 474 and 476, and all three are applied in production. A new file numbered 475, below the existing 476, fails migration-check CHECK B. 477 stays the same. 478 is taken by the KYB closed-guard branch. The contents are unchanged.

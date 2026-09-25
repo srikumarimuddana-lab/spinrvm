@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -7,13 +8,17 @@ try:
     from ..dependencies import get_current_user
     from ..schemas import SavedAddress, SavedAddressCreate, SavedAddressUpdate
     from ..utils.address_verification import verify_address_matches_coordinate
+    from ..utils.error_handling import DuplicateRecordError
     from ..validators import sanitize_string
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from schemas import SavedAddress, SavedAddressCreate, SavedAddressUpdate
     from utils.address_verification import verify_address_matches_coordinate
+    from utils.error_handling import DuplicateRecordError
     from validators import sanitize_string
+
+logger = logging.getLogger(__name__)
 
 api_router = APIRouter(prefix="/addresses", tags=["Addresses"])
 
@@ -24,6 +29,11 @@ _MISMATCH_DETAIL = "Address and location don't match. Please search for the addr
 _SINGLETON_TYPES = ("home", "work")
 # Icons that name a type of their own, so the label is never consulted.
 _OTHER_TYPED_ICONS = ("gym", "school", "other")
+# What a non-rider-app "home"/"work" icon is stored as (see _driver_safe_icon).
+_UNTYPED_ICON = "location"
+# Migration 485's partial unique index (user_id, icon) WHERE icon IN
+# ('home','work') rejects a second Home/Work written by a concurrent request.
+_HOME_WORK_CONFLICT_DETAIL = "Your Home or Work place was just changed on another device. Refresh and try again."
 
 
 def serialize_doc(doc):
@@ -63,6 +73,31 @@ def _singletons_apply(current_user: dict, app_platform: Optional[str]) -> bool:
     if platform in ("rider", "driver"):
         return platform == "rider"
     return not current_user.get("is_driver", False)
+
+
+def _driver_safe_icon(icon: Optional[str]) -> Optional[str]:
+    """Store a non-rider-app "home"/"work" icon as the untyped "location".
+
+    The driver app never had Home/Work semantics: builds before the
+    2026-09-25 fix send icon "home" for EVERY saved address, and the new
+    build sends "location". Stored as-is, an old driver build's second
+    "home" would hit migration 485's one-Home unique index and fail. The
+    driver screen draws the same glyph for "location" as for "home".
+    """
+    return _UNTYPED_ICON if icon in _SINGLETON_TYPES else icon
+
+
+def _home_work_conflict(e: DuplicateRecordError, op: str, user_id: str, address_id: Optional[str]) -> HTTPException:
+    # IDs only. The underlying 23505 text names the key (user_id, icon),
+    # never the address.
+    logger.error(
+        "saved_addresses one-Home/Work unique violation on %s (user_id=%s address_id=%s): %s",
+        op,
+        user_id,
+        address_id,
+        (e.details or {}).get("original"),
+    )
+    return HTTPException(status_code=409, detail=_HOME_WORK_CONFLICT_DETAIL)
 
 
 async def _drop_other_singletons(user_id: str, place_type: str, keep_id: str) -> None:
@@ -108,7 +143,8 @@ async def create_saved_address(
         raise HTTPException(status_code=400, detail=_MISMATCH_DETAIL)
 
     name = sanitize_string(request.name)[1]
-    place_type = _singleton_type(name, request.icon) if _singletons_apply(current_user, x_app_platform) else None
+    singletons = _singletons_apply(current_user, x_app_platform)
+    place_type = _singleton_type(name, request.icon) if singletons else None
     address = SavedAddress(
         user_id=user_id,
         name=name,
@@ -117,33 +153,37 @@ async def create_saved_address(
         lng=request.lng,
         # A Home/Work row always carries its type in `icon`, so the replace
         # filter below (and the next save) can find it by icon alone.
-        icon=place_type or request.icon,
+        icon=place_type or (request.icon if singletons else _driver_safe_icon(request.icon)),
         # The server's own geocode place_id wins; the client's is a fallback.
         place_id=place_id or request.place_id,
     )
     doc = address.model_dump()
 
-    if place_type:
-        # Owner decision 2026-09-25: a rider keeps exactly one Home and one
-        # Work — saving a second one replaces the first, in place (same id).
-        # The oldest row is the one kept, so concurrent saves agree on it;
-        # the others are dropped before the write (see _drop_other_singletons).
-        current = await db_supabase.get_rows(
-            "saved_addresses", {"user_id": user_id, "icon": place_type}, order="created_at", limit=1
-        )
-        if current:
-            keep_id = current[0]["id"]
-            await _drop_other_singletons(user_id, place_type, keep_id)
-            fields = {k: doc[k] for k in ("name", "address", "lat", "lng", "icon", "place_id")}
-            updated = await db_supabase.update_one(
-                "saved_addresses", {"id": keep_id, "user_id": user_id, "icon": place_type}, fields
+    try:
+        if place_type:
+            # Owner decision 2026-09-25: a rider keeps exactly one Home and one
+            # Work — saving a second one replaces the first, in place (same id).
+            # The oldest row is the one kept, so concurrent saves agree on it;
+            # the others are dropped before the write (see _drop_other_singletons).
+            current = await db_supabase.get_rows(
+                "saved_addresses", {"user_id": user_id, "icon": place_type}, order="created_at", limit=1
             )
-            if updated:
-                return updated
-            # The kept row was removed or re-typed by a concurrent request
-            # between the read and the write: save this one as a new row.
+            if current:
+                keep_id = current[0]["id"]
+                await _drop_other_singletons(user_id, place_type, keep_id)
+                fields = {k: doc[k] for k in ("name", "address", "lat", "lng", "icon", "place_id")}
+                updated = await db_supabase.update_one(
+                    "saved_addresses", {"id": keep_id, "user_id": user_id, "icon": place_type}, fields
+                )
+                if updated:
+                    return updated
+                # The kept row was removed or re-typed by a concurrent request
+                # between the read and the write: save this one as a new row.
 
-    await db_supabase.insert_one("saved_addresses", doc)
+        await db_supabase.insert_one("saved_addresses", doc)
+    except DuplicateRecordError as e:
+        # A concurrent request wrote this rider's Home/Work first.
+        raise _home_work_conflict(e, "create", user_id, doc["id"]) from e
     return doc
 
 
@@ -167,8 +207,9 @@ async def update_saved_address(
     update: dict = {}
     if "name" in sent:
         update["name"] = sanitize_string(sent["name"])[1]
+    singletons = _singletons_apply(current_user, x_app_platform)
     if "icon" in sent:
-        update["icon"] = sent["icon"]
+        update["icon"] = sent["icon"] if singletons else _driver_safe_icon(sent["icon"])
 
     location_keys = {"address", "lat", "lng"} & sent.keys()
     if location_keys:
@@ -190,7 +231,7 @@ async def update_saved_address(
         update["place_id"] = sent["place_id"]
 
     place_type = None
-    if _singletons_apply(current_user, x_app_platform):
+    if singletons:
         place_type = _singleton_type(update.get("name", existing.get("name")), update.get("icon", existing.get("icon")))
     if place_type:
         update["icon"] = place_type
@@ -201,7 +242,11 @@ async def update_saved_address(
         if (existing.get("icon") or "").strip().lower() != place_type:
             await _drop_other_singletons(user_id, place_type, address_id)
 
-    row = await db_supabase.update_one("saved_addresses", {"id": address_id, "user_id": user_id}, update)
+    try:
+        row = await db_supabase.update_one("saved_addresses", {"id": address_id, "user_id": user_id}, update)
+    except DuplicateRecordError as e:
+        # A concurrent request made another row this rider's Home/Work first.
+        raise _home_work_conflict(e, "update", user_id, address_id) from e
     if not row:
         # The row existed above, so it vanished mid-request: another device's
         # Home/Work save removed it (e.g. two phones swapping Home and Work at

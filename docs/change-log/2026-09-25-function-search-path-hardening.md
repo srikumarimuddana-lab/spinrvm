@@ -13,7 +13,7 @@
 
 ## 1. Issue / gap identified
 
-The Supabase security linter (`function_search_path_mutable`, lint 0011) reports 16 `public` functions with a role-mutable `search_path`. These include the live dispatch claim RPC `match_and_claim_driver`, two money RPCs, and the append-only guards on `audit_logs`, `financial_events` and `disputes`.
+The Supabase security linter (`function_search_path_mutable`, lint 0011) reports 16 `public` functions with a role-mutable `search_path`. These include four PostGIS dispatch-area functions, two money RPCs, and the append-only guards on `audit_logs`, `financial_events` and `disputes`.
 
 ## 2. Root cause
 
@@ -46,7 +46,7 @@ Chosen paths, read from prod `pg_proc.prosrc` and `pg_extension`/`pg_namespace` 
 
 No body references pgcrypto, uuid-ossp, http, pgsodium, vault, topology or tiger. `pg_catalog` is always searched implicitly first, which covers `now()`, `current_setting()` and the other built-ins. `pg_temp` is listed last explicitly so it can never shadow anything.
 
-**Alternative considered:** schema-qualify every reference inside each body (`extensions.ST_MakePoint(...)`, `public.drivers`, and so on) with `CREATE OR REPLACE`. **Rejected:** that re-forks 16 bodies, including the live dispatch claim RPC, and risks transcription drift from the prod source. It trips migration-check CHECK G (CREATE OR REPLACE conflict). It would also not satisfy lint 0011 anyway, because the lint checks `proconfig`, not the body. `ALTER FUNCTION ... SET` is metadata-only and cannot change behavior while names still resolve to the same objects.
+**Alternative considered:** schema-qualify every reference inside each body (`extensions.ST_MakePoint(...)`, `public.drivers`, and so on) with `CREATE OR REPLACE`. **Rejected:** that re-forks 16 bodies, including four PostGIS functions, and risks transcription drift from the prod source. It trips migration-check CHECK G (CREATE OR REPLACE conflict). It would also not satisfy lint 0011 anyway, because the lint checks `proconfig`, not the body. `ALTER FUNCTION ... SET` is metadata-only and cannot change behavior while names still resolve to the same objects.
 
 ### 3a. LIVE-003 not done, needs a decision
 
@@ -63,7 +63,7 @@ The audit asks to `REVOKE EXECUTE ON FUNCTION public.is_party_to_lost_and_found_
 
 **Blast radius: cross-domain (dispatch, payments, audit/safety triggers), backend-only, metadata-only.**
 
-- **Dispatch (highest risk).** `match_and_claim_driver` is the live atomic claim RPC (`backend/repositories/driver_repo.py:245`, re-exported by `backend/db_supabase.py`). `find_nearby_drivers` (`driver_repo.py:111`), `get_service_area_for_point` (`driver_repo.py:91`) and `update_driver_location` (`driver_repo.py:123`) are also called by the backend through the service-role client. All four depend on unqualified PostGIS names that live in `extensions`. That is why their path includes `extensions`. Leaving it out would make every call fail with `function st_makepoint(...) does not exist`. The migration's post-condition refuses to commit if any of the four lacks `extensions`.
+- **Dispatch-area functions (highest risk).** Live callers: `update_driver_location` (`driver_repo.py:123`, called from `routes/drivers/location.py:189` and `routes/websocket.py:193`) and `get_service_area_for_point` (`driver_repo.py:91`, `routes/promotions.py:502`). `match_and_claim_driver` (`driver_repo.py:245`) and `find_nearby_drivers` (`driver_repo.py:111`) have Python wrappers but no production caller: real dispatch uses `dispatch_claim_batch`/`claim_driver_atomic` (migrations 402/403/448), and `routes/rides/matching.py` deliberately avoids `find_nearby_drivers`. Corrected after `spinr-migration-reviewer` review; the original text called `match_and_claim_driver` the live claim RPC. All four depend on unqualified PostGIS names that live in `extensions`. That is why their path includes `extensions`. Leaving it out would make every call fail with `function st_makepoint(...) does not exist`. The migration's post-condition refuses to commit if any of the four lacks `extensions`.
 - **Money.** `fare_split_pay_share` (`backend/repositories/wallet_repo.py:297`) and `increment_promo_uses` (`wallet_repo.py:239`) touch only `public` tables, so resolution is unchanged. The `FOR UPDATE` lock and the `uses < max_uses` guard are untouched.
 - **Trigger guards.** The 8 append-only guards (on `audit_logs`, `financial_events`, `financial_event_entries`, `subscription_payments`, `disputes`, and tables using `block_mutation_on_immutable_table` from migration 435) and the 2 `updated_at` helpers (`update_updated_at_column` is shared by many tables) use only built-ins. The GUC gates `spinr.audit_logs.allow_delete` / `spinr.financial_events.allow_delete` that `purge_pii_retention()` uses are read through `current_setting` from `pg_catalog`. No change.
 - **SQL-function inlining.** A `LANGUAGE sql` function with a SET clause is no longer inlined by the planner. `find_nearby_drivers` and `get_service_area_for_point` (STABLE sql) will run as a function scan. Their internal plans (GiST on `location`/`area`) are unchanged, and PostgREST calls them as `SELECT ... FROM fn(...)` with no outer predicate to push down, so the expected impact is negligible. It was **not measured** against the dispatch SLA (< 2 s) or the fare-estimate SLA.

@@ -25,8 +25,11 @@
 --     geography `<->` operator, all UNQUALIFIED. They get
 --     `public, extensions, pg_temp`:
 --         find_nearby_drivers, get_service_area_for_point,
---         match_and_claim_driver (the live dispatch claim RPC),
---         update_driver_location
+--         match_and_claim_driver, update_driver_location
+--     Live callers: update_driver_location (driver location writes) and
+--     get_service_area_for_point. match_and_claim_driver and
+--     find_nearby_drivers have no production caller (superseded per
+--     migrations 402/403/448 and routes/rides/matching.py); pinned anyway.
 --     If `extensions` were left out, these calls would fail with "function
 --     st_makepoint(...) does not exist" and dispatch would break.
 --   * The other 12 reference only `public` tables (wallets,
@@ -134,7 +137,8 @@ BEGIN
 END $$;
 
 -- ── PostGIS callers: unqualified ST_* / geography live in `extensions` ──────
--- Dispatch: live atomic claim RPC (driver_repo.match_and_claim_driver).
+-- match_and_claim_driver / find_nearby_drivers: no production caller today.
+-- get_service_area_for_point / update_driver_location: live callers.
 ALTER FUNCTION public.match_and_claim_driver(text, double precision, double precision, double precision, double precision)
     SET search_path = public, extensions, pg_temp;
 ALTER FUNCTION public.find_nearby_drivers(double precision, double precision, double precision)

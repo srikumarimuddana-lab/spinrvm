@@ -16,6 +16,7 @@ automatically.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
@@ -46,6 +47,21 @@ def _to_cents(amount: Decimal) -> int:
     return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _winddown_idempotency_key(wallet_id: str, stripe_refund_ids: List[str]) -> str:
+    """Ledger dedup key for the wind-down debit (clean-sheet audit CORP-001).
+
+    Derived from the *sorted set of Stripe refund ids* the debit accounts
+    for, not the wallet id alone: a replay that got back the same refunds
+    (Stripe's own per-topup idempotency key returns the original refund
+    object) reuses the original ledger row, while a run that refunded a
+    different set is a different debit and must not be swallowed. Hashed so
+    the key stays a fixed length however many top-ups were refunded (it
+    lands in a unique btree index, migration 376).
+    """
+    digest = hashlib.sha256("|".join(sorted(stripe_refund_ids)).encode("utf-8")).hexdigest()
+    return f"corp-close-{wallet_id}-{digest}"
+
+
 async def refund_wallet_balance_on_close(
     *,
     company_id: str,
@@ -68,6 +84,7 @@ async def refund_wallet_balance_on_close(
         "stripe_error": None,
         "skipped_reason": None,
         "ledger_write_failed": False,
+        "ledger_debit_deduped": False,
     }
 
     wallet = await db_supabase.get_corporate_wallet_by_company(company_id)
@@ -161,7 +178,7 @@ async def refund_wallet_balance_on_close(
         # returned, with ledger_write_failed flagging the divergence for
         # finance/ops follow-up instead of losing it to an uncaught raise.
         try:
-            await apply_adjustment(
+            ledger_row = await apply_adjustment(
                 wallet_id=wallet_id,
                 amount=-refunded_total,
                 notes=(
@@ -170,7 +187,22 @@ async def refund_wallet_balance_on_close(
                 ),
                 actor_user_id=actor_user_id or "system",
                 floor=Decimal("0"),
+                client_idempotency_key=_winddown_idempotency_key(wallet_id, stripe_refund_ids),
             )
+            # The RPC returned the ledger row an earlier run already wrote for
+            # this exact refund set — the balance was debited once, correctly,
+            # and this run changed nothing. Correct outcome, but it means the
+            # close flow ran twice (change_company_status' CAS should prevent
+            # that), so say so rather than report a fresh debit.
+            if ledger_row.get("deduped") is True:
+                result["ledger_debit_deduped"] = True
+                logger.warning(
+                    "Corporate wallet close: ledger debit for company=%s wallet=%s refunds=%s was "
+                    "already recorded by an earlier wind-down run; no second debit applied",
+                    company_id,
+                    wallet_id,
+                    stripe_refund_ids,
+                )
         except Exception as ledger_exc:
             logger.error(
                 "Corporate wallet close: %s in Stripe refunds succeeded (ids=%s) but the "

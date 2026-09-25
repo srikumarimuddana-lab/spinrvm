@@ -861,14 +861,42 @@ async def change_company_status(
 
     # transition.reason is accepted but not persisted — the audit log table
     # lands in a later plan. Wallet freeze/unfreeze is handled below.
+    #
+    # Compare-and-set on the status read above (clean-sheet audit CORP-001):
+    # the 409 check above is a plain read, so two concurrent requests (a
+    # double-clicked "Close account", a timeout-retry) could both pass it and
+    # both run the close side effects below, including the wallet wind-down.
+    # Filtering the UPDATE on the status we read means only one of them can
+    # win; the loser matches zero rows and is rejected here before any side
+    # effect runs. It also stops a concurrent suspend from overwriting a
+    # just-committed 'closed' (which would make a refunded, terminal account
+    # reopenable).
+    expected_status = current.get("status")
     row = await update_corporate_account_status(
         company_id=normalized_id,
         status=transition.status.value,
+        expected_status=expected_status,
     )
     if not row:
+        latest = await get_corporate_account_by_id(validated_id=normalized_id)
+        if not latest:
+            raise HTTPException(
+                status_code=404,
+                detail="Corporate account disappeared mid-transition",
+            )
+        logger.warning(
+            "Corporate status transition lost a concurrent race: company=%s expected=%s actual=%s requested=%s",
+            normalized_id,
+            expected_status,
+            latest.get("status"),
+            transition.status.value,
+        )
         raise HTTPException(
-            status_code=404,
-            detail="Corporate account disappeared mid-transition",
+            status_code=409,
+            detail=(
+                f"Corporate account status changed while this request was in flight "
+                f"(now '{latest.get('status')}'). No changes were made — refresh and try again."
+            ),
         )
 
     # ── Wallet freeze ────────────────────────────────────────────────
@@ -967,7 +995,7 @@ async def change_company_status(
                 normalized_id,
                 exc_info=True,
             )
-            subscription_cancel_result = {"skipped_reason": "unhandled_exception"}
+            subscription_cancel_result = {"skipped_reason": "unhandled_exception"}  # noqa: F841 -- pre-existing on main, never read; see CORP-001 change log
 
     # Reactivation visibility: change_company_status only ever DISABLES
     # auto-topup on suspend/close (above) — there's no corresponding "turn it

@@ -142,7 +142,10 @@ def test_change_status_closed_account_cannot_reopen_409(test_client, admin_overr
 def test_change_status_row_disappears_mid_transition_404(test_client, admin_override):
     existing = corporate_account_row("active", id="c1")
     with (
-        patch(_ROUTE + "get_corporate_account_by_id", AsyncMock(return_value=existing)),
+        # CORP-001: a 0-row CAS update now re-reads the row to tell "gone"
+        # (404, this test) from "status changed underneath us" (409, see
+        # test_corporate_close_cas.py) — the re-read here finds nothing.
+        patch(_ROUTE + "get_corporate_account_by_id", AsyncMock(side_effect=[existing, None])),
         patch("db_supabase.update_corporate_account_status", AsyncMock(return_value=None)),
     ):
         resp = test_client.post("/api/admin/corporate-accounts/c1/status", json={"status": "suspended"})

@@ -1,7 +1,9 @@
-// Promotions CRUD, ride disputes, the safety incident queue, and support
-// tickets. Extracted from the monolithic lib/api.ts as part of the
-// per-domain split. (The disputes read/CRUD helpers are here; there is no
-// deleteDispute -- the backend's hard-delete route was removed 2026-09-25.)
+// Promotions CRUD, card-network chargebacks, the safety incident queue, and
+// support tickets. Extracted from the monolithic lib/api.ts as part of the
+// per-domain split. (The in-app dispute helpers -- getDisputes,
+// getDisputeStats, getDisputeDetails, createDispute, updateDispute -- were
+// deleted 2026-09-25: in-app disputes are disabled and no page called them.
+// See docs/change-log/2026-09-25-remove-disabled-dispute-code.md.)
 
 import { request } from "./client";
 
@@ -38,26 +40,8 @@ export const updatePromotion = (id: string, data: any) =>
 export const deletePromotion = (id: string) =>
     request<any>(`/api/admin/promotions/${id}`, { method: "DELETE" });
 
-/* ── Disputes ───────────────────────────────── */
-export const getDisputes = (opts: { limit?: number; offset?: number; status?: string } = {}) => {
-    const sp = new URLSearchParams();
-    if (opts.limit != null) sp.set("limit", String(opts.limit));
-    if (opts.offset != null) sp.set("offset", String(opts.offset));
-    if (opts.status && opts.status !== "all") sp.set("status", opts.status);
-    const qs = sp.toString();
-    return request<any[]>(`/api/admin/disputes${qs ? `?${qs}` : ""}`);
-};
-
-export const getDisputeStats = () =>
-    request<{ open: number; under_review: number; resolved: number; rejected: number; total_refunded: number }>(
-        "/api/admin/disputes/stats"
-    );
-
-export const getDisputeDetails = (id: string) =>
-    request<any>(`/api/admin/disputes/${id}`);
-
 /* ── Chargebacks (card-network disputes, C23) ──
-   Distinct from the rider-raised `disputes` above — these come from
+   Distinct from the retired in-app `disputes` rows — these come from
    Stripe's dispute webhooks (`stripe_disputes` table), not rider-filed
    refund requests. Read-only: chargebacks are resolved via the Stripe
    Dashboard today. */
@@ -122,18 +106,6 @@ export const submitDisputeEvidence = (disputeId: string, uncategorizedText?: str
             confirm: true,
             ...(uncategorizedText ? { uncategorized_text: uncategorizedText } : {}),
         }),
-    });
-
-export const createDispute = (data: any) =>
-    request<any>("/api/admin/disputes", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateDispute = (id: string, data: any) =>
-    request<any>(`/api/admin/disputes/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
     });
 
 /* ── Safety Queue ───────────────────────────── */

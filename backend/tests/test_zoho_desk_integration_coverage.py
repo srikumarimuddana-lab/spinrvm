@@ -17,9 +17,9 @@ remaining gaps found via `--cov-report=term-missing`:
   - `close_linked_records`'s already-closed-record skip branches (both the
     is_active flag path and the status-column path) and its per-table
     exception swallow
-  - `create_ticket_for_lost_and_found` / `create_ticket_for_dispute`'s
-    ZohoDeskError + generic-Exception swallow paths, and the
-    already-linked / disabled idempotent skips on the dispute helper
+  - `create_ticket_for_lost_and_found`'s ZohoDeskError + generic-Exception
+    swallow paths (the dispute helper's equivalents went with
+    `create_ticket_for_dispute`, deleted 2026-09-25)
   - `create_support_ticket`'s missing-email user re-fetch merge and the
     transcript-appended-to-description branch
 """
@@ -251,54 +251,6 @@ async def test_lost_and_found_swallows_generic_exception(monkeypatch):
     monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
 
     await integ.create_ticket_for_lost_and_found({"id": "c6"}, None)
-    db.update_one.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# create_ticket_for_dispute: idempotent skips + both exception paths
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_dispute_autocreate_skips_when_already_linked(monkeypatch):
-    db = _db()
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock()
-    monkeypatch.setattr(integ.zoho, "create_ticket", created)
-
-    await integ.create_ticket_for_dispute({"id": "d9", "zoho_ticket_id": "already"}, None)
-    created.assert_not_awaited()
-    db.find_one.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_dispute_autocreate_skips_when_disabled(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": False}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    created = AsyncMock()
-    monkeypatch.setattr(integ.zoho, "create_ticket", created)
-
-    await integ.create_ticket_for_dispute({"id": "d10"}, None)
-    created.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_dispute_autocreate_swallows_zoho_desk_error(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=ZohoDeskError("no dept", status=503)))
-
-    await integ.create_ticket_for_dispute({"id": "d11", "user_id": None}, None)
-    db.update_one.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_dispute_autocreate_swallows_generic_exception(monkeypatch):
-    db = _db(find_one=AsyncMock(return_value={"id": "default", "enabled": True}))
-    monkeypatch.setattr(integ, "db_supabase", db)
-    monkeypatch.setattr(integ.zoho, "create_ticket", AsyncMock(side_effect=RuntimeError("boom")))
-
-    await integ.create_ticket_for_dispute({"id": "d12", "user_id": None}, None)
     db.update_one.assert_not_awaited()
 
 

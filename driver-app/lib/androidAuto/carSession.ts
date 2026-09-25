@@ -329,7 +329,7 @@ async function loadDriverConfig(): Promise<void> {
     const res = await api.get('/drivers/config');
     if (res?.data) {
       useDriverStore.getState().applyDriverConfig(res.data);
-      // Migration 482 kill switch; absent (older backend) means off.
+      // Migration 487 kill switch; absent (older backend) means off.
       setCarOfferToneEnabled(
         (res.data as { android_auto_offer_tone_enabled?: unknown }).android_auto_offer_tone_enabled === true,
       );

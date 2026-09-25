@@ -26,7 +26,7 @@ With the phone connected to Android Auto, a ride offer shows on the car screen b
 
 ## 3. Fix / remediation
 
-- **One ring owner.** `lib/androidAuto/carOfferRing.ts` introduces `isCarRingOwner()`. It is true only when a car is connected, the new `settings.android_auto_offer_tone_enabled` flag is on (migration 482, default **off**), and the new native module works on this build.
+- **One ring owner.** `lib/androidAuto/carOfferRing.ts` introduces `isCarRingOwner()`. It is true only when a car is connected, the new `settings.android_auto_offer_tone_enabled` flag is on (migration 487, default **off**), and the new native module works on this build.
 - **When the car owns the ring:**
   - A new local Expo module (`modules/ride-offer-tone`, Android) plays the bundled `res/raw/ride_offer` tone as `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE` with `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`. The tone reaches the car speakers and ducks music.
   - It loops with a 2.5 s gap until the offer deadline (at most 60 s).
@@ -79,7 +79,7 @@ With the phone connected to Android Auto, a ride offer shows on the car screen b
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/482_android_auto_offer_tone_flag.sql` | New BOOLEAN column, default false | Kill switch / canary flag |
+| `backend/migrations/487_android_auto_offer_tone_flag.sql` | New BOOLEAN column, default false | Kill switch / canary flag |
 | `backend/routes/admin/settings.py` | `android_auto_offer_tone_enabled: Optional[bool]` | Admin save can write it |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Column added to snapshot | Drift guard |
 | `backend/routes/drivers/profile.py` | Field on `/drivers/config` (`is True`) | Deliver the flag to the app |

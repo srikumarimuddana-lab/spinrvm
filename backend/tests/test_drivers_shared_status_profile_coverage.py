@@ -862,7 +862,7 @@ class TestGetDriverConfigSettingsFailure:
         [(True, True), (False, False), (None, False), ("true", False)],
     )
     async def test_android_auto_offer_tone_follows_the_flag(self, value, expected):
-        """Migration 482: only an exact True turns the car offer tone on."""
+        """Migration 487: only an exact True turns the car offer tone on."""
         from backend.routes.drivers import profile as profile_mod
 
         settings = {"android_auto_offer_tone_enabled": value}

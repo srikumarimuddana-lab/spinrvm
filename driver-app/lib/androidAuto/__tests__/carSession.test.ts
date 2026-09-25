@@ -481,7 +481,7 @@ describe('lifecycle', () => {
   });
 });
 
-describe('android_auto_offer_tone_enabled (migration 482)', () => {
+describe('android_auto_offer_tone_enabled (migration 487)', () => {
   it('turns the car offer tone on when the config says exactly true', async () => {
     mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20, android_auto_offer_tone_enabled: true } });
     await startCarSession();

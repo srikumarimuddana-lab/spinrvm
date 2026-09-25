@@ -509,7 +509,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setOfferSoundUrl((driverConfigQuery.data as { ride_offer_sound_url?: string | null }).ride_offer_sound_url ?? null);
     alwaysLocationGateRef.current =
       (driverConfigQuery.data as { always_location_required?: boolean }).always_location_required === true;
-    // Migration 482, default off: ring offers through Android Auto's speakers.
+    // Migration 487, default off: ring offers through Android Auto's speakers.
     // Set here too so a phone-open session that connects a car has it without
     // waiting for the car session's own config fetch.
     setCarOfferToneEnabled(

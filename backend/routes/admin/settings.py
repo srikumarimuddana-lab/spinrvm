@@ -607,7 +607,7 @@ class SettingsUpdateRequest(BaseModel):
     # Migration 471. Android ride offers on the alarm-volume channel; read by
     # utils/ride_offer_ring.py when building offer payloads.
     ride_offer_alarm_channel_enabled: Optional[bool] = None
-    # Migration 482. Ride-offer tone through Android Auto car speakers; served
+    # Migration 487. Ride-offer tone through Android Auto car speakers; served
     # to the driver app as android_auto_offer_tone_enabled on /drivers/config.
     android_auto_offer_tone_enabled: Optional[bool] = None
     # Migration 474. True = only a driver-app login signs the account's other

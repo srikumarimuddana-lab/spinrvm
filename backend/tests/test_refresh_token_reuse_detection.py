@@ -17,6 +17,7 @@ client.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -789,10 +790,12 @@ async def test_cascade_bumps_admin_staff_for_admin_audience():
 
 
 @pytest.mark.asyncio
-async def test_cascade_skips_token_version_for_admin_001_super_admin():
+async def test_cascade_bumps_env_admin_token_version_for_admin_001_super_admin():
     """admin-001's creds live in env vars — there is no admin_staff row to
-    bump. The cascade must skip the bump (not raise a DB miss) but still
-    revoke refresh tokens and write the audit row."""
+    bump, but migration 434 gave it its own revocable token_version on the
+    settings row (utils/env_admin_tokens.py). The cascade must bump that
+    counter (not skip it, and not touch admin_staff/users), matching what
+    /admin/auth/logout-all already does for this account (#5623)."""
     update_calls = []
     insert_calls = []
 
@@ -808,16 +811,20 @@ async def test_cascade_skips_token_version_for_admin_001_super_admin():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=None)),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(side_effect=_update_one)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens.bump_env_admin_token_version", AsyncMock(return_value=7)),
         patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
         await _handle_refresh_token_reuse(_revoked_row(audience="admin", user_id="admin-001"))
 
-    # No bump on admin_staff or users
+    # No bump on admin_staff or users -- admin-001's revocation counter lives
+    # on the settings row via bump_env_admin_token_version(), not db.update_one.
     assert not [c for c in update_calls if c[0] in ("admin_staff", "users")]
-    # Audit log still written
+    # Audit log still written, and carries the new env-admin token version.
     assert insert_calls and insert_calls[0][0] == "audit_logs"
+    details = json.loads(insert_calls[0][1]["details"])
+    assert details["cascade_token_version"] == 7
 
 
 # ─────────────────────────────────────────────────────────────────────────────

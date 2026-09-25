@@ -46,6 +46,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .services.fare_service import _round as _fare_round
     from .utils.audit_logger import log_admin_action
     from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
@@ -58,6 +59,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from services.fare_service import _round as _fare_round
     from utils.audit_logger import log_admin_action
     from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
@@ -912,7 +914,12 @@ async def compute_fare_estimate(
         _matched_area=matched_area,
     )
 
-    grand_total = round(subtotal + fees_result["fees_total"] + fees_result["tax_amount"], 2)
+    # MONEY-006: Decimal sum + ROUND_HALF_UP (CLAUDE.md money rule), float only
+    # at the response boundary. fees_total/tax_amount arrive as floats from
+    # calculate_all_fees; _fare_d() goes via str() so they re-enter exactly.
+    grand_total = _fare_f(
+        _fare_round(fb.total_fare + _fare_d(fees_result["fees_total"]) + _fare_d(fees_result["tax_amount"]))
+    )
 
     return {
         "base_fare": _fare_f(fb.base_fare),

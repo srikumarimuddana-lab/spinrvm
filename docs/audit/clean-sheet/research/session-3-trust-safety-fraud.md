@@ -60,7 +60,7 @@ Every card follows §1's format, plus two fields the §4 guardrails require: **F
 - Who uses it / source: server-side plausibility is the check OWASP MAS says to prefer: gather data on the device, decide in the backend ([OWASP MASVS-RESILIENCE-1](https://mas.owasp.org/MASVS/controls/MASVS-RESILIENCE-1/), snippet, read 2026-09-25, INFERRED). Grab publicly reports banning and removing incentives from drivers who spoof location to jump queues ([Malay Mail, 2019](https://www.malaymail.com/news/money---international/2019/05/17/drivers-use-gps-spoofing-fake-apps-to-defraud-grab-says-ride-sharing-firm/1754081), [Grab PH driver security guide](https://www.grab.com/ph/security/security-guide-dax/), snippets, read 2026-09-25, INFERRED).
 - Spinr today: the check exists and is sound (`backend/utils/location_integrity.py:41-175`, VERIFIED). Rejections are dropped per point; nothing counts them per driver (CS-5, VERIFIED).
 - Benefit for Spinr at our scale: turns an existing, already-paid-for check into a reviewable signal with no new data collection. Cost/effort: **S** (a counter keyed by driver and reason, written into the signal table in 2.2). Risk: low.
-- How it fails or gets gamed: a spoofer who moves the fake point at a plausible speed passes every check; a single static point is never compared with anything (TSF (b)#34). Genuine GPS glitches (tunnels, urban canyons, cold start) create rejections too.
+- How it fails or gets gamed: plausibility checks only bound what is physically possible, so they cannot tell a plausible fake from a real fix; a single static point is never compared with anything (TSF (b)#34). Pair with attestation and trip-level signals rather than tightening thresholds. Genuine GPS glitches (tunnels, urban canyons, cold start) create rejections too.
 - False-positive cost: none directly — the signal only feeds review. Cost appears only if a reviewer acts on a count without looking at the trips.
 - Appeal path: any action taken from it goes through the driver appeal flow with the stated reason.
 - First step behind a flag: `trust_signal_gps_rejections_enabled` (log-only), writing one row per driver per day above a threshold. Measure success by: share of flagged drivers a reviewer confirms (precision), target over 50% before any action is attached.
@@ -99,7 +99,7 @@ Every card follows §1's format, plus two fields the §4 guardrails require: **F
 - Who uses it / source: described in industry writing on fleet spoofing (vendor blog, [Airpinpoint](https://airpinpoint.com/blog/fake-gps-spoofing-fleet-detection), snippet, read 2026-09-25, INFERRED; not a primary source).
 - Spinr today: not present (VERIFIED absence in `location_integrity.py`).
 - Benefit: closes a documented residual gap. Cost/effort: S–M. Risk: phones parked on a dashboard mount with good sky view, or OS-level location caching, can also repeat coordinates.
-- How it fails: a spoofer adds random wobble.
+- How it fails: a determined attacker can adapt, so treat it as one weak signal among several, never alone.
 - False-positive cost: a legitimately idle driver flagged; low if signal-only.
 - Appeal path: signal only; review.
 - First step: measure first — count how often real idle drivers repeat identical fixes in existing location history before choosing a threshold. No flag until the base rate is known.
@@ -319,3 +319,137 @@ This is the most important card in this file. Today an SOS reaches the admin das
 - Why it is on this radar: this session's guardrail forbids ad or behavioural-profiling SDKs, and CLAUDE.md forbids "behavioral retargeting". CAPI is not an SDK, and the module is careful (hashing, no raw PII). But hashing does not make an email address non-personal (ASSUMED legal reading), and per-ride purchase events tied to a matched identity are exactly the input that ad retargeting uses. This is STRAT-004's question; it is live now (VERIFIED-LIVE config).
 - Recommendation for this lane: (1) no fraud or safety tool may read from or write to the Meta channel; (2) no new events; (3) founder + privacy decision on whether per-ride events stay on, with the privacy-policy wording checked (§4). Not a build item.
 
+---
+
+## §2.9 Verdict summary
+
+| # | Technique | Verdict |
+|---|---|---|
+| 1 | Server-side position plausibility, aggregated per driver | ADOPT |
+| 2 | Mock-location flag (keep, signal only) | ADOPT |
+| 3 | Server-verified Play Integrity + App Attest on go-online (signal, not gate); step 0 = stop presenting the heuristic as attestation | TRIAL |
+| 4 | App Check replay protection on money endpoints | ASSESS |
+| 5 | Zero-jitter heuristic for static spoofing | ASSESS |
+| 6 | Accelerometer sensor fusion as enforcement | HOLD |
+| 7 | `trust_signals` table + five SQL rules + one review queue | ADOPT |
+| 8 | Shared-instrument graph signals (card / payout account; device only after E10) | TRIAL |
+| 9 | Graph ML collusion models | HOLD |
+| 10 | Instant-payout velocity cap and clearing rule (N22) | ADOPT |
+| 11 | Enforce incentive windows and budgets (`incentive_eligibility_enforced`) | ADOPT |
+| 12 | New-device notice for all audiences + push + "this wasn't me" | ADOPT |
+| 13 | Risk-based step-up / payout-destination cool-off | TRIAL |
+| 14 | Carrier SIM-swap lookup | ASSESS |
+| 15 | Passkeys for riders/drivers | HOLD |
+| 16 | Keep per-account promo gates + referral velocity report | ADOPT |
+| 17 | Purpose-limited device signal for promos | ASSESS (blocked on E10) |
+| 18 | SOS paging via PagerDuty free tier (+ Twilio voice fallback TRIAL; safety vendor ASSESS; in-house centre HOLD) | ADOPT |
+| 19 | SOS triage protocol with ack SLA | ADOPT |
+| 20 | Rider-verifies-driver copy + trip-started confirmation (X4) | ADOPT |
+| 21 | Rider/driver-facing check-in on deviation or long stop | TRIAL |
+| 22 | Phone-sensor crash detection | HOLD |
+| 23 | Contact relationship in SOS context (ADOPT); contact confirmation at add time (ASSESS) | ADOPT / ASSESS |
+| 24 | Repeated false-SOS penalty (HOLD); reviewer-only count (ASSESS) | HOLD / ASSESS |
+| 25 | Driver break advisory (TRIAL); hard 12 h / 6 h cap (ASSESS, counsel) | TRIAL / ASSESS |
+| 26 | Law-enforcement request process + legal-hold export + disclosure log | ADOPT |
+| G-1 | Meta per-ride events | HOLD expansion; escalate |
+
+---
+
+## §3 Ranked build order
+
+Ranking: life-safety first, then open money doors that are live today, then detection, then product. Every item that acts on a person states its false-positive cost and appeal path. "Finding IDs" names what the item closes (fully or in part).
+
+### Now (days; mostly config, copy and docs)
+
+| Rank | Item | Effort | Closes | False-positive cost | Appeal path |
+|---|---|---|---|---|---|
+| 1 | **Page a human on SOS**: PagerDuty free tier, on-call rota, set `sos_paging_webhook_url`; SOS + check-in-no-response = high urgency; route-deviation = low urgency; weekly synthetic test page. Also page from the check-in escalation and route-deviation paths (small code change). | S | TSF-001 (paging half), edge-case Flow 6 "provider outage" RED, CS-11 | A responder woken by an accidental press (bounded by 1.2 s hold + 60 s false-alarm window) | n/a (no enforcement) |
+| 2 | **Rewrite `docs/runbooks/sos-incident.md`** to the real table and channels, add the triage protocol (ack → classify → act → close), remove the unbuilt false-SOS penalty promise, and correct `domain-safety.md`'s Opsgenie reference | S | TSF-001 (doc half), CS-11, Flow 6 "repeat abuse" RED (by removing the false promise) | none | n/a |
+| 3 | **Instant-payout velocity cap + close the no-service-area bypass** (ROADMAP N22) | S | 08-hostile-review §1.4, CS-8, TSF-002 cash-out path | A delay, not a loss: capped money still arrives by scheduled payout | "Request a higher limit" via support; per-driver override by a reviewer |
+| 4 | **Turn on incentive window/budget enforcement** after auditing live campaigns and telling drivers | S | CS-7; bounds TSF-002 losses | An honest driver loses a bonus from a stale campaign | Driver support ticket; admin can extend the campaign |
+| 5 | **Surface `rider_prior_dispute_count` on the Chargebacks tab** (flag ≥ 3 in 90 days) | S | TSF-004 | Reviewer attention on a rider with genuine billing problems; no action attached | n/a until an action is attached; then rider support |
+| 6 | **Written law-enforcement request process** with a named owner (no code) | S | TSF-009 (process half) | Over-disclosure risk falls; none on users | Individual's PIPEDA access right (ASSUMED detail) |
+| 7 | **Stop presenting heuristic device checks as attestation**: rename the stored tier, store/expire the nonce, log store failures at `error` | S | CS-1..CS-3 (new), SEC-A2-005 context | none (no action attached) | n/a |
+| 8 | **Pickup-code residuals copy** (plate-match reminder, "trip started with …" confirmation, "this code is a safety check"), documented missing-code support path | S | X4 / TSF-010 & BENCH-001 residuals | none | n/a |
+| 9 | **Additive incident columns**: `acknowledged_at`, `ride_status_at_trigger`; audit-log admin reads of an incident | S | TSF-007, TSF-011 (audit half closed as a gap by CS-12) | none | n/a |
+
+### Next (weeks; new code, flagged, signal-only)
+
+| Rank | Item | Effort | Closes | False-positive cost | Appeal path |
+|---|---|---|---|---|---|
+| 10 | **`trust_signals` table + review queue**, modelled on `ride_distance_integrity_events`; pilot rule = same-pair frequency, then cancellation-fee share, chargeback count, GPS-rejection count, referral-code burst. Purpose, retention class and purge step from day one. | M | TSF-002, TSF-003, TSF-004, BENCH-006, CS-5, CS-9 | Reviewer time; if acted on wrongly, a held incentive or payout (released on clearance) | Driver told which payout is held and why (category); response through the driver appeal flow; every signal needs a recorded outcome |
+| 11 | **New-device notice for drivers + push to old device + "this wasn't me"** | S | TSF-005 (partial), CS-10 | An unnecessary notice | "This wasn't me" → session revoke → support |
+| 12 | **Payout-destination cool-off after a new-device login** | M | TSF-005 (partial) | A 24 h payout delay for a driver with a genuinely new phone | Support call-back lifts it early |
+| 13 | **Legal-hold export tool** (super-admin, dual approval on, checksummed, one audit row per export) | M | TSF-009 | Over-disclosure risk falls | as rank 6 |
+| 14 | **Server-verified Play Integrity + App Attest as a signal** into `trust_signals` | M | SEC-A2-005, CS-1..CS-4 | If misused as a gate, a contractor cannot earn — so signal only | Driver notice + appeal flow; never an automatic block |
+| 15 | **Deviation / long-stop check-in to rider and driver** (after 4 weeks of alert false-positive measurement) | M | BENCH-009 (partial), TSF (c)#21 | An unnecessary prompt; a needless page if escalation is noisy | n/a |
+| 16 | **Driver break advisory** (no dispatch effect) + long-shift baseline | S–M | CS-13 | none | n/a |
+| 17 | **Contact relationship in SOS view** | S | SAFETY-002 | none | n/a |
+
+### Later (needs a decision, a privacy review, or real volume)
+
+| Rank | Item | Effort | Closes | False-positive cost | Appeal path |
+|---|---|---|---|---|---|
+| 18 | Damage / cleaning-fee claims with photo evidence and a rider appeal window before the charge is final (reuse cancellation-fee settings pattern) | M–L | TSF-008 | A rider charged for damage they did not cause | Rider appeal window before charge; then the rider dispute flow (X2) |
+| 19 | Shared-instrument signals (store Stripe card fingerprint; payout-account reuse) | M | TSF-002 (stronger signal) | Households sharing a card | Same queue and appeal flow |
+| 20 | Purpose-limited device signal for first-ride promos (only after E10 + PIA) | M | E10, A8 SAFETY-004 | Genuine new rider on a second-hand phone loses a promo | "Promo not applied" → support override |
+| 21 | Carrier SIM-swap lookup (only if Canadian carrier coverage is confirmed) | S–M | TSF-005 | Second check for someone with a new SIM | The second check itself |
+| 22 | Hard fatigue cap (only after counsel on classification) | M | CS-13 | Lost earnings for a rested driver | Support review of the counted session |
+| 23 | Safety-response vendor (Noonlight / RapidSOS class) | L | TSF-001 (24/7 coverage) | Vendor contacting police on a false alarm — must stay user-initiated | n/a |
+| 24 | Annual law-enforcement transparency note | S | TSF-009 (openness) | none | n/a |
+
+**Sequencing constraints** (from ROADMAP and 08-hostile-review §1.4, re-confirmed): the driver cash-out screen (X3) ships only after rank 3, rank 5 and the first rule of rank 10; the rider dispute button (X2) ships only with ROADMAP N23's interim admin refund cap. Nothing in this list auto-deactivates an account.
+
+---
+
+## §3.1 What not to build
+
+- **An ML fraud model or a graph database.** No labelled data, no owner, and an unexplainable decision cannot be appealed fairly. SQL rules first (HOLD 9).
+- **Automatic bans, deactivations or earnings clawbacks from any signal.** Every action is a reversible hold plus a human decision with a stated reason; this protects contractors and satisfies the appeal-path guardrail.
+- **A new pickup PIN.** One exists and is stronger than Uber's opt-in default (TSF-010/BENCH-001 withdrawn).
+- **Any penalty for pressing SOS, including repeated false alarms.** Deterring a real press costs more than the abuse.
+- **Auto-dial 911 or a vendor that contacts police without the user asking.** "Not a 911 replacement" stands.
+- **A third-party fingerprinting, telematics or crash-detection SDK**, or any reuse of the Meta events channel for trust and safety. No ad or behavioural-profiling SDKs.
+- **Using the dormant driver-pass quota / force-offline mechanic as a fatigue control.** A safety cap, if approved, is its own counsel-reviewed rule.
+- **Hard-gating go-online on device attestation.** Drivers bring their own phones; signal only.
+- **An in-house 24/7 safety centre.** Not staffable at this scale.
+- **Opsgenie as the paging target.** It is end-of-sale.
+
+---
+
+## §4 Escalations for `05-escalations.md` (legal/regulatory claims without a read primary source — all ASSUMED)
+
+1. **PIPEDA law-enforcement disclosure rules** — s.7(3)(c), (c.1)(ii), (d.1)/(d.2), (e) and the s.9(2.1)–(2.4) access-request rules. Only OPC snippets were read; the statute page was blocked. Counsel to confirm the §2.7 process before it is adopted.
+2. **Emergency disclosure without a request** — whether Spinr's on-call lead may proactively give police a location during an active SOS with no answer from the reporter, and the after-the-fact notice duty.
+3. **Fraud signals as personal information** — purpose statement, retention class and whether the privacy policy must name fraud-prevention scoring (COMP-007).
+4. **Device signal for promo eligibility** — E10 (A8 SAFETY-004); PIA required; the OPC legitimacy test was read only via a law-firm summary.
+5. **Driver fatigue cap vs. contractor status** — whether a platform-enforced 12 h / 6 h cap is compatible with Spinr's independent-contractor position in Saskatchewan, and whether any Saskatchewan rule on TNC driver hours exists (none was found; absence is ASSUMED).
+6. **Hashed identifiers sent to Meta** — whether SHA-256-hashed email/phone per ride is personal information disclosed to a third party for advertising, and whether the privacy policy covers it (G-1, STRAT-004).
+7. **Carried forward unchanged**: SAFETY-003 contingent-coverage interpretation (SGI); one-party-consent framing for audio recording; Saskatoon Bylaw 9651 driver-identity disclosure caveat (TSF (e)).
+
+---
+
+## §5 Open human questions
+
+1. **Who is on call for SOS, starting this week?** Names for a PagerDuty rota (free tier allows 5 users). Is a single on-call person acceptable at night, or is a second escalation step required? (TSF-001)
+2. **Is `sos_paging_webhook_url` set in production today?** It was not in the live checks.
+3. **Is App Check enforced in production?** (ACTION_ITEMS C3; still not in the live checks.)
+4. **Incentive enforcement:** which live campaigns would stop paying if `incentive_eligibility_enforced` is turned on, and how will drivers be told?
+5. **Instant-payout cap default**: what daily amount/count is conservative but not punitive for Saskatchewan drivers?
+6. **Emergency police contact policy**: may the on-call lead call police on a user's behalf when an SOS goes unanswered? (§4 item 2)
+7. **Fatigue**: advisory only, or a hard cap after counsel's view?
+8. **E10**: accept multi-account promo exposure, or commission a PIA for a purpose-limited device signal?
+9. **Meta per-ride events**: keep on, restrict, or turn off? (G-1)
+10. **Law-enforcement owner**: who receives and signs off requests, and which counsel reviews them?
+11. **Budget for a safety-response vendor** (Later rank 23): is 24/7 human coverage a pre-condition for a second city?
+
+---
+
+## §6 Deferred and not verified
+
+- **External sources**: WebFetch was blocked for almost every primary source; all external claims except Google's Play Integrity verdicts page are INFERRED from search snippets. Uber's RideCheck and PIN pages, Lyft help pages, Firebase custom-backend docs, Apple App Attest docs, NIST 800-63B-4 text, PIPEDA text and every OPC page should be re-read from a machine that can reach them before any card is quoted externally.
+- **Live state**: paging URL, App Check enforcement, and whether route-deviation alerts have produced incidents (count and genuine share) were not checked.
+- **Code not read line by line**: the field set returned by `GET /api/admin/safety/incidents/{id}`; the admin-dashboard safety queue's real-time alert behaviour (sound, badge) on the WS broadcast; whether drivers hit the rider-only new-device path through the shared OTP verify handler; the payout bank-account change endpoint's existing checks beyond its route line.
+- **Carried forward from TSF (c)**: promo entry points for corporate/scheduled bookings (TSF-006); the free-ride + referral/quest double-reward interaction; minors riding unaccompanied (#26); lost-and-found chat masking.
+- **Adversary lane**: run by this session, not by `spinr-edge-case-reviewer`; a separate adversarial pass on the `trust_signals` thresholds should happen once real base rates exist.
+- **No replay test** was possible for any detector: thresholds in §2 are placeholders to be set from Spinr's own data, not recommendations.

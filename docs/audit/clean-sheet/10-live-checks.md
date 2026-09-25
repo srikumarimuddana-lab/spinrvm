@@ -33,6 +33,7 @@
 | Rideless SOS | Off. | SOS coverage when there is no active ride is dark (TSF lane). |
 | Route deviation alerts | On. | Safety: route deviation alerting is live. |
 | Notification throttling | Off. | SKB lane: quiet hours and daily caps ship dark, as reported. |
+| Is an SOS paging target set? | **No.** `settings.sos_paging_webhook_url` is empty (only emptiness was checked, not the value). | **TSF-001 is now VERIFIED-LIVE:** `backend/utils/safety_paging.py` pages only through this webhook, so a real SOS pages no one in production today. This is the first item in `research/session-3-trust-safety-fraud.md` §Now. |
 
 ## §2 New finding: the migration tracking table does not match the schema
 

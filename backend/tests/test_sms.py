@@ -190,6 +190,11 @@ class TestSMSService:
 _TWILIO_KW = {"twilio_sid": "AC123", "twilio_token": "token", "twilio_from": "+10000000000"}
 
 
+def _capacity(executor) -> int:
+    """Admission slots (max_workers + queue_size) of a BoundedExecutor."""
+    return executor._slots._initial_value
+
+
 class TestSMSBoundedExecutor:
     """Twilio sends run on dedicated bounded pools (security-auditor finding on
     #5784): a hung Twilio/DNS call must pin at most the SMS pool's threads,
@@ -210,18 +215,20 @@ class TestSMSBoundedExecutor:
             mock_client_cls.return_value.messages.create.side_effect = _create
             assert (await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW))["success"] is True
             assert (await sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW))["success"] is True
+            assert (await sms_mod.send_sos_sms("+13065551234", "SOS", **_TWILIO_KW))["success"] is True
 
-        general_name, otp_name = thread_names
+        general_name, otp_name, sos_name = thread_names
         # Default-executor threads are named "asyncio_N"; ours carry a prefix.
         assert general_name.startswith("spinr-sms_"), general_name
         assert otp_name.startswith("spinr-sms-otp_"), otp_name
+        assert sos_name.startswith("spinr-sms-sos_"), sos_name
 
     @pytest.mark.asyncio
     async def test_saturated_pool_fails_fast_and_default_executor_stays_free(self):
         import backend.sms_service as sms_mod
 
         release = threading.Event()
-        capacity = 8 + 56  # _SMS_EXECUTOR max_workers + queue_size
+        capacity = _capacity(sms_mod._SMS_EXECUTOR)
 
         def _hang(**_kwargs):
             release.wait(5)
@@ -242,7 +249,7 @@ class TestSMSBoundedExecutor:
                     *(sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW) for _ in range(capacity))
                 )
                 assert all(r["success"] is False and r["error"] == "TimeoutError" for r in hung)
-                assert len(sms_mod._SMS_EXECUTOR._threads) == 8
+                assert len(sms_mod._SMS_EXECUTOR._threads) == sms_mod._SMS_EXECUTOR._max_workers == 8
 
                 start = time.monotonic()
                 result = await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW)
@@ -258,15 +265,14 @@ class TestSMSBoundedExecutor:
             release.set()
 
     @pytest.mark.asyncio
-    async def test_sos_general_pool_has_capacity_while_otp_pool_saturated(self):
+    async def test_sos_pool_has_capacity_while_otp_and_general_pools_saturated(self):
         import backend.sms_service as sms_mod
 
         release = threading.Event()
-        otp_capacity = 4 + 8  # _OTP_SMS_EXECUTOR max_workers + queue_size
 
         def _create(**_kwargs):
-            if threading.current_thread().name.startswith("spinr-sms-otp"):
-                release.wait(5)  # Twilio hangs for the OTP flood...
+            if not threading.current_thread().name.startswith("spinr-sms-sos"):
+                release.wait(5)  # Twilio hangs for the OTP flood and the broadcast...
             return MagicMock(sid="SM-sos")
 
         try:
@@ -278,13 +284,24 @@ class TestSMSBoundedExecutor:
                 mock_client_cls.return_value.messages.create.side_effect = _create
 
                 await asyncio.gather(
-                    *(sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW) for _ in range(otp_capacity))
+                    *(
+                        sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW)
+                        for _ in range(_capacity(sms_mod._OTP_SMS_EXECUTOR))
+                    ),
+                    *(
+                        sms_mod.send_sms("+13065551234", "bulk", **_TWILIO_KW)
+                        for _ in range(_capacity(sms_mod._SMS_EXECUTOR))
+                    ),
                 )
                 otp = await sms_mod.send_otp_sms("+13065551234", "123456", **_TWILIO_KW)
                 assert otp["success"] is False and otp["error"] == "ExecutorSaturated"
+                bulk = await sms_mod.send_sms("+13065551234", "bulk", **_TWILIO_KW)
+                assert bulk["success"] is False and bulk["error"] == "ExecutorSaturated"
 
-                # ...but an SOS fan-out (3 contacts, via send_sms) still sends.
-                sos = await asyncio.gather(*(sms_mod.send_sms("+13065551234", "SOS", **_TWILIO_KW) for _ in range(3)))
+                # ...but an SOS fan-out (3 contacts) still sends on its own pool.
+                sos = await asyncio.gather(
+                    *(sms_mod.send_sos_sms("+13065551234", "SOS", **_TWILIO_KW) for _ in range(3))
+                )
                 assert [r["success"] for r in sos] == [True, True, True]
         finally:
             release.set()

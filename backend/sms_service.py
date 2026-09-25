@@ -34,17 +34,21 @@ _TWILIO_THREAD_TIMEOUT_S = _TWILIO_HTTP_TIMEOUT_S + 5.0
 # send fails fast (ExecutorSaturated -> the usual {"success": False, ...})
 # instead of queueing without limit.
 #
-# Two pools so a public OTP flood cannot starve SOS / transactional SMS:
+# Three pools so neither a public OTP flood nor a bulk broadcast can starve
+# SOS:
+# - SOS (send_sos_sms: routes/rides/safety.py ride + rideless SOS only, <= 3
+#   contacts per trigger -- MAX_EMERGENCY_CONTACTS): 4 workers covers one
+#   fan-out in a single round trip; the 28-deep queue holds ~10 concurrent
+#   SOS triggers, far beyond anything seen, before failing fast.
 # - OTP (send_otp_sms: one SMS per /auth/send-otp, rate-limited 6/min per
 #   client): 4 workers ~= 4+ sends/s at a sub-second Twilio round trip, far
 #   above organic login volume; the small queue absorbs a burst, past that a
 #   send fails fast and the rider is told to retry.
-# - Everything else via send_sms (SOS fan-out <= 3 contacts per trigger, SOS
-#   contact opt-out notice, guest ride notices, admin cloud-messaging and
-#   marketing broadcasts at up to 50 concurrent sends): 8 workers -- no fewer
-#   than the default pool's min(32, cpu+4) gave these sends on a 1-4 vCPU host
-#   -- plus a 56-deep queue, so a 50-wide broadcast plus a concurrent SOS
-#   fan-out still fits the 64 admission slots and queues rather than failing.
+# - Everything else via send_sms (SOS contact opt-out notice, guest ride
+#   notices, admin cloud-messaging and marketing broadcasts at up to 50
+#   concurrent sends): 8 workers -- no fewer than the default pool's
+#   min(32, cpu+4) gave these sends on a 1-4 vCPU host -- plus a 56-deep queue.
+_SOS_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=28, thread_name_prefix="spinr-sms-sos")
 _OTP_SMS_EXECUTOR = BoundedExecutor(max_workers=4, queue_size=8, thread_name_prefix="spinr-sms-otp")
 _SMS_EXECUTOR = BoundedExecutor(max_workers=8, queue_size=56, thread_name_prefix="spinr-sms")
 
@@ -63,6 +67,17 @@ async def send_sms(
     """
     return await _send_sms_on(
         _SMS_EXECUTOR, to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
+    )
+
+
+async def send_sos_sms(
+    to_phone: str, message: str, *, twilio_sid: str = "", twilio_token: str = "", twilio_from: str = ""
+) -> dict:
+    """send_sms for SOS emergency-contact alerts, on the dedicated SOS pool so
+    an OTP flood or a bulk broadcast can never take its capacity. Same
+    arguments and return shape as send_sms."""
+    return await _send_sms_on(
+        _SOS_SMS_EXECUTOR, to_phone, message, twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from
     )
 
 
@@ -98,7 +113,7 @@ async def _send_sms_on(
         logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
         return {"success": True, "provider": "twilio", "sid": sid}
     except ExecutorSaturated:
-        pool = "otp" if executor is _OTP_SMS_EXECUTOR else "general"
+        pool = {id(_SOS_SMS_EXECUTOR): "sos", id(_OTP_SMS_EXECUTOR): "otp"}.get(id(executor), "general")
         logger.bind(sms_pool=pool).error(f"Failed to send SMS to {masked}: ExecutorSaturated (sms pool={pool} full)")
         return {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
     except Exception as e:

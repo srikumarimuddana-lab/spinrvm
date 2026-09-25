@@ -109,11 +109,64 @@ else
   echo -e "${GREEN}  ✅ On feature branch: $BRANCH${NC}"
 fi
 
-# 6. Float money check
-echo "6/12 Checking money arithmetic..."
-FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE "(fare|price|amount|earning|payout)\s*[+\-\*\/]\s*[0-9]*\.[0-9]+" 2>/dev/null)
-if [ -n "$FLOAT" ]; then
-  echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
+# 6. Float money check (blocking, scoped to the SR-03 money-file list)
+# Was warning-only and scanned every staged *.py/*.ts file. Narrowed and
+# made blocking (ROADMAP N3 remainder, MONEY-005) to match CLAUDE.md's
+# "Money arithmetic" claim that a pre-commit hook actually blocks this.
+# Scope is exactly .semgrep/spinr-rules.yml's spinr-no-float-in-money (SR-03)
+# `include` list — the files that rule and its sibling spinr-no-bare-sum-in-
+# money already gate in CI, so this hook and that gate never disagree on
+# which files are "money files". Scoped by parsing diff file headers (like
+# check 12's phone scan below) instead of a `git diff -- <pathspec>`, so it
+# also works correctly in front of tests/hooks/test_pre_commit.sh's fake git
+# shim, which returns the whole patch for any `--cached -U0` call regardless
+# of the pathspec passed. Full-comment lines (stripped line starts with '#')
+# are skipped — verified against every line of every file in the list below
+# as a synthetic full-file addition (2026-09-25): 0 hits after adding this
+# exclusion, 2 without it (both comments describing a fare tolerance band in
+# wallet.py, e.g. "server_fare+0.01").
+echo "6/12 Checking money arithmetic (blocking, scoped to money files)..."
+MONEY_FLOAT_AWK='
+BEGIN {
+  n = split("backend/routes/fares.py backend/routes/payments.py backend/routes/wallet.py backend/routes/rides/payments.py backend/services/fare_service.py backend/services/payment_service.py backend/services/corporate_wallet_service.py backend/services/corporate_allowance_service.py backend/services/corporate_subscription_service.py backend/utils/stripe_charge.py backend/utils/receipt_pdf.py backend/utils/email_receipt.py backend/routes/drivers/earnings.py backend/features.py backend/utils/referral_payout.py", files, " ")
+  for (i = 1; i <= n; i++) money[files[i]] = 1
+  file = ""; hdr = 0; in_money = 0
+}
+/^diff --git / { hdr = 1; next }
+hdr && /^\+\+\+ / {
+  file = substr($0, 5); sub(/^b\//, "", file)
+  in_money = (file in money)
+  next
+}
+/^@@ / { hdr = 0; next }
+hdr { next }
+/^-/ { next }
+/^\+/ {
+  if (in_money) {
+    line = substr($0, 2)
+    stripped = line
+    sub(/^[ \t]+/, "", stripped)
+    if (stripped !~ /^#/ && tolower(line) ~ /(fare|price|amount|earning|payout)[ \t]*[+\-*\/][ \t]*[0-9]*\.[0-9]+/) {
+      printf "%s: %s\n", file, line
+    }
+  }
+  next
+}
+'
+# Fail closed: this check now blocks, so a diff/awk failure must not read as
+# "no float arithmetic found" (same rationale as check 12 below).
+MONEY_SCAN_OK=1
+MONEY_DIFF=$(git diff --cached -U0 --no-color --no-ext-diff) || MONEY_SCAN_OK=0
+MONEY_HITS=$(printf '%s\n' "$MONEY_DIFF" | awk "$MONEY_FLOAT_AWK") || MONEY_SCAN_OK=0
+if [ "$MONEY_SCAN_OK" -eq 0 ]; then
+  echo -e "${RED}  BLOCKED — money arithmetic scan could not run (git diff or awk failed)${NC}"
+  BLOCKED=1
+elif [ -n "$MONEY_HITS" ]; then
+  while IFS= read -r hit; do
+    echo -e "${RED}  BLOCKED — float money arithmetic: $hit${NC}"
+  done <<< "$MONEY_HITS"
+  echo -e "${RED}  Use Decimal (_d()/_round()/_f()) instead of float arithmetic. See CLAUDE.md \"Money arithmetic\".${NC}"
+  BLOCKED=1
 else
   echo -e "${GREEN}  ✅ Clean${NC}"
 fi

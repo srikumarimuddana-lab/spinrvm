@@ -276,6 +276,77 @@ rules:
     severity: WARNING
     languages: [python]
 
+  # SR-11: Unwrapped builtin sum() over money values (MONEY-001/005 follow-up)
+  #
+  # SR-03 above only matches float(...) — it cannot see a raw sum() over
+  # unwrapped DB values, which is exactly how the pre-#5792 tip-total drift
+  # (MONEY-001) and the driver_daily_stats aggregation reads it, i.e.
+  # sum(r.get("tip_amount", 0) or 0 for r in rows), got past it. See
+  # docs/change-log/2026-09-25-float-money-writes.md §10 "Not fixed, found
+  # while checking" item 3, which named this gap explicitly.
+  #
+  # Design: flag sum($GEN) / sum($GEN, $START) only when the summed
+  # expression $GEN both (a) mentions a money-shaped field name (fare,
+  # amount, tip, fee, total, ...) and (b) is not already wrapped in a
+  # Decimal-producing call. (a) keeps this from firing on legitimate
+  # non-money sums in the same files, e.g. earnings.py's
+  # total_distance_km/total_duration_minutes sum()s, which mention neither.
+  # (b) allows the two forms every current usage in these files already
+  # uses: sum(_d(x) for x in rows) and sum(gen, Decimal("0")) (also
+  # Decimal(str(x)), _fare_d(), _f(), and the two local Decimal-returning
+  # helpers earnings.py calls sum() over, _ride_income()/_ride_tax()).
+  #
+  # Both conditions are expressed as metavariable-pattern blocks on $GEN
+  # rather than sibling pattern-regex/pattern-not-regex entries: combining a
+  # bare pattern-regex with an AST pattern in the same `patterns:` list
+  # rewrites the match to the regex's own (narrower, possibly duplicated)
+  # sub-range, so a pattern-not-regex sibling never sees the full $GEN text
+  # and cannot exclude anything — confirmed by hand against every real sum()
+  # call in the paths below (0 findings via metavariable-pattern; the sibling
+  # form produced false positives/duplicates before this fix).
+  - id: spinr-no-bare-sum-in-money
+    patterns:
+      - pattern-either:
+          - pattern: sum($GEN)
+          - pattern: sum($GEN, $START)
+      - metavariable-pattern:
+          metavariable: $GEN
+          patterns:
+            - pattern-regex: '(?i)(fare|price|amount|earning|payout|tip|fee|total|bonus|wallet|balance|charge|subtotal|surge|toll|tax|commission|refund|credit|debit)'
+      - metavariable-pattern:
+          metavariable: $GEN
+          patterns:
+            - pattern-not-regex: '(_d\(|_fare_d\(|_f\(|Decimal\(|_ride_income\(|_ride_tax\()'
+    paths:
+      # Same file list as SR-03 above (spinr-no-float-in-money) — verified
+      # 0 findings on every file here (2026-09-25); see the change-log entry
+      # cited above for how each was checked.
+      include:
+        - "backend/routes/fares.py"
+        - "backend/routes/payments.py"
+        - "backend/routes/wallet.py"
+        - "backend/routes/rides/payments.py"
+        - "backend/services/fare_service.py"
+        - "backend/services/payment_service.py"
+        - "backend/services/corporate_wallet_service.py"
+        - "backend/services/corporate_allowance_service.py"
+        - "backend/services/corporate_subscription_service.py"
+        - "backend/utils/stripe_charge.py"
+        - "backend/utils/receipt_pdf.py"
+        - "backend/utils/email_receipt.py"
+        - "backend/routes/drivers/earnings.py"
+        - "backend/features.py"
+        - "backend/utils/referral_payout.py"
+    message: |
+      Raw sum() over a money-shaped value outside Decimal. sum() on plain
+      DB floats accumulates binary-float drift the same way a `+=` loop
+      does (e.g. ten $0.10 tips summing to 0.9999999999999999). Wrap each
+      summed value in _d()/Decimal() — sum((_d(x) for x in rows),
+      Decimal("0")) — and convert to float only at the response boundary
+      with _f(). See CLAUDE.md "Money arithmetic" and MONEY-001.
+    severity: ERROR
+    languages: [python]
+
   # SR-10: Raw phone / address in log statement
   - id: spinr-pii-in-logs
     patterns:

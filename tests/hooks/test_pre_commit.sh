@@ -119,17 +119,49 @@ echo ""
 echo "Gate 4 — Branch protection"
 _pass "feature branch passes (shim returns feature/test-branch)"
 
-# ── Gate 5: Float money arithmetic ────────────────────────────────────────────
+# ── Gate 5: Float money arithmetic (blocking, scoped to money files) ─────────
+# ROADMAP N3 remainder / MONEY-005: check 6 used to warn-only on any staged
+# *.py/*.ts file; it now blocks, scoped to exactly .semgrep/spinr-rules.yml's
+# spinr-no-float-in-money (SR-03) `include` list. Scoping is done by parsing
+# diff file headers (diff --git / +++ b/<path>), so these patches need real
+# headers — a bare "+line" patch (as the old tests used) never sets in_money
+# and the check trivially passes regardless of content.
 echo ""
-echo "Gate 5 — Float money arithmetic"
+echo "Gate 5 — Float money arithmetic (blocking, scoped to money files)"
 
-_run_gate "integer math passes" \
-  "+fare = amount + 100" \
+_run_gate "integer math in a money file passes" \
+"diff --git a/backend/services/fare_service.py b/backend/services/fare_service.py
++++ b/backend/services/fare_service.py
+@@ -0,0 +1,1 @@
++fare = amount + 100" \
   0
 
-# Float check is WARNING only, not a block — expect exit 0
-_run_gate "float fare arithmetic is warning-only (exit 0)" \
-  "+fare = amount + 1.5" \
+# Float arithmetic in a SR-03 money file is now BLOCKED, not just a warning.
+_run_gate "float fare arithmetic in a money file is BLOCKED" \
+"diff --git a/backend/services/fare_service.py b/backend/services/fare_service.py
++++ b/backend/services/fare_service.py
+@@ -0,0 +1,1 @@
++fare = amount + 1.5" \
+  1
+
+# Same float shape, but the file isn't in the SR-03 list — scoping must
+# still let it through (this check is intentionally narrower than the old
+# every-*.py/*.ts scan).
+_run_gate "same float arithmetic outside the money-file list passes" \
+"diff --git a/backend/routes/rides/booking.py b/backend/routes/rides/booking.py
++++ b/backend/routes/rides/booking.py
+@@ -0,0 +1,1 @@
++fare = amount + 1.5" \
+  0
+
+# A full-comment line describing a float tolerance band (real example: the
+# CLAUDE.md/wallet.py "server_fare+0.01" comment that a header-unaware regex
+# false-positived on) must not block.
+_run_gate "float-shaped text in a comment in a money file passes" \
+"diff --git a/backend/routes/wallet.py b/backend/routes/wallet.py
++++ b/backend/routes/wallet.py
+@@ -0,0 +1,1 @@
++    # amount is within [server_fare, server_fare+0.01]" \
   0
 
 # ── Summary ──────────────────────────────────────────────────────────────────

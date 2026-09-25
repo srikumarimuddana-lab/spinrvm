@@ -123,7 +123,7 @@ Concrete scenarios:
 
 ## 8. Rollback plan
 
-- **Behavioural, no deploy.** Run `UPDATE settings SET corporate_kyb_refuses_closed_company = false WHERE id = 'app_settings';`. Both routes then skip the pre-read and CAS and write unconditionally, exactly as before. The settings cache TTL is 60 seconds.
+- **Behavioural, no deploy.** Turn the flag off with `PUT /api/admin/settings` and `{"corporate_kyb_refuses_closed_company": false}`. It is admin-writable as of `3dbf734`, after the migration-reviewer follow-up. Alternatively run `UPDATE settings SET corporate_kyb_refuses_closed_company = false WHERE id = 'app_settings';`. Both routes then skip the pre-read and CAS and write unconditionally, exactly as before. The settings cache TTL is 60 seconds.
 - **Schema.** Run `ALTER TABLE settings DROP COLUMN IF EXISTS corporate_kyb_refuses_closed_company;`. It is safe with the code still deployed, because the code defaults to true when the column is absent.
 - **Data.** Nothing to remediate. The fix only refuses writes; it never writes new data.
 

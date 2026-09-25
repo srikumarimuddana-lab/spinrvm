@@ -41,8 +41,11 @@ reads `ride_offers.driver_id` for the ride (uses the `ride_offers(ride_id)`
 index from migration 100, row cap 1000). Each dispatch attempt removes those
 drivers from the primary pool (after the Redis skip filter) and from the
 vehicle-cascade pool (both the v2 and legacy presence branches). If the read
-fails, it logs at error level with the traceback and falls back to the Redis
-filter only — today's behaviour.
+fails it raises: `match_driver_to_ride`'s recovery shell logs it and re-arms
+`_dispatch_retry` with 10/30/60 s backoff. (First version fell back to the
+Redis-only filter; Codex review P1 on #5776 — correctly — pointed out that
+continuing without the filter re-opens the exact batch-insert failure this
+fixes.)
 
 No feature flag: excluding a driver who holds an offer row can only remove a
 candidate the claim step would have rejected or crashed on, so there is no
@@ -87,7 +90,7 @@ Blast radius: single-surface (backend dispatch hot path).
 | File path | What changed | Why |
 |---|---|---|
 | `backend/routes/rides/matching.py` | `_already_offered_driver_ids()` + filter on the primary and cascade pools | Durable already-offered filter |
-| `backend/tests/test_dispatch_already_offered_filter.py` | New: 5 cases (DB excludes with expired key, Redis outage, empty, read failure fallback, helper query) | Coverage |
+| `backend/tests/test_dispatch_already_offered_filter.py` | New: 5 cases (DB excludes with expired key, Redis outage, empty, read failure aborts before ranking, helper query) | Coverage |
 | `backend/tests/conftest.py` | Autouse stub of the helper for other modules | Keep order-sensitive dispatch mocks stable |
 
 ## 7. Before / after
@@ -98,7 +101,7 @@ _skip_ids = {d["id"] for d, v in zip(all_drivers, _skip_vals) if v}
 all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
 
 # After — plus the durable DB read
-_offered_ids = await _already_offered_driver_ids(ride_id)   # error → set(), logged
+_offered_ids = await _already_offered_driver_ids(ride_id)   # error → raises into the retry shell
 all_drivers = [d for d in all_drivers if d["id"] not in _offered_ids]
 ```
 
@@ -106,8 +109,9 @@ all_drivers = [d for d in all_drivers if d["id"] not in _offered_ids]
 
 Revert the commit and redeploy. There is no flag (see section 3) and no data
 written, so a code revert fully restores today's behaviour. If the extra
-read ever misbehaves in production, its failure mode is already "fall back
-to today's filter".
+read fails in production, the attempt is retried with backoff rather than
+dispatched without the filter; a DB outage long enough to exhaust retries
+would already fail the claim step itself.
 
 ## 9. Verification performed
 

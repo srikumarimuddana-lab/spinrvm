@@ -173,7 +173,7 @@ Column drop SQL is in the migration header.
       `resolve_driver_offer` expire branch (migration 460).
 - [x] Reviewed against CLAUDE.md: state machine (no transition added),
       insurance periods (Period 2 closed by the expiry path), observability
-      (info log on the new branch; settings read failure logged at error).
+      (info log on the new branch; a settings read failure on an `offer_expired` decline is logged at error and answered 503, leaving the offer pending for server expiry — changed after Codex review on #5776, it previously fell back to a normal decline).
 - [x] Feature-flagged, default off.
 - [x] `spinr-insurance-period-auditor`: no blockers — Period 2 is always
       closed by the expiry path (reaper covers a lost in-process timer), the

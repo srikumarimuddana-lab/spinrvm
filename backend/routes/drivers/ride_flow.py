@@ -653,8 +653,10 @@ async def _after_accept_notify(ride_id: str, ride: dict | None, driver: dict) ->
 async def _offer_expired_as_miss_enabled() -> bool:
     """settings.offer_expired_decline_as_miss_enabled (migration 466), default off.
 
-    A settings read failure is logged and treated as off, which is today's
-    behaviour (the auto-decline is handled as a decline).
+    A settings read failure is logged and answered with 503 rather than
+    guessed: treating it as "off" would mark the offer declined and reset the
+    miss streak even when the flag is on. A 503 leaves the offer pending, so
+    the server-side expiry still decides it.
     """
     try:
         from ...settings_loader import get_app_settings as _get_settings
@@ -663,8 +665,8 @@ async def _offer_expired_as_miss_enabled() -> bool:
     try:
         return bool((await _get_settings()).get("offer_expired_decline_as_miss_enabled"))
     except Exception:
-        logger.error("decline_ride: settings read failed — offer_expired handled as a decline", exc_info=True)
-        return False
+        logger.error("decline_ride: settings read failed for an offer_expired decline — returning 503", exc_info=True)
+        raise HTTPException(status_code=503, detail="Settings temporarily unavailable") from None
 
 
 @router.post("/rides/{ride_id}/decline")

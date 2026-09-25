@@ -1599,9 +1599,12 @@ async def create_ride(
 
     if updated_ride and updated_ride.get("status") == RideStatus.SEARCHING:
         # On-demand rides use the configured search window (timeout_seconds=None:
-        # settings.ride_search_timeout_seconds, read inside the task). A scheduled
-        # ride dispatched at once keeps the fixed 300 s default, as in scheduled_rides.py.
-        if updated_ride.get("is_scheduled"):
+        # settings.ride_search_timeout_seconds, read inside the task). A ride
+        # with a scheduled_time keeps the fixed 300 s default, as in
+        # scheduled_rides.py. Keyed on scheduled_time, not is_scheduled, to match
+        # the stuck-ride sweeper: an is_scheduled ride with no time is dispatched
+        # immediately and is on-demand for both.
+        if updated_ride.get("scheduled_time"):
             _deps.spawn(matching.ride_search_timeout(ride.id))
         else:
             _deps.spawn(matching.ride_search_timeout(ride.id, timeout_seconds=None))

@@ -798,15 +798,10 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
             # Drivers already offered this ride, from the DB — covers an expired
             # or unreadable Redis skip key. See _already_offered_driver_ids. A
-            # failed read keeps today's behaviour (Redis filter only), loudly.
-            try:
-                _offered_ids: set = await _already_offered_driver_ids(ride_id)
-            except Exception:
-                logger.opt(exception=True).error(
-                    "[DISPATCH] already-offered lookup failed for ride {} — using the Redis skip filter only",
-                    ride_id,
-                )
-                _offered_ids = set()
+            # failed read is not skipped: continuing without it could admit an
+            # already-offered driver and fail the batch insert, so it raises
+            # into match_driver_to_ride's retry shell (10/30/60 s backoff).
+            _offered_ids: set = await _already_offered_driver_ids(ride_id)
             if _offered_ids:
                 _before_offered = len(all_drivers)
                 all_drivers = [d for d in all_drivers if d["id"] not in _offered_ids]

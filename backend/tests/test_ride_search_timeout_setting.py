@@ -336,10 +336,31 @@ async def test_booking_keeps_default_window_for_scheduled_ride_dispatched_now():
 
     def _scheduled(mock_supabase, _mgr):
         mock_supabase.get_ride = AsyncMock(
-            return_value={**_inserted_ride(), "status": "searching", "is_scheduled": True}
+            return_value={
+                **_inserted_ride(),
+                "status": "searching",
+                "is_scheduled": True,
+                "scheduled_time": "2026-09-25T18:00:00+00:00",
+            }
         )
 
     _result, _sb, _mgr, mock_timeout = await _run_happy_path(mock_overrides=_scheduled)
 
     mock_timeout.assert_called_once()
     assert mock_timeout.call_args.kwargs == {}
+
+
+async def test_booking_treats_is_scheduled_without_a_time_as_on_demand():
+    # Dispatched immediately with no scheduled_time: the stuck-ride sweeper
+    # already uses the on-demand cutoff for it, so the timer must match.
+    from backend.tests.test_create_ride_post_insert_branches import _inserted_ride, _run_happy_path
+
+    def _flag_only(mock_supabase, _mgr):
+        mock_supabase.get_ride = AsyncMock(
+            return_value={**_inserted_ride(), "status": "searching", "is_scheduled": True, "scheduled_time": None}
+        )
+
+    _result, _sb, _mgr, mock_timeout = await _run_happy_path(mock_overrides=_flag_only)
+
+    mock_timeout.assert_called_once()
+    assert mock_timeout.call_args.kwargs == {"timeout_seconds": None}

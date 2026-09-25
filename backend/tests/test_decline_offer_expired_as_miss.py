@@ -195,7 +195,9 @@ async def test_v2_driver_pending_offer_is_left_before_the_v2_decline():
     env.reset_streak.assert_not_awaited()
 
 
-async def test_settings_read_failure_is_treated_as_flag_off():
+async def test_settings_read_failure_returns_503_and_leaves_the_offer():
+    from fastapi import HTTPException
+
     with _Env(
         flag=True,
         pending_offer_rows=[{"id": "offer-1"}],
@@ -203,7 +205,11 @@ async def test_settings_read_failure_is_treated_as_flag_off():
         offer_update_rows=[{"id": "o"}],
         settings_error=RuntimeError("settings unavailable"),
     ) as env:
-        result = await _decline({"reason": "offer_expired"})
+        with pytest.raises(HTTPException) as exc:
+            await _decline({"reason": "offer_expired"})
 
-    assert result == {"success": True}
-    env.reset_streak.assert_awaited_once_with(_DRIVER_ID)
+    # Unknown flag: do not guess "off" — no decline, no streak reset; the
+    # pending offer is left for the server-side expiry.
+    assert exc.value.status_code == 503
+    env.run_sync.assert_not_awaited()
+    env.reset_streak.assert_not_awaited()

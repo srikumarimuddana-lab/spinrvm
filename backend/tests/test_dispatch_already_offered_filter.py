@@ -126,13 +126,16 @@ async def test_no_offer_rows_keeps_the_pool():
     assert ids == {"d1", "d2"}
 
 
-async def test_offer_read_failure_falls_back_to_redis_filter_only():
+async def test_offer_read_failure_stops_the_attempt_before_ranking():
+    # Continuing without the filter could admit an already-offered driver and
+    # fail the batch insert, so a failed read aborts the attempt; the
+    # match_driver_to_ride shell re-arms _dispatch_retry (patched here).
     ids = await _ranked_ids(
         [_driver("d1"), _driver("d2")],
         [],
         offers_error=RuntimeError("db blip"),
     )
-    assert ids == {"d1", "d2"}
+    assert ids == set()
 
 
 async def test_helper_reads_driver_ids_for_the_ride():

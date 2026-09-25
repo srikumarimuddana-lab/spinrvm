@@ -41,7 +41,7 @@ All three now read `settings.ride_search_timeout_seconds` through the cached `ge
 
 **Scheduled rides are unchanged.**
 - `utils/scheduled_rides.py` still calls `ride_search_timeout(ride_id)` with the 300 s default. That path never reads the setting.
-- `booking.py` passes the default, not `None`, when the ride it just dispatched has `is_scheduled`.
+- `booking.py` passes the default, not `None`, when the ride it just dispatched has a `scheduled_time` (keyed on `scheduled_time`, like the sweeper — changed after Codex review on #5776; an `is_scheduled` ride with no time is dispatched immediately and is on-demand for both).
 - Even if `None` reaches the timer for a scheduled ride, its grace after pickup (`scheduled_search_deadline(ride, 300)`) is still 300 s.
 - The sweeper's scheduled branch still requires both `scheduled_time` and `ride_requested_at` to be more than 5 minutes old, as before.
 - `_dispatch_retry`'s scheduled branch (deadline-based) runs before the settings read and does not use it.
@@ -73,7 +73,7 @@ Behaviour to know about:
 - **Mid-session change.** The timer reads the window once, when the ride's task starts. The sweeper reads it on every 60 s sweep, after a cache delay of up to 60 s. Lowering 300 → 180 while rides are searching means the sweeper can cancel those rides at 180 s, before their own 300 s timer fires. Both paths produce the same cancel, and the CAS makes a double cancel impossible.
 - **Window is measured from the first request.** `ride_requested_at` is never reset. A ride that goes back to `searching` after an offer expires or a pre-accept decline is still measured from its first request, as it is today at 300 s.
 - **Timer finds the ride mid-offer.** If the timer fires while the ride is `driver_assigned` (offer pending), it does nothing, as today. The sweeper cancels the ride once it is back in `searching`.
-- **Mismatched flags.** A ride with `scheduled_time` set but `is_scheduled = False` (booked for a time inside the dispatch lead) is treated as on-demand by the timer (setting) and as scheduled by the sweeper (5 minutes). The timer fires first, so the setting wins unless the timer is lost to a restart. This split existed before; only the on-demand value moved.
+- **Timer and sweeper agree on "scheduled".** Both key on `scheduled_time`, so a ride with a time (whatever `is_scheduled` says) keeps the fixed 5-minute window in both, and an `is_scheduled` ride with no time uses the setting in both.
 - **Unique-constraint ceiling.** Covered in section 3: the code clamps to ≤ 300 s so a search never outlives the 300 s offer-skip key.
 
 ## 5. User-experience effect
@@ -130,7 +130,7 @@ async def ride_search_timeout(r_id, timeout_seconds: Optional[int] = 300):
     deadline = scheduled_search_deadline(current_ride or {}, scheduled_grace)
 
 # After — booking.py
-if updated_ride.get("is_scheduled"):
+if updated_ride.get("scheduled_time"):
     _deps.spawn(matching.ride_search_timeout(ride.id))
 else:
     _deps.spawn(matching.ride_search_timeout(ride.id, timeout_seconds=None))

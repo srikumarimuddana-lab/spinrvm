@@ -81,7 +81,7 @@ Larger text would have clipped, so scaling was disabled instead of letting the h
 | `driver-app/components/dashboard/DriverIdlePanel.tsx` | 3 locks → cap; vehicle/plate capped; `hudHeightsFor`; GO/STOP fit | HUD grows with its text |
 | `driver-app/components/dashboard/index.ts` | Re-exports `hudHeightsFor` | Barrel |
 | `driver-app/app/driver/(tabs)/index.tsx` | Map padding via `hudHeightsFor`; 3 locks → cap | Map and HUD agree |
-| `driver-app/__tests__/components/hudHeightsFor.test.ts` | New: 4 tests | Identical at default size, grows, stops at the cap |
+| `driver-app/__tests__/components/DriverIdlePanel.test.tsx` | +4 `hudHeightsFor` tests | Identical at default size, grows, stops at the cap |
 | `driver-app/__tests__/app/driverDashboardScreen.test.tsx` | Barrel mock gains `hudHeightsFor` | Mock mirrors the module surface |
 
 ## 7. Before / after
@@ -108,16 +108,26 @@ outputRange: [hudHeights.collapsed, hudHeights.expanded] // 34 / 90 at 1x
 
 ## 9. Verification performed
 
-- [x] **New tests:** `hudHeightsFor` unit test (4 tests).
+- [x] **New tests:** 4 `hudHeightsFor` tests, added to the existing `DriverIdlePanel.test.tsx`.
 - [x] **Related suites:** 6 suites, 77 tests, including the dashboard screen and DriverIdlePanel suites.
-- [x] **Full driver-app suite:** 172 suites, 2131 tests pass.
+- [x] **Full driver-app suite:** 171 suites, 2131 tests pass.
+- [x] **CI typecheck incident:** the first push put these tests in a *new* file, `hudHeightsFor.test.ts`. That made `yarn tsc --noEmit` report an error in `shared/store/locationStore.ts:121` (`createJSONStorage(() => Platform.OS === 'web' ? localStorage : AsyncStorage)`), a file this PR does not touch. I bisected it to the new file: without it the error disappears, and `main` alone is clean. The tests now live in the existing test file, and `tsc` is clean (0 errors). **Follow-up, not fixed here:** `locationStore.ts`'s storage type inference depends on check order, a latent fragility on `main`. An explicit type on its `createJSONStorage` call would remove it.
 - [x] **Typecheck:** `tsc --noEmit` passes.
 - [x] **Lint:** ESLint on the touched source files matches `main` exactly: 4 errors and 90 warnings, all pre-existing. The new test file is clean.
 - [x] **Per-site analysis before editing:** a read-only pass over each site's container styles supplied the banner and HUD height model.
-- [ ] **Accessibility review:** `spinr-accessibility-reviewer` on the diff is running. The outcome will be recorded before merge.
+- [x] **Accessibility review:** `spinr-accessibility-reviewer` ran on the diff (code-read only).
+  - **Blocker:** none.
+  - **Confirmed:**
+    - hook order is safe (no conditional call precedes either `useWindowDimensions`)
+    - the banner effect only re-runs on a real font-scale change
+    - `pillRow` and `adjustsFontSizeToFit` don't engage at 1× for English
+    - no ride or dispatch logic changed
+  - **Should-fix, both close-margin claims that need a device, kept for the device pass:**
+    - The Spanish "PARAR" at 1× may be wider than the 72 pt circle. It likely overflowed before; it now shrinks to fit. That is a default-size change for `es`, and an improvement.
+    - The 16 dp-per-line HUD model is within about 0.3 dp of estimated Android growth, inside the existing ~4 dp slack.
 
 ## 10. What was NOT verified
 
 - **No device testing.** Nothing was run at a large OS text size; driver-app has no visual tooling. The HUD height model (16 dp per pill text line) is estimated from the styles, not measured.
-- **Needs a person:** a device pass at the largest text size while online and offline (HUD expanded and collapsed), with the connection banner showing, in English and French.
+- **Needs a person:** a device pass at the largest text size while online and offline (HUD expanded and collapsed), with the connection banner showing, in English, French and Spanish. Check the GO/STOP "PARAR" label at 1× too, and on Android especially.
 - **Still to do:** the navigation banner, offer card, SOS, Android Auto, splash and the driver guard test are W1.1b-3.

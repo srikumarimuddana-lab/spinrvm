@@ -170,7 +170,7 @@ All loops are spawned from `backend/core/lifespan.py`. **CODEOWNERS:** only `pay
 
 1. **Name a human per proposed role** — even if one person holds several roles, the point is that each alert and each decision has a recipient. Record it in CODEOWNERS (as individual accounts until teams exist) and in each runbook header. Target: every "unowned" cell in §1–§4 filled within two weeks (`ROADMAP.md` N21).
 2. **Add a loop-owner column to the loop registry** (`background_loop_registry.py`) and route watchdog alerts per owner once `ALERT_WEBHOOK_URL` is confirmed (RR-85, RR-86).
-3. **Give `shared/` logic and Maps & Routing a reviewer** by widening an existing agent's description or adding a narrow one (CARTO-002, CARTO-003).
+3. **Give `shared/` logic and Maps & Routing a reviewer** by widening an existing agent's charter rather than adding new agents — the same two people maintain every agent's config (CARTO-002, CARTO-003; 08-hostile-review §1.8).
 4. **Re-generate this file quarterly** from CODEOWNERS, runbook headers and the loop registry (a script, not hand edits — HIST-005's lesson).
 
 *Written by R20 (W5), 2026-09-25. No code, config or data was changed.*

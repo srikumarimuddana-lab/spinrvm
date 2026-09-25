@@ -27,29 +27,32 @@ except ImportError:
         sys.exit(1)
 
 async def check_user(phone):
-    print(f"Checking user with phone: {phone}")
+    last4 = phone[-4:]
+    print(f"Checking user ending in ***{last4}")
     print(f"Connecting to database with SUPABASE_URL: {os.environ.get('SUPABASE_URL')}")
     
     try:
         user = await db.users.find_one({'phone': phone})
         if not user:
-            print(f"User not found for phone: {phone}")
+            print(f"User not found, ending in ***{last4}")
             return
         
         print(f"User Found:")
         print(f"  ID: {user.get('id')}")
-        print(f"  Phone: {user.get('phone')}")
+        found_last4 = str(user.get("phone") or "")[-4:]
+        print(f"  Number ending in: ***{found_last4}")
         print(f"  Role: {user.get('role')}")
         print(f"  Is Admin? {'YES' if user.get('role') == 'admin' else 'NO'}")
     except Exception as e:
         print(f"Error checking user: {e}")
 
 async def promote_user(phone):
-    print(f"Promoting user with phone: {phone} to admin...")
+    last4 = phone[-4:]
+    print(f"Promoting user ending in ***{last4} to admin...")
     try:
         user = await db.users.find_one({'phone': phone})
         if not user:
-            print(f"User not found for phone: {phone}")
+            print(f"User not found, ending in ***{last4}")
             return
         
         if user.get('role') == 'admin':

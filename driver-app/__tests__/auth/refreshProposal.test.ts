@@ -25,7 +25,9 @@ import {
   refreshProposalFor,
 } from '../../../shared/auth/refreshProposal';
 
-// Expo installs `fetch` as a lazy global; see utils/__tests__/alwaysLocationGate.test.ts.
+// Expo installs `fetch` as a lazy global that loads its code on first read. If
+// nothing here reads it, Jest's post-suite globals cleanup would, outside test
+// scope. Give it a plain value so that can never fail this suite.
 Object.defineProperty(globalThis, 'fetch', { value: jest.fn(), configurable: true, writable: true });
 
 const SHAPE = /^[A-Za-z0-9_-]{64}$/;

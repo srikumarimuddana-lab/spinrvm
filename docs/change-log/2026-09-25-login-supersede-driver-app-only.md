@@ -27,7 +27,7 @@ There is one shared session identity per account.
 
 ## 3. Fix / remediation
 
-All of this sits behind new `settings.login_supersede_driver_app_only_enabled` (migration 472, default **false**, admin-writable). The same migration adds nullable `refresh_tokens.session_id`, so the flag can only be enabled once the column exists.
+All of this sits behind new `settings.login_supersede_driver_app_only_enabled` (migration 474, default **false**, admin-writable). The same migration adds nullable `refresh_tokens.session_id`, so the flag can only be enabled once the column exists.
 
 With the flag on:
 - **Who owns the account's session** (`_login_session_policy`): only a login from the driver app (`X-App-Platform: driver`) writes `users.current_session_id` and signs the account's other devices out. So does a login the driver single-session rollout owns. Rider-app, company-portal and header-less logins do neither. `current_session_id` becomes "the driver's session".
@@ -63,7 +63,7 @@ Nothing changes until the flag is switched on. There is no copy change.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/472_settings_login_supersede_driver_app_only.sql` | Flag column + nullable `refresh_tokens.session_id` | Flag + per-chain session storage, shipped together |
+| `backend/migrations/474_settings_login_supersede_driver_app_only.sql` | Flag column + nullable `refresh_tokens.session_id` | Flag + per-chain session storage, shipped together |
 | `backend/routes/admin/settings.py` | Field on `SettingsUpdateRequest` | Flip via admin API |
 | `backend/tests/test_admin_settings_write_allowlist_drift.py` | Snapshot entry | Drift guard maintenance |
 | `backend/routes/auth.py` | Session policy helpers; four login paths; refresh rotate/recover; logout own-session tombstone | The behaviour change |

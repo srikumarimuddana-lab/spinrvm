@@ -10,6 +10,13 @@ const mockRequireAlways = jest.fn(async () => true);
 const mockCaptureException = jest.fn();
 const mockOpenSettings = jest.fn(() => Promise.resolve());
 
+// expo-modules-core reads Platform.select at import time, so the mock needs a
+// Platform stub (same pattern as hooks/__tests__/goOnlinePermission.test.ts).
+jest.mock('react-native', () => ({
+  Platform: { OS: 'android', select: (o: Record<string, unknown>) => o.android ?? o.native ?? o.default },
+  Linking: { openSettings: () => mockOpenSettings() },
+}));
+
 jest.mock('expo-location', () => ({
   getBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: mockBgPermission })),
 }));
@@ -35,7 +42,6 @@ jest.mock('../../components/AlertDialog', () => {
   };
 });
 
-import { Linking } from 'react-native';
 import { showAlert, hideAlert, useAlertStore } from '../../components/AlertDialog';
 import {
   BACKGROUND_LOCATION_DISCLOSURE,
@@ -56,18 +62,6 @@ function press(text: string) {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-// Real react-native, only openSettings stubbed. A hand-written react-native
-// mock crashed the suite: jest-expo's lazy globals load expo's own runtime,
-// which needs the real Platform and StyleSheet.
-jest.spyOn(Linking, 'openSettings').mockImplementation(() => mockOpenSettings());
-
-// Expo installs `fetch` as a lazy global that loads its implementation on first
-// read. Nothing in this suite reads it, so the first read would be Jest 30's
-// post-suite globals cleanup, which runs outside test scope and fails the whole
-// suite ("import a file outside of the scope of the test code"). jest.setup.js
-// pre-reads the other Expo lazy globals but not fetch, so give it a plain value.
-Object.defineProperty(globalThis, 'fetch', { value: jest.fn(), configurable: true, writable: true });
 
 beforeEach(() => {
   jest.clearAllMocks();

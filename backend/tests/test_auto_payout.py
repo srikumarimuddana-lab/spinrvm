@@ -1373,20 +1373,42 @@ class TestInstantPayoutKillSwitch:
             await _require_instant_payout_enabled({"service_area_id": "sa_001"})
 
     @pytest.mark.anyio
-    async def test_allows_when_no_service_area(self):
+    @pytest.mark.parametrize("sa_id", [None, ""])
+    async def test_blocks_when_no_service_area(self, sa_id):
+        # ROADMAP N22: a driver with no area used to pass straight through,
+        # so a market's kill switch never reached them. Fails closed now,
+        # without a DB read.
         from backend.routes.drivers.payouts import _require_instant_payout_enabled
 
-        await _require_instant_payout_enabled({"service_area_id": None})
+        get_rows = AsyncMock(return_value=[])
+        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", get_rows):
+            with pytest.raises(HTTPException) as exc_info:
+                await _require_instant_payout_enabled({"service_area_id": sa_id})
+        assert exc_info.value.status_code == 403
+        assert "service area" in exc_info.value.detail
+        get_rows.assert_not_awaited()
 
     @pytest.mark.anyio
-    async def test_allows_when_service_area_missing_from_db(self):
+    async def test_blocks_when_service_area_missing_from_db(self):
+        # A driver can write any service_area_id via PUT /drivers/me; an id
+        # that resolves to no row must not bypass the switch either.
         from backend.routes.drivers.payouts import _require_instant_payout_enabled
 
         async def mock_get_rows(table, filters, **kw):
             return []
 
         with patch("backend.routes.drivers.payouts.db_supabase.get_rows", side_effect=mock_get_rows):
-            await _require_instant_payout_enabled({"service_area_id": "sa_missing"})
+            with pytest.raises(HTTPException) as exc_info:
+                await _require_instant_payout_enabled({"service_area_id": "sa_missing"})
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_returns_service_area_row_when_enabled(self):
+        from backend.routes.drivers.payouts import _require_instant_payout_enabled
+
+        row = {"id": "sa_001", "instant_payout_enabled": True, "timezone": "America/Regina"}
+        with patch("backend.routes.drivers.payouts.db_supabase.get_rows", AsyncMock(return_value=[row])):
+            assert await _require_instant_payout_enabled({"service_area_id": "sa_001"}) == row
 
     @pytest.mark.anyio
     async def test_endpoint_wires_the_gate(self):

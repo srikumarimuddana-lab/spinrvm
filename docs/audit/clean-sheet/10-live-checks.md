@@ -136,4 +136,14 @@ The repo now has 560 migration files (main at `9e27915`); production's `schema_m
 
 **Semgrep: public rule packs (`p/python`, `p/typescript`, `p/secrets`, `p/owasp-top-ten`) did not run.** The sandbox's network proxy blocks `semgrep.dev`, where the packs are downloaded. This half is still **NOT VERIFIED here**. CI runs it on every PR, so its results are in the GitHub Security tab.
 
-**Backend tests:** the run was still in progress when this section was first committed. Its results follow in the next commit.
+**Backend test suite.** Run once in the sandbox on `main` at `9e27915`, with `pytest -m "not slow"` (24 minutes):
+
+| Result | Count | Reading |
+|---|---|---|
+| Passed | 16,334 | |
+| Skipped / deselected / xfail | 211 / 554 / 1 | `slow`-marked tests excluded on purpose |
+| Errors | 411 | **Environment, not code.** All are in `tests/rls/`, which needs a real Postgres (`TEST_DATABASE_URL`). CLAUDE.md says to run it separately with `-c /dev/null --confcutdir=tests/rls`; run inside the main suite, these tests error instead of self-skipping. Not verified here: the RLS tier itself. |
+| **Failed** | **6** | **QUAL-005 (MEDIUM), new: order-dependent test failures on the login path.** All 6 are in `tests/test_verify_otp_login_flow.py` (existing-user login, new-device check, guest-flag clear, session-update failure, missing consent, and delete-after-verify fallback). **The same file passes 21 of 21 when run alone**, so an earlier test leaks state into it (a module-level patch or a cached settings or driver-session stub). A leak like this can hide a real login regression or invent one. Fix: find the leaking test (bisect with `pytest -p no:randomly` and `--lf`), and make the fixture restore what it patches. |
+| Backend line coverage | 87% (68,354 statements) | Above the 60% gate in `pytest.ini`. |
+
+This replaces the audit's earlier "no test suite run" statement for the backend unit/integration tier. The admin-dashboard, rider-app and driver-app suites were **not** run.

@@ -100,7 +100,7 @@ The full list, with options and who can answer each, is in [`05-escalations.md`]
   - the public Semgrep rule packs (the sandbox proxy blocks their download; CI runs them).
 
   *Closed by the follow-up checks (`10-live-checks.md` §6):* all untracked migrations (39 applied, 467 pending, and one tracked file missing from the repo), Railway health and region (US), a local Semgrep run of Spinr's rules, and a local backend test run.
-- **Execution.** No test suite run, no load test and no Semgrep run. The only execution was a test-collection count.
+- **Execution.** No load test. The backend suite and Spinr's Semgrep rules were run once on 2026-09-25 ([`10-live-checks.md`](10-live-checks.md) §6.3): 16,334 passed, 6 order-dependent failures on the login tests (QUAL-005), 411 environment errors in the Postgres-only RLS tier, and 87% line coverage. The web and mobile test suites were not run.
 - **The rider and driver apps.** They have no screenshot tooling, so every app claim is reasoned from code.
 - **Tax, legal and regulatory.** Government sites were unreachable, so every such claim is labelled assumed.
 - **Competitors.** Uber and Lyft claims come from their public help pages. The local taxi comparison is assumed.

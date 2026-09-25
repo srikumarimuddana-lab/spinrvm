@@ -4,7 +4,8 @@
 > linkable reference page — the thing a rider actually searches for
 > mid-dispute ("why was I charged a cancellation fee") shouldn't require
 > re-reading the full Terms of Service. Meant to be linked directly from the
-> receipt/dispute flow, not just reachable through the Legal menu.
+> receipt, not just reachable through the Legal menu. (There is no in-app
+> dispute flow: in-app disputes were disabled 2026-09-25.)
 >
 > **This is a draft, not legal advice.** The specific dollar amounts and
 > time windows below are placeholders — they are pricing/product decisions,
@@ -69,9 +70,10 @@ driver is offered, as described in the Independent Contractor Agreement.
 
 DISPUTING A CANCELLATION OR NO-SHOW FEE
 
-If you believe a cancellation or no-show fee was charged in error, contact
-Support through the app within 60 days of the charge. Spinr will review the
-trip's timeline and issue a refund where the fee was applied incorrectly.
+If you believe a cancellation or no-show fee was charged in error, let us
+know within 60 days of the charge. Questions about a charge? Email
+support@spinr.ca, or contact your card issuer. Spinr will review the trip's
+timeline and issue a refund where the fee was applied incorrectly.
 
 ## END DRAFT
 
@@ -99,14 +101,14 @@ trip's timeline and issue a refund where the fee was applied incorrectly.
    override it, matching how the fee-split paragraph is phrased.
 3. **Still open — genuinely unverified**: the dispute-window figure above
    was set to 60 days as a reasonable, disclosed default at publication
-   time (2026-08-21), not derived from any enforced backend cutoff.
-   `backend/routes/disputes.py`'s `create_dispute()` has no time-based
-   cutoff at all — it only checks the ride is completed/cancelled and that
-   no other dispute is already open on that ride. Either product/fare-config
-   should confirm 60 days is the intended figure, or the backend should
-   actually enforce a window matching this page — until then, "Support
-   through the app within 60 days" is a stated policy the backend does not
-   yet technically enforce, tracked in `legal-text-publication-checklist.md`.
+   time (2026-08-21), not derived from any enforced backend cutoff. Since
+   2026-09-25 there is no in-app dispute flow at all (`POST /disputes`
+   answers 410; see `docs/change-log/2026-09-25-disable-in-app-disputes.md`):
+   the published text now reads "Questions about a charge? Email
+   support@spinr.ca, or contact your card issuer." An email becomes a Zoho
+   Desk ticket, so the 60-day window is a support-handling policy with no
+   technical enforcement. Product/fare-config should still confirm 60 days
+   is the intended figure, tracked in `legal-text-publication-checklist.md`.
 4. Confirm this doesn't duplicate content already correct in
    `docs/legal/terms-of-service.md` §5 in a way that could drift out of
    sync — consider this page authoritative on specifics, and simplify §5 in

@@ -258,7 +258,27 @@ async def admin_get_chargebacks(
     return result
 
 
+# In-app disputes are disabled (owner decision 2026-09-25): existing
+# `disputes` rows are a read-only historical view (GET list/stats/detail
+# above and below stay). Creating or editing a dispute answers 410, and the
+# old hard DELETE is gone entirely -- dispute records fall under the 7-year
+# financial retention rule. Card-network chargebacks (/disputes/chargebacks,
+# stripe_disputes) are untouched. The original create/update handlers stay
+# undecorated (not routed) until the follow-up cleanup PR. See
+# docs/change-log/2026-09-25-disable-in-app-disputes.md.
+_DISPUTE_WRITES_DISABLED_DETAIL = (
+    "In-app disputes are disabled; existing dispute records are read-only. "
+    "Issue any refund in the Stripe Dashboard. Bank chargebacks are on the Chargebacks tab."
+)
+
+
 @router.post("/disputes")
+async def admin_create_dispute_disabled():
+    """In-app disputes are disabled: always 410, nothing is written."""
+    raise HTTPException(status_code=410, detail=_DISPUTE_WRITES_DISABLED_DETAIL)
+
+
+# Not routed (see the note above admin_create_dispute_disabled); kept for the cleanup PR.
 async def admin_create_dispute(dispute: DisputeCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a dispute manually from admin."""
     doc = {
@@ -293,6 +313,12 @@ async def admin_get_dispute_details(dispute_id: str):
 
 
 @router.put("/disputes/{dispute_id}")
+async def admin_update_dispute_disabled(dispute_id: str):
+    """In-app disputes are disabled: always 410, nothing is written."""
+    raise HTTPException(status_code=410, detail=_DISPUTE_WRITES_DISABLED_DETAIL)
+
+
+# Not routed (see the note above admin_create_dispute_disabled); kept for the cleanup PR.
 async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update a dispute."""
     updates: Dict[str, Any] = {}
@@ -326,12 +352,8 @@ async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, a
 # payload was silently ignored. Removed 2026-09-25 (N23).
 
 
-@router.delete("/disputes/{dispute_id}")
-async def admin_delete_dispute(dispute_id: str, admin: dict = Depends(get_admin_user)):
-    """Delete a dispute."""
-    await db_supabase.delete_many("disputes", {"id": dispute_id})
-    await log_admin_action(admin, "dispute_deleted", "disputes", dispute_id, {})
-    return {"message": "Dispute deleted"}
+# DELETE /disputes/{dispute_id} was removed 2026-09-25: it hard-deleted a
+# financial record, which the 7-year retention rule forbids. No replacement.
 
 
 # ---------- Support Tickets ----------

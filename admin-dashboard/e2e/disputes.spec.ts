@@ -1,80 +1,49 @@
 /**
- * Admin dashboard E2E — /dashboard/disputes interaction coverage.
- * Drives status tabs, refresh, row-click-to-resolve-panel, and the
- * refund/note inputs. All network calls mocked — no live backend.
+ * Admin dashboard E2E — /dashboard/disputes after in-app disputes were
+ * disabled (2026-09-25). The page shows card-network chargebacks only:
+ * no "Rider Disputes" tab, no resolve/refund dialog. All network calls
+ * mocked — no live backend.
  */
 import { test, expect } from '@playwright/test';
 import { setupAdminMocks } from './admin-mocks';
 
-const MOCK_DISPUTE = {
-  id: 'dispute_e2e_1',
-  user_name: 'Jane Rider',
-  user_phone: '+13065550100',
-  reason: 'overcharge',
-  original_fare: 25.0,
-  requested_amount: 10.0,
-  status: 'open',
-  created_at: '2026-07-20T10:00:00Z',
+const MOCK_CHARGEBACK = {
+  id: 'cb_e2e_1',
+  stripe_dispute_id: 'dp_e2e_1',
   ride_id: 'ride_e2e_1',
+  ride_code: 'RIDE-E2E-1',
+  amount_cents: 2500,
+  reason: 'fraudulent',
+  status: 'needs_response',
+  evidence_due_by: '2026-10-05T00:00:00Z',
+  evidence_submitted_at: null,
+  days_remaining: 10,
+  created_at: '2026-09-20T10:00:00Z',
+  updated_at: '2026-09-20T10:00:00Z',
 };
 
-const MOCK_STATS = { open: 1, under_review: 0, resolved: 0, rejected: 0, total_refunded: 0 };
-
-async function mockDisputes(page: any) {
+async function mockChargebacks(page: any) {
   await setupAdminMocks(page, {
     extra: async (route, url, method, json) => {
-      if (url.includes('/disputes/stats')) return json(200, MOCK_STATS);
-      if (method === 'PUT' && url.includes('/disputes/')) return json(200, { success: true });
-      if (url.includes('/disputes')) return json(200, [MOCK_DISPUTE]);
+      if (url.includes('/disputes/chargebacks')) return json(200, [MOCK_CHARGEBACK]);
+      if (url.includes('/disputes')) return json(200, []);
       return null;
     },
   });
 }
 
-test.describe('admin dashboard: disputes — interaction', () => {
-  test('page loads and renders a dispute row', async ({ page }) => {
-    await mockDisputes(page);
+test.describe('admin dashboard: disputes page — chargebacks only', () => {
+  test('page loads and renders a chargeback row', async ({ page }) => {
+    await mockChargebacks(page);
     await page.goto('/dashboard/disputes');
-    await expect(page.getByText('Jane Rider')).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText('RIDE-E2E-1')).toBeVisible({ timeout: 20000 });
   });
 
-  test('status filter tabs switch without crashing', async ({ page }) => {
-    await mockDisputes(page);
+  test('no Rider Disputes tab and no Resolve action', async ({ page }) => {
+    await mockChargebacks(page);
     await page.goto('/dashboard/disputes');
-    await expect(page.getByText('Jane Rider')).toBeVisible({ timeout: 20000 });
-    await page.getByRole('button', { name: /^open$/i }).click();
-    await expect(page.locator('body')).toBeVisible();
-  });
-
-  test('refresh button is clickable', async ({ page }) => {
-    await mockDisputes(page);
-    await page.goto('/dashboard/disputes');
-    const refreshBtn = page.getByRole('button', { name: /refresh/i });
-    await expect(refreshBtn).toBeVisible({ timeout: 20000 });
-    await refreshBtn.click();
-    await expect(page.locator('body')).toBeVisible();
-  });
-
-  test('Resolve button opens the resolution panel with refund/note inputs', async ({ page }) => {
-    await mockDisputes(page);
-    await page.goto('/dashboard/disputes');
-    await expect(page.getByText('Jane Rider')).toBeVisible({ timeout: 20000 });
-    // exact: true — the status-filter tab row also renders a "Resolved" button.
-    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
-    const noteInput = page.getByPlaceholder(/Internal note about this resolution/i);
-    await expect(noteInput).toBeVisible({ timeout: 10000 });
-    await noteInput.fill('Refund approved per policy');
-    await expect(noteInput).toHaveValue('Refund approved per policy');
-  });
-
-  test('resolution panel Cancel button closes it', async ({ page }) => {
-    await mockDisputes(page);
-    await page.goto('/dashboard/disputes');
-    // exact: true — the status-filter tab row also renders a "Resolved" button.
-    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
-    const noteInput = page.getByPlaceholder(/Internal note about this resolution/i);
-    await expect(noteInput).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: /^cancel$/i }).click();
-    await expect(noteInput).not.toBeVisible();
+    await expect(page.getByText('RIDE-E2E-1')).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText('Rider Disputes')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Resolve', exact: true })).toHaveCount(0);
   });
 });

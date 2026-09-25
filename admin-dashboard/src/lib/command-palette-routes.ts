@@ -57,7 +57,7 @@ export const COMMAND_PALETTE_ROUTES: CommandPaletteRoute[] = [
 
     { href: "/dashboard/support", label: "Support & Issues", group: "Support", module: "support" },
     { href: "/dashboard/support?tab=tickets", label: "Support & Issues → Support Tickets", group: "Support", module: "support" },
-    { href: "/dashboard/support?tab=disputes", label: "Support & Issues → Disputes & Refunds", group: "Support", module: "support" },
+    { href: "/dashboard/support?tab=disputes", label: "Support & Issues → Chargebacks", group: "Support", module: "support" },
     { href: "/dashboard/support?tab=complaints", label: "Support & Issues → Complaints", group: "Support", module: "support" },
     { href: "/dashboard/support?tab=lost-found", label: "Support & Issues → Lost & Found", group: "Support", module: "support" },
     { href: "/dashboard/support?tab=flags", label: "Support & Issues → Flags", group: "Support", module: "support" },

@@ -5,6 +5,7 @@ Credentials are read from DB settings (passed in by caller), not env vars.
 """
 
 import asyncio
+import contextvars
 
 from loguru import logger
 
@@ -115,8 +116,14 @@ async def _send_sms_on(
         # doesn't catch still can't block the caller forever. run_in_executor
         # raises ExecutorSaturated synchronously when the pool is full; a
         # still-queued send whose wait times out is cancelled and never runs.
+        # Run inside a copy of the caller's context, as asyncio.to_thread did:
+        # Sentry's default stdlib/threading integrations read the current
+        # scope/span from contextvars when instrumenting the Twilio HTTP call,
+        # and pool threads would otherwise see whichever request's context
+        # was live when the thread was first spawned.
         loop = asyncio.get_running_loop()
-        sid = await asyncio.wait_for(loop.run_in_executor(executor, _send), timeout=_TWILIO_THREAD_TIMEOUT_S)
+        ctx = contextvars.copy_context()
+        sid = await asyncio.wait_for(loop.run_in_executor(executor, ctx.run, _send), timeout=_TWILIO_THREAD_TIMEOUT_S)
         logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
         return {"success": True, "provider": "twilio", "sid": sid}
     except ExecutorSaturated:

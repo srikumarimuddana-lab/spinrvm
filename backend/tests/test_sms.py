@@ -4,6 +4,7 @@ Tests cover OTP SMS sending, general SMS, and Twilio integration.
 """
 
 import asyncio
+import contextvars
 import importlib
 import os
 import sys
@@ -222,6 +223,28 @@ class TestSMSBoundedExecutor:
         assert general_name.startswith("spinr-sms_"), general_name
         assert otp_name.startswith("spinr-sms-otp_"), otp_name
         assert sos_name.startswith("spinr-sms-sos_"), sos_name
+
+    @pytest.mark.asyncio
+    async def test_caller_contextvars_are_visible_inside_send(self):
+        """asyncio.to_thread copied the caller's context into the worker
+        thread (Sentry scope/span, request_id, deadline); the bounded pools
+        must too, or the Twilio HTTP span attaches to a stale request."""
+        import backend.sms_service as sms_mod
+
+        marker = contextvars.ContextVar("sms_test_marker", default="unset")
+        seen = []
+
+        def _create(**_kwargs):
+            seen.append(marker.get())
+            return MagicMock(sid="SM1")
+
+        with patch("twilio.http.http_client.TwilioHttpClient"), patch("twilio.rest.Client") as mock_client_cls:
+            mock_client_cls.return_value.messages.create.side_effect = _create
+            for i, send in enumerate((sms_mod.send_sms, sms_mod.send_sos_sms, sms_mod.send_sms)):
+                marker.set(f"request-{i}")
+                assert (await send("+13065551234", "hi", **_TWILIO_KW))["success"] is True
+
+        assert seen == ["request-0", "request-1", "request-2"]
 
     @pytest.mark.asyncio
     async def test_saturated_pool_fails_fast_and_default_executor_stays_free(self):

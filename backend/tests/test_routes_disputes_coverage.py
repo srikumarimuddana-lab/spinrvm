@@ -82,7 +82,9 @@ def _patch_disputes(**overrides):
         "backend.routes.disputes.db_supabase.update_one": AsyncMock(return_value={"id": "disp_1"}),
         "backend.routes.disputes.send_push_notification": AsyncMock(),
         "backend.routes.disputes.log_admin_action": AsyncMock(),
-        "backend.routes.disputes.get_app_settings": AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        "backend.routes.disputes.get_app_settings": AsyncMock(
+            return_value={"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": True}
+        ),
         "backend.routes.disputes.create_ticket_for_dispute": AsyncMock(),
     }
     defaults.update(overrides)
@@ -303,7 +305,9 @@ async def test_resolve_dispute_stripe_not_configured():
             dispute=dispute,
             ride=ride,
             extra_patches={
-                "backend.routes.disputes.get_app_settings": AsyncMock(return_value={"stripe_secret_key": ""})
+                "backend.routes.disputes.get_app_settings": AsyncMock(
+                    return_value={"stripe_secret_key": "", "admin_dispute_refunds_enabled": True}
+                )
             },
         )
     assert exc_info.value.status_code == 503
@@ -455,10 +459,14 @@ async def test_open_dispute_by_other_party_does_not_block_claimant(claimant, oth
             return [existing] if filters.get("user_id", other) == other else []
         raise AssertionError(table)
 
-    with _MultiPatch(_patch_disputes(**{
-        "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=ride),
-        "backend.routes.disputes.db_supabase.get_rows": AsyncMock(side_effect=rows),
-    })):
+    with _MultiPatch(
+        _patch_disputes(
+            **{
+                "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=ride),
+                "backend.routes.disputes.db_supabase.get_rows": AsyncMock(side_effect=rows),
+            }
+        )
+    ):
         result = await create_dispute(
             CreateDisputeRequest(ride_id="ride_1", reason="payment_error", description="Review charge"),
             current_user={"id": claimant},
@@ -470,10 +478,14 @@ async def test_open_dispute_by_other_party_does_not_block_claimant(claimant, oth
 async def test_open_dispute_by_same_claimant_still_blocks_duplicate():
     from fastapi import HTTPException
 
-    with _MultiPatch(_patch_disputes(**{
-        "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=dict(RIDE_ROW)),
-        "backend.routes.disputes.db_supabase.get_rows": AsyncMock(return_value=[dict(DISPUTE_ROW)]),
-    })):
+    with _MultiPatch(
+        _patch_disputes(
+            **{
+                "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=dict(RIDE_ROW)),
+                "backend.routes.disputes.db_supabase.get_rows": AsyncMock(return_value=[dict(DISPUTE_ROW)]),
+            }
+        )
+    ):
         with pytest.raises(HTTPException) as error:
             await create_dispute(
                 CreateDisputeRequest(ride_id="ride_1", reason="payment_error", description="Review charge"),

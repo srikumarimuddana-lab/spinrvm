@@ -28,6 +28,7 @@ import { formatDate } from "@/lib/utils";
 import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
 import { getPartialRefundError } from "@/lib/disputeResolutionSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 import ChargebacksTab from "./chargebacks-tab";
 
 // dark:text-[#ff453a] on "open" — text-destructive alone is only 3.7:1 on
@@ -61,6 +62,7 @@ interface DisputeStats {
 
 export default function DisputesPage() {
   const { allowed } = useRequireModule("support");
+  const { toast } = useToast();
   const [disputes, setDisputes] = useState<any[]>([]);
   const [stats, setStats] = useState<DisputeStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,11 +127,22 @@ export default function DisputesPage() {
 
   const refresh = () => { fetchDisputes(); fetchStats(); };
 
+  // N23: "Approve Full Refund" used to send no refund_amount, so the backend
+  // never refunded. Pre-fill the dispute's original fare (visible, editable)
+  // so a full approval sends a real amount.
+  const openResolve = (d: any) => {
+    setSelected(d);
+    setResolution("approved");
+    setRefundAmount(Number(d.original_fare) > 0 ? Number(d.original_fare).toFixed(2) : "");
+    setResolveError(null);
+  };
+
   const handleResolve = async () => {
     if (!selected) return;
     setResolveError(null);
 
-    if (resolution === "partial_refund") {
+    const refunding = resolution === "approved" || resolution === "partial_refund";
+    if (refunding) {
       const originalFareAmount = Number(selected.original_fare || 0);
       const error = getPartialRefundError(refundAmount, originalFareAmount);
       if (error) {
@@ -140,11 +153,21 @@ export default function DisputesPage() {
 
     setResolving(true);
     try {
-      await resolveDispute(selected.id, {
+      const result = await resolveDispute(selected.id, {
         resolution,
-        refund_amount: refundAmount ? Number(refundAmount) : undefined,
+        refund_amount: refunding && refundAmount ? Number(refundAmount) : undefined,
         admin_note: adminNote || undefined,
       });
+      // N23: with admin_dispute_refunds_enabled off (or a failed Stripe
+      // refund) the dispute is resolved but no money moves. Say so instead of
+      // closing the dialog as if the refund went through.
+      if (result?.refund_issued === false && (resolution === "approved" || resolution === "partial_refund")) {
+        toast({
+          title: "Dispute resolved, no refund issued",
+          description: result?.message || "No refund was issued. Issue the refund manually in Stripe.",
+          variant: "destructive",
+        });
+      }
       setSelected(null);
       setResolution("approved");
       setRefundAmount("");
@@ -242,7 +265,7 @@ export default function DisputesPage() {
                   {sortedDisputes.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No disputes found</TableCell></TableRow>
                   ) : sortedDisputes.map((d: any) => (
-                    <ClickableTableRow key={d.id} className="hover:bg-muted/50" onActivate={() => setSelected(d)} ariaLabel={`${d.user_name || "Unknown"}, ${REASON_LABELS[d.reason] || d.reason}, ${d.status}`}>
+                    <ClickableTableRow key={d.id} className="hover:bg-muted/50" onActivate={() => openResolve(d)} ariaLabel={`${d.user_name || "Unknown"}, ${REASON_LABELS[d.reason] || d.reason}, ${d.status}`}>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <User className="h-4 w-4 text-muted-foreground" />
@@ -263,7 +286,7 @@ export default function DisputesPage() {
                       <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
                       <TableCell>
                         {d.status === "open" || d.status === "under_review" ? (
-                          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelected(d); }}>
+                          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openResolve(d); }}>
                             Resolve
                           </Button>
                         ) : (
@@ -334,7 +357,7 @@ export default function DisputesPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  {resolution === "partial_refund" && (
+                  {(resolution === "approved" || resolution === "partial_refund") && (
                     <div>
                       <Label htmlFor="dispute-refund-amount">Refund Amount ($)</Label>
                       <Input id="dispute-refund-amount" type="number" step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)} placeholder={String(selected.requested_amount || 0)} />

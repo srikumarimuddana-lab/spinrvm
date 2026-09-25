@@ -191,14 +191,83 @@ def test_update_dispute_with_fields(client, _set_admin, monkeypatch):
     assert m.log_admin_action.call_args.args[1] == "dispute_updated"
 
 
-def test_resolve_dispute(client, _set_admin, monkeypatch):
+def _patch_dispute_resolve(monkeypatch, *, refunds_enabled):
+    """Stub routes/disputes.py's dependencies for an HTTP resolve call."""
+    import routes.disputes as d
+    import services.admin_money_caps as caps
+
+    dispute = {"id": "d1", "ride_id": "ride-1", "user_id": "rider-1", "status": "open", "original_fare": 25.00}
+
+    async def get_rows(table, filters=None, **kwargs):
+        assert table == "disputes", table
+        return [dict(dispute)]
+
     update_one = AsyncMock()
-    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
-    resp = client.put("/api/admin/disputes/d1/resolve", json={"status": "resolved", "notes": "ok"})
-    assert resp.status_code == 200
+    monkeypatch.setattr(d.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(
+        d.db_supabase,
+        "get_ride",
+        AsyncMock(return_value={"id": "ride-1", "rider_id": "rider-1", "stripe_charge_id": "pi_1"}),
+    )
+    monkeypatch.setattr(d.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(
+        d,
+        "get_app_settings",
+        AsyncMock(return_value={"stripe_secret_key": "sk_test_x", "admin_dispute_refunds_enabled": refunds_enabled}),
+    )
+    monkeypatch.setattr(d, "log_admin_action", AsyncMock())
+    monkeypatch.setattr(d, "send_push_notification", AsyncMock())
+    monkeypatch.setattr(caps, "get_app_settings", AsyncMock(return_value={}))
+    return update_one
+
+
+# The admin dashboard's exact payload (admin-dashboard/src/lib/api/analytics-payouts.ts resolveDispute).
+_DASHBOARD_RESOLVE = {"resolution": "approved", "refund_amount": 10, "admin_note": "goodwill"}
+
+
+def test_resolve_route_is_served_by_disputes_py(client, _set_admin, monkeypatch):
+    """N23: a duplicate PUT /disputes/{id}/resolve in support.py used to be
+    registered first and shadow routes/disputes.py, silently ignoring the
+    dashboard's resolution/refund_amount. The real app must now route the
+    dashboard payload to routes/disputes.py's handler."""
+    from unittest.mock import MagicMock, patch
+
+    update_one = _patch_dispute_resolve(monkeypatch, refunds_enabled=True)
+    refund_create = MagicMock(return_value=MagicMock(status="succeeded", id="re_1"))
+    with patch("stripe.Refund.create", refund_create):
+        resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["refund_issued"] is True and body["refund"]["refund_id"] == "re_1"
+    assert refund_create.call_args.kwargs["amount"] == 1000
     updates = update_one.call_args.args[2]
-    assert updates["resolution_status"] == "resolved"
+    assert updates["resolution"] == "approved" and updates["status"] == "resolved"
     assert updates["resolved_by"] == "admin-1"
+    assert "resolution_status" not in updates  # the old support.py write
+
+
+def test_resolve_route_flag_off_records_without_refund(client, _set_admin, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    _patch_dispute_resolve(monkeypatch, refunds_enabled=False)
+    refund_create = MagicMock()
+    with patch("stripe.Refund.create", refund_create):
+        resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["refund_issued"] is False
+    refund_create.assert_not_called()
+
+
+@pytest.mark.parametrize(("modules", "status"), [(["support"], 403), (["disputes"], 200)])
+def test_resolve_route_now_requires_disputes_module(client, app_fixture, monkeypatch, modules, status):
+    """Permission change: the route used to be gated by require_module("support")
+    (support.py's router); it is now require_module("disputes")."""
+    from dependencies import get_admin_user
+
+    _patch_dispute_resolve(monkeypatch, refunds_enabled=False)
+    app_fixture.dependency_overrides[get_admin_user] = lambda: {"id": "admin-2", "role": "admin", "modules": modules}
+    resp = client.put("/api/admin/disputes/d1/resolve", json=_DASHBOARD_RESOLVE)
+    assert resp.status_code == status, resp.text
 
 
 def test_delete_dispute(client, _set_admin, monkeypatch):

@@ -267,6 +267,8 @@ jest.mock('../../components/panels/RideOfferPanel', () => ({
 jest.mock('../../components/dashboard', () => {
   const { View, TouchableOpacity: RNTouchableOpacity, Text: RNText } = require('react-native');
   return {
+    // Real module sizes at the default text size (DriverIdlePanel.hudHeightsFor).
+    hudHeightsFor: () => ({ expanded: 90, collapsed: 34 }),
     DriverTopBar: (props: any) => <RNText accessibilityLabel="top-bar">{`unread:${props.unreadNotifCount}`}</RNText>,
     DriverIdlePanel: (props: any) => (
       <RNTouchableOpacity accessibilityLabel="idle-toggle" onPress={props.onToggleOnline}>

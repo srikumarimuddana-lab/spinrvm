@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { View, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions, useWindowDimensions } from 'react-native';
 import { Text } from '@shared/components/Text';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -15,8 +15,7 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
-  HUD_EXPANDED_HEIGHT_DP,
-  HUD_COLLAPSED_HEIGHT_DP,
+  hudHeightsFor,
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
@@ -50,7 +49,7 @@ import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
 import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
 import { DestinationModeBanner } from '../../../components/DestinationModeBanner';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import { useNotifications } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -87,6 +86,9 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 function DriverDashboard() {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  // Idle hud height follows the OS text size; the map reserves the same space.
+  const { fontScale } = useWindowDimensions();
+  const idleHudHeights = hudHeightsFor(fontScale);
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   // Home is a navigation root: the Android back button must background the app,
@@ -1350,7 +1352,7 @@ function DriverDashboard() {
       {/* WS server error banner — non-blocking, clears on next good message */}
       {wsError && (
         <View style={styles.wsErrorBanner}>
-          <Text style={styles.wsErrorText} allowFontScaling={false}>{wsError}</Text>
+          <Text style={styles.wsErrorText} maxFontSizeMultiplier={MAX_FONT_SCALE}>{wsError}</Text>
         </View>
       )}
 
@@ -1416,7 +1418,7 @@ function DriverDashboard() {
                 top: 0, right: 0, left: 0,
                 bottom:
                   IDLE_PANEL_BASE_HEIGHT_DP +
-                  (idleHudExpanded ? HUD_EXPANDED_HEIGHT_DP : HUD_COLLAPSED_HEIGHT_DP) +
+                  (idleHudExpanded ? idleHudHeights.expanded : idleHudHeights.collapsed) +
                   insets.bottom,
               }
             : rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress'
@@ -1908,10 +1910,10 @@ function DriverDashboard() {
           the next fix happens to arrive. See locationDisplayGate.ts. */}
       {isOnline && (
         <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
-          <Text style={styles.speedChipValue} allowFontScaling={false}>
+          <Text style={styles.speedChipValue} maxFontSizeMultiplier={MAX_FONT_SCALE}>
             {displaySpeedKmh(location.coords.speed, location.timestamp, Date.now())}
           </Text>
-          <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
+          <Text style={styles.speedChipUnit} maxFontSizeMultiplier={MAX_FONT_SCALE}>km/h</Text>
         </View>
       )}
 

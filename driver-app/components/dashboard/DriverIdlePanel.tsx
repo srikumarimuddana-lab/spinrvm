@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Animated, Platform, useWindowDimensions } from 'react-native';
 import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,7 +10,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
-import { SPACING, FONT } from '@shared/utils/responsive';
+import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useReduceMotion } from '@shared/hooks/useReduceMotion';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -37,6 +37,19 @@ const HUD_RE_COLLAPSE_MS = 2_500;
 export const HUD_EXPANDED_HEIGHT_DP = 90;
 // Collapsed ≈ one compact pill row.
 export const HUD_COLLAPSED_HEIGHT_DP = 34;
+// The heights above hold at the default OS text size. Each pill holds one
+// ~16dp text line, which grows with the OS text size (capped at
+// MAX_FONT_SCALE); the rest (padding, margin) is fixed. Use this, not the raw
+// constants, wherever the hud's height is needed, so the panel and the map
+// padding agree. Identical to the constants at a font scale of 1 or less.
+const HUD_TEXT_LINE_DP = 16;
+export function hudHeightsFor(fontScale: number): { expanded: number; collapsed: number } {
+  const extra = Math.max(0, Math.min(fontScale, MAX_FONT_SCALE) - 1);
+  return {
+    expanded: HUD_EXPANDED_HEIGHT_DP + Math.ceil(2 * HUD_TEXT_LINE_DP * extra),
+    collapsed: HUD_COLLAPSED_HEIGHT_DP + Math.ceil(HUD_TEXT_LINE_DP * extra),
+  };
+}
 
 interface IdlePanelProps {
   isOnline: boolean;
@@ -101,8 +114,10 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   // Precomputed once here (with the required disable comments) so the JSX
   // below reads plain interpolation values instead of touching the ref
   // itself at each usage site.
+  const { fontScale } = useWindowDimensions();
+  const hudHeights = hudHeightsFor(fontScale);
   // eslint-disable-next-line react-hooks/refs
-  const hudHeight = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [HUD_COLLAPSED_HEIGHT_DP, HUD_EXPANDED_HEIGHT_DP] });
+  const hudHeight = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [hudHeights.collapsed, hudHeights.expanded] });
   // eslint-disable-next-line react-hooks/refs
   const hudMarginBottom = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 20] });
   const fullContentOpacity = hudAnim;
@@ -237,10 +252,10 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
           {vehicleLine ? (
             <View style={styles.vehiclePill}>
               <Ionicons name="car-outline" size={14} color={colors.textSecondary} />
-              <Text style={styles.vehiclePillText} numberOfLines={1}>{vehicleLine}</Text>
+              <Text style={styles.vehiclePillText} numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE}>{vehicleLine}</Text>
               {driver?.license_plate ? (
                 <View style={styles.plateBadge}>
-                  <Text style={styles.plateBadgeText}>{driver.license_plate.toUpperCase()}</Text>
+                  <Text style={styles.plateBadgeText} maxFontSizeMultiplier={MAX_FONT_SCALE}>{driver.license_plate.toUpperCase()}</Text>
                 </View>
               ) : null}
             </View>
@@ -250,12 +265,12 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             {isOnline ? (
               <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.youreOnline')}>
                 <View style={styles.onlineDot} />
-                <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
               </View>
             ) : (
               <View style={styles.statusPillOffline} accessibilityRole="text" accessibilityLabel={t('home.offline')}>
                 <View style={styles.offlineDot} />
-                <Text allowFontScaling={false} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
+                <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
               </View>
             )}
           </View>
@@ -280,7 +295,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             accessibilityHint="Tap to show vehicle details"
           >
             <View style={styles.onlineDot} />
-            <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
+            <Text maxFontSizeMultiplier={MAX_FONT_SCALE} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
             <Ionicons name="chevron-down" size={12} color={colors.success} />
           </TouchableOpacity>
         </Animated.View>
@@ -311,7 +326,14 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
               }
               style={styles.goButtonInner}
             >
-              <Text allowFontScaling={false} style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}>
+              {/* One line, shrunk to fit the 72pt circle: "GO" grows with the OS
+                  text size, "STOP" stays about its default size. */}
+              <Text
+                maxFontSizeMultiplier={MAX_FONT_SCALE}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}
+              >
                 {isOnline ? t('home.stop') : t('home.go')}
               </Text>
             </LinearGradient>

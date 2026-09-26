@@ -1,7 +1,11 @@
 "use client"
 
 import * as React from "react"
-import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
+// From "radix-ui" like dialog, sheet and dropdown-menu, so all of them share one
+// focus-trap and dismissable-layer registry. The standalone
+// @radix-ui/react-alert-dialog package bundles its own copies: an AlertDialog
+// opened inside a Sheet then never received focus, and Escape closed the Sheet too.
+import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"

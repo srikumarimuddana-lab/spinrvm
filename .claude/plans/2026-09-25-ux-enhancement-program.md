@@ -39,12 +39,13 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | W1.1b `[x]` | Same | driver-app + shared (~56 sites) | unflagged a11y | same |
 | W1.2 `[x]` | `aria-sort` on `SortableHead` and `aria-label` on 15 unlabelled search inputs. **Sticky `thead` moved to W5.5:** tables sit inside horizontal-scroll containers, which stop `position: sticky` from following the page scroll, so it needs a table-layout change | admin | none (no visible change) | tests; build; baselines unchanged |
 | W1.3 `[x]` | Admin motion: a global `prefers-reduced-motion` rule (spinners exempt) and an exit animation on the alert feed. `MotionConfig` was skipped because its only consumer already uses `useReducedMotion()`; add it with the next `motion` component | admin | none | tests; build; baselines unchanged |
-| W1.4 `[~]` | Public web. **Reduce Motion on `/track` needed no code:** W1.3's global rule already overrides the car marker's transition, and `/track` already shows its own "link invalid or expired" state. The remaining gap was the 404 page, which sent every visitor to the staff dashboard; it now picks its action by path (tracking link, driver sign-up, company portal, or dashboard for staff) | web | none | tests; build served and fetched |
+| W1.4 `[x]` | Public web. **Reduce Motion on `/track` needed no code:** W1.3's global rule already overrides the car marker's transition, and `/track` already shows its own "link invalid or expired" state. The remaining gap was the 404 page, which sent every visitor to the staff dashboard; it now picks its action by path (tracking link, driver sign-up, company portal, or dashboard for staff) | web | none | tests; build served and fetched |
 
 ### Wave 2: one feedback system per surface
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W2.1 | Replace 10 browser `confirm()`/`alert()` calls with `AlertDialog` (destructive styling) | admin | none; staff-only UX note | tests per page |
+| W2.0 `[~]` | **Added 2026-09-26:** `AlertDialog` came from a separate Radix package with its own focus and layer registries, so a confirmation opened inside a side sheet never took focus and Escape closed the sheet too. Import it from `radix-ui` like the other wrappers (user chose this fix) | admin | none | regression test; Chromium check; full suite; baselines unchanged |
+| W2.1 | Replace 13 browser `confirm()` calls with an in-app dialog via a `useConfirm()` hook (destructive styling). The 5 `alert()` error messages move after W2.2, so they become persistent error toasts rather than auto-dismissing ones | admin | none; staff-only UX note | tests per page |
 | W2.2 | Toast policy: limit 3, errors persist until dismissed, `role=status`/`role=alert` | admin | none | unit test on reducer |
 | W2.3 | Unify driver toasts onto the shared toast, by swapping the implementation behind `driver-app/hooks/useToast.ts` so the 25 callers are unchanged | driver-app | flag `driver_unified_toast_enabled` | tests; `[H]` device check |
 
@@ -108,3 +109,5 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 - 2026-09-25: W1.3 merged (#5855). W1.4 opened: the 404 page sends public visitors to their own entry point.
 - Follow-up found in W1.4, not scheduled: on `track.spinr.ca`, middleware answers the root and multi-segment paths with a plain-text `Not found`. A single segment already reaches the tracking page's own error state, so only malformed URLs see it. Changing it touches host routing and the tracking CSP.
 - Follow-up from the W1.4 review, not scheduled: middleware treats only `/register/` (with a slash) as public, so a driver applicant who types bare `/register` is redirected to the staff login. Fixing it means changing the auth-routing allowlist in `src/middleware.ts`.
+- 2026-09-26: W1.4 merged (#5857), so Wave 1 is complete. W2.0 opened.
+- 2026-09-26: W2.0 added and prepared. Building W2.1 showed that confirmation dialogs inside a side sheet misbehave (no focus; Escape closes the sheet), confirmed in Chromium. W2.1 (12 call sites, in two PRs) is ready locally behind it. Follow-ups: remove the now-unused `@radix-ui/react-alert-dialog` dependency; check toasts over an open sheet (`react-toast` also bundles its own layer).

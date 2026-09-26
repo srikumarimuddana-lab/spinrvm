@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -696,11 +697,12 @@ export default function CloudMessagingPage() {
                     </CardHeader>
                     <CardContent className="p-0">
                         {scheduledMessages.length === 0 ? (
-                            <div className="text-center py-16">
-                                <Timer className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
-                                <h3 className="text-lg font-semibold">No scheduled messages</h3>
-                                <p className="text-muted-foreground mt-1">Schedule a message from the Compose tab.</p>
-                            </div>
+                            <EmptyState
+                                icon={Timer}
+                                title="No scheduled messages"
+                                description="Schedule a message from the Compose tab."
+                                headingLevel={3}
+                            />
                         ) : (
                             <Table>
                                 <TableHeader><TableRow>

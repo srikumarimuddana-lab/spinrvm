@@ -4,7 +4,7 @@
  * admin is typing in a field or another dialog is already open.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KeyboardShortcutsSheet, openKeyboardShortcuts } from "@/components/keyboard-shortcuts-sheet";
 
@@ -48,6 +48,20 @@ describe("KeyboardShortcutsSheet", () => {
         expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
         await user.keyboard("{Escape}");
         await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("announces key combos with 'plus' and single keys without it", async () => {
+        const user = setup();
+        await user.keyboard("?");
+        const dialog = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        const comboRow = within(dialog).getByText("Open or close the page jumper").closest("div")!;
+        const spokenPlus = Array.from(comboRow.querySelectorAll(".sr-only")).filter((el) => el.textContent === " plus ");
+        const visualPlus = Array.from(comboRow.querySelectorAll("[aria-hidden='true']")).filter((el) => el.textContent === "+");
+        // Ctrl+K and ⌘+K: one joiner each, spoken and visual.
+        expect(spokenPlus).toHaveLength(2);
+        expect(visualPlus).toHaveLength(2);
+        const singleKeyRow = within(dialog).getByText("Close the page jumper").closest("div")!;
+        expect(singleKeyRow.textContent).not.toContain("plus");
     });
 
     it("returns focus to the previously focused element after Escape", async () => {

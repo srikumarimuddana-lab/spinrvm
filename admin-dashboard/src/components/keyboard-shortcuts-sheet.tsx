@@ -214,8 +214,19 @@ export function KeyboardShortcutsSheet() {
                                         {shortcut.keys.map((combo, i) => (
                                             <Fragment key={combo.join("+")}>
                                                 {i > 0 && <span>or</span>}
-                                                {combo.map((k) => (
-                                                    <Key key={k} name={k} />
+                                                {combo.map((k, j) => (
+                                                    <Fragment key={k}>
+                                                        {/* Keys pressed together: a visual "+" and a
+                                                            spoken "plus", so "Ctrl, K" isn't read like
+                                                            two keys pressed one after the other. */}
+                                                        {j > 0 && (
+                                                            <>
+                                                                <span aria-hidden="true">+</span>
+                                                                <span className="sr-only"> plus </span>
+                                                            </>
+                                                        )}
+                                                        <Key name={k} />
+                                                    </Fragment>
                                                 ))}
                                             </Fragment>
                                         ))}

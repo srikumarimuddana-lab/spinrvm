@@ -57,6 +57,22 @@ def dual_role_client():
     yield from _client_as(DUAL_ROLE)
 
 
+def _flatten(routes, prefix=""):
+    """(full path, route) for every route, recursing through the lazy
+    `_IncludedRouter` wrapper newer FastAPI uses for include_router() (same
+    walk as test_disputes_disabled.py's _flatten): app.routes alone only
+    holds the top-level entries, not /api/v1/..."""
+    out = []
+    for r in routes:
+        original_router = getattr(r, "original_router", None)
+        if original_router is not None:
+            ctx_prefix = getattr(getattr(r, "include_context", None), "prefix", "") or ""
+            out.extend(_flatten(original_router.routes, prefix + ctx_prefix))
+        elif hasattr(r, "path"):
+            out.append((prefix + r.path, r))
+    return out
+
+
 def _legacy_handler_module():
     """The module object that actually owns the mounted legacy route.
 
@@ -66,7 +82,7 @@ def _legacy_handler_module():
     """
     from backend.server import app
 
-    route = next(r for r in app.routes if getattr(r, "path", None) == LEGACY_PATH)
+    route = next(r for path, r in _flatten(app.routes) if path == LEGACY_PATH)
     return sys.modules[route.endpoint.__module__]
 
 

@@ -41,7 +41,10 @@ from backend.routes.admin.staff import AVAILABLE_MODULES, ROLE_PRESETS
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _STAFF_PAGE = _REPO_ROOT / "admin-dashboard" / "src" / "app" / "dashboard" / "staff" / "page.tsx"
 _ADMIN_INIT = _REPO_ROOT / "backend" / "routes" / "admin" / "__init__.py"
-_SIDEBAR = _REPO_ROOT / "admin-dashboard" / "src" / "components" / "sidebar.tsx"
+# The sidebar's nav entries (href/module) live in lib/admin-nav-config.ts since
+# #5895; components/sidebar.tsx only renders them. The command palette reads
+# the same file, so these checks cover both.
+_SIDEBAR = _REPO_ROOT / "admin-dashboard" / "src" / "lib" / "admin-nav-config.ts"
 
 
 def _frontend_module_keys() -> list[str]:
@@ -208,6 +211,9 @@ def test_sidebar_links_gate_on_grantable_modules():
     src = _SIDEBAR.read_text(encoding="utf-8")
     code = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("//"))
     referenced = set(re.findall(r'module:\s*"([^"]+)"', code))
+    # An empty match means the nav entries moved again; fail rather than pass
+    # vacuously.
+    assert referenced, f"no module: gates found in {_SIDEBAR.name}; did the nav config move?"
     unknown = sorted(referenced - set(AVAILABLE_MODULES) - _KNOWN_UNGRANTABLE_SIDEBAR)
 
     assert not unknown, (

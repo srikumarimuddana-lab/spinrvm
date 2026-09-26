@@ -85,7 +85,6 @@ export default function CompanySectionsPage() {
             title: "Archive this section?",
             description: "Members keep their history; you can reassign them anytime.",
             confirmLabel: "Archive section",
-            destructive: true,
         }))) {
             return;
         }

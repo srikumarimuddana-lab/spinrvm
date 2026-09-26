@@ -106,6 +106,9 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
     const [template, setTemplate] = useState<RejectTemplate>("blurry_image");
     const [notify, setNotify] = useState(true);
     const reasonRef = useRef<HTMLTextAreaElement>(null);
+    // Set synchronously while a review request is in flight. `busy` is state,
+    // so two quick keypresses can both run before it updates; this can't.
+    const submittingRef = useRef(false);
     const [downloading, setDownloading] = useState(false);
     const dialogRef = useRef<HTMLDivElement>(null);
     // The element focused just before the modal opened, so we can hand
@@ -159,7 +162,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
     const goNext = useCallback(() => { setIndex((i) => Math.min(docs.length - 1, i + 1)); resetDocState(); }, [docs.length, resetDocState]);
 
     const submit = useCallback(async (status: "approved" | "rejected") => {
-        if (!current) return;
+        if (!current || submittingRef.current) return;
         if (status === "approved" && needsExpiry && !expiry) {
             toast({ title: "Expiry date required", description: "This document needs an expiry date before approval.", variant: "destructive" });
             return;
@@ -171,6 +174,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                 toast({ title: "Reason required", description: "Pick a template or write a reason.", variant: "destructive" });
                 return;
             }
+            submittingRef.current = true;
             setBusy(true);
             try {
                 await reviewDocument(current.id, "rejected", finalReason, undefined, {
@@ -180,16 +184,19 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                 toast({ title: "Document rejected", description: notify ? "Driver was notified." : "Rejected without notification." });
             } catch (e) {
                 toast({ title: "Rejection failed", description: String((e as Error).message || e), variant: "destructive" });
+                submittingRef.current = false;
                 setBusy(false);
                 return;
             }
         } else {
+            submittingRef.current = true;
             setBusy(true);
             try {
                 await reviewDocument(current.id, "approved", undefined, expiry ? new Date(expiry).toISOString() : undefined);
                 toast({ title: "Document approved" });
             } catch (e) {
                 toast({ title: "Approval failed", description: String((e as Error).message || e), variant: "destructive" });
+                submittingRef.current = false;
                 setBusy(false);
                 return;
             }
@@ -198,6 +205,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
         const newStatus = status;
         setDocs((prev) => prev.map((d, i) => (i === index ? { ...d, status: newStatus } : d)));
         onAfterAction?.();
+        submittingRef.current = false;
         setBusy(false);
 
         const nextPending = docs.findIndex((d, i) => i > index && d.status === "pending");
@@ -233,6 +241,10 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
             }
             const tag = (document.activeElement?.tagName || "").toLowerCase();
             if (tag === "input" || tag === "textarea" || tag === "select") return;
+            // A dropdown's type-to-select (e.g. the reject template picker) sees
+            // these letters too; they must not also arm or confirm a review.
+            const active = document.activeElement as HTMLElement | null;
+            if (active?.isContentEditable || active?.closest('[role="combobox"], [role="listbox"], [role="option"]')) return;
             // Single-key shortcuts only: Ctrl/Cmd+A (select all) or Ctrl/Cmd+R
             // (reload) must not arm or confirm a review.
             if (e.ctrlKey || e.metaKey || e.altKey) return;

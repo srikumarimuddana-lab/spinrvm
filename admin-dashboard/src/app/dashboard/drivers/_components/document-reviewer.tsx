@@ -233,7 +233,12 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
             }
             const tag = (document.activeElement?.tagName || "").toLowerCase();
             if (tag === "input" || tag === "textarea" || tag === "select") return;
+            // Single-key shortcuts only: Ctrl/Cmd+A (select all) or Ctrl/Cmd+R
+            // (reload) must not arm or confirm a review.
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
             const k = e.key.toLowerCase();
+            // A held A/R key's auto-repeat must not turn "arm" into "confirm".
+            if (e.repeat && (k === "a" || k === "r")) return;
             if (k === "j") { e.preventDefault(); goNext(); }
             else if (k === "k") { e.preventDefault(); goPrev(); }
             else if (k === "a" && current?.status === "pending") {

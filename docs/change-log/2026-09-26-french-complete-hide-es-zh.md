@@ -8,7 +8,7 @@
 | Author | Claude Code (agent), for UX program item W7.1 |
 | Surface(s) | rider-app, driver-app |
 | Domain (Sentry tag) | rides / drivers (UI copy and settings only; no backend, money or state-machine change) |
-| PR / commit link | branch `wip/w7-1`, not pushed |
+| PR / commit link | Branch `claude/spinr-animations-admin-ux-x7nl5x` (this PR, W7.1 part 1 of 2). Part 2 (picker title, start-up language restore, load-vs-pick race fix) follows. |
 | Related issue or gap ID | W7.1, decision D3: finish French to 100% of the keys the apps use; hide `es` and `zh` from the language pickers until they are complete |
 
 > **[H] Human action required before release:** every French string added here was
@@ -184,6 +184,9 @@ additive. Reverting them only brings back the English fallbacks and raw keys des
 - [x] Full `npx jest`, before → after:
   - driver-app: 174 suites / 2159 tests → 175 / 2168, all passing.
   - rider-app: 173 suites / 2340 tests → 174 / 2351, all passing.
+- [x] **Re-verified on the PR branch**, rebuilt from `main` after #5892:
+  - `tsc` exits 0 in both apps;
+  - full `jest`: driver-app 177 suites / 2190 tests, rider-app 174 suites / 2353 tests, all passing.
 - [x] Blast-radius grep: `languages`, `LANGUAGES`, `getStoredLanguage`, `loadLanguage`,
   `hydrate`, `setLanguage`, `changeLanguage`, `from '../i18n'` across both apps, plus
   `expo-localization`/`getLocales` repo-wide (no hits).
@@ -200,22 +203,21 @@ additive. Reverting them only brings back the English fallbacks and raw keys des
   4 policy-row labels are about as long as neighbouring French rows that already exist.
 - **Translation quality** was not checked by a fluent speaker. See the [H] item at the top.
 - **Found, not fixed (out of scope / forbidden files):**
-  - rider-app `hydrate()` has **no caller**. `useLanguageStore.hydrate` is never invoked
+  - rider-app `hydrate()` has **no caller** (fixed in W7.1 part 2). `useLanguageStore.hydrate` is never invoked
     (the natural home, `rider-app/app/_layout.tsx`, was off-limits for this change). So
     a rider's language choice does not survive an app restart: every cold start is
     English. The stored-language fallback added here is correct but dormant until
     `hydrate()` is wired.
-  - driver-app `loadLanguage()` is called only from `app/driver/settings.tsx`. A driver
+  - driver-app `loadLanguage()` is called only from `app/driver/settings.tsx` (fixed in W7.1 part 2). A driver
     who chose French sees English after a cold start until they open Settings.
   - rider-app's picker title `"Select Language"` (`app/settings.tsx`) is hardcoded
-    English. An unused `settings.selectLanguage` key exists in `en.json`/`fr.json`.
+    English (fixed in W7.1 part 2). An unused `settings.selectLanguage` key exists in `en.json`/`fr.json`.
   - rider-app keeps two parallel key sets: snake_case in `en-CA`/`fr-CA` and camelCase in
     `en`/`fr`/`es`/`zh`. About 44 of the 53 non-error camelCase keys that exist only in
     `en.json` (e.g. `home.whereToGo`, `wallet.*`, `loyalty.*`, `support.*`) have no
     literal `t('…')` reference in the app. They look dead but were not deleted, because
-    deletion needs approval.
+    deletion needs approval. This is logged as `ACTION_ITEMS.md` C139.
   - No locale **file** is dead: all 9 are imported by their app's `i18n/index.ts`.
     `driver-app/i18n/es.json`, `rider-app/i18n/es.json` and `rider-app/i18n/zh.json` are
     now unreachable to users but are still bundled.
-- The `spinr-*` reviewer agents were not run against this diff, because the agent tool is
-  unavailable in this session.
+- **Review:** `spinr-edge-case-reviewer` ran on the full W7.1 branch (both parts) on 2026-09-26 and found no blockers in this part. It reproduced a race where a slow language load overwrites a fresh pick; that is fixed in part 2, alongside the start-up restore. No accessibility or copy review was run on this part.

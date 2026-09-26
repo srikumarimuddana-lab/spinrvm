@@ -191,3 +191,73 @@ async def test_v2_go_offline_destination_clear_failure_does_not_fail_offline(cap
     with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
         assert await _call_v2("go_offline") == {"ok": True}
     assert any("failed to clear destination mode" in r.getMessage() for r in caplog.records)
+
+
+# ── #5781 finding 3: fence the v2 destination-clear write on online_epoch ──
+# A driver who goes offline then immediately back online before this trailing
+# write lands must not have their fresh destination wiped by the stale
+# go-offline transition's clear.
+
+
+def _v2_patches_with_transition(*, update_one: AsyncMock, change: AsyncMock, transition_epoch):
+    base = _patches(current_online=True, requested_online=False, update_one=update_one)
+    finish_result = {"ok": True, "transition": {"online_epoch": transition_epoch}}
+    return (
+        *base,
+        patch.object(status_mod, "_availability_v2_enabled", AsyncMock(return_value=True)),
+        patch.object(status_mod, "_change_availability_status", change),
+        patch.object(status_mod, "_finish_v2_status", AsyncMock(return_value=finish_result)),
+    )
+
+
+@pytest.mark.anyio
+async def test_v2_go_offline_clears_destination_when_epoch_still_current():
+    """The common case: no race. The transition's own epoch is passed as the
+    write filter and the clear lands normally."""
+    update_one = AsyncMock(return_value={"id": "drv-1"})
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches_with_transition(update_one=update_one, change=change, transition_epoch="7")
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        await _call_v2("go_offline")
+
+    dest_writes = [c for c in update_one.await_args_list if "destination_mode" in c.args[2]]
+    assert len(dest_writes) == 1
+    table, filt, payload = dest_writes[0].args
+    assert table == "drivers" and filt == {"id": "drv-1", "online_epoch": 7}
+    assert payload["destination_mode"] is False
+
+
+@pytest.mark.anyio
+async def test_v2_go_offline_destination_clear_skipped_when_epoch_already_advanced(caplog):
+    """The race: online_epoch on the driver row no longer matches the
+    go-offline transition's epoch because the driver already went back online.
+    The filtered write matches zero rows (update_one returns None) and the
+    fresh destination set by the new session is left untouched -- logged at
+    INFO, not treated as a failure."""
+    update_one = AsyncMock(return_value=None)
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches_with_transition(update_one=update_one, change=change, transition_epoch="7")
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        with caplog.at_level("INFO"):
+            assert await _call_v2("go_offline") == {"ok": True, "transition": {"online_epoch": "7"}}
+
+    dest_writes = [c for c in update_one.await_args_list if "destination_mode" in c.args[2]]
+    assert len(dest_writes) == 1
+    assert dest_writes[0].args[1] == {"id": "drv-1", "online_epoch": 7}
+    assert any("skipped clearing destination mode" in r.getMessage() for r in caplog.records)
+    assert not any("failed to clear destination mode" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_v2_go_offline_clear_falls_back_unfenced_when_epoch_unparsable():
+    """A missing/garbage transition epoch falls back to the pre-fix
+    unconditional write rather than silently never clearing."""
+    update_one = AsyncMock(return_value={"id": "drv-1"})
+    change = AsyncMock(return_value={"code": "OK"})
+    ps = _v2_patches_with_transition(update_one=update_one, change=change, transition_epoch="not-a-number")
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9], ps[10]:
+        await _call_v2("go_offline")
+
+    dest_writes = [c for c in update_one.await_args_list if "destination_mode" in c.args[2]]
+    assert len(dest_writes) == 1
+    assert dest_writes[0].args[1] == {"id": "drv-1"}

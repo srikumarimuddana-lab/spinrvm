@@ -103,17 +103,43 @@ _DESTINATION_MODE_CLEARED: dict = {
 }
 
 
-async def _clear_destination_mode_after_v2_offline(driver_id: str) -> None:
+async def _clear_destination_mode_after_v2_offline(driver_id: str, expected_epoch: int | None) -> None:
     """C136: v2 go_offline goes through the availability service, which never
     touches destination columns, so clear them here once it has succeeded.
 
-    A failure does NOT fail the go-offline: the driver is already offline, and
-    returning an error would make the app retry a transition that landed. It is
-    logged at ERROR with the underlying cause, and DESTINATION_MODE_TTL (2h)
-    still bounds how long a stale destination can filter offers.
+    Fenced on ``online_epoch`` (bumped on every real availability transition,
+    migration 457/486): if the driver has already gone back online by the time
+    this trailing write lands, ``online_epoch`` has advanced past
+    ``expected_epoch`` and the filtered write matches zero rows, leaving a
+    freshly-set destination alone instead of wiping it out from under the new
+    session. ``expected_epoch=None`` (epoch missing/unparsable from the
+    transition result) falls back to the unconditional write rather than never
+    clearing at all.
+
+    A failure/no-op does NOT fail the go-offline: the driver is already
+    offline, and returning an error would make the app retry a transition that
+    landed. Failures are logged at ERROR with the underlying cause; a clean
+    epoch-mismatch skip is logged at INFO. DESTINATION_MODE_TTL (2h) still
+    bounds how long a stale destination can filter offers either way.
     """
+    filters: dict = {"id": driver_id}
+    if expected_epoch is not None:
+        filters["online_epoch"] = expected_epoch
     try:
-        await db_supabase.update_one("drivers", {"id": driver_id}, dict(_DESTINATION_MODE_CLEARED))
+        updated = await db_supabase.update_one("drivers", filters, dict(_DESTINATION_MODE_CLEARED))
+        if expected_epoch is not None and not isinstance(updated, dict):
+            # 0 rows matched -- most likely online_epoch already advanced past
+            # expected_epoch (driver went online again), but update_one also
+            # returns None if supabase is unset (_write_skipped) or the driver
+            # row no longer exists, so this is not proof of the race
+            # specifically. Logged at INFO either way: none of the three cases
+            # should fail the already-landed go-offline transition.
+            logger.info(
+                "C136: skipped clearing destination mode after v2 go_offline driver_id=%s -- "
+                "0 rows matched for online_epoch=%s (epoch race, driver missing, or write skipped)",
+                driver_id,
+                expected_epoch,
+            )
     except Exception as exc:
         details = getattr(exc, "details", None)
         original = details.get("original") if isinstance(details, dict) else None
@@ -466,7 +492,13 @@ async def update_driver_status(
             # go_offline clears it; stop_requests (a pause) keeps the
             # destination, still bounded by its 2h TTL.
             if v2_action == "go_offline":
-                await _clear_destination_mode_after_v2_offline(driver_id)
+                _offline_transition = response.get("transition") or {}
+                _offline_epoch_raw = _offline_transition.get("online_epoch")
+                try:
+                    _offline_epoch = int(str(_offline_epoch_raw)) if _offline_epoch_raw is not None else None
+                except (TypeError, ValueError):
+                    _offline_epoch = None
+                await _clear_destination_mode_after_v2_offline(driver_id, _offline_epoch)
             return response
 
     # CR-4104 / A34 dual-run cutover guard: block go-online for a

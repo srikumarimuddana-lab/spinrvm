@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { isVenueNameValid } from "@/lib/venueFormSchema";
 import { useConfirm } from "@/hooks/useConfirm";
+import { useToast } from "@/components/ui/use-toast";
 
 const EMPTY: VenueUpsert = {
   name: "", center_lat: 0, center_lng: 0, radius_m: 150, pickup_points: [], service_area_id: null, is_active: true,
@@ -43,6 +44,7 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 
 export default function VenuesPage() {
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { toast } = useToast();
   const [venues, setVenues] = useState<Venue[]>([]);
   const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
   const [areaFilter, setAreaFilter] = useState<string>("");
@@ -186,7 +188,7 @@ export default function VenuesPage() {
       setSelectedPoint(null);
       await load();
     } catch (e: any) {
-      alert(e?.message || "Save failed");
+      toast({ title: "Couldn't save venue", description: e?.message || "Save failed", variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -199,7 +201,7 @@ export default function VenuesPage() {
       confirmLabel: "Delete",
       destructive: true,
     }))) return;
-    try { await deleteVenue(v.id); await load(); } catch (e: any) { alert(e?.message || "Delete failed"); }
+    try { await deleteVenue(v.id); await load(); } catch (e: any) { toast({ title: "Couldn't delete venue", description: e?.message || "Delete failed", variant: "destructive" }); }
   };
 
   const d = editing?.data;

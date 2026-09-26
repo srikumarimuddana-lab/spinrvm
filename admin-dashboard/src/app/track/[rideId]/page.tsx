@@ -6,6 +6,7 @@ import Script from 'next/script';
 import {
   buildPathGradient,
   routePinSvg,
+  ROUTE_PIN_COLORS,
   ROUTE_STROKE_WIDTH,
   type RoutePinKind,
 } from '@spinr/shared/constants/routeMapStyle';
@@ -17,6 +18,13 @@ import {
   visualRotationDegrees,
   type TrackingLatLng,
 } from '@spinr/shared/utils/vehicleTracking';
+import {
+  MARKER_ANIMATION_MS,
+  interpolateMarker,
+  prefersReducedMotion,
+  type MarkerPose,
+} from '@/lib/map/marker-interpolation';
+import { TRACK_LIGHT_TOKENS } from './light-tokens';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -56,19 +64,28 @@ interface RideInfo {
  *  browser at arm's length with no other chrome competing for attention. */
 const TRACK_PIN_SIZE = 34;
 
-const STATUS_LABEL: Record<string, { label: string; color: string }> = {
-  searching:        { label: 'Finding driver',    color: '#B45309' },
-  driver_assigned:  { label: 'Driver assigned',   color: '#1D4ED8' },
-  driver_accepted:  { label: 'Driver on the way', color: '#1D4ED8' },
-  driver_arrived:   { label: 'Driver arrived',    color: '#047857' },
-  in_progress:      { label: 'Trip in progress',  color: '#5B21B6' },
-  completed:        { label: 'Trip complete',      color: '#4B5563' },
-  cancelled:        { label: 'Trip cancelled',     color: '#B91C1C' },
+// `dot` is a semantic token class (see light-tokens.ts): pending → warning,
+// on the move → info, arrived → success, ended → muted, cancelled →
+// destructive. The label beside it carries the meaning; the dot only echoes it.
+const STATUS_LABEL: Record<string, { label: string; dot: string }> = {
+  searching:        { label: 'Finding driver',    dot: 'bg-warning' },
+  driver_assigned:  { label: 'Driver assigned',   dot: 'bg-info' },
+  driver_accepted:  { label: 'Driver on the way', dot: 'bg-info' },
+  driver_arrived:   { label: 'Driver arrived',    dot: 'bg-success' },
+  in_progress:      { label: 'Trip in progress',  dot: 'bg-info' },
+  completed:        { label: 'Trip ended',        dot: 'bg-muted-foreground' },
+  cancelled:        { label: 'Trip cancelled',    dot: 'bg-destructive' },
 };
 
 // Statuses where the driver is heading to pickup (route: driver → pickup).
 // Once in_progress the driver heads to dropoff (route: driver → dropoff).
 const EN_ROUTE_TO_PICKUP = new Set(['driver_assigned', 'driver_accepted', 'driver_arrived']);
+
+// RideStatus.terminal_statuses() in the backend. For these the tracking
+// endpoint (backend/routes/rides/sharing.py) returns only status, message and
+// the two addresses — no driver, no coordinates — so nothing on the map is
+// live any more.
+const ENDED_STATUSES = new Set(['completed', 'cancelled']);
 
 // Minimum distance (degrees ~= ~10m) the driver must move before we re-fetch
 // the OSRM route — avoids hammering the public router on every poll tick.
@@ -120,7 +137,18 @@ export default function TrackRide() {
   const carBearingRef = useRef<number | null>(null);
   const carRotationRef = useRef(0);
 
-  // Point the car icon along its last known course.
+  // ── Car glide (UX program W4.2) ────────────────────────────────────────────
+  // The pose drawn right now (`shown`), the glide in progress (`from` → `to`,
+  // started at `startedAt`, null when idle) and when the last update arrived
+  // (for the util's stale-gap snap). Position and heading both move through
+  // marker-interpolation (W4.1) on one requestAnimationFrame loop, so they
+  // glide together and snap together (big jump, stale feed, Reduce Motion).
+  const carMotionRef = useRef<{
+    shown: MarkerPose; from: MarkerPose; to: MarkerPose; startedAt: number | null; updatedAt: number;
+  } | null>(null);
+  const carFrameRef = useRef<number | null>(null);
+
+  // Point the car icon along `bearing` (world-space course, degrees).
   //
   // An AdvancedMarkerElement's content is ordinary DOM and the map does NOT
   // rotate it, so this is a SCREEN-space transform and the map's own heading
@@ -129,9 +157,8 @@ export default function TrackRide() {
   // This map is north-up in practice (disableDefaultUI hides the rotate
   // control), but a two-finger rotate on a vector map still moves it, and a
   // transform that ignored that would be wrong by exactly the rotation angle.
-  const applyCarRotation = useCallback(() => {
+  const applyCarRotation = useCallback((bearing: number | null | undefined) => {
     const marker = driverMarkerRef.current;
-    const bearing = carBearingRef.current;
     if (!marker || bearing == null) return;
     const img: HTMLImageElement | null = marker.content?.querySelector?.('img') ?? null;
     if (!img) return;
@@ -142,11 +169,60 @@ export default function TrackRide() {
       visualRotationDegrees(bearing, mapHeading),
     );
     img.style.transformOrigin = '50% 50%';
-    // Turn visibly rather than snapping. Poll cadence is 5 s, so a short tween
-    // reads as the car rounding a corner instead of teleporting its angle.
-    img.style.transition = 'transform 600ms ease-out';
+    // No CSS transition: the turn is stepped frame by frame by the glide
+    // below, so it snaps with the position instead of tweening on its own.
     img.style.transform = `rotate(${carRotationRef.current}deg)`;
   }, []);
+
+  const drawCar = useCallback((pose: MarkerPose) => {
+    const marker = driverMarkerRef.current;
+    if (!marker) return;
+    marker.position = { lat: pose.lat, lng: pose.lng };
+    applyCarRotation(pose.bearing);
+  }, [applyCarRotation]);
+
+  const stopCarMotion = useCallback(() => {
+    if (carFrameRef.current != null) cancelAnimationFrame(carFrameRef.current);
+    carFrameRef.current = null;
+    carMotionRef.current = null;
+  }, []);
+
+  /** Move the car to `to`: glide from wherever it is drawn now, or draw it
+   *  there directly when the util says snap (first placement, nothing moved,
+   *  a jump over 500 m, a stale feed, Reduce Motion). */
+  const moveCar = useCallback((to: MarkerPose) => {
+    const now = performance.now();
+    const prev = carMotionRef.current;
+    // A glide already under way retargets from the pose drawn right now.
+    const from = prev?.shown ?? to;
+    const { done } = interpolateMarker(from, to, 0, MARKER_ANIMATION_MS, {
+      reduceMotion: prefersReducedMotion(),
+      gapMs: prev ? now - prev.updatedAt : undefined,
+    });
+    if (done) {
+      if (carFrameRef.current != null) cancelAnimationFrame(carFrameRef.current);
+      carFrameRef.current = null;
+      carMotionRef.current = { shown: to, from: to, to, startedAt: null, updatedAt: now };
+      drawCar(to);
+      return;
+    }
+    carMotionRef.current = { shown: from, from, to, startedAt: now, updatedAt: now };
+    if (carFrameRef.current != null) return; // the running loop picks up the new target
+    const step = (t: number) => {
+      carFrameRef.current = null;
+      const m = carMotionRef.current;
+      if (!m || m.startedAt == null) return;
+      const { pose, done: arrived } = interpolateMarker(m.from, m.to, t - m.startedAt, MARKER_ANIMATION_MS);
+      m.shown = pose;
+      drawCar(pose);
+      if (arrived) m.startedAt = null;
+      else carFrameRef.current = requestAnimationFrame(step);
+    };
+    carFrameRef.current = requestAnimationFrame(step);
+  }, [drawCar]);
+
+  // No frame loop outlives the page.
+  useEffect(() => stopCarMotion, [stopCarMotion]);
 
   // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
@@ -190,7 +266,9 @@ export default function TrackRide() {
     // The car's rotation is screen-space (see applyCarRotation), so a camera
     // rotation has to re-derive it — otherwise a rider who twists the map
     // leaves the car pointing wrong until the next position update.
-    mapRef.current.addListener?.('heading_changed', applyCarRotation);
+    mapRef.current.addListener?.('heading_changed', () => {
+      applyCarRotation(carMotionRef.current?.shown.bearing);
+    });
   }, [mapsReady, applyCarRotation]);
 
   // ── Sync markers + OSRM route whenever ride data changes ────────────────────
@@ -287,12 +365,19 @@ export default function TrackRide() {
     upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pickupNavSvg,  TRACK_PIN_SIZE, true);
     upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, TRACK_PIN_SIZE, true);
 
-    const d = ride.driver;
+    // Once the trip is over the car comes off the map even if a payload were
+    // ever to carry a driver again — a parked car on an ended trip reads as live.
+    const ended = ENDED_STATUSES.has(ride.status);
+    const d = ended ? undefined : ride.driver;
     // Args: (ref, lat, lng, svgUrl, size, centerAnchor, zIndex).
     // centerAnchor MUST be the 6th arg (a boolean) — passing zIndex here
     // directly is a type error and breaks the Vercel build. The car is a
     // round puck so it centre-anchors on the driver's GPS position.
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
+    // An EXISTING car is not moved here: moveCar() below glides it once this
+    // fix's course is known. Setting .position here would teleport it first.
+    if (!driverMarkerRef.current || d?.lat == null || d?.lng == null) {
+      upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
+    }
 
     // ── Which way the car faces ────────────────────────────────────────────────
     // The car SVG above is drawn nose-up and nothing ever rotated it, so every
@@ -330,6 +415,9 @@ export default function TrackRide() {
       routeSegIndexRef.current = null;
       carRotationRef.current = 0;
       routeCoordsRef.current = [];
+      // Same for the glide: the next driver's first fix is placed exactly,
+      // never slid in from where this one was.
+      stopCarMotion();
     } else {
       const here: TrackingLatLng = { latitude: d!.lat!, longitude: d!.lng! };
       if (legChanged) {
@@ -358,7 +446,7 @@ export default function TrackRide() {
         }
       }
       lastDriverPosRef.current = here;
-      applyCarRotation();
+      moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.current });
     }
 
     // Pan to driver after initial fit.
@@ -374,6 +462,16 @@ export default function TrackRide() {
       if (ride.dropoff_lat != null) { bounds.extend({ lat: ride.dropoff_lat, lng: ride.dropoff_lng! }); pts++; }
       if (d?.lat           != null) { bounds.extend({ lat: d.lat,            lng: d.lng!            }); pts++; }
       if (pts >= 2) { map.fitBounds(bounds, 80); didFitRef.current = true; }
+    }
+
+    // ── Trip over ──────────────────────────────────────────────────────────────
+    // The pins and the car are already gone above (no coordinates). The route
+    // line isn't tied to the payload, so clear it here, and void any OSRM
+    // request still in flight so it can't draw one back afterwards.
+    if (ended) {
+      routeFetchSeqRef.current++;
+      routePolylinesRef.current.forEach(l => l.setMap(null));
+      routePolylinesRef.current = [];
     }
 
     // ── OSRM route: recalculate from driver's current position ─────────────────
@@ -401,7 +499,7 @@ export default function TrackRide() {
     // the heading, which reads that same geometry.
     const driverAppeared = hasDriver && lastRoutedDriverRef.current === null;
 
-    if ((neverRouted || legChanged || driverMoved || driverAppeared) && ride.pickup_lat != null && ride.dropoff_lat != null) {
+    if (!ended && (neverRouted || legChanged || driverMoved || driverAppeared) && ride.pickup_lat != null && ride.dropoff_lat != null) {
       const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
       const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
       const destLat    = currentLeg === 'pickup' ? ride.pickup_lat  : ride.dropoff_lat;
@@ -449,7 +547,7 @@ export default function TrackRide() {
             if (snapped) {
               routeSegIndexRef.current = snapped.segmentIndex;
               carBearingRef.current = snapped.bearing;
-              applyCarRotation();
+              moveCar({ lat: dp.latitude, lng: dp.longitude, bearing: snapped.bearing });
             }
           }
 
@@ -478,10 +576,15 @@ export default function TrackRide() {
         })
         .catch(() => { /* silent — markers remain visible without a route line */ });
     }
-  }, [ride, mapsReady, applyCarRotation]);
+  }, [ride, mapsReady, moveCar, stopCarMotion]);
 
   const statusCfg    = STATUS_LABEL[ride?.status ?? ''] ?? STATUS_LABEL.searching;
-  const isActive     = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);
+  const isEnded      = !!ride?.status && ENDED_STATUSES.has(ride.status);
+  const isActive     = !!ride?.status && !isEnded;
+  const isArrived    = ride?.status === 'driver_arrived';
+  // The ETA is to the drop-off, so it means nothing while the driver waits at
+  // pickup; "arrived" replaces it rather than sitting next to it.
+  const headline     = isArrived ? 'The driver has arrived' : statusCfg.label;
   const driverName   = ride?.driver?.name || 'Driver';
   const vehicleLine  = useMemo(() => {
     const dr = ride?.driver;
@@ -494,10 +597,8 @@ export default function TrackRide() {
     return (
       <Centered>
         <div className="text-center">
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <div className="animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-800 mx-auto mb-4" />
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <p className="text-sm text-gray-500 font-medium">Loading trip…</p>
+          <div className="animate-spin rounded-full h-10 w-10 border-2 border-border border-t-foreground mx-auto mb-4" />
+          <p className="text-sm text-muted-foreground font-medium">Loading trip…</p>
         </div>
       </Centered>
     );
@@ -506,24 +607,19 @@ export default function TrackRide() {
   if (error || !ride) {
     return (
       <Centered>
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div className="bg-white p-8 rounded-2xl shadow-sm max-w-sm w-full text-center border border-gray-100">
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <h1 className="text-lg font-semibold text-gray-900 mb-1">Tracking unavailable</h1>
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <p className="text-sm text-gray-500">{error || 'This link may have expired or the ride has ended.'}</p>
+        <div className="bg-card p-8 rounded-2xl shadow-sm max-w-sm w-full text-center border border-border">
+          <h1 className="text-lg font-semibold text-foreground mb-1">Tracking unavailable</h1>
+          <p className="text-sm text-muted-foreground">{error || 'This link may have expired or the ride has ended.'}</p>
         </div>
       </Centered>
     );
   }
 
   return (
-    // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-background text-foreground flex flex-col" style={TRACK_LIGHT_TOKENS}>
       {/* Map — explicit height so the canvas always has dimensions on first paint */}
       <div className="relative w-full" style={{ height: '60vh', minHeight: 320 }}>
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div ref={mapContainerRef} className="absolute inset-0 bg-gray-200" />
+        <div ref={mapContainerRef} className="absolute inset-0 bg-muted" />
 
         {GMAPS_KEY ? (
           <Script
@@ -532,78 +628,77 @@ export default function TrackRide() {
             onLoad={() => setMapsReady(true)}
           />
         ) : (
-          // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 text-gray-500 text-sm px-4 text-center">
+          <div className="absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground text-sm px-4 text-center">
             Map unavailable — set <code className="mx-1">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> in Vercel
           </div>
         )}
 
-        {/* Status pill */}
-        <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-white/95 backdrop-blur">
-          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: statusCfg.color }} />
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <span className="text-xs font-semibold text-gray-700 tracking-wide">
-            {statusCfg.label.toUpperCase()}
-          </span>
-          {isActive && ride.eta_minutes != null && (
-            // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-            <span className="ml-auto text-xs font-medium text-gray-500">
-              ETA {ride.eta_minutes} min
+        {isEnded ? (
+          // Trip over: say so over the (now empty) map instead of leaving a
+          // map that looks like it's still waiting for the car.
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-background/90 px-6 text-center">
+            <p className="text-lg font-semibold text-foreground">{statusCfg.label}</p>
+            <p className="text-sm text-muted-foreground">Live location is no longer shared.</p>
+          </div>
+        ) : (
+          // Status pill
+          <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-card/95 backdrop-blur">
+            <span className={`inline-block w-2 h-2 rounded-full ${statusCfg.dot}`} />
+            <span className="text-xs font-semibold text-foreground tracking-wide">
+              {statusCfg.label.toUpperCase()}
             </span>
-          )}
-        </div>
+            {isActive && !isArrived && ride.eta_minutes != null && (
+              <span className="ml-auto text-xs font-medium text-muted-foreground">
+                ETA {ride.eta_minutes} min
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bottom sheet */}
-      <div className="bg-white rounded-t-3xl -mt-6 shadow-[0_-8px_30px_rgba(0,0,0,0.06)] relative">
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div className="mx-auto w-12 h-1.5 bg-gray-200 rounded-full mt-3" />
+      <div className="bg-card rounded-t-3xl -mt-6 shadow-[0_-8px_30px_rgba(0,0,0,0.06)] relative">
+        <div className="mx-auto w-12 h-1.5 bg-border rounded-full mt-3" />
 
         <div className="px-5 pt-5 pb-4">
-          {ride.eta_minutes != null && isActive ? (
+          {/* Announces each status change (e.g. arrived, trip ended) to screen readers. */}
+          <p className="sr-only" role="status">{headline}</p>
+          {isArrived ? (
+            <div className="text-xl font-semibold text-foreground">{headline}</div>
+          ) : ride.eta_minutes != null && isActive ? (
             <div className="flex items-baseline gap-2">
-              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-              <span className="text-3xl font-semibold text-gray-900 tracking-tight">{ride.eta_minutes}</span>
-              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-              <span className="text-sm text-gray-500 font-medium">min away</span>
+              <span className="text-3xl font-semibold text-foreground tracking-tight">{ride.eta_minutes}</span>
+              <span className="text-sm text-muted-foreground font-medium">min away</span>
             </div>
           ) : (
-            // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-            <div className="text-base font-semibold text-gray-900">{statusCfg.label}</div>
+            <div className="text-base font-semibold text-foreground">{statusCfg.label}</div>
           )}
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          {ride.message && <p className="text-sm text-gray-500 mt-1">{ride.message}</p>}
+          {ride.message && <p className="text-sm text-muted-foreground mt-1">{ride.message}</p>}
         </div>
 
         {/* Driver card */}
         {ride.driver && (
-          // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-          <div className="mx-5 mb-5 rounded-2xl border border-gray-100 bg-gray-50/70 p-4 flex items-center gap-4">
+          <div className="mx-5 mb-5 rounded-2xl border border-border bg-muted/50 p-4 flex items-center gap-4">
             <div className="relative">
               {ride.driver.photo_url ? (
                 <img src={ride.driver.photo_url} alt={driverName} className="w-12 h-12 rounded-full object-cover" />
               ) : (
-                // eslint-disable-next-line no-restricted-syntax -- decorative avatar-placeholder tint, not a status signal (#2816)
-                <div className="w-12 h-12 rounded-full bg-gray-900 text-white flex items-center justify-center font-semibold">
+                <div className="w-12 h-12 rounded-full bg-foreground text-background flex items-center justify-center font-semibold">
                   {driverInitial}
                 </div>
               )}
               {typeof ride.driver.rating === 'number' && (
-                // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-                <span className="absolute -bottom-1 -right-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-white border border-gray-200 text-gray-700">
+                <span className="absolute -bottom-1 -right-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-card border border-border text-foreground">
                   ★ {ride.driver.rating.toFixed(1)}
                 </span>
               )}
             </div>
             <div className="flex-1 min-w-0">
-              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-              <div className="text-sm font-semibold text-gray-900 truncate">{driverName}</div>
-              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-              {vehicleLine && <div className="text-xs text-gray-500 truncate mt-0.5">{vehicleLine}</div>}
+              <div className="text-sm font-semibold text-foreground truncate">{driverName}</div>
+              {vehicleLine && <div className="text-xs text-muted-foreground truncate mt-0.5">{vehicleLine}</div>}
             </div>
             {ride.driver.license_plate && (
-              // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-              <div className="px-2.5 py-1 rounded-md bg-white border border-gray-200 text-xs font-mono font-semibold text-gray-900 tracking-wider">
+              <div className="px-2.5 py-1 rounded-md bg-card border border-border text-xs font-mono font-semibold text-foreground tracking-wider">
                 {ride.driver.license_plate}
               </div>
             )}
@@ -611,46 +706,36 @@ export default function TrackRide() {
         )}
 
         {/* Route */}
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div className="mx-5 mb-5 rounded-2xl border border-gray-100 p-4">
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          <div className="flex gap-3 relative before:absolute before:top-2 before:bottom-2 before:left-[7px] before:w-0.5 before:bg-gray-200">
+        <div className="mx-5 mb-5 rounded-2xl border border-border p-4">
+          <div className="flex gap-3 relative before:absolute before:top-2 before:bottom-2 before:left-[7px] before:w-0.5 before:bg-border">
             <div className="flex flex-col items-center pt-1">
-              {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin marker color (#2816) */}
-              <span className="w-4 h-4 rounded-full bg-emerald-500 border-2 border-white shadow-sm z-10" />
+              {/* Same fills as the map's pins (shared route pin spec). */}
+              <span className="w-4 h-4 rounded-full border-2 border-card shadow-sm z-10" style={{ backgroundColor: ROUTE_PIN_COLORS.pickup }} />
               <span className="flex-1" />
-              {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin marker color (#2816) */}
-              <span className="w-4 h-4 rounded-sm bg-red-500 border-2 border-white shadow-sm z-10" />
+              <span className="w-4 h-4 rounded-sm border-2 border-card shadow-sm z-10" style={{ backgroundColor: ROUTE_PIN_COLORS.dropoff }} />
             </div>
             <div className="flex-1 space-y-3">
               <div>
-                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-                <div className="text-[10px] font-semibold text-gray-400 tracking-wider uppercase">Pickup</div>
-                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-                <div className="text-sm text-gray-900 mt-0.5">{ride.pickup_address}</div>
+                <div className="text-[10px] font-semibold text-muted-foreground tracking-wider uppercase">Pickup</div>
+                <div className="text-sm text-foreground mt-0.5">{ride.pickup_address}</div>
               </div>
               <div>
-                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-                <div className="text-[10px] font-semibold text-gray-400 tracking-wider uppercase">Drop-off</div>
-                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-                <div className="text-sm text-gray-900 mt-0.5">{ride.dropoff_address}</div>
+                <div className="text-[10px] font-semibold text-muted-foreground tracking-wider uppercase">Drop-off</div>
+                <div className="text-sm text-foreground mt-0.5">{ride.dropoff_address}</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div className="px-5 pb-4 flex items-center justify-between text-[11px] text-gray-400">
+        <div className="px-5 pb-4 flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{ride.ride_code ? `Ref ${ride.ride_code}` : ''}</span>
           {isActive && lastUpdated && (
             <span>Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}</span>
           )}
         </div>
 
-        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-        <div className="py-3 text-center text-[11px] text-gray-400 border-t border-gray-100">
-          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
-          Live tracking · <span className="font-semibold text-gray-500">Spinr</span>
+        <div className="py-3 text-center text-[11px] text-muted-foreground border-t border-border">
+          Live tracking · <span className="font-semibold">Spinr</span>
         </div>
       </div>
     </div>
@@ -659,8 +744,7 @@ export default function TrackRide() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
-    <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+    <div className="flex items-center justify-center min-h-screen bg-background text-foreground p-4" style={TRACK_LIGHT_TOKENS}>
       {children}
     </div>
   );

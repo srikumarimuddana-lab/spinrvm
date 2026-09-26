@@ -63,7 +63,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
 | W4.1 `[~]` | Marker interpolation util (lerp position + bearing, snap on large jumps, off under Reduce Motion) for monitoring and the live-ride map | admin | none | unit tests on util; monitoring baseline unchanged (tiles stubbed) |
-| W4.2 | Same util on `/track`, plus brand tokens and a clear "arrived / trip ended" state. Adds no PII beyond today's driver name and plate | web | none | tests; `spinr-regulatory-compliance-checker` (PIPEDA) |
+| W4.2 `[~]` | Same util on `/track`, plus brand tokens and a clear "arrived / trip ended" state. Adds no PII beyond today's driver name and plate | web | none | tests; `spinr-regulatory-compliance-checker` (PIPEDA) |
 
 ### Wave 5: admin efficiency
 | ID | Item | Surface | Gate | Verify |
@@ -155,3 +155,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - `showToast` routes to it when the flag is on;
   - the host is mounted in `_layout.tsx`, and the flag is read from `/drivers/config`.
   - Flag off is byte-identical to today. Turning the flag on needs a device check `[H]` first, because driver-app has no visual tooling.
+- 2026-09-26: W2.3 driver-app half merged (#5891), so W2.3's code is complete. Before the flag can be turned on:
+  - migration 490 must be applied in production;
+  - a device check `[H]` is needed.
+- 2026-09-26: W4.2 opened: the public `/track` page glides the car with W4.1's util, uses the admin tokens (fixed light), and shows clear "The driver has arrived" and trip-ended states. Its privacy review was clean; the older address exposure it found is B44.

@@ -59,7 +59,7 @@ export function CommandPalette() {
         [isSuperAdmin, userModules]
     );
 
-    const results = useMemo(() => {
+    const ranked = useMemo(() => {
         if (!query.trim()) return visibleRoutes;
         return visibleRoutes
             .map((route) => ({ route, score: fuzzyScore(query, `${route.group} ${route.label}`) }))
@@ -67,6 +67,24 @@ export function CommandPalette() {
             .sort((a, b) => b.score - a.score)
             .map((r) => r.route);
     }, [query, visibleRoutes]);
+
+    // Group results for display while preserving each group's own order.
+    const grouped = useMemo(() => {
+        const map = new Map<string, CommandPaletteRoute[]>();
+        for (const r of ranked) {
+            const key = r.group;
+            if (!map.has(key)) map.set(key, []);
+            map.get(key)!.push(r);
+        }
+        return Array.from(map.entries());
+    }, [ranked]);
+
+    // The rows in the order they render. `activeIndex` indexes this list for
+    // the highlight, arrow keys, aria-activedescendant AND Enter. Enter used
+    // to index the score-sorted list instead, which interleaves sections
+    // (e.g. "set": Settings, Live Monitoring, ...), so it could open a
+    // different row than the one highlighted.
+    const results = useMemo(() => grouped.flatMap(([, items]) => items), [grouped]);
 
     // Opening (whether via the shortcut or Radix's own onOpenChange, e.g.
     // Escape/overlay-click) always starts from a blank query. Handled here
@@ -117,17 +135,6 @@ export function CommandPalette() {
         }
         // Escape is handled by Radix Dialog's default close-on-Escape behavior.
     };
-
-    // Group results for display while preserving each group's own order.
-    const grouped = useMemo(() => {
-        const map = new Map<string, CommandPaletteRoute[]>();
-        for (const r of results) {
-            const key = r.group;
-            if (!map.has(key)) map.set(key, []);
-            map.get(key)!.push(r);
-        }
-        return Array.from(map.entries());
-    }, [results]);
 
     let flatIndex = -1;
 

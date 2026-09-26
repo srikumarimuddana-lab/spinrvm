@@ -157,6 +157,44 @@ describe("CommandPalette (rendered)", () => {
         }
     });
 
+    it.each([
+        ["dialog", "{Control>}k{/Control}"],
+        ["dialog", "{Meta>}k{/Meta}"],
+        ["alertdialog", "{Control>}k{/Control}"],
+    ])("does not open while another %s is open (%s)", async (role, combo) => {
+        state.user = PROFILES.operations;
+        const ue = userEvent.setup();
+        render(
+            <>
+                <div role={role} aria-label="Document reviewer" />
+                <CommandPalette />
+            </>,
+        );
+        await ue.keyboard(combo);
+        expect(screen.queryByRole("dialog", { name: "Jump to a page" })).toBeNull();
+    });
+
+    it("Ctrl+K does nothing while the shortcut sheet is open", async () => {
+        state.user = PROFILES.operations;
+        const ue = userEvent.setup();
+        render(
+            <>
+                <CommandPalette />
+                <KeyboardShortcutsSheet />
+            </>,
+        );
+        await ue.keyboard("?");
+        await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        await ue.keyboard("{Control>}k{/Control}");
+        expect(screen.queryByRole("dialog", { name: "Jump to a page" })).toBeNull();
+    });
+
+    it("Ctrl+K still toggles the palette itself closed", async () => {
+        const ue = await openPalette(PROFILES.operations);
+        await ue.keyboard("{Control>}k{/Control}");
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Jump to a page" })).toBeNull());
+    });
+
     it("Escape returns focus to where it was before the palette opened", async () => {
         state.user = PROFILES.operations;
         const ue = userEvent.setup();

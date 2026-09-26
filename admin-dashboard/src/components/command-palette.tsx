@@ -140,6 +140,10 @@ export function CommandPalette() {
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+                // Never open over another open modal (the document reviewer,
+                // a confirm dialog, the shortcut sheet) - same guard as "?".
+                // Closing the palette itself with Ctrl/Cmd+K still works.
+                if (!openRef.current && document.querySelector("[role='dialog'], [role='alertdialog']")) return;
                 e.preventDefault();
                 handleOpenChange(!openRef.current);
             }

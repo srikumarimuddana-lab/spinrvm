@@ -842,6 +842,7 @@ class TestGetDriverConfigSettingsFailure:
         assert result["ride_offer_sound_url"] is None
         assert result["always_location_required"] is False
         assert result["android_auto_offer_tone_enabled"] is False
+        assert result["driver_unified_toast_enabled"] is False
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -870,6 +871,29 @@ class TestGetDriverConfigSettingsFailure:
             result = await profile_mod.get_driver_config(current_user={"id": "u1"})
 
         assert result["android_auto_offer_tone_enabled"] is expected
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(True, True), (False, False), (None, False), ("true", False)],
+    )
+    async def test_driver_unified_toast_follows_the_flag(self, value, expected):
+        """Migration 490: only an exact True routes driver toasts to the unified toast."""
+        from backend.routes.drivers import profile as profile_mod
+
+        settings = {"driver_unified_toast_enabled": value}
+        with patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)):
+            result = await profile_mod.get_driver_config(current_user={"id": "u1"})
+
+        assert result["driver_unified_toast_enabled"] is expected
+
+    async def test_driver_unified_toast_defaults_off_when_column_absent(self):
+        """A settings row that predates migration 490 serves False, not a missing key."""
+        from backend.routes.drivers import profile as profile_mod
+
+        with patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})):
+            result = await profile_mod.get_driver_config(current_user={"id": "u1"})
+
+        assert result["driver_unified_toast_enabled"] is False
 
 
 class TestUpdateMyDriverAutoCreateAndReview:

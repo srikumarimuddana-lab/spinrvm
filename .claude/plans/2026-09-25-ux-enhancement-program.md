@@ -48,7 +48,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | W2.1 `[x]` | Replace 12 browser `confirm()` calls with an in-app dialog via a `useConfirm()` hook (destructive styling). The 5 `alert()` error messages move after W2.2, so they become persistent error toasts rather than auto-dismissing ones | admin | none; staff-only UX note | tests per page |
 | W2.2a `[x]` | **Added 2026-09-26:** `text-destructive-foreground` (every error toast, red buttons in 23 files) was never defined, so text on red inherited near-black (3.67:1). Define the token as white (4.83:1). User chose "own small PR first" | admin | none | static contrast guard; build emits the class; baselines unchanged |
 | W2.2 `[x]` | Toast policy: limit 3, errors persist until dismissed, `role=status`/`role=alert` | admin | none | unit test on reducer |
-| W2.3 | Unify driver toasts onto the shared toast, by swapping the implementation behind `driver-app/hooks/useToast.ts` so the 25 callers are unchanged | driver-app | flag `driver_unified_toast_enabled` | tests; `[H]` device check |
+| W2.3 `[~]` | Unify driver toasts onto the shared toast, by swapping the implementation behind `driver-app/hooks/useToast.ts` so the 25 callers are unchanged. **Decided 2026-09-26:** a driver-app copy of the rider banner; nothing moves to `shared/`. | driver-app | flag `driver_unified_toast_enabled` | tests; `[H]` device check |
 
 ### Wave 3: feel (flagged)
 | ID | Item | Surface | Gate | Verify |
@@ -146,3 +146,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - C138 (P3): the backend guard against two racing document reviews, the follow-up above. Re-checking showed it must be a compare-and-set, not a plain "still pending" filter, because editing a rejection's reason is a supported re-review.
   - C139 (P3): rider-app's two translation-key sets.
   - The `/track` page's own older issues stay in W4.2's change log, which ships with W4.2: the ETA label, a blank map after one failed poll, the `scheduled` label, the developer-facing no-key message, and polling after the trip ends.
+- 2026-09-26: Follow-ups merged (#5889). W2.3 backend half opened. Migration 490 adds the default-off `driver_unified_toast_enabled` flag, and `/drivers/config` serves it.
+  - It was built as 489 and renumbered, because `main` gained `489_monitoring_connection_summary.sql` first.
+  - The migration's comments were corrected before merge; they had called the new toast a `shared/` component.
+  - The driver-app half follows in its own PR. Its accessibility review found nothing new: the contrast failure is the theme follow-up already logged, and the 1.5× text cap follows D1.

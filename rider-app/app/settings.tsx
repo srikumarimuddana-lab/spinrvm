@@ -211,7 +211,7 @@ export default function SettingsScreen() {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowLangModal(false)} />
           <View style={styles.langSheet}>
             <View style={styles.langHandle} />
-            <Text style={styles.langTitle}>Select Language</Text>
+            <Text style={styles.langTitle}>{t('settings.selectLanguage')}</Text>
             {LANGUAGES.map((lang) => (
               <TouchableOpacity
                 key={lang.code}

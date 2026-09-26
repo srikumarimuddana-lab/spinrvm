@@ -171,3 +171,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - B: palette fixes (Enter opens the highlighted row; focus returns on close);
   - C: the "?" shortcut sheet with its per-admin off switch (WCAG 2.1.4), the Ctrl/Cmd+K dialog guard, and the change log.
   Part A opened.
+- 2026-09-26: W5.1 part A merged (#5895). The sidebar was byte-identical and its 5 visual baselines passed in CI. Part B opened: palette Enter opens the highlighted row when matches span sections, and the palette returns focus on close.

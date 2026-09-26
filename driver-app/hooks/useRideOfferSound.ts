@@ -24,6 +24,7 @@
  *                 revert to the bundled placeholder.
  */
 import { useEffect, useRef, useCallback, useMemo } from 'react';
+import { AppState, Platform } from 'react-native';
 import {
     createAudioPlayer,
     setAudioModeAsync,
@@ -55,10 +56,35 @@ function _createBundledPlayer(): AudioPlayer | null {
     }
 }
 
+function _createRemotePlayer(url: string): AudioPlayer | null {
+    try {
+        return createAudioPlayer({ uri: url });
+    } catch (e) {
+        if (__DEV__) console.warn('[useRideOfferSound] remote createAudioPlayer failed, falling back to bundled:', e);
+        return _createBundledPlayer();
+    }
+}
+
 function _getOrCreatePlayer(): AudioPlayer | null {
     if (_player) return _player;
-    _player = _createBundledPlayer();
+    // Honour the admin-uploaded sound when one is set — a released player must
+    // come back as the same sound, not silently revert to the bundled tone.
+    _player = _currentUrl ? _createRemotePlayer(_currentUrl) : _createBundledPlayer();
     return _player;
+}
+
+// Android: expo-audio's native side marks every player that is playing when the
+// app goes to the background as `isPaused`, and replays each one when the app
+// returns (AudioModule.kt OnActivityEntersBackground/Foreground). A JS pause()
+// never clears that flag, so a tone caught mid-clip by a background transition
+// resumed on return — even after the offer had expired meanwhile (a 1–2 s tone
+// with no offer on screen). Releasing the player removes it from the native
+// resume list; _getOrCreatePlayer() rebuilds it on the next offer.
+function _releasePlayer(): void {
+    const p = _player;
+    _player = null;
+    try { p?.pause(); } catch { /* never loaded — ignore */ }
+    try { p?.remove(); } catch { /* already gone — ignore */ }
 }
 
 /**
@@ -84,12 +110,7 @@ export function setOfferSoundUrl(url: string | null | undefined): void {
         // Revert to bundled. _getOrCreatePlayer() will re-create on demand.
         return;
     }
-    try {
-        _player = createAudioPlayer({ uri: next });
-    } catch (e) {
-        if (__DEV__) console.warn('[useRideOfferSound] remote createAudioPlayer failed, falling back to bundled:', e);
-        _player = _createBundledPlayer();
-    }
+    _player = _createRemotePlayer(next);
 }
 
 async function _configureAudioMode(): Promise<void> {
@@ -155,6 +176,9 @@ export function useRideOfferSound(): RideOfferSoundControls {
         } catch {
             // pause on a never-loaded player throws; ignore.
         }
+        // Android only, and only when the app is not in front: a foreground
+        // stop (accept/decline in-app) keeps the warm player exactly as before.
+        if (Platform.OS === 'android' && AppState.currentState !== 'active') _releasePlayer();
     }, []);
 
     // The car taking the ring mid-offer (car connected, flag turned on) must

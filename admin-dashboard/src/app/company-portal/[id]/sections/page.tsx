@@ -21,6 +21,7 @@ import type {
 import {
     listCompanyMembers,
 } from "@/lib/companyApi";
+import { useConfirm } from "@/hooks/useConfirm";
 
 /**
  * Sections (departments) — grouping + reporting, plus an optional
@@ -33,6 +34,7 @@ import {
  */
 export default function CompanySectionsPage() {
     const params = useParams();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     const companyId = typeof params?.id === "string" ? params.id : "";
 
     const [sections, setSections] = useState<CompanySection[]>([]);
@@ -79,7 +81,11 @@ export default function CompanySectionsPage() {
     };
 
     const handleArchive = async (sectionId: string) => {
-        if (!window.confirm("Archive this section? Members keep their history; you can reassign them anytime.")) {
+        if (!(await confirm({
+            title: "Archive this section?",
+            description: "Members keep their history; you can reassign them anytime.",
+            confirmLabel: "Archive section",
+        }))) {
             return;
         }
         try {
@@ -129,6 +135,7 @@ export default function CompanySectionsPage() {
 
     return (
         <div className="space-y-6">
+            {confirmDialog}
             <header>
                 <h1 className="flex items-center gap-2 text-xl font-semibold">
                     <FolderTree className="h-5 w-5" /> Sections

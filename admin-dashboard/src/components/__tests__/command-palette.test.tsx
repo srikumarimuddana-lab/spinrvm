@@ -127,6 +127,52 @@ describe("CommandPalette (rendered)", () => {
         }
     });
 
+    it("Enter opens the highlighted row even when matches span sections", async () => {
+        // "set" ranks Settings (System) first and Live Monitoring
+        // (Operations) second, but rows render grouped by section, so the
+        // second row on screen is another System row. Highlight and Enter
+        // must agree on every row.
+        const ue = await openPalette(PROFILES.super_admin);
+        await ue.keyboard("set");
+        const labels = optionNames();
+        expect(labels[0]).toBe("Settings");
+        expect(labels.indexOf("Live Monitoring")).toBeGreaterThan(1);
+        const hrefByLabel = new Map(
+            getCommandPaletteRoutes(accessFor(PROFILES.super_admin)).map((r) => [r.label, r.href]),
+        );
+        for (let k = 0; k < labels.length; k++) {
+            if (k > 0) {
+                await ue.keyboard("{Control>}k{/Control}");
+                await screen.findByRole("dialog");
+                await ue.keyboard("set");
+            }
+            for (let i = 0; i < k; i++) await ue.keyboard("{ArrowDown}");
+            const selected = screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
+            expect(selected?.textContent).toBe(labels[k]);
+            expect(screen.getByLabelText("Search admin dashboard pages")).toHaveAttribute("aria-activedescendant", selected?.id);
+            await ue.keyboard("{Enter}");
+            expect(push).toHaveBeenLastCalledWith(hrefByLabel.get(labels[k]));
+        }
+    });
+
+    it("Escape returns focus to where it was before the palette opened", async () => {
+        state.user = PROFILES.operations;
+        const ue = userEvent.setup();
+        render(
+            <>
+                <button type="button">Page button</button>
+                <CommandPalette />
+            </>,
+        );
+        const pageButton = screen.getByRole("button", { name: "Page button" });
+        pageButton.focus();
+        await ue.keyboard("{Control>}k{/Control}");
+        await screen.findByRole("dialog", { name: "Jump to a page" });
+        await ue.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        await waitFor(() => expect(pageButton).toHaveFocus());
+    });
+
     it("finds a child route by name and navigates to it", async () => {
         const ue = await openPalette(PROFILES.operations);
         await ue.keyboard("unpaid");

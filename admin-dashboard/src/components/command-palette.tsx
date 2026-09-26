@@ -49,6 +49,10 @@ export function CommandPalette() {
     const [query, setQuery] = useState("");
     const [activeIndex, setActiveIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
+    // Radix Dialog returns focus to its DialogTrigger on close, and the
+    // palette has none (it opens from Ctrl/Cmd+K), so focus used to fall to
+    // <body>. Remember where it was and put it back ourselves.
+    const returnFocusRef = useRef<HTMLElement | null>(null);
 
     const isSuperAdmin = user?.role === "super_admin";
     const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
@@ -59,7 +63,7 @@ export function CommandPalette() {
         [isSuperAdmin, userModules]
     );
 
-    const results = useMemo(() => {
+    const ranked = useMemo(() => {
         if (!query.trim()) return visibleRoutes;
         return visibleRoutes
             .map((route) => ({ route, score: fuzzyScore(query, `${route.group} ${route.label}`) }))
@@ -67,6 +71,24 @@ export function CommandPalette() {
             .sort((a, b) => b.score - a.score)
             .map((r) => r.route);
     }, [query, visibleRoutes]);
+
+    // Group results for display while preserving each group's own order.
+    const grouped = useMemo(() => {
+        const map = new Map<string, CommandPaletteRoute[]>();
+        for (const r of ranked) {
+            const key = r.group;
+            if (!map.has(key)) map.set(key, []);
+            map.get(key)!.push(r);
+        }
+        return Array.from(map.entries());
+    }, [ranked]);
+
+    // The rows in the order they render. `activeIndex` indexes this list for
+    // the highlight, arrow keys, aria-activedescendant AND Enter. Enter used
+    // to index the score-sorted list instead, which interleaves sections
+    // (e.g. "set": Settings, Live Monitoring, ...), so it could open a
+    // different row than the one highlighted.
+    const results = useMemo(() => grouped.flatMap(([, items]) => items), [grouped]);
 
     // Opening (whether via the shortcut or Radix's own onOpenChange, e.g.
     // Escape/overlay-click) always starts from a blank query. Handled here
@@ -76,6 +98,9 @@ export function CommandPalette() {
         if (next) {
             setQuery("");
             setActiveIndex(0);
+            if (!returnFocusRef.current && document.activeElement instanceof HTMLElement) {
+                returnFocusRef.current = document.activeElement;
+            }
         }
         setOpen(next);
     };
@@ -118,17 +143,6 @@ export function CommandPalette() {
         // Escape is handled by Radix Dialog's default close-on-Escape behavior.
     };
 
-    // Group results for display while preserving each group's own order.
-    const grouped = useMemo(() => {
-        const map = new Map<string, CommandPaletteRoute[]>();
-        for (const r of results) {
-            const key = r.group;
-            if (!map.has(key)) map.set(key, []);
-            map.get(key)!.push(r);
-        }
-        return Array.from(map.entries());
-    }, [results]);
-
     let flatIndex = -1;
 
     return (
@@ -139,6 +153,11 @@ export function CommandPalette() {
                 onOpenAutoFocus={(e) => {
                     e.preventDefault();
                     inputRef.current?.focus();
+                }}
+                onCloseAutoFocus={(e) => {
+                    e.preventDefault();
+                    returnFocusRef.current?.focus();
+                    returnFocusRef.current = null;
                 }}
             >
                 <DialogTitle className="sr-only">Jump to a page</DialogTitle>

@@ -72,8 +72,7 @@ export function useConfirm() {
                     <AlertDialogCancel>{options?.cancelLabel ?? "Cancel"}</AlertDialogCancel>
                     <AlertDialogAction
                         onClick={() => settle(true)}
-                        // The Button's own destructive variant: `text-destructive-foreground` isn't a
-                        // theme colour, so that class would drop the button's white text.
+                        // The Button's own destructive variant (white text), matching every red button.
                         className={options?.destructive ? buttonVariants({ variant: "destructive" }) : undefined}
                     >
                         {options?.confirmLabel ?? "Confirm"}

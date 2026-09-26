@@ -25,6 +25,7 @@ import { normalizeActualRouteSegments, normalizeDecodedPolyline, routeQualityLab
 const BOOKED_DISTANCE_BASES = new Set(["planned_estimated", "planned_capped", "planned_guess_deviation"]);
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { useToast } from "@/components/ui/use-toast";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
@@ -96,6 +97,7 @@ interface Props {
 
 export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
+    const { toast } = useToast();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -1160,7 +1162,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     setShowCancelDialog(false);
                                     await loadRide();
                                 } catch (err: any) {
-                                    alert(err?.message || "Failed to cancel ride");
+                                    toast({ title: "Couldn't cancel ride", description: err?.message || "Failed to cancel ride", variant: "destructive" });
                                 } finally {
                                     setCancelling(false);
                                 }

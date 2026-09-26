@@ -41,7 +41,10 @@ from backend.routes.admin.staff import AVAILABLE_MODULES, ROLE_PRESETS
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _STAFF_PAGE = _REPO_ROOT / "admin-dashboard" / "src" / "app" / "dashboard" / "staff" / "page.tsx"
 _ADMIN_INIT = _REPO_ROOT / "backend" / "routes" / "admin" / "__init__.py"
-_SIDEBAR = _REPO_ROOT / "admin-dashboard" / "src" / "components" / "sidebar.tsx"
+# The sidebar's nav entries (href/module per link) live in lib/admin-nav-config.ts
+# since #5895 moved NAV_GROUPS out of components/sidebar.tsx, which now only
+# renders them. Pointing at sidebar.tsx left these tests with nothing to parse.
+_SIDEBAR = _REPO_ROOT / "admin-dashboard" / "src" / "lib" / "admin-nav-config.ts"
 
 
 def _frontend_module_keys() -> list[str]:
@@ -208,6 +211,9 @@ def test_sidebar_links_gate_on_grantable_modules():
     src = _SIDEBAR.read_text(encoding="utf-8")
     code = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("//"))
     referenced = set(re.findall(r'module:\s*"([^"]+)"', code))
+    # An empty set means the nav config moved again and this test would pass
+    # vacuously (as it did after #5895 until _SIDEBAR was repointed).
+    assert referenced, f"no `module:` gates found in {_SIDEBAR.name}; has the nav config moved?"
     unknown = sorted(referenced - set(AVAILABLE_MODULES) - _KNOWN_UNGRANTABLE_SIDEBAR)
 
     assert not unknown, (

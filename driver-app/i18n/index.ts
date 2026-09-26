@@ -5,10 +5,13 @@ import es from './es.json';
 
 export type Language = 'en' | 'fr' | 'es';
 
+// The languages the settings picker offers. Only complete languages belong
+// here: Spanish ('es') is hidden until es.json covers every key en.json has
+// (decision D3, W7.1). es.json and the 'es' code stay so re-enabling it is a
+// one-line change, gated by __tests__/i18n/localeParity.test.ts.
 export const languages: { code: Language; name: string; nativeName: string }[] = [
     { code: 'en', name: 'English', nativeName: 'English' },
     { code: 'fr', name: 'French', nativeName: 'Français' },
-    { code: 'es', name: 'Spanish', nativeName: 'Español' },
 ];
 
 const LANGUAGE_KEY = '@spinr_language';
@@ -25,8 +28,12 @@ const translations: Record<Language, Translations> = {
 export async function getStoredLanguage(): Promise<Language> {
     try {
         const stored = await AsyncStorage.getItem(LANGUAGE_KEY);
-        if (stored === 'en' || stored === 'fr' || stored === 'es') {
-            return stored;
+        // Only honour a stored choice the picker still offers. A driver who
+        // picked Spanish before it was hidden gets English (the complete
+        // fallback) instead of a language they can no longer see or re-select.
+        // The stored value itself is left untouched.
+        if (languages.some((l) => l.code === stored)) {
+            return stored as Language;
         }
         return 'en';
     } catch {

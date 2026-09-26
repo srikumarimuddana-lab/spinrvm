@@ -55,6 +55,15 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_STATE,
+        // Pin the WebGL backend dashboard-monitoring's map canvas draws with.
+        // GPU-less CI runners already default to ANGLE/SwiftShader (the
+        // renderer the committed baseline was captured with), so this is a
+        // no-op on a normal run: same renderer string and pixels. Without it,
+        // Chromium picks its GL backend per runner, and one main run
+        // (03c5d2fe, CI run 36215139111) drew the canvas differently: a stable
+        // ~21% diff on that page only, identical across all 3 retries, while
+        // the same code passed in two other jobs.
+        launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
       },
       dependencies: ['setup'],
     },

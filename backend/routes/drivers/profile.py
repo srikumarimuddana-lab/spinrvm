@@ -109,6 +109,10 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
         # car speakers while Android Auto is connected. False on a settings
         # read failure too.
         "android_auto_offer_tone_enabled": app_settings.get("android_auto_offer_tone_enabled") is True,
+        # Migration 490, default off: render driver-app toasts through the
+        # unified toast instead of react-native-toast-message. False on a
+        # settings read failure too.
+        "driver_unified_toast_enabled": app_settings.get("driver_unified_toast_enabled") is True,
     }
 
 

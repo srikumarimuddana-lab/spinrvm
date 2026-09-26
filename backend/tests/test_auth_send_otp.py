@@ -346,3 +346,72 @@ class TestSendOtpDbStoreFailure:
             with pytest.raises(SpinrException) as excinfo:
                 asyncio.run(inner(request, body))
         assert excinfo.value.status_code == 503
+
+
+class TestSendOtpTwilioErrorClassification:
+    """CRIMSON-SMOKE-7445 OTP cluster: a permanent Twilio input error (bad/
+    undeliverable number) must not be mapped to the same 503 as a real
+    Twilio-service outage -- retrying can never succeed until the rider
+    fixes the number, and bucketing both together buried genuine-outage
+    signal in Sentry behind routine bad-input noise."""
+
+    _APP_SETTINGS = {
+        "twilio_account_sid": "AC_test",
+        "twilio_auth_token": "tok_test",
+        "twilio_from_number": "+15550001111",
+    }
+
+    def _run(self, sms_result: dict):
+        from backend.routes.auth import send_otp
+        from backend.schemas import SendOTPRequest
+
+        body = SendOTPRequest(phone=PHONE)
+        request = MagicMock()
+        request.client = MagicMock(host="127.0.0.1")
+
+        with (
+            patch("backend.routes.auth.get_app_settings", AsyncMock(return_value=self._APP_SETTINGS)),
+            patch("backend.routes.auth.settings.ENV", "production"),
+            patch("backend.routes.auth._enforce_otp_send_cap", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
+            patch("backend.routes.auth.db_supabase.insert_otp_record", AsyncMock()),
+            patch("backend.routes.auth.send_otp_sms", AsyncMock(return_value=sms_result)),
+        ):
+            inner = _resolve_inner(send_otp)
+            return asyncio.run(inner(request, body))
+
+    def test_invalid_to_number_21211_returns_400_not_503(self):
+        with pytest.raises(HTTPException) as excinfo:
+            self._run(
+                {"success": False, "provider": "twilio", "error": "TwilioRestException code=21211", "error_code": 21211}
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_not_sms_capable_21614_returns_400_not_503(self):
+        with pytest.raises(HTTPException) as excinfo:
+            self._run(
+                {"success": False, "provider": "twilio", "error": "TwilioRestException code=21614", "error_code": 21614}
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_other_twilio_failure_still_returns_503(self):
+        """A non-permanent (or unclassified) Twilio failure keeps the
+        existing retryable-503 behavior -- this fix only carves out the
+        two known permanent-input codes, it doesn't change the default."""
+        from backend.utils.error_handling import SpinrException
+
+        with pytest.raises(SpinrException) as excinfo:
+            self._run(
+                {"success": False, "provider": "twilio", "error": "TwilioRestException code=20003", "error_code": 20003}
+            )
+        assert excinfo.value.status_code == 503
+
+    def test_missing_error_code_still_returns_503(self):
+        """ExecutorSaturated and any pre-existing caller shape carries no
+        error_code at all -- must not crash on a missing key and must keep
+        the safe default (503, not 400)."""
+        from backend.utils.error_handling import SpinrException
+
+        with pytest.raises(SpinrException) as excinfo:
+            self._run({"success": False, "provider": "twilio", "error": "ExecutorSaturated", "error_code": None})
+        assert excinfo.value.status_code == 503

@@ -161,7 +161,7 @@ async def _send_sms_on(
         if pool in _POOL_DOMAIN:
             log_ctx["domain"] = _POOL_DOMAIN[pool]
         logger.bind(**log_ctx).error(f"Failed to send SMS to {masked}: ExecutorSaturated (sms pool={pool} full)")
-        return {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
+        return {"success": False, "provider": "twilio", "error": "ExecutorSaturated", "error_code": None}
     except Exception as e:
         # PIPEDA: never log or return str(e) — TwilioRestException text
         # embeds the destination number ("The 'To' number +1306... is not a
@@ -177,7 +177,12 @@ async def _send_sms_on(
             _parts.append(f"status={_status}")
         safe_error = " ".join(_parts)
         logger.error(f"Failed to send SMS to {masked}: {safe_error}")
-        return {"success": False, "provider": "twilio", "error": safe_error}
+        # error_code is Twilio's own numeric code (e.g. 21211) when present —
+        # a machine-readable field alongside the human-log-only 'error'
+        # string, so a caller can classify a permanent input error (bad/
+        # undeliverable number) separately from a transient Twilio outage
+        # without parsing the log string (CRIMSON-SMOKE-7445 OTP cluster).
+        return {"success": False, "provider": "twilio", "error": safe_error, "error_code": _code}
 
 
 async def send_otp_sms(

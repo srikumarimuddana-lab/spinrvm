@@ -288,7 +288,12 @@ class TestSMSBoundedExecutor:
                 result = await sms_mod.send_sms("+13065551234", "hi", **_TWILIO_KW)
                 elapsed = time.monotonic() - start
 
-                assert result == {"success": False, "provider": "twilio", "error": "ExecutorSaturated"}
+                assert result == {
+                    "success": False,
+                    "provider": "twilio",
+                    "error": "ExecutorSaturated",
+                    "error_code": None,
+                }
                 assert elapsed < 0.05, "a full SMS pool must reject immediately, not wait"
                 # The wedge is alertable: rejection counted, pool reads fully occupied.
                 assert _saturated(sms_mod, "general") == before + 1

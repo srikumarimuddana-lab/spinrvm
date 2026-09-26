@@ -17,6 +17,12 @@ import {
 } from "@/lib/map/maplibre-base";
 import { hasRenderingWebGL } from "@/lib/map/webgl-support";
 import {
+    MARKER_ANIMATION_MS,
+    MarkerPose,
+    interpolateMarker,
+    prefersReducedMotion,
+} from "@/lib/map/marker-interpolation";
+import {
     buildPathGradient,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
@@ -246,6 +252,71 @@ export function MonitoringMap({
     const driverMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
     const driverVisibleRef = useRef<Map<string, boolean>>(new Map());
 
+    // ── Smooth driver marker movement (UX program W4.1) ──────────────
+    // Per driver: the pose currently drawn (`shown`), the glide in progress
+    // (`from` → `to`, started at `startedAt`, null when idle) and when the
+    // last location update arrived (for the stale-gap snap). One shared
+    // requestAnimationFrame loop steps every gliding marker and stops as soon
+    // as none are moving. A marker's FIRST placement never animates — it is
+    // created at its exact position, same as before — only later moves glide.
+    const driverMotionRef = useRef<
+        Map<string, { shown: MarkerPose; from: MarkerPose; to: MarkerPose; startedAt: number | null; updatedAt: number }>
+    >(new Map());
+    const motionFrameRef = useRef<number | null>(null);
+
+    const cancelDriverMotion = useCallback(() => {
+        if (motionFrameRef.current != null) cancelAnimationFrame(motionFrameRef.current);
+        motionFrameRef.current = null;
+        driverMotionRef.current.clear();
+    }, []);
+
+    const runDriverMotion = useCallback(() => {
+        if (motionFrameRef.current != null) return;
+        const step = (now: number) => {
+            motionFrameRef.current = null;
+            let moving = false;
+            driverMotionRef.current.forEach((m, id) => {
+                if (m.startedAt == null) return;
+                const marker = driverMarkersRef.current.get(id);
+                if (!marker) {
+                    driverMotionRef.current.delete(id);
+                    return;
+                }
+                const { pose, done } = interpolateMarker(m.from, m.to, now - m.startedAt, MARKER_ANIMATION_MS);
+                marker.setLngLat([pose.lng, pose.lat]);
+                m.shown = pose;
+                if (done) m.startedAt = null;
+                else moving = true;
+            });
+            if (moving) motionFrameRef.current = requestAnimationFrame(step);
+        };
+        motionFrameRef.current = requestAnimationFrame(step);
+    }, []);
+
+    /** Move an existing driver marker to `to`: glide from wherever it is
+     *  drawn now, or set it directly when the util says snap (big jump,
+     *  stale gap, Reduce Motion, no movement) or the marker isn't on the map. */
+    const moveDriverMarker = useCallback(
+        (id: string, marker: maplibregl.Marker, to: MarkerPose, onMap: boolean) => {
+            const now = performance.now();
+            const prev = driverMotionRef.current.get(id);
+            const from = prev?.shown ?? to;
+            // A glide already in progress retargets from its current pose.
+            const { done } = interpolateMarker(from, to, 0, MARKER_ANIMATION_MS, {
+                reduceMotion: prefersReducedMotion(),
+                gapMs: prev ? now - prev.updatedAt : undefined,
+            });
+            if (!onMap || done) {
+                marker.setLngLat([to.lng, to.lat]);
+                driverMotionRef.current.set(id, { shown: to, from: to, to, startedAt: null, updatedAt: now });
+                return;
+            }
+            driverMotionRef.current.set(id, { shown: from, from, to, startedAt: now, updatedAt: now });
+            runDriverMotion();
+        },
+        [runDriverMotion],
+    );
+
     const rideMarkersRef = useRef<
         Map<string, { pickup: maplibregl.Marker; dropoff: maplibregl.Marker; sourceId: string; layerId: string }>
     >(new Map());
@@ -292,14 +363,20 @@ export function MonitoringMap({
             if (visible) marker.addTo(mapRef.current);
             driverMarkersRef.current.set(driver.id, marker);
             driverVisibleRef.current.set(driver.id, visible);
+            const pose = { lat: driver.lat, lng: driver.lng };
+            driverMotionRef.current.set(driver.id, {
+                shown: pose, from: pose, to: pose, startedAt: null, updatedAt: performance.now(),
+            });
         } else {
-            marker.setLngLat(lngLat);
+            const wasVisible = driverVisibleRef.current.get(driver.id) ?? false;
+            // Only glide a marker that stays on screen; one being shown or
+            // hidden by this update jumps straight to its new position.
+            moveDriverMarker(driver.id, marker, { lat: driver.lat, lng: driver.lng }, visible && wasVisible);
             const el = marker.getElement();
             el.style.backgroundColor = driverColor(driver);
             el.title = driver.name;
             el.textContent = driver.name.slice(0, 1).toUpperCase();
 
-            const wasVisible = driverVisibleRef.current.get(driver.id) ?? false;
             if (visible && !wasVisible) marker.addTo(mapRef.current);
             else if (!visible && wasVisible) marker.remove();
             driverVisibleRef.current.set(driver.id, visible);
@@ -314,7 +391,7 @@ export function MonitoringMap({
         if (followMode && selected?.type === "driver" && selected.id === driver.id) {
             panTo(driver.lat, driver.lng);
         }
-    }, [filters, searchQuery, followMode, selected, panTo]);
+    }, [filters, searchQuery, followMode, selected, panTo, moveDriverMarker]);
 
     const removeDriverMarker = useCallback((driverId: string) => {
         const m = driverMarkersRef.current.get(driverId);
@@ -322,6 +399,7 @@ export function MonitoringMap({
             m.remove();
             driverMarkersRef.current.delete(driverId);
             driverVisibleRef.current.delete(driverId);
+            driverMotionRef.current.delete(driverId);
         }
     }, []);
 
@@ -550,6 +628,7 @@ export function MonitoringMap({
                     if (cancelled) return;
                     detach?.();
                     detach = null;
+                    cancelDriverMotion();
                     driverMarkersRef.current.forEach((m) => m.remove());
                     driverMarkersRef.current.clear();
                     driverVisibleRef.current.clear();
@@ -583,6 +662,7 @@ export function MonitoringMap({
         return () => {
             cancelled = true;
             detach?.();
+            cancelDriverMotion();
             driverMarkersRef.current.forEach((m) => m.remove());
             driverMarkersRef.current.clear();
             driverVisibleRef.current.clear();

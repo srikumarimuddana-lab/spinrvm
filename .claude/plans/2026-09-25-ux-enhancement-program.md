@@ -62,7 +62,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 4: smooth maps on the web
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W4.1 | Marker interpolation util (lerp position + bearing, snap on large jumps, off under Reduce Motion) for monitoring and the live-ride map | admin | none | unit tests on util; monitoring baseline unchanged (tiles stubbed) |
+| W4.1 `[~]` | Marker interpolation util (lerp position + bearing, snap on large jumps, off under Reduce Motion) for monitoring and the live-ride map | admin | none | unit tests on util; monitoring baseline unchanged (tiles stubbed) |
 | W4.2 | Same util on `/track`, plus brand tokens and a clear "arrived / trip ended" state. Adds no PII beyond today's driver name and plate | web | none | tests; `spinr-regulatory-compliance-checker` (PIPEDA) |
 
 ### Wave 5: admin efficiency
@@ -135,3 +135,8 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - a quick third A resending the review.
   Documents that need an expiry date were protected. Fixed client-side, ahead of W4.1 because it's a live accidental-approval path on driver eligibility.
 - Follow-up, not scheduled: `admin_review_driver_document` (`backend/routes/admin/documents.py`) has no `status = 'pending'` condition, so two racing reviews (for example two tabs) both apply, with duplicate audit rows and driver notifications. It needs a backend "0 rows means already reviewed" guard in its own PR.
+- 2026-09-26: Document reviewer fix merged (#5887). W4.1 opened: the marker interpolation util (position and heading glide between polls; snaps on large jumps, stale feeds and Reduce Motion) and its use on the monitoring map. The live-ride map (`rides/live/[id]/live-map.tsx`) isn't wired yet. W4.2 (`/track`) is built on this util and queued behind it.
+- W4.1 follow-ups from its review, not scheduled:
+  - wire the util into the live-ride map;
+  - ignore a poll position older than the one already shown;
+  - profile the animation loop at fleet scale (hundreds of markers).

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/authStore";
-import { COMMAND_PALETTE_ROUTES, type CommandPaletteRoute } from "@/lib/command-palette-routes";
+import { getCommandPaletteRoutes, type CommandPaletteRoute } from "@/lib/command-palette-routes";
 import { cn } from "@/lib/utils";
 
 /**
@@ -14,9 +14,9 @@ import { cn } from "@/lib/utils";
  * the flag is on, so the keybinding listener below is itself dark until a
  * super admin flips the flag on the Settings page.
  *
- * Filtering mirrors sidebar.tsx's NAV_GROUPS visibility logic exactly (same
- * module-grant / superAdminOnly / hideIfModule rules) so the palette never
- * surfaces a route a given admin can't actually reach.
+ * Routes come from lib/admin-nav-config.ts — the sidebar's own config and
+ * visibility rules (W5.1) — so the palette never surfaces a route the
+ * sidebar hides from a given admin.
  */
 
 // Simple case-insensitive scorer: exact/prefix/substring match first, then a
@@ -53,15 +53,11 @@ export function CommandPalette() {
     const isSuperAdmin = user?.role === "super_admin";
     const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
 
-    // Same visibility rules as sidebar.tsx's NAV_GROUPS filtering — see that
-    // file's SidebarInner() for the reference implementation this mirrors.
-    const visibleRoutes = useMemo(() => {
-        return COMMAND_PALETTE_ROUTES.filter((r) => {
-            if (r.hideIfModule && (isSuperAdmin || userModules.includes(r.hideIfModule))) return false;
-            if (r.superAdminOnly) return isSuperAdmin;
-            return isSuperAdmin || userModules.includes(r.module);
-        });
-    }, [isSuperAdmin, userModules]);
+    // The routes the sidebar shows this admin, in sidebar order.
+    const visibleRoutes = useMemo(
+        () => getCommandPaletteRoutes({ isSuperAdmin, modules: userModules }),
+        [isSuperAdmin, userModules]
+    );
 
     const results = useMemo(() => {
         if (!query.trim()) return visibleRoutes;

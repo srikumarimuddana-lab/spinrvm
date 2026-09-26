@@ -139,7 +139,7 @@ A second alternative was motion.dev's `useReducedMotion()`, which `alert-feed.ts
   - Not checked for how it feels in follow mode, where the map pans to the target while the marker glides in.
 - **No performance profiling** at fleet scale (hundreds of simultaneously moving markers). The per-frame DOM-write cost is reasoned about in §4, not measured.
 - **Thresholds (1 s glide, 500 m snap, 30 s stale gap) are judgement calls** based on the 4 s driver ping cadence. They have not been tuned against production data.
-- **The live-ride map (`src/app/dashboard/rides/live/[id]/live-map.tsx`) is not wired.** It is on this work stream's do-not-touch list (`rides/**`). Its driver marker moves with a single direct `driverMarkerRef.current.setLngLat([driverLng, driverLat])` in an effect keyed on the driver position. That is the one call site to swap for this util in a follow-up.
+- **The live-ride map (`src/app/dashboard/rides/live/[id]/live-map.tsx`) is not wired.** It is on this work stream's do-not-touch list (`rides/**`). Its driver marker moves with a single direct `driverMarkerRef.current.setLngLat([driverLng, driverLat])` in an effect keyed on the driver position. That is the one call site to swap for this util in a follow-up. **Update (2026-09-26):** wired in the follow-up; see `2026-09-26-live-ride-map-marker-glide.md`.
 
 ## 10. Sign-off
 

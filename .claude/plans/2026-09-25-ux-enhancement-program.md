@@ -62,13 +62,13 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 4: smooth maps on the web
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W4.1 `[~]` | Marker interpolation util (lerp position + bearing, snap on large jumps, off under Reduce Motion) for monitoring and the live-ride map | admin | none | unit tests on util; monitoring baseline unchanged (tiles stubbed) |
-| W4.2 `[~]` | Same util on `/track`, plus brand tokens and a clear "arrived / trip ended" state. Adds no PII beyond today's driver name and plate | web | none | tests; `spinr-regulatory-compliance-checker` (PIPEDA) |
+| W4.1 `[x]` | Marker interpolation util (lerp position + bearing, snap on large jumps, off under Reduce Motion) for monitoring and the live-ride map | admin | none | unit tests on util; monitoring baseline unchanged (tiles stubbed) |
+| W4.2 `[x]` | Same util on `/track`, plus brand tokens and a clear "arrived / trip ended" state. Adds no PII beyond today's driver name and plate | web | none | tests; `spinr-regulatory-compliance-checker` (PIPEDA) |
 
 ### Wave 5: admin efficiency
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W5.1 `[~]` | Command palette routes derived from the sidebar config (one source), plus a `?` shortcut sheet | admin | existing `admin_command_palette_enabled` (flip `[H]`) | tests |
+| W5.1 `[x]` | Command palette routes derived from the sidebar config (one source), plus a `?` shortcut sheet | admin | existing `admin_command_palette_enabled` (flip `[H]`) | tests |
 | W5.2 | Saved filter views (per admin, browser-local) on Rides and Drivers | admin | none | tests |
 | W5.3 | Shared `EmptyState` component; pollers pause while the tab is hidden and refresh on focus | admin | none | tests |
 | W5.5 | Sticky table headers. Needs the table scroll container restructured (or `thead` sticky inside a vertically scrolling table wrapper) without changing baselined pages | admin | none | baselines, which may need re-capture `[H]` |
@@ -173,3 +173,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   Part A opened.
 - 2026-09-26: W5.1 part A merged (#5895). The sidebar was byte-identical and its 5 visual baselines passed in CI. Part B opened: palette Enter opens the highlighted row when matches span sections, and the palette returns focus on close.
 - 2026-09-26: W5.1 part B merged (#5896): palette Enter opens the highlighted row, and focus returns on close. Part C opened: the "?" shortcut sheet with its per-admin single-key off switch (WCAG 2.1.4), the palette's "Keyboard shortcuts" entry and footer hints, the Ctrl/Cmd+K dialog guard, and the W5.1 change log covering all three parts. W5.1 stays `[~]` until part C merges; everything stays behind `admin_command_palette_enabled` (flip `[H]`).
+- 2026-09-26: W5.1 part C merged (#5897), so W5.1 is done in code; turning on `admin_command_palette_enabled` stays `[H]`. W4.2 is marked done: it merged in #5892, and the next main CI run (`0a4d0da`) passed. W4.1's last piece opened: the admin live-ride map's driver marker glides between its 5 s polls with the same util and pattern as the monitoring map and `/track`. It was left out of #5888 only because `rides/**` was fenced off during parallel work. W4.1 is complete once it merges. Its two other review follow-ups stay unscheduled: ignoring a poll position older than the one shown, and profiling the animation loop at fleet scale.

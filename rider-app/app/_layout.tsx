@@ -67,6 +67,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import type { ConfirmSheetButton } from '../components/ConfirmSheet';
 import Toast from '../components/Toast';
 import { MinTipAmountContext } from '../utils/minTipContext';
+import { useLanguageStore } from '../i18n';
 
 export const StripeKeyContext = React.createContext<string | null>(null);
 // Public base URL for the "Share Trip" tracking page, served from
@@ -321,6 +322,9 @@ function targetPathForRideStatus(status: string): string | null {
 
 function RootLayout() {
   useEffect(() => { void clearLegacyScheduledReminders(); }, []);
+  // Restore the rider's saved language. One AsyncStorage read, settled long
+  // before the navReady gate (>= SPLASH_MIN_DISPLAY_MS) mounts any screen.
+  useEffect(() => { void useLanguageStore.getState().hydrate(); }, []);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,

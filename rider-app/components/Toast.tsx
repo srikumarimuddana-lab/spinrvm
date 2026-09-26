@@ -38,6 +38,14 @@ function variantConfig(colors: ThemeColors, variant: ToastVariant) {
 
 const DEFAULT_DURATION = 4000;
 
+/**
+ * Toasts sit near the top, where the ride screens float the 44 pt SOS button
+ * (top-right, 16 pt from the edge: ride-in-progress, driver-arriving).
+ * Ending every toast this far from the right keeps SOS visible and tappable
+ * while a toast shows. Same value as driver-app/components/toastConfig.tsx.
+ */
+export const SOS_COLUMN_CLEARANCE = 76;
+
 // danger toasts are urgent/error content — interrupt whatever the screen
 // reader is currently announcing. Everything else (info/success/warning) is
 // informational and should queue politely behind other speech.
@@ -168,7 +176,7 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     left: 16,
-    right: 16,
+    right: SOS_COLUMN_CLEARANCE,
     borderRadius: 12,
     paddingHorizontal: SPACING.md,
     paddingVertical: 14,

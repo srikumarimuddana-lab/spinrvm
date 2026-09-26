@@ -12,7 +12,7 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render, act } from '@testing-library/react-native';
-import Toast from '../Toast';
+import Toast, { SOS_COLUMN_CLEARANCE } from '../Toast';
 import { useToastStore, showToast } from '../../store/toastStore';
 import { ThemeProvider } from '@shared/theme/ThemeContext';
 import { lightColors, darkColors } from '@shared/theme/index';
@@ -77,5 +77,23 @@ describe('Toast — theme-driven colors', () => {
     // than asserting the pre-hydration light-mode default.
     await findByRole('alert');
     expect(backgroundOf(getByRole('alert'))).toBe(darkColors.danger);
+  });
+});
+
+describe('Toast — keeps clear of the SOS button', () => {
+  it('ends every toast left of the SOS column', () => {
+    const { getByRole } = render(<Toast />);
+    for (const variant of ['success', 'danger', 'warning', 'info'] as const) {
+      act(() => {
+        showToast('Heads up', undefined, variant);
+      });
+      const style = StyleSheet.flatten(getByRole('alert').props.style);
+      expect(style.left).toBe(16);
+      expect(style.right).toBe(SOS_COLUMN_CLEARANCE);
+    }
+  });
+
+  it('clears the 44 pt SOS button at right 16 with a gap', () => {
+    expect(SOS_COLUMN_CLEARANCE).toBeGreaterThanOrEqual(16 + 44 + 8);
   });
 });

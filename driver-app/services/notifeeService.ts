@@ -552,6 +552,54 @@ export async function displayRideOfferNotification(
 }
 
 /**
+ * iOS only: remove the ride-offer alert(s) the backend's APNs push delivered.
+ *
+ * On iOS the minimised-app offer is a remote alert (aps.alert + ride_offer.caf),
+ * not something Notifee posted, so `cancelNotification(ride-offer-current)`
+ * cannot reach it and it would sit in Notification Center after the offer has
+ * ended or the app has taken over. Notifee lists delivered remote alerts too
+ * (it parses them from the request), keyed by their APNs identifier.
+ *
+ * This clears the CARD. A sound iOS has already started playing is not ours to
+ * stop — the OS owns it and there is no API for it.
+ *
+ * `rideId` limits removal to that ride's alert.
+ *
+ * Call ONLY when the driver is actually looking at the app (a foreground
+ * handover). Never from a generic "offer over" path or at mount: iOS wakes a
+ * killed app in the background for an offer push, the dashboard mounts with
+ * rideState 'idle', and removing the alert then would delete the only card the
+ * driver has.
+ *
+ * No-op off iOS: Android dispatch pushes are data-only, so there is nothing
+ * delivered to remove. Never throws — a failed lookup must not cost the caller
+ * its own post/cancel — but it is logged loudly, not swallowed.
+ */
+export async function dismissDeliveredOfferAlerts(rideId?: string): Promise<void> {
+    if (Platform.OS !== 'ios') return;
+    try {
+        const delivered = await notifee.getDisplayedNotifications();
+        const ids = delivered
+            .filter((n) =>
+                n.notification?.data?.type === 'new_ride_assignment' ||
+                n.notification?.ios?.categoryId === RIDE_OFFER_CATEGORY_ID,
+            )
+            // Only the ride being handed over: a newer offer's card must not go
+            // with it. An alert carrying no ride_id can't be told apart, so it
+            // is still removed.
+            .filter((n) => {
+                const alertRideId = n.notification?.data?.ride_id;
+                return !rideId || typeof alertRideId !== 'string' || alertRideId === rideId;
+            })
+            .map((n) => n.id)
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (ids.length > 0) await notifee.cancelDisplayedNotifications(ids);
+    } catch (e) {
+        console.error('[Notifee] could not remove the delivered ride-offer alert (iOS):', e);
+    }
+}
+
+/**
  * Dismiss the active ride-offer notification — call this when the offer
  * is accepted, declined, expired, or cancelled so it doesn't linger.
  */

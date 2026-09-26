@@ -18,6 +18,8 @@ const mockRequestPermission = jest.fn().mockResolvedValue(undefined);
 const mockSetNotificationCategories = jest.fn().mockResolvedValue(undefined);
 const mockDisplayNotification = jest.fn().mockResolvedValue(undefined);
 const mockCancelNotification = jest.fn().mockResolvedValue(undefined);
+const mockGetDisplayedNotifications = jest.fn().mockResolvedValue([]);
+const mockCancelDisplayedNotifications = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('@notifee/react-native', () => ({
   __esModule: true,
@@ -29,6 +31,8 @@ jest.mock('@notifee/react-native', () => ({
     setNotificationCategories: (...a: unknown[]) => mockSetNotificationCategories(...a),
     displayNotification: (...a: unknown[]) => mockDisplayNotification(...a),
     cancelNotification: (...a: unknown[]) => mockCancelNotification(...a),
+    getDisplayedNotifications: (...a: unknown[]) => mockGetDisplayedNotifications(...a),
+    cancelDisplayedNotifications: (...a: unknown[]) => mockCancelDisplayedNotifications(...a),
   },
   AndroidCategory: { CALL: 'call' },
   AndroidColor: { GREEN: 'green' },
@@ -443,6 +447,89 @@ describe('notifeeService', () => {
       mockCancelNotification.mockRejectedValueOnce(new Error('not found'));
       const { dismissRideOfferNotification } = require('../../services/notifeeService');
       await expect(dismissRideOfferNotification()).resolves.toBeUndefined();
+    });
+  });
+
+  // iOS plays the offer sound from the backend's APNs alert, which Notifee did
+  // not post and `cancelNotification('ride-offer-current')` cannot reach. When
+  // the app takes over in the foreground, that delivered card must be removed
+  // too. Android has no such alert (its pushes are data-only), so nothing here
+  // may run there.
+  describe('dismissDeliveredOfferAlerts (iOS foreground handover)', () => {
+    const APNS_OFFER = {
+      id: 'apns-1',
+      notification: { data: { type: 'new_ride_assignment', ride_id: 'ride-1' } },
+    };
+    const APNS_OFFER_BY_CATEGORY = { id: 'apns-2', notification: { ios: { categoryId: 'ride-offer' } } };
+    const OTHER = { id: 'other-1', notification: { data: { type: 'ride_completed' } } };
+
+    beforeEach(() => {
+      mockGetDisplayedNotifications.mockResolvedValue([APNS_OFFER, APNS_OFFER_BY_CATEGORY, OTHER]);
+    });
+
+    it('removes only the delivered offer alerts on iOS', async () => {
+      mockPlatform.OS = 'ios';
+      const { dismissDeliveredOfferAlerts } = require('../../services/notifeeService');
+      await dismissDeliveredOfferAlerts();
+      expect(mockCancelDisplayedNotifications).toHaveBeenCalledWith(['apns-1', 'apns-2']);
+    });
+
+    it('does nothing on Android — no delivered-notification API is touched', async () => {
+      const { dismissDeliveredOfferAlerts } = require('../../services/notifeeService');
+      await dismissDeliveredOfferAlerts();
+      expect(mockGetDisplayedNotifications).not.toHaveBeenCalled();
+      expect(mockCancelDisplayedNotifications).not.toHaveBeenCalled();
+    });
+
+    // A newer offer's card must survive the handover of an older one.
+    it('with a rideId, removes only that ride alert (and ones with no ride_id)', async () => {
+      mockPlatform.OS = 'ios';
+      mockGetDisplayedNotifications.mockResolvedValue([
+        { id: 'a-r1', notification: { data: { type: 'new_ride_assignment', ride_id: 'r1' } } },
+        { id: 'a-r2', notification: { data: { type: 'new_ride_assignment', ride_id: 'r2' } } },
+        { id: 'a-none', notification: { ios: { categoryId: 'ride-offer' } } },
+      ]);
+      const { dismissDeliveredOfferAlerts } = require('../../services/notifeeService');
+      await dismissDeliveredOfferAlerts('r1');
+      expect(mockCancelDisplayedNotifications).toHaveBeenCalledWith(['a-r1', 'a-none']);
+    });
+
+    it('cancels nothing when no offer alert is delivered', async () => {
+      mockPlatform.OS = 'ios';
+      mockGetDisplayedNotifications.mockResolvedValue([OTHER]);
+      const { dismissDeliveredOfferAlerts } = require('../../services/notifeeService');
+      await dismissDeliveredOfferAlerts();
+      expect(mockCancelDisplayedNotifications).not.toHaveBeenCalled();
+    });
+
+    it('never throws when the lookup fails, and logs it loudly', async () => {
+      mockPlatform.OS = 'ios';
+      mockGetDisplayedNotifications.mockRejectedValue(new Error('native error'));
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { dismissDeliveredOfferAlerts } = require('../../services/notifeeService');
+      await expect(dismissDeliveredOfferAlerts()).resolves.toBeUndefined();
+      expect(errSpy).toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    // The mount-time trap: iOS wakes a killed app in the background for an
+    // offer push and the dashboard mounts with rideState 'idle', which runs the
+    // generic dismiss. Removing the APNs alert there would delete the driver's
+    // only card. These paths must therefore never remove delivered alerts.
+    it('the generic dismiss never removes delivered alerts on iOS', async () => {
+      mockPlatform.OS = 'ios';
+      const { dismissRideOfferNotification } = require('../../services/notifeeService');
+      await dismissRideOfferNotification();
+      expect(mockGetDisplayedNotifications).not.toHaveBeenCalled();
+      expect(mockCancelDisplayedNotifications).not.toHaveBeenCalled();
+    });
+
+    it('a silent iOS post never removes delivered alerts (the caller decides)', async () => {
+      mockPlatform.OS = 'ios';
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { silent: true });
+      expect(mockGetDisplayedNotifications).not.toHaveBeenCalled();
+      expect(mockCancelDisplayedNotifications).not.toHaveBeenCalled();
     });
   });
 

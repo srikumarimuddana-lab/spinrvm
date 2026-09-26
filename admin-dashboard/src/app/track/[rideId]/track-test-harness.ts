@@ -62,6 +62,8 @@ export const harness = {
     status: 200,
     /** OSRM geometry ([lng, lat] pairs) to answer with; null → no route. */
     route: null as [number, number][] | null,
+    /** When set, OSRM answers only after this resolves (an in-flight request). */
+    routeGate: null as Promise<void> | null,
     markers: [] as FakeMarker[],
     polylines: [] as FakePolyline[],
     mapListeners: new Map<string, () => void>(),
@@ -181,6 +183,7 @@ function installFetch() {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("router.project-osrm.org")) {
+            if (harness.routeGate) await harness.routeGate;
             if (!harness.route) return { ok: false, json: async () => null } as Response;
             const coordinates = harness.route;
             return { ok: true, json: async () => ({ routes: [{ geometry: { coordinates } }] }) } as Response;
@@ -205,6 +208,7 @@ export function setupTrackHarness() {
     harness.ride = null;
     harness.status = 200;
     harness.route = null;
+    harness.routeGate = null;
     harness.markers.length = 0;
     harness.polylines.length = 0;
     harness.mapListeners.clear();

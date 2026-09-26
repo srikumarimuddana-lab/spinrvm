@@ -73,13 +73,19 @@ const STATUS_LABEL: Record<string, { label: string; dot: string }> = {
   driver_accepted:  { label: 'Driver on the way', dot: 'bg-info' },
   driver_arrived:   { label: 'Driver arrived',    dot: 'bg-success' },
   in_progress:      { label: 'Trip in progress',  dot: 'bg-info' },
-  completed:        { label: 'Trip complete',     dot: 'bg-muted-foreground' },
+  completed:        { label: 'Trip ended',        dot: 'bg-muted-foreground' },
   cancelled:        { label: 'Trip cancelled',    dot: 'bg-destructive' },
 };
 
 // Statuses where the driver is heading to pickup (route: driver → pickup).
 // Once in_progress the driver heads to dropoff (route: driver → dropoff).
 const EN_ROUTE_TO_PICKUP = new Set(['driver_assigned', 'driver_accepted', 'driver_arrived']);
+
+// RideStatus.terminal_statuses() in the backend. For these the tracking
+// endpoint (backend/routes/rides/sharing.py) returns only status, message and
+// the two addresses — no driver, no coordinates — so nothing on the map is
+// live any more.
+const ENDED_STATUSES = new Set(['completed', 'cancelled']);
 
 // Minimum distance (degrees ~= ~10m) the driver must move before we re-fetch
 // the OSRM route — avoids hammering the public router on every poll tick.
@@ -359,7 +365,10 @@ export default function TrackRide() {
     upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pickupNavSvg,  TRACK_PIN_SIZE, true);
     upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, TRACK_PIN_SIZE, true);
 
-    const d = ride.driver;
+    // Once the trip is over the car comes off the map even if a payload were
+    // ever to carry a driver again — a parked car on an ended trip reads as live.
+    const ended = ENDED_STATUSES.has(ride.status);
+    const d = ended ? undefined : ride.driver;
     // Args: (ref, lat, lng, svgUrl, size, centerAnchor, zIndex).
     // centerAnchor MUST be the 6th arg (a boolean) — passing zIndex here
     // directly is a type error and breaks the Vercel build. The car is a
@@ -455,6 +464,16 @@ export default function TrackRide() {
       if (pts >= 2) { map.fitBounds(bounds, 80); didFitRef.current = true; }
     }
 
+    // ── Trip over ──────────────────────────────────────────────────────────────
+    // The pins and the car are already gone above (no coordinates). The route
+    // line isn't tied to the payload, so clear it here, and void any OSRM
+    // request still in flight so it can't draw one back afterwards.
+    if (ended) {
+      routeFetchSeqRef.current++;
+      routePolylinesRef.current.forEach(l => l.setMap(null));
+      routePolylinesRef.current = [];
+    }
+
     // ── OSRM route: recalculate from driver's current position ─────────────────
     // Route origin = driver (when assigned) or pickup (no driver yet).
     // Route destination = pickup (driver en route to pickup) or dropoff (trip in progress).
@@ -480,7 +499,7 @@ export default function TrackRide() {
     // the heading, which reads that same geometry.
     const driverAppeared = hasDriver && lastRoutedDriverRef.current === null;
 
-    if ((neverRouted || legChanged || driverMoved || driverAppeared) && ride.pickup_lat != null && ride.dropoff_lat != null) {
+    if (!ended && (neverRouted || legChanged || driverMoved || driverAppeared) && ride.pickup_lat != null && ride.dropoff_lat != null) {
       const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
       const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
       const destLat    = currentLeg === 'pickup' ? ride.pickup_lat  : ride.dropoff_lat;
@@ -560,7 +579,12 @@ export default function TrackRide() {
   }, [ride, mapsReady, moveCar, stopCarMotion]);
 
   const statusCfg    = STATUS_LABEL[ride?.status ?? ''] ?? STATUS_LABEL.searching;
-  const isActive     = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);
+  const isEnded      = !!ride?.status && ENDED_STATUSES.has(ride.status);
+  const isActive     = !!ride?.status && !isEnded;
+  const isArrived    = ride?.status === 'driver_arrived';
+  // The ETA is to the drop-off, so it means nothing while the driver waits at
+  // pickup; "arrived" replaces it rather than sitting next to it.
+  const headline     = isArrived ? 'Your driver has arrived' : statusCfg.label;
   const driverName   = ride?.driver?.name || 'Driver';
   const vehicleLine  = useMemo(() => {
     const dr = ride?.driver;
@@ -609,18 +633,27 @@ export default function TrackRide() {
           </div>
         )}
 
-        {/* Status pill */}
-        <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-card/95 backdrop-blur">
-          <span className={`inline-block w-2 h-2 rounded-full ${statusCfg.dot}`} />
-          <span className="text-xs font-semibold text-foreground tracking-wide">
-            {statusCfg.label.toUpperCase()}
-          </span>
-          {isActive && ride.eta_minutes != null && (
-            <span className="ml-auto text-xs font-medium text-muted-foreground">
-              ETA {ride.eta_minutes} min
+        {isEnded ? (
+          // Trip over: say so over the (now empty) map instead of leaving a
+          // map that looks like it's still waiting for the car.
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-background/90 px-6 text-center">
+            <p className="text-lg font-semibold text-foreground">{statusCfg.label}</p>
+            <p className="text-sm text-muted-foreground">Live location is no longer shared.</p>
+          </div>
+        ) : (
+          // Status pill
+          <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-card/95 backdrop-blur">
+            <span className={`inline-block w-2 h-2 rounded-full ${statusCfg.dot}`} />
+            <span className="text-xs font-semibold text-foreground tracking-wide">
+              {statusCfg.label.toUpperCase()}
             </span>
-          )}
-        </div>
+            {isActive && !isArrived && ride.eta_minutes != null && (
+              <span className="ml-auto text-xs font-medium text-muted-foreground">
+                ETA {ride.eta_minutes} min
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bottom sheet */}
@@ -628,7 +661,11 @@ export default function TrackRide() {
         <div className="mx-auto w-12 h-1.5 bg-border rounded-full mt-3" />
 
         <div className="px-5 pt-5 pb-4">
-          {ride.eta_minutes != null && isActive ? (
+          {/* Announces each status change (e.g. arrived, trip ended) to screen readers. */}
+          <p className="sr-only" role="status">{headline}</p>
+          {isArrived ? (
+            <div className="text-xl font-semibold text-foreground">{headline}</div>
+          ) : ride.eta_minutes != null && isActive ? (
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-semibold text-foreground tracking-tight">{ride.eta_minutes}</span>
               <span className="text-sm text-muted-foreground font-medium">min away</span>

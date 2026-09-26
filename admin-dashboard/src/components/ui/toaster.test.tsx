@@ -71,4 +71,14 @@ describe("Toaster policy", () => {
         expect(assertive?.textContent).toContain("Save failed");
         expect(polite).toBeDefined();
     });
+
+    it("gives the close button a name and shows it on error toasts", () => {
+        render(<Toaster />);
+        show({ title: "Save failed", variant: "destructive" });
+        const close = screen.getByRole("button", { name: "Dismiss notification" });
+        expect(close).toHaveClass("group-[.destructive]:opacity-100");
+        act(() => { close.click(); });
+        advance(1_000);
+        expect(screen.queryByText("Save failed")).toBeNull();
+    });
 });

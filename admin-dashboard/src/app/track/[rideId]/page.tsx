@@ -17,6 +17,12 @@ import {
   visualRotationDegrees,
   type TrackingLatLng,
 } from '@spinr/shared/utils/vehicleTracking';
+import {
+  MARKER_ANIMATION_MS,
+  interpolateMarker,
+  prefersReducedMotion,
+  type MarkerPose,
+} from '@/lib/map/marker-interpolation';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -120,7 +126,18 @@ export default function TrackRide() {
   const carBearingRef = useRef<number | null>(null);
   const carRotationRef = useRef(0);
 
-  // Point the car icon along its last known course.
+  // ── Car glide (UX program W4.2) ────────────────────────────────────────────
+  // The pose drawn right now (`shown`), the glide in progress (`from` → `to`,
+  // started at `startedAt`, null when idle) and when the last update arrived
+  // (for the util's stale-gap snap). Position and heading both move through
+  // marker-interpolation (W4.1) on one requestAnimationFrame loop, so they
+  // glide together and snap together (big jump, stale feed, Reduce Motion).
+  const carMotionRef = useRef<{
+    shown: MarkerPose; from: MarkerPose; to: MarkerPose; startedAt: number | null; updatedAt: number;
+  } | null>(null);
+  const carFrameRef = useRef<number | null>(null);
+
+  // Point the car icon along `bearing` (world-space course, degrees).
   //
   // An AdvancedMarkerElement's content is ordinary DOM and the map does NOT
   // rotate it, so this is a SCREEN-space transform and the map's own heading
@@ -129,9 +146,8 @@ export default function TrackRide() {
   // This map is north-up in practice (disableDefaultUI hides the rotate
   // control), but a two-finger rotate on a vector map still moves it, and a
   // transform that ignored that would be wrong by exactly the rotation angle.
-  const applyCarRotation = useCallback(() => {
+  const applyCarRotation = useCallback((bearing: number | null | undefined) => {
     const marker = driverMarkerRef.current;
-    const bearing = carBearingRef.current;
     if (!marker || bearing == null) return;
     const img: HTMLImageElement | null = marker.content?.querySelector?.('img') ?? null;
     if (!img) return;
@@ -142,11 +158,60 @@ export default function TrackRide() {
       visualRotationDegrees(bearing, mapHeading),
     );
     img.style.transformOrigin = '50% 50%';
-    // Turn visibly rather than snapping. Poll cadence is 5 s, so a short tween
-    // reads as the car rounding a corner instead of teleporting its angle.
-    img.style.transition = 'transform 600ms ease-out';
+    // No CSS transition: the turn is stepped frame by frame by the glide
+    // below, so it snaps with the position instead of tweening on its own.
     img.style.transform = `rotate(${carRotationRef.current}deg)`;
   }, []);
+
+  const drawCar = useCallback((pose: MarkerPose) => {
+    const marker = driverMarkerRef.current;
+    if (!marker) return;
+    marker.position = { lat: pose.lat, lng: pose.lng };
+    applyCarRotation(pose.bearing);
+  }, [applyCarRotation]);
+
+  const stopCarMotion = useCallback(() => {
+    if (carFrameRef.current != null) cancelAnimationFrame(carFrameRef.current);
+    carFrameRef.current = null;
+    carMotionRef.current = null;
+  }, []);
+
+  /** Move the car to `to`: glide from wherever it is drawn now, or draw it
+   *  there directly when the util says snap (first placement, nothing moved,
+   *  a jump over 500 m, a stale feed, Reduce Motion). */
+  const moveCar = useCallback((to: MarkerPose) => {
+    const now = performance.now();
+    const prev = carMotionRef.current;
+    // A glide already under way retargets from the pose drawn right now.
+    const from = prev?.shown ?? to;
+    const { done } = interpolateMarker(from, to, 0, MARKER_ANIMATION_MS, {
+      reduceMotion: prefersReducedMotion(),
+      gapMs: prev ? now - prev.updatedAt : undefined,
+    });
+    if (done) {
+      if (carFrameRef.current != null) cancelAnimationFrame(carFrameRef.current);
+      carFrameRef.current = null;
+      carMotionRef.current = { shown: to, from: to, to, startedAt: null, updatedAt: now };
+      drawCar(to);
+      return;
+    }
+    carMotionRef.current = { shown: from, from, to, startedAt: now, updatedAt: now };
+    if (carFrameRef.current != null) return; // the running loop picks up the new target
+    const step = (t: number) => {
+      carFrameRef.current = null;
+      const m = carMotionRef.current;
+      if (!m || m.startedAt == null) return;
+      const { pose, done: arrived } = interpolateMarker(m.from, m.to, t - m.startedAt, MARKER_ANIMATION_MS);
+      m.shown = pose;
+      drawCar(pose);
+      if (arrived) m.startedAt = null;
+      else carFrameRef.current = requestAnimationFrame(step);
+    };
+    carFrameRef.current = requestAnimationFrame(step);
+  }, [drawCar]);
+
+  // No frame loop outlives the page.
+  useEffect(() => stopCarMotion, [stopCarMotion]);
 
   // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
@@ -190,7 +255,9 @@ export default function TrackRide() {
     // The car's rotation is screen-space (see applyCarRotation), so a camera
     // rotation has to re-derive it — otherwise a rider who twists the map
     // leaves the car pointing wrong until the next position update.
-    mapRef.current.addListener?.('heading_changed', applyCarRotation);
+    mapRef.current.addListener?.('heading_changed', () => {
+      applyCarRotation(carMotionRef.current?.shown.bearing);
+    });
   }, [mapsReady, applyCarRotation]);
 
   // ── Sync markers + OSRM route whenever ride data changes ────────────────────
@@ -292,7 +359,11 @@ export default function TrackRide() {
     // centerAnchor MUST be the 6th arg (a boolean) — passing zIndex here
     // directly is a type error and breaks the Vercel build. The car is a
     // round puck so it centre-anchors on the driver's GPS position.
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
+    // An EXISTING car is not moved here: moveCar() below glides it once this
+    // fix's course is known. Setting .position here would teleport it first.
+    if (!driverMarkerRef.current || d?.lat == null || d?.lng == null) {
+      upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
+    }
 
     // ── Which way the car faces ────────────────────────────────────────────────
     // The car SVG above is drawn nose-up and nothing ever rotated it, so every
@@ -330,6 +401,9 @@ export default function TrackRide() {
       routeSegIndexRef.current = null;
       carRotationRef.current = 0;
       routeCoordsRef.current = [];
+      // Same for the glide: the next driver's first fix is placed exactly,
+      // never slid in from where this one was.
+      stopCarMotion();
     } else {
       const here: TrackingLatLng = { latitude: d!.lat!, longitude: d!.lng! };
       if (legChanged) {
@@ -358,7 +432,7 @@ export default function TrackRide() {
         }
       }
       lastDriverPosRef.current = here;
-      applyCarRotation();
+      moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.current });
     }
 
     // Pan to driver after initial fit.
@@ -449,7 +523,7 @@ export default function TrackRide() {
             if (snapped) {
               routeSegIndexRef.current = snapped.segmentIndex;
               carBearingRef.current = snapped.bearing;
-              applyCarRotation();
+              moveCar({ lat: dp.latitude, lng: dp.longitude, bearing: snapped.bearing });
             }
           }
 
@@ -478,7 +552,7 @@ export default function TrackRide() {
         })
         .catch(() => { /* silent — markers remain visible without a route line */ });
     }
-  }, [ride, mapsReady, applyCarRotation]);
+  }, [ride, mapsReady, moveCar, stopCarMotion]);
 
   const statusCfg    = STATUS_LABEL[ride?.status ?? ''] ?? STATUS_LABEL.searching;
   const isActive     = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);

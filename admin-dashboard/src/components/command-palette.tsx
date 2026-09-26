@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/authStore";
 import { getCommandPaletteRoutes, type CommandPaletteRoute } from "@/lib/command-palette-routes";
+import { openKeyboardShortcuts } from "@/components/keyboard-shortcuts-sheet";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,6 +19,23 @@ import { cn } from "@/lib/utils";
  * visibility rules (W5.1) — so the palette never surfaces a route the
  * sidebar hides from a given admin.
  */
+
+/** A palette row that does something other than open a page. */
+interface PaletteAction {
+    action: "keyboard-shortcuts";
+    label: string;
+    group: string;
+}
+type PaletteItem = CommandPaletteRoute | PaletteAction;
+
+// Listed after the sidebar's routes, under their own heading.
+const PALETTE_ACTIONS: PaletteAction[] = [
+    // Keeps the shortcut sheet reachable when single-key shortcuts ("?")
+    // are switched off (WCAG 2.1.4).
+    { action: "keyboard-shortcuts", label: "Keyboard shortcuts", group: "Help" },
+];
+
+const itemKey = (item: PaletteItem) => ("href" in item ? item.href : item.action);
 
 // Simple case-insensitive scorer: exact/prefix/substring match first, then a
 // typo-tolerant subsequence fallback. No fuzzy-matching library — a request
@@ -53,6 +71,10 @@ export function CommandPalette() {
     // palette has none (it opens from Ctrl/Cmd+K), so focus used to fall to
     // <body>. Remember where it was and put it back ourselves.
     const returnFocusRef = useRef<HTMLElement | null>(null);
+    // Set when an action row is chosen; run once the palette has closed and
+    // put focus back (onCloseAutoFocus below), so a dialog the action opens
+    // records that element as the place to return to.
+    const pendingActionRef = useRef<(() => void) | null>(null);
 
     const isSuperAdmin = user?.role === "super_admin";
     const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
@@ -63,18 +85,20 @@ export function CommandPalette() {
         [isSuperAdmin, userModules]
     );
 
+    const items = useMemo<PaletteItem[]>(() => [...visibleRoutes, ...PALETTE_ACTIONS], [visibleRoutes]);
+
     const ranked = useMemo(() => {
-        if (!query.trim()) return visibleRoutes;
-        return visibleRoutes
+        if (!query.trim()) return items;
+        return items
             .map((route) => ({ route, score: fuzzyScore(query, `${route.group} ${route.label}`) }))
             .filter((r) => r.score >= 0)
             .sort((a, b) => b.score - a.score)
             .map((r) => r.route);
-    }, [query, visibleRoutes]);
+    }, [query, items]);
 
     // Group results for display while preserving each group's own order.
     const grouped = useMemo(() => {
-        const map = new Map<string, CommandPaletteRoute[]>();
+        const map = new Map<string, PaletteItem[]>();
         for (const r of ranked) {
             const key = r.group;
             if (!map.has(key)) map.set(key, []);
@@ -128,6 +152,15 @@ export function CommandPalette() {
         router.push(href);
     };
 
+    const select = (item: PaletteItem) => {
+        if ("href" in item) {
+            navigate(item.href);
+            return;
+        }
+        pendingActionRef.current = openKeyboardShortcuts;
+        setOpen(false);
+    };
+
     const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -138,7 +171,7 @@ export function CommandPalette() {
         } else if (e.key === "Enter") {
             e.preventDefault();
             const target = results[activeIndex];
-            if (target) navigate(target.href);
+            if (target) select(target);
         }
         // Escape is handled by Radix Dialog's default close-on-Escape behavior.
     };
@@ -158,6 +191,9 @@ export function CommandPalette() {
                     e.preventDefault();
                     returnFocusRef.current?.focus();
                     returnFocusRef.current = null;
+                    const run = pendingActionRef.current;
+                    pendingActionRef.current = null;
+                    run?.();
                 }}
             >
                 <DialogTitle className="sr-only">Jump to a page</DialogTitle>
@@ -198,13 +234,13 @@ export function CommandPalette() {
                                 const idx = flatIndex;
                                 return (
                                     <button
-                                        key={item.href}
+                                        key={itemKey(item)}
                                         id={`command-palette-option-${idx}`}
                                         type="button"
                                         role="option"
                                         aria-selected={idx === activeIndex}
                                         onMouseEnter={() => setActiveIndex(idx)}
-                                        onClick={() => navigate(item.href)}
+                                        onClick={() => select(item)}
                                         className={cn(
                                             "flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm transition-colors",
                                             idx === activeIndex

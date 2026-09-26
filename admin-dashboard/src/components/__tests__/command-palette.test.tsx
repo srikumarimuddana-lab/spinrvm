@@ -30,6 +30,7 @@ vi.mock("@/lib/api", () => ({
 
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
+import { KeyboardShortcutsSheet } from "@/components/keyboard-shortcuts-sheet";
 import { getCommandPaletteRoutes } from "@/lib/command-palette-routes";
 
 const ALL_MODULES = [
@@ -115,7 +116,8 @@ describe("CommandPalette (rendered)", () => {
 
     it("restricted admin: only the sidebar's entries, no Audit Logs without dashboard", async () => {
         await openPalette(PROFILES.audit_settings);
-        expect(optionNames()).toEqual(["Redis & Infra", "Dispatch Geo Status", "Settings"]);
+        // Routes first, then the one non-route action (see the last describe).
+        expect(optionNames()).toEqual(["Redis & Infra", "Dispatch Geo Status", "Settings", "Keyboard shortcuts"]);
     });
 
     it("role admin with every module still gets no super-admin-only page", async () => {
@@ -179,5 +181,45 @@ describe("CommandPalette (rendered)", () => {
         expect(optionNames()[0]).toBe("Rides → Unpaid Rides");
         await ue.keyboard("{Enter}");
         expect(push).toHaveBeenCalledWith("/dashboard/rides/unpaid");
+    });
+});
+
+describe("Keyboard shortcuts palette entry (WCAG 2.1.4 fallback)", () => {
+    beforeEach(() => {
+        localStorage.clear();
+        push.mockClear();
+    });
+
+    it("opens the shortcut sheet with single-key shortcuts off, then focus returns to the page", async () => {
+        localStorage.setItem("spinr-admin-single-key-shortcuts", "off");
+        state.user = PROFILES.operations;
+        const ue = userEvent.setup();
+        render(
+            <>
+                <button type="button">Page button</button>
+                <CommandPalette />
+                <KeyboardShortcutsSheet />
+            </>,
+        );
+        const pageButton = screen.getByRole("button", { name: "Page button" });
+        pageButton.focus();
+
+        // "?" is off...
+        await ue.keyboard("?");
+        expect(screen.queryByRole("dialog")).toBeNull();
+
+        // ...but the palette entry still gets there, and it is not a route.
+        await ue.keyboard("{Control>}k{/Control}");
+        await screen.findByRole("dialog", { name: "Jump to a page" });
+        await ue.keyboard("shortcuts");
+        expect(optionNames()).toEqual(["Keyboard shortcuts"]);
+        await ue.keyboard("{Enter}");
+        await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        expect(screen.queryByRole("dialog", { name: "Jump to a page" })).toBeNull();
+        expect(push).not.toHaveBeenCalled();
+
+        await ue.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        await waitFor(() => expect(pageButton).toHaveFocus());
     });
 });

@@ -46,6 +46,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 |---|---|---|---|---|
 | W2.0 `[x]` | **Added 2026-09-26:** `AlertDialog` came from a separate Radix package with its own focus and layer registries, so a confirmation opened inside a side sheet never took focus and Escape closed the sheet too. Import it from `radix-ui` like the other wrappers (user chose this fix) | admin | none | regression test; Chromium check; full suite; baselines unchanged |
 | W2.1 `[x]` | Replace 12 browser `confirm()` calls with an in-app dialog via a `useConfirm()` hook (destructive styling). The 5 `alert()` error messages move after W2.2, so they become persistent error toasts rather than auto-dismissing ones | admin | none; staff-only UX note | tests per page |
+| W2.2a `[~]` | **Added 2026-09-26:** `text-destructive-foreground` (every error toast, red buttons in 23 files) was never defined, so text on red inherited near-black (3.67:1). Define the token as white (4.83:1). User chose "own small PR first" | admin | none | static contrast guard; build emits the class; baselines unchanged |
 | W2.2 | Toast policy: limit 3, errors persist until dismissed, `role=status`/`role=alert` | admin | none | unit test on reducer |
 | W2.3 | Unify driver toasts onto the shared toast, by swapping the implementation behind `driver-app/hooks/useToast.ts` so the 25 callers are unchanged | driver-app | flag `driver_unified_toast_enabled` | tests; `[H]` device check |
 
@@ -114,3 +115,6 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 - 2026-09-26: W2.0 merged (#5869). W2.1 opened.
 - 2026-09-26: W2.1 prepared locally in two parts: staff dashboard (10 sites) and company portal (W2.1b, 2 sites). Security and accessibility reviews found no blockers; their should-fixes are done. Follow-up found: 24 files use `bg-destructive text-destructive-foreground`, but `--color-destructive-foreground` isn't defined, so those red buttons lose their white text. The central fix changes rendered colour on baselined pages, so it needs a baseline re-capture `[H]`.
 - 2026-09-26: W2.1 merged (#5870). W2.1b opened: company-portal booking cancel and section archive.
+- 2026-09-26: W2.1b merged (#5871). W2.2a opened.
+- 2026-09-26: W2.2a prepared: define the missing `--destructive-foreground` token (error toasts and red buttons fail contrast in light mode). Replaces the "24 files" follow-up from W2.1.
+- Correction, 2026-09-26: W1.3's change log and PR (#5855), and later logs, cited WCAG 2.1 SC 2.3.3 as if it were required. 2.3.3 (animation from interactions) is Level AAA, not AA, so CLAUDE.md's "WCAG 2.1 AA" rule doesn't require it. Honouring Reduce Motion is good practice, not a compliance gate.

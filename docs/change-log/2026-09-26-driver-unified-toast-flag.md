@@ -8,7 +8,7 @@
 | Author | Claude Code, UX program W2.3 |
 | Surface(s) | backend, driver-app |
 | Domain (Sentry tag) | drivers |
-| PR / commit link | Branch `claude/spinr-animations-admin-ux-x7nl5x`, in two PRs: the backend half first, then the driver-app half |
+| PR / commit link | Backend half: #5890 (merged). Driver-app half: branch `claude/spinr-animations-admin-ux-x7nl5x` (this PR) |
 | Related issue or gap ID | `.claude/plans/2026-09-25-ux-enhancement-program.md` W2.3, decision D4; `docs/audit/2026-09-25-ux-scorecard-world-class-minimal.md` gap 3 ("two toast systems") |
 
 **Decisions (user, 2026-09-26):**
@@ -173,6 +173,7 @@ export function showToast(type: ToastType, title: string, message?: string) {
   - `pytest tests/test_drivers_shared_status_profile_coverage.py`: 99 passed. Against the pre-change endpoint code, 6 fail.
   - `ruff check` and `ruff format --check` are clean on all 4 Python files.
   - `spinr-migration-reviewer`: no blockers or should-fixes; verdict "safe to apply". The migration's header and `COMMENT ON COLUMN` were then corrected before merge: they had described the unified toast as a `shared/` component, which it is not.
+  - **Migration and rollback, run for real** on a throwaway local PostgreSQL 16 with a minimal `public.settings` table: applying twice is idempotent; the column is `boolean NOT NULL DEFAULT false` with its comment; the `UPDATE ... = false` and `DROP COLUMN` rollbacks work; the migration re-applies cleanly afterwards.
 - **driver-app `yarn tsc --noEmit`:** 0 errors.
 - **driver-app affected jest suites:**
   - `__tests__/components/UnifiedToast.test.tsx`: 8 passed.
@@ -184,7 +185,7 @@ export function showToast(type: ToastType, title: string, message?: string) {
   - Against the pre-change `useToast.ts`, 5 of the 6 new flag tests fail; the 6th is the flag-off exact-call test.
   - With the dashboard setter replaced by a no-op, both wiring tests fail.
   - Mutating the host (dropping the auto-dismiss timer or the 60 px offset) or the store (removing the `dismiss(id)` guard) fails 3 tests.
-- **Full driver-app jest suite:** 174 suites, 2157 tests, all passed.
+- **Full driver-app jest suite:** 176 suites, 2181 tests, all passed, on this branch rebuilt from `main` after #5890.
 - **ESLint on the new and changed driver-app files:**
   - 0 new errors.
   - The 6 new warnings (hardcoded `#FFF` / numeric spacing) match `toastConfig.tsx`'s existing warnings, kept for visual parity with the rider banner.
@@ -195,7 +196,7 @@ export function showToast(type: ToastType, title: string, message?: string) {
 
 - **No device or simulator check `[H]`.** driver-app has no visual or snapshot tooling. The banner's look, spring animation, swipe-to-dismiss, stacking above modals, and VoiceOver/TalkBack reading were reasoned about and unit-tested, not screenshotted or heard.
 - **No production build.** Neither `expo export` nor an EAS build was run. Only `tsc --noEmit` and jest.
-- **Database:** the migration was not applied to any database.
+- **Database:** the migration was not applied to Supabase, staging or production. It was run only on a throwaway local PostgreSQL 16 with a stand-in `settings` table (above).
 - **Full backend suite:** not run; only the two affected files were.
 - **Accessibility review (`spinr-accessibility-reviewer`, code reading only):** nothing new introduced by this change. It noted:
   - **Contrast:** white text on the success (about 2.5:1) and warning (about 2.1:1) colours fails AA. This is the same in today's toast and the rider banner, and is already a logged follow-up (a `shared/theme` decision).

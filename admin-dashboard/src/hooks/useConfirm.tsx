@@ -11,6 +11,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { buttonVariants } from "@/components/ui/button";
 
 export interface ConfirmOptions {
     title: string;
@@ -54,7 +55,11 @@ export function useConfirm() {
 
     const dialog = (
         <AlertDialog open={open} onOpenChange={(next) => { if (!next) settle(false); }}>
-            <AlertDialogContent {...(options?.description ? {} : { "aria-describedby": undefined })}>
+            <AlertDialogContent
+                // Long previews (e.g. statement totals) scroll instead of pushing the buttons off-screen.
+                className="max-h-[90vh] overflow-y-auto"
+                {...(options?.description ? {} : { "aria-describedby": undefined })}
+            >
                 <AlertDialogHeader>
                     <AlertDialogTitle>{options?.title}</AlertDialogTitle>
                     {options?.description && (
@@ -67,7 +72,9 @@ export function useConfirm() {
                     <AlertDialogCancel>{options?.cancelLabel ?? "Cancel"}</AlertDialogCancel>
                     <AlertDialogAction
                         onClick={() => settle(true)}
-                        className={options?.destructive ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+                        // The Button's own destructive variant: `text-destructive-foreground` isn't a
+                        // theme colour, so that class would drop the button's white text.
+                        className={options?.destructive ? buttonVariants({ variant: "destructive" }) : undefined}
                     >
                         {options?.confirmLabel ?? "Confirm"}
                     </AlertDialogAction>

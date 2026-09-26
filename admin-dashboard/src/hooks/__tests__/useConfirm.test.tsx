@@ -4,7 +4,8 @@
  * button; every other way out of the dialog resolves false.
  */
 import { describe, it, expect } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useConfirm, type ConfirmOptions } from "@/hooks/useConfirm";
 
@@ -61,10 +62,26 @@ describe("useConfirm", () => {
         await waitFor(() => expect(results).toEqual([false]));
     });
 
+    it("resolves an older pending request false when a newer one opens", async () => {
+        let confirmFn: ((o: ConfirmOptions) => Promise<boolean>) | null = null;
+        function Capture({ onReady }: { onReady: (fn: (o: ConfirmOptions) => Promise<boolean>) => void }) {
+            const { confirm, dialog } = useConfirm();
+            useEffect(() => onReady(confirm), [confirm, onReady]);
+            return dialog;
+        }
+        render(<Capture onReady={(fn) => { confirmFn = fn; }} />);
+        let first!: Promise<boolean>;
+        act(() => { first = confirmFn!({ title: "First?" }); });
+        act(() => { void confirmFn!({ title: "Second?" }); });
+        await expect(first).resolves.toBe(false);
+        expect(await screen.findByRole("alertdialog")).toHaveAccessibleName("Second?");
+    });
+
     it("shows the title, the description with line breaks, and a destructive button", async () => {
         await openDialog({ title: "Reveal SIN?", description: "Line one\n\nLine two", confirmLabel: "Reveal", destructive: true });
         expect(screen.getByRole("alertdialog")).toHaveAccessibleName("Reveal SIN?");
         expect(screen.getByText(/Line one/)).toHaveClass("whitespace-pre-line");
-        expect(screen.getByRole("button", { name: "Reveal" })).toHaveClass("bg-destructive");
+        expect(screen.getByRole("button", { name: "Reveal" })).toHaveClass("bg-destructive", "text-white");
+        expect(screen.getByRole("alertdialog")).toHaveClass("max-h-[90vh]", "overflow-y-auto");
     });
 });

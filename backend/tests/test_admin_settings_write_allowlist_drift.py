@@ -111,6 +111,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "driver_heatmap_v2_enabled",
         "driver_matching_algorithm",
         "driver_stationary_tracking_enabled",
+        "driver_unified_toast_enabled",
         "dual_approval_exports_enabled",
         "fare_distance_basis",
         "fare_lock_enabled",
@@ -289,11 +290,14 @@ async def test_stationary_tracking_admin_save_preserves_boolean(monkeypatch, ena
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("field", ["destination_mode_enabled", "saved_place_shortcuts_enabled"])
+@pytest.mark.parametrize(
+    "field", ["destination_mode_enabled", "saved_place_shortcuts_enabled", "driver_unified_toast_enabled"]
+)
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_feature_flag_admin_save_preserves_boolean(monkeypatch, field, enabled):
-    """Both dashboard toggles (2026-09-25) round-trip an explicit False, not
-    just True -- exclude_none must not drop an admin turning a flag off."""
+    """Both dashboard toggles (2026-09-25), and the API-only
+    driver_unified_toast_enabled (migration 490), round-trip an explicit False,
+    not just True -- exclude_none must not drop an admin turning a flag off."""
     from routes.admin import settings
 
     monkeypatch.setattr(settings.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "app_settings"}]))

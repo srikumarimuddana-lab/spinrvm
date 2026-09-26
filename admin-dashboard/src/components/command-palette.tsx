@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/authStore";
 import { getCommandPaletteRoutes, type CommandPaletteRoute } from "@/lib/command-palette-routes";
-import { openKeyboardShortcuts } from "@/components/keyboard-shortcuts-sheet";
+import { openKeyboardShortcuts, useSingleKeyShortcuts } from "@/components/keyboard-shortcuts-sheet";
 import { cn } from "@/lib/utils";
 
 /**
@@ -75,6 +75,7 @@ export function CommandPalette() {
     // put focus back (onCloseAutoFocus below), so a dialog the action opens
     // records that element as the place to return to.
     const pendingActionRef = useRef<(() => void) | null>(null);
+    const [singleKeyOn] = useSingleKeyShortcuts();
 
     const isSuperAdmin = user?.role === "super_admin";
     const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
@@ -255,6 +256,11 @@ export function CommandPalette() {
                         </div>
                     ))}
                 </div>
+                {/* Where to find the shortcut list: "?" while single-key
+                    shortcuts are on, otherwise this palette's own entry. */}
+                <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                    {singleKeyOn ? "Press ? for shortcuts" : <>Type &ldquo;shortcuts&rdquo; to see keyboard shortcuts</>}
+                </p>
             </DialogContent>
         </Dialog>
     );

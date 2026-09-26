@@ -190,6 +190,18 @@ describe("Keyboard shortcuts palette entry (WCAG 2.1.4 fallback)", () => {
         push.mockClear();
     });
 
+    it("footer hint says ? while single-key shortcuts are on", async () => {
+        await openPalette(PROFILES.operations);
+        expect(screen.getByText("Press ? for shortcuts")).toBeInTheDocument();
+    });
+
+    it("footer hint points to the palette entry while single-key shortcuts are off", async () => {
+        localStorage.setItem("spinr-admin-single-key-shortcuts", "off");
+        await openPalette(PROFILES.operations);
+        expect(screen.getByText("Type “shortcuts” to see keyboard shortcuts")).toBeInTheDocument();
+        expect(screen.queryByText("Press ? for shortcuts")).toBeNull();
+    });
+
     it("opens the shortcut sheet with single-key shortcuts off, then focus returns to the page", async () => {
         localStorage.setItem("spinr-admin-single-key-shortcuts", "off");
         state.user = PROFILES.operations;

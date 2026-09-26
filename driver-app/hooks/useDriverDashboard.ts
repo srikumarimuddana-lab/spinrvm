@@ -19,6 +19,7 @@ import {
   subscribeCarRingOwner,
 } from '../lib/androidAuto/carOfferRing';
 import { toRideOfferDisplayData } from '../services/rideOfferDisplayData';
+import { isOfferStillLive } from '../utils/offerLiveness';
 import { tKey } from '../i18n';
 import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
@@ -2229,7 +2230,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const handover = Platform.OS === 'ios'
           ? _removeDeliveredOfferAlertsIfForeground(offer.ride_id).then(() => _surfaceOfferNotification(offer, true))
           : _surfaceOfferNotification(offer, true);
-        void handover.finally(() => offerSound.play());
+        // Ring only if the offer is still live once the handover settles: an
+        // offer that expired while backgrounded is still in the store (its
+        // decline request has not settled), and one cleared during the await
+        // has already had its stop effect run. .finally is kept so a failed
+        // handover still rings rather than going silent.
+        void handover.finally(() => {
+          if (isOfferStillLive(useDriverStore.getState(), offer.ride_id)) offerSound.play();
+        });
       } else {
         offerSound.stop();
         // Android only. iOS has no insistent loop to reclaim, and the backend

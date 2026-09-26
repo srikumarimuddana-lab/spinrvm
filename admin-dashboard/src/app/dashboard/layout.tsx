@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
 import { FeatureFlagsProvider, useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { CommandPalette } from "@/components/command-palette";
+import { KeyboardShortcutsSheet } from "@/components/keyboard-shortcuts-sheet";
 
 // Reads the flag from inside FeatureFlagsProvider (useFeatureFlag needs a
 // descendant of the provider, not the component that renders it) and applies
@@ -14,9 +15,10 @@ import { CommandPalette } from "@/components/command-palette";
 // globals.css. Everything else about the shell is unchanged either way.
 function DashboardShell({ children }: { children: React.ReactNode }) {
     const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
-    // Cmd+K/Ctrl+K route jumper — dark by default. CommandPalette owns its
-    // own keydown listener, so mounting it only when the flag is on is what
-    // keeps the shortcut itself off until a super admin flips this on.
+    // Cmd+K/Ctrl+K route jumper and its "?" shortcut sheet — dark by
+    // default. Each owns its own keydown listener, so mounting them only
+    // when the flag is on is what keeps both shortcuts off until a super
+    // admin flips this on.
     const commandPaletteEnabled = useFeatureFlag("admin_command_palette_enabled");
 
     return (
@@ -27,6 +29,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                 <main className="p-4 pt-4 md:p-8">{children}</main>
             </div>
             {commandPaletteEnabled && <CommandPalette />}
+            {commandPaletteEnabled && <KeyboardShortcutsSheet />}
         </div>
     );
 }

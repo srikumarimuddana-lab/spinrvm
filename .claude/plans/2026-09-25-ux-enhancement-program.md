@@ -172,3 +172,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - C: the "?" shortcut sheet with its per-admin off switch (WCAG 2.1.4), the Ctrl/Cmd+K dialog guard, and the change log.
   Part A opened.
 - 2026-09-26: W5.1 part A merged (#5895). The sidebar was byte-identical and its 5 visual baselines passed in CI. Part B opened: palette Enter opens the highlighted row when matches span sections, and the palette returns focus on close.
+- 2026-09-26: W5.1 part B merged (#5896): palette Enter opens the highlighted row, and focus returns on close. Part C opened: the "?" shortcut sheet with its per-admin single-key off switch (WCAG 2.1.4), the palette's "Keyboard shortcuts" entry and footer hints, the Ctrl/Cmd+K dialog guard, and the W5.1 change log covering all three parts. W5.1 stays `[~]` until part C merges; everything stays behind `admin_command_palette_enabled` (flip `[H]`).

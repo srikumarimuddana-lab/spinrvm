@@ -1,7 +1,8 @@
 // CONCURRENCY-001: PUT /admin/drivers/{id} now supports an optional
-// `expected_updated_at` optimistic-concurrency check (backend/routes/admin/
-// drivers.py admin_update_driver). These tests cover the admin-dashboard
-// side: the edit form sends back the `updated_at` it was loaded with, and a
+// `expected_admin_edited_at` optimistic-concurrency check (backend/routes/
+// admin/drivers.py admin_update_driver, migration 488). These tests cover the
+// admin-dashboard side: the edit form sends back the `admin_edited_at` it was
+// loaded with (null included, never `updated_at`), and a
 // 409 (someone else saved first) shows a reload-offering toast instead of
 // silently retrying or leaving a stale form open. Modelled on the mocking
 // pattern in page.export.test.tsx (same page, different feature).
@@ -10,7 +11,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 const DRIVER = vi.hoisted(() => ({
-    id: 'drv-1', first_name: 'Alex', last_name: 'Doe', city: 'Saskatoon', updated_at: '2026-09-20T10:00:00+00:00',
+    id: 'drv-1', first_name: 'Alex', last_name: 'Doe', city: 'Saskatoon',
+    // Moves with the driver's own location pings -- must NOT be sent as the lock.
+    updated_at: '2026-09-25T23:00:00+00:00',
+    admin_edited_at: '2026-09-20T10:00:00+00:00' as string | null,
 }));
 const toastSpy = vi.hoisted(() => vi.fn());
 
@@ -73,7 +77,7 @@ import Page from './page';
 import { updateDriver, DriverConflictError, getDrivers } from '@/lib/api';
 
 describe('driver edit form optimistic-lock (CONCURRENCY-001)', () => {
-    it('sends the loaded updated_at and applies a normal save', async () => {
+    it('sends the loaded admin_edited_at (not updated_at) and applies a normal save', async () => {
         vi.mocked(updateDriver).mockResolvedValueOnce({ message: 'ok', updated_fields: ['city'] });
         render(<Page />);
         fireEvent.click(await screen.findByText('Select driver'));
@@ -83,11 +87,29 @@ describe('driver edit form optimistic-lock (CONCURRENCY-001)', () => {
         await waitFor(() =>
             expect(updateDriver).toHaveBeenCalledWith(
                 'drv-1',
-                expect.objectContaining({ city: 'Regina', expected_updated_at: '2026-09-20T10:00:00+00:00' }),
+                expect.objectContaining({ city: 'Regina', expected_admin_edited_at: '2026-09-20T10:00:00+00:00' }),
             ),
         );
+        expect(vi.mocked(updateDriver).mock.calls[0][1]).not.toHaveProperty('expected_updated_at');
         // Back to the read-only view -- the save was accepted.
         await waitFor(() => expect(screen.getByText('Edit')).toBeInTheDocument());
+    });
+
+    it('sends null for a driver no admin has edited yet', async () => {
+        DRIVER.admin_edited_at = null;
+        try {
+            vi.mocked(updateDriver).mockClear().mockResolvedValueOnce({ message: 'ok', updated_fields: ['city'] });
+            render(<Page />);
+            fireEvent.click(await screen.findByText('Select driver'));
+            fireEvent.click(await screen.findByText('Edit'));
+            fireEvent.click(screen.getByText('Change city'));
+            fireEvent.click(screen.getByText('Save'));
+            await waitFor(() => expect(updateDriver).toHaveBeenCalled());
+            const payload = vi.mocked(updateDriver).mock.calls[0][1] as Record<string, unknown>;
+            expect(payload).toHaveProperty('expected_admin_edited_at', null);
+        } finally {
+            DRIVER.admin_edited_at = '2026-09-20T10:00:00+00:00';
+        }
     });
 
     it('shows a reload-offering toast and exits editing on a 409 conflict', async () => {

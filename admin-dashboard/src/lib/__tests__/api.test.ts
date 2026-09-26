@@ -318,3 +318,35 @@ describe('api.ts contract tests', () => {
     );
   });
 });
+
+// CONCURRENCY-001: updateDriver maps the backend's two driver-edit failure
+// details to readable errors the drivers page can show.
+describe('updateDriver error mapping', () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  function errorResponse(status: number, body: unknown) {
+    return Promise.resolve({
+      ok: false,
+      status,
+      statusText: 'Error',
+      headers: new Headers(),
+      json: () => Promise.resolve(body),
+    } as unknown as Response);
+  }
+
+  it('maps a 409 conflict to DriverConflictError', async () => {
+    const { updateDriver, DriverConflictError } = await import('../api');
+    mockFetch.mockReturnValueOnce(
+      errorResponse(409, { detail: 'This driver was changed by someone else. Reload and try again.' }),
+    );
+    await expect(updateDriver('drv-1', { city: 'Regina' })).rejects.toBeInstanceOf(DriverConflictError);
+  });
+
+  it('maps ERR_DRIVER_PARTIAL_SAVE to a readable partial-save message', async () => {
+    const { updateDriver } = await import('../api');
+    mockFetch.mockReturnValueOnce(errorResponse(500, { detail: 'ERR_DRIVER_PARTIAL_SAVE' }));
+    await expect(updateDriver('drv-1', { email: 'x@example.com' })).rejects.toThrow(
+      /Driver details were saved, but the name\/email\/phone update failed/,
+    );
+  });
+});

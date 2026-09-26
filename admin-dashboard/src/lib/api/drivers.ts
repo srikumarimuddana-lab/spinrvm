@@ -675,7 +675,7 @@ export const getDriverStats = (params?: {
 };
 
 // CONCURRENCY-001: thrown when `PUT /admin/drivers/{id}` rejects a save
-// because the row's `updated_at` no longer matches the `expected_updated_at`
+// because the row's `admin_edited_at` no longer matches the `expected_admin_edited_at`
 // the caller sent (see backend/routes/admin/drivers.py admin_update_driver).
 // `request()` only exposes the backend's `detail` as a plain Error message
 // (no status code), so this matches on that literal text to give callers a
@@ -694,6 +694,13 @@ export const updateDriver = async (id: string, data: Record<string, any>) => {
     } catch (e: any) {
         if (typeof e?.message === "string" && e.message.includes("changed by someone else")) {
             throw new DriverConflictError(e.message);
+        }
+        // The drivers row saved but the linked account (name/email/phone)
+        // update failed; the backend can only send an ERR_* code on a 5xx.
+        if (typeof e?.message === "string" && e.message.includes("ERR_DRIVER_PARTIAL_SAVE")) {
+            throw new Error(
+                "Driver details were saved, but the name/email/phone update failed. Reload the driver and re-apply that change.",
+            );
         }
         throw e;
     }

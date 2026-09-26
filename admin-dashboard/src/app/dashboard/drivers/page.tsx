@@ -76,10 +76,12 @@ export default function DriversPage() {
     const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
     const [editing, setEditing] = useState(false);
     const [editForm, setEditForm] = useState<Record<string, any>>({});
-    // CONCURRENCY-001: the driver row's `updated_at` as of when the edit
-    // form was opened, sent back as `expected_updated_at` on save so the
-    // backend can detect another admin's edit landing in between.
-    const [editingLoadedAt, setEditingLoadedAt] = useState<string | null>(null);
+    // CONCURRENCY-001: the driver row's `admin_edited_at` as of when the edit
+    // form was opened (null = never admin-edited), sent back as
+    // `expected_admin_edited_at` on save so the backend can detect another
+    // admin's edit landing in between. `undefined` = the API didn't return
+    // the column, so no lock is requested.
+    const [editingLoadedAt, setEditingLoadedAt] = useState<string | null | undefined>(undefined);
     const [saving, setSaving] = useState(false);
     const [allServiceAreas, setAllServiceAreas] = useState<any[]>([]);
     // Vehicle types catalogue + serviceAreaId → allowed type IDs map,
@@ -494,7 +496,7 @@ export default function DriversPage() {
             decal_generated_at: datetimeLocalValue(selected.decal_generated_at),
             decal_number: selected.decal_number || "",
         });
-        setEditingLoadedAt(selected.updated_at ?? null);
+        setEditingLoadedAt("admin_edited_at" in selected ? (selected.admin_edited_at ?? null) : undefined);
         setEditing(true);
     };
 
@@ -530,10 +532,11 @@ export default function DriversPage() {
         }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        // CONCURRENCY-001: send back the `updated_at` the form was loaded
-        // with so the backend can reject the save (409) if another admin's
-        // edit landed first, instead of silently overwriting it.
-        const payload = editingLoadedAt ? { ...changes, expected_updated_at: editingLoadedAt } : changes;
+        // CONCURRENCY-001: send back the `admin_edited_at` the form was
+        // loaded with (null included) so the backend can reject the save
+        // (409) if another admin's edit landed first.
+        const payload =
+            editingLoadedAt !== undefined ? { ...changes, expected_admin_edited_at: editingLoadedAt } : changes;
         try {
             await updateDriver(selected.id, payload);
             // The backend derives is_citizen / is_permanent_resident from the

@@ -1636,7 +1636,14 @@ jobs:
           # resolves it to refs/remotes/origin/<branch> when checkout has no
           # local branch (as is typical on GitHub-hosted runners).
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.base_branch || 'main' }}
-          HEAD_SHA: ${{ github.sha }}
+          # The PR's own head, not github.sha: on a pull_request run
+          # github.sha is the test-merge commit with CURRENT main, while
+          # base.sha can be the older main the PR was opened on. Diffing the
+          # merge-base of those counted every file main changed since then as
+          # this PR's (PR #5856 was blocked on routes/auth.py and
+          # routes/webhooks.py it never touched). Same as every other gate in
+          # this file; merge_group/manual runs have no PR head and keep github.sha.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python scripts/check_change_impact.py
 

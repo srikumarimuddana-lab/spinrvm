@@ -210,7 +210,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 ## Critical Conventions
 
-**Money arithmetic** — use Python `Decimal` only (never float). Helpers `_d()`, `_round()`, `_f()` must be used before any DB write or API response. A pre-commit hook blocks float arithmetic in fare code.
+**Money arithmetic** — use Python `Decimal` only (never float). Helpers `_d()`, `_round()`, `_f()` must be used before any DB write or API response. A pre-commit hook blocks float arithmetic (`.claude/hooks/pre-commit` check 6), scoped to the money-handling files listed as `spinr-no-float-in-money`'s `include` in `.semgrep/spinr-rules.yml` — not just fare code.
 
 **Dual import pattern** — every backend module uses:
 ```python

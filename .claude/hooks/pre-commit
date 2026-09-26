@@ -109,20 +109,129 @@ else
   echo -e "${GREEN}  ✅ On feature branch: $BRANCH${NC}"
 fi
 
-# 6. Float money check
-# Non-blocking local hint only — a bash regex can't tell Decimal arithmetic
-# from float arithmetic by syntax alone (both look identical), so this stays
-# a WARNING rather than BLOCKED to avoid false-positiving on correct code.
-# The actual enforcement is .semgrep/spinr-rules.yml's spinr-no-float-in-money
-# (SR-03, literal float()/*1.0 casts) and spinr-bare-dict-arithmetic-in-money-file
-# (SR-11, #5817 — dict/subscript arithmetic and round()/+= over dict values),
-# both merge-blocking and AST-aware rather than regex-based.
-echo "6/12 Checking money arithmetic..."
-FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE \
-  "(fare|price|amount|earning|payout|total|fee|tip|balance|charge|subtotal|refund|tax)[a-zA-Z_]*['\"]?\s*[+\-\*\/]=?\s*([0-9]*\.[0-9]+|[a-zA-Z_])|round\([^)]*[+\-][^)]*\)" \
-  2>/dev/null)
-if [ -n "$FLOAT" ]; then
-  echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
+# 6. Float money check (blocking, scoped to the SR-03 money-file list)
+# Was warning-only and scanned every staged *.py/*.ts file. Narrowed and
+# made blocking (ROADMAP N3 remainder, MONEY-005) to match CLAUDE.md's
+# "Money arithmetic" claim that a pre-commit hook actually blocks this.
+# Scope is exactly .semgrep/spinr-rules.yml's spinr-no-float-in-money (SR-03)
+# `include` list — the files that rule and its sibling spinr-no-bare-sum-in-
+# money already gate in CI, so this hook and that gate never disagree on
+# which files are "money files" (tests/hooks/test_money_file_list_parity.py
+# asserts this hook's list, SR-03's include and SR-12's include never drift).
+# Scoped by parsing diff file headers (like check 12's phone scan below)
+# instead of a `git diff -- <pathspec>`, so it also works correctly in front
+# of tests/hooks/test_pre_commit.sh's fake git shim, which returns the whole
+# patch for any `--cached -U0` call regardless of the pathspec passed.
+# `--src-prefix=a/ --dst-prefix=b/` pins the `+++ b/<path>` header shape this
+# awk program parses, overriding a user's diff.mnemonicPrefix/diff.noprefix
+# git config (which would otherwise rewrite the prefix to something like
+# `i/`/`w/` or drop it, breaking the `sub(/^b\//, ...)` strip below).
+#
+# False-positive handling (review finding, 2026-09-26): a naive "skip only
+# full-comment lines" check blocked on a trailing/inline comment
+# (`x = 1  # fare+0.01 tolerance`) and on a float-shaped tolerance string
+# inside a docstring. Fixed by, per added line: (1) stripping a trailing
+# `#...` comment via a char-by-char scan that ignores `#` while inside a
+# '...'/"..." string (does not handle backslash-escaped quotes — a known,
+# accepted simplification); (2) tracking `"""`/`'''` open/close state across
+# the added lines of each file and skipping any line that is inside, opens,
+# or closes a triple-quoted region; (3) skipping a line whose only content
+# (after the comment strip) is itself a single string literal. Because the
+# diff is -U0, only added lines are visible, so the triple-quote tracker has
+# no view of unchanged lines — a hunk that starts partway through an
+# existing docstring, or whose matching `"""`/`'''` close is on an unchanged
+# line, can leave the tracker's state wrong for the rest of that file's
+# hunks in this diff. This is a known, accepted limitation: the tracker is
+# deliberately conservative (any line it's unsure about is skipped, never
+# blocked), so the failure mode is a missed real violation, never a false
+# block — the same trade-off CI's SR-03/SR-11/SR-12 semgrep gate exists to catch
+# with real AST parsing. Verified against every line of every file in the
+# list below as a synthetic full-file addition (2026-09-25, re-verified
+# 2026-09-26 after this fix): 0 hits. See tests/hooks/test_pre_commit.sh
+# Gate 5 for the inline-comment / docstring / comment-plus-real-float cases.
+echo "6/12 Checking money arithmetic (blocking, scoped to money files)..."
+# shellcheck disable=SC2016  # awk program, $-fields are awk's, not the shell's
+MONEY_FLOAT_AWK='
+BEGIN {
+  n = split("backend/routes/fares.py backend/routes/payments.py backend/routes/wallet.py backend/routes/rides/payments.py backend/services/fare_service.py backend/services/payment_service.py backend/services/corporate_wallet_service.py backend/services/corporate_allowance_service.py backend/services/corporate_subscription_service.py backend/utils/stripe_charge.py backend/utils/receipt_pdf.py backend/utils/email_receipt.py backend/routes/drivers/earnings.py backend/features.py backend/utils/referral_payout.py", files, " ")
+  for (i = 1; i <= n; i++) money[files[i]] = 1
+  file = ""; hdr = 0; in_money = 0; intriple = 0
+  # Built via sprintf(), not a literal '"'"' character, so this awk source
+  # never contains a single quote — it has to stay embeddable inside this
+  # variable'"'"'s own shell single-quotes.
+  sq = sprintf("%c", 39)
+  dq3 = "\"\"\""
+  sq3 = sq sq sq
+  dq_line_re = "^\"[^\"]*\"[,)]?[ \t]*$"
+  sq_line_re = "^" sq "[^" sq "]*" sq "[,)]?[ \t]*$"
+}
+# Returns the prefix of s up to (not including) the first "#" that is not
+# inside a '"'"'...'"'"'/"..." string. Simple quote-depth scan — does not
+# handle a backslash-escaped quote inside the string, by design (documented
+# limitation above).
+function strip_comment(s,    i, c, inq, qc) {
+  inq = 0; qc = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (inq) {
+      if (c == qc) inq = 0
+    } else {
+      if (c == "\"" || c == sq) { inq = 1; qc = c }
+      else if (c == "#") return substr(s, 1, i - 1)
+    }
+  }
+  return s
+}
+/^diff --git / { hdr = 1; next }
+hdr && /^\+\+\+ / {
+  file = substr($0, 5); sub(/^b\//, "", file)
+  in_money = (file in money)
+  intriple = 0
+  next
+}
+/^@@ / { hdr = 0; next }
+hdr { next }
+/^-/ { next }
+/^\+/ {
+  if (in_money) {
+    line = substr($0, 2)
+    stripped = line
+    sub(/^[ \t]+/, "", stripped)
+    is_full_comment = (stripped ~ /^#/)
+    was_intriple = intriple
+    ntrip = 0
+    if (was_intriple || !is_full_comment) {
+      tmp = stripped
+      ntrip = gsub(dq3, "@", tmp)
+      tmp = stripped
+      ntrip += gsub(sq3, "@", tmp)
+    }
+    if (ntrip % 2 == 1) intriple = 1 - was_intriple
+    if (was_intriple || ntrip > 0 || is_full_comment) { next }
+    code = strip_comment(stripped)
+    sub(/[ \t]+$/, "", code)
+    if (code == "" || code ~ dq_line_re || code ~ sq_line_re) { next }
+    if (tolower(code) ~ /(fare|price|amount|earning|payout)[ \t]*[+\-*\/][ \t]*[0-9]*\.[0-9]+/) {
+      printf "%s: %s\n", file, line
+    }
+  }
+  next
+}
+'
+# Fail closed: this check now blocks, so a diff/awk failure must not read as
+# "no float arithmetic found" (same rationale as check 12 below).
+MONEY_SCAN_OK=1
+MONEY_DIFF=$(git diff --cached -U0 --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/) || MONEY_SCAN_OK=0
+MONEY_HITS=$(printf '%s\n' "$MONEY_DIFF" | awk "$MONEY_FLOAT_AWK") || MONEY_SCAN_OK=0
+if [ "$MONEY_SCAN_OK" -eq 0 ]; then
+  echo -e "${RED}  BLOCKED — money arithmetic scan could not run (git diff or awk failed)${NC}"
+  BLOCKED=1
+elif [ -n "$MONEY_HITS" ]; then
+  while IFS= read -r hit; do
+    echo -e "${RED}  BLOCKED — float money arithmetic: $hit${NC}"
+  done <<< "$MONEY_HITS"
+  echo -e "${RED}  Use Decimal (_d()/_round()/_f()) instead of float arithmetic. See CLAUDE.md \"Money arithmetic\".${NC}"
+  BLOCKED=1
 else
   echo -e "${GREEN}  ✅ Clean${NC}"
 fi

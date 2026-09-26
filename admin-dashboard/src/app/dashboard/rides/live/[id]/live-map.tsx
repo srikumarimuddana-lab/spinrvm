@@ -1,7 +1,7 @@
 /// <reference types="geojson" />
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -12,6 +12,12 @@ import {
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
 import { hasRenderingWebGL } from "@/lib/map/webgl-support";
+import {
+    MARKER_ANIMATION_MS,
+    interpolateMarker,
+    prefersReducedMotion,
+    type MarkerPose,
+} from "@/lib/map/marker-interpolation";
 import {
     buildPathGradient,
     buildStraightRouteGradient,
@@ -68,6 +74,59 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
     // the GPU actually painting, so the canvas would sit blank with nothing
     // on screen explaining why. See src/lib/map/webgl-support.ts.
     const [webglOk] = useState<boolean>(() => hasRenderingWebGL());
+
+    // ── Driver marker glide (UX program W4.1) ────────────────────────
+    // Same pattern as monitoring-map.tsx and the public /track page: the pose
+    // drawn now (`shown`), the glide in progress (`from` → `to`, started at
+    // `startedAt`, null when idle) and when the last move arrived (for the
+    // util's stale-gap snap). The marker's first placement is exact; later
+    // moves glide over MARKER_ANIMATION_MS, or snap on a jump over 500 m, a
+    // stale feed or Reduce Motion.
+    const driverMotionRef = useRef<{
+        shown: MarkerPose; from: MarkerPose; to: MarkerPose; startedAt: number | null; updatedAt: number;
+    } | null>(null);
+    const driverFrameRef = useRef<number | null>(null);
+
+    const stopDriverMotion = useCallback(() => {
+        if (driverFrameRef.current != null) cancelAnimationFrame(driverFrameRef.current);
+        driverFrameRef.current = null;
+        driverMotionRef.current = null;
+    }, []);
+
+    /** Move the driver marker to `to`: glide from wherever it is drawn now,
+     *  or set it there directly when the util says snap (nothing drawn yet,
+     *  nothing moved, a jump over 500 m, a stale feed, Reduce Motion). */
+    const moveDriverMarker = useCallback((marker: maplibregl.Marker, to: MarkerPose) => {
+        const now = performance.now();
+        const prev = driverMotionRef.current;
+        // A glide already under way retargets from the pose drawn right now.
+        const from = prev?.shown ?? to;
+        const { done } = interpolateMarker(from, to, 0, MARKER_ANIMATION_MS, {
+            reduceMotion: prefersReducedMotion(),
+            gapMs: prev ? now - prev.updatedAt : undefined,
+        });
+        if (done) {
+            if (driverFrameRef.current != null) cancelAnimationFrame(driverFrameRef.current);
+            driverFrameRef.current = null;
+            driverMotionRef.current = { shown: to, from: to, to, startedAt: null, updatedAt: now };
+            marker.setLngLat([to.lng, to.lat]);
+            return;
+        }
+        driverMotionRef.current = { shown: from, from, to, startedAt: now, updatedAt: now };
+        if (driverFrameRef.current != null) return; // the running loop picks up the new target
+        const step = (t: number) => {
+            driverFrameRef.current = null;
+            const m = driverMotionRef.current;
+            const current = driverMarkerRef.current;
+            if (!m || m.startedAt == null || !current) return;
+            const { pose, done: arrived } = interpolateMarker(m.from, m.to, t - m.startedAt, MARKER_ANIMATION_MS);
+            m.shown = pose;
+            current.setLngLat([pose.lng, pose.lat]);
+            if (arrived) m.startedAt = null;
+            else driverFrameRef.current = requestAnimationFrame(step);
+        };
+        driverFrameRef.current = requestAnimationFrame(step);
+    }, []);
 
     // Initialize map once
     useEffect(() => {
@@ -158,6 +217,14 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
                 ])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Driver"))
                 .addTo(map);
+            // Only a real position is a glide start point; the midpoint
+            // placeholder isn't, so the first real fix is set directly.
+            if (driverLat != null && driverLng != null) {
+                const placed = { lat: driverLat, lng: driverLng };
+                driverMotionRef.current = {
+                    shown: placed, from: placed, to: placed, startedAt: null, updatedAt: performance.now(),
+                };
+            }
 
             fitBoundsToPoints(
                 map,
@@ -170,13 +237,14 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
         });
 
         return () => {
+            stopDriverMotion();
             driverMarkerRef.current?.remove();
             driverMarkerRef.current = null;
             map.remove();
             mapRef.current = null;
             isLoadedRef.current = false;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, webglOk]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, webglOk, stopDriverMotion]);
 
     // Update driver position and trail
     useEffect(() => {
@@ -184,14 +252,14 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
         if (!map || !isLoadedRef.current) return;
 
         if (driverLat != null && driverLng != null && driverMarkerRef.current) {
-            driverMarkerRef.current.setLngLat([driverLng, driverLat]);
+            moveDriverMarker(driverMarkerRef.current, { lat: driverLat, lng: driverLng });
         }
 
         if (trail && trail.length > 0) {
             const src = map.getSource(TRAIL_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
             src?.setData(trailGradientFeatureCollection(trail));
         }
-    }, [driverLat, driverLng, trail]);
+    }, [driverLat, driverLng, trail, moveDriverMarker]);
 
     if (!webglOk) {
         return (

@@ -36,7 +36,8 @@ export async function getStoredLanguage(): Promise<Language> {
             return stored as Language;
         }
         return 'en';
-    } catch {
+    } catch (error) {
+        console.error('Failed to read stored language:', error);
         return 'en';
     }
 }
@@ -108,15 +109,16 @@ export function tKey(key: string, fallback?: string): string {
 
 export { translations };
 
-// Restore the driver's saved language at app start, not only when Settings
-// mounts (loadLanguage() used to have no other caller, so a cold start was
-// English until the driver opened Settings). Every translated screen and the
+// Restore the driver's saved language at app start. This is the only caller
+// of loadLanguage(): Settings used to call it on mount, so a cold start was
+// English until the driver opened Settings. Every translated screen and the
 // alert helpers import this module, so this runs before the first translated
 // string renders; the launch splash still covers that first screen while the
 // single AsyncStorage read settles. Deferred to a microtask because
 // store/languageStore imports this module: both have finished evaluating by
 // then. A saved language the picker no longer offers resolves to English
-// (getStoredLanguage()).
+// (getStoredLanguage()), and a language the driver picks while the read is in
+// flight wins over it (hasUserChosen in the store).
 Promise.resolve()
     .then(() => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports

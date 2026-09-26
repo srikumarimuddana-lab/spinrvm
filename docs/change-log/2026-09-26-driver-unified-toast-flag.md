@@ -176,7 +176,7 @@ export function showToast(type: ToastType, title: string, message?: string) {
   - **Migration and rollback, run for real** on a throwaway local PostgreSQL 16 with a minimal `public.settings` table: applying twice is idempotent; the column is `boolean NOT NULL DEFAULT false` with its comment; the `UPDATE ... = false` and `DROP COLUMN` rollbacks work; the migration re-applies cleanly afterwards.
 - **driver-app `yarn tsc --noEmit`:** 0 errors.
 - **driver-app affected jest suites:**
-  - `__tests__/components/UnifiedToast.test.tsx`: 8 passed.
+  - `__tests__/components/UnifiedToast.test.tsx`: 9 passed (including the SOS-clearance test).
   - `store/__tests__/unifiedToastStore.test.ts`: 3 passed.
   - `__tests__/hooks/useToast.test.ts`: 9 passed.
   - `hooks/__tests__/useDriverDashboard.socketLifecycle.test.ts`: 24 passed.

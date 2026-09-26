@@ -25,7 +25,6 @@ import { normalizeActualRouteSegments, normalizeDecodedPolyline, routeQualityLab
 const BOOKED_DISTANCE_BASES = new Set(["planned_estimated", "planned_capped", "planned_guess_deviation"]);
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
-import { useToast } from "@/components/ui/use-toast";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
@@ -97,13 +96,13 @@ interface Props {
 
 export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
-    const { toast } = useToast();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
     const [showCancelDialog, setShowCancelDialog] = useState(false);
+    const [cancelError, setCancelError] = useState<string | null>(null);
     const [cancelReason, setCancelReason] = useState("Cancelled by admin");
     const [cancelling, setCancelling] = useState(false);
     const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("planned");
@@ -1089,7 +1088,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 status the ride type's union may not declare stays
                                                 type-safe. */}
                                             {ride.status && !["completed", "cancelled", "in_progress"].includes(ride.status) && (
-                                                <button onClick={() => { setCancelReason("Cancelled by admin"); setShowCancelDialog(true); }}
+                                                <button onClick={() => { setCancelReason("Cancelled by admin"); setCancelError(null); setShowCancelDialog(true); }}
                                                     className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/15 px-3 py-2 rounded-lg border border-destructive/40 transition-colors ml-auto">
                                                     <Ban className="h-3.5 w-3.5" /> Force Cancel
                                                 </button>
@@ -1145,6 +1144,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             placeholder="Cancelled by admin"
                         />
                     </div>
+                    {cancelError && (
+                        <p role="alert" className="text-sm text-destructive">
+                            Couldn&apos;t cancel the ride: {cancelError}
+                        </p>
+                    )}
                     <div className="flex justify-end gap-2 pt-2">
                         <button
                             onClick={() => setShowCancelDialog(false)}
@@ -1156,13 +1160,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             disabled={cancelling}
                             onClick={async () => {
                                 if (!ride?.id) return;
+                                setCancelError(null);
                                 setCancelling(true);
                                 try {
                                     await adminCancelRide(ride.id, cancelReason.trim() || "Cancelled by admin");
                                     setShowCancelDialog(false);
                                     await loadRide();
                                 } catch (err: any) {
-                                    toast({ title: "Couldn't cancel ride", description: err?.message || "Failed to cancel ride", variant: "destructive" });
+                                    // Shown inside the dialog: a modal Dialog hides the toast
+                                    // viewport from screen readers, and the typed reason stays for a retry.
+                                    setCancelError(err?.message || "Failed to cancel ride");
                                 } finally {
                                     setCancelling(false);
                                 }

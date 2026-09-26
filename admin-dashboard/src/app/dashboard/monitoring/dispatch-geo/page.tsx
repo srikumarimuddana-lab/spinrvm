@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 import {
     getDispatchGeoStatus,
@@ -86,8 +87,7 @@ export default function DispatchGeoMonitoringPage() {
     }, [fetchStatus]);
 
     useEffect(() => {
-        const id = setInterval(fetchStatus, STATUS_POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(fetchStatus, STATUS_POLL_MS);
     }, [fetchStatus]);
 
     const handleManualRefresh = async () => {

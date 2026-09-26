@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     AlertTriangle,
     CheckCircle2,
@@ -40,6 +40,7 @@ import { Label } from "@/components/ui/label";
 import { Pagination } from "@/components/ui/pagination";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 import {
     getStuckStripeEvents,
@@ -105,7 +106,6 @@ export default function StripeEventsPage() {
 
     // Auto-refresh
     const [autoRefresh, setAutoRefresh] = useState(true);
-    const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const fetchEvents = useCallback(async () => {
         try {
@@ -129,12 +129,8 @@ export default function StripeEventsPage() {
     }, [fetchEvents]);
 
     useEffect(() => {
-        if (autoRefresh) {
-            intervalRef.current = setInterval(fetchEvents, 30_000);
-        }
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
+        if (!autoRefresh) return;
+        return setVisibleInterval(fetchEvents, 30_000);
     }, [autoRefresh, fetchEvents]);
 
     const handleViewDetail = async (eventId: string) => {

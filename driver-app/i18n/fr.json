@@ -509,7 +509,55 @@
     "unauthorized": "Session expirée. Veuillez vous reconnecter.",
     "unknown": "Une erreur inconnue s'est produite.",
     "failedToLoad": "Échec du chargement des données",
-    "tryAgain": "Veuillez réessayer"
+    "tryAgain": "Veuillez réessayer",
+    "auth": {
+      "account_suspended": "Votre compte chauffeur a été suspendu. Veuillez communiquer avec le soutien.",
+      "otp_invalid": "Ce code ne correspond pas. Vérifiez le texto et réessayez.",
+      "otp_expired": "Ce code a expiré. Touchez « Renvoyer le code » pour en obtenir un nouveau.",
+      "otp_locked": "Trop de tentatives infructueuses. Veuillez patienter un moment avant de réessayer.",
+      "consent_required": "Veuillez accepter les Conditions d'utilisation et la Politique de confidentialité pour continuer.",
+      "invalid_credentials": "Les informations de connexion ne correspondent pas. Veuillez réessayer.",
+      "token_expired": "Votre session a expiré. Veuillez vous reconnecter."
+    },
+    "driver": {
+      "documents_expired": "Vos documents ont expiré. Renouvelez-les dans l'onglet Profil pour vous mettre en ligne.",
+      "documents_pending": "Vos documents sont toujours en cours d'examen. Nous vous aviserons dès leur approbation.",
+      "documents_rejected": "Certains de vos documents ont été refusés. Veuillez les vérifier et les soumettre de nouveau.",
+      "subscription_required": "Activez Spinr Pass pour commencer à accepter des courses.",
+      "quota_exhausted": "Vous avez utilisé toutes vos courses Spinr Pass pour aujourd'hui. Votre quota se renouvelle à minuit — profitez bien du reste de votre journée !",
+      "not_available": "Vous n'êtes pas disponible pour accepter cette course pour le moment.",
+      "offline": "Vous êtes actuellement hors ligne. Mettez-vous en ligne pour recevoir des offres de course.",
+      "dual_run_hold": "Votre compte est en attente, car il est encore actif dans l'ancienne application. Veuillez communiquer avec le soutien.",
+      "license_class_ineligible": "Votre classe de permis de conduire exige une approbation distincte de SGI pour conduire avec Spinr. Veuillez communiquer avec le soutien.",
+      "vehicle_too_old": "Votre véhicule ne répond plus aux critères d'admissibilité de Spinr. Les véhicules doivent avoir moins de 10 ans.",
+      "insufficient_experience": "Vous devez avoir au moins 3 ans d'expérience de conduite avec permis pour conduire avec Spinr. Veuillez communiquer avec le soutien.",
+      "underage": "Vous devez avoir 18 ans ou plus pour conduire avec Spinr.",
+      "crc_consent_required": "Donnez votre consentement à la vérification des antécédents avant de vous mettre en ligne."
+    },
+    "ride": {
+      "not_found": "Nous n'avons pas trouvé cette course. Elle a peut-être été supprimée.",
+      "already_cancelled": "Cette course a déjà été annulée.",
+      "invalid_status": "Cette action n'est pas permise dans l'état actuel de la course.",
+      "no_drivers_available": "Aucun chauffeur n'est disponible pour cette course pour le moment.",
+      "price_mismatch": "Les détails du tarif ont changé. Veuillez les vérifier avant de continuer.",
+      "taken": "Un autre chauffeur a pris cette course. Nous vous enverrons la prochaine offre."
+    },
+    "payment": {
+      "failed": "Le paiement n'a pas abouti. Veuillez réessayer.",
+      "method_invalid": "Ce mode de versement n'est pas valide. Veuillez le mettre à jour dans l'onglet Profil.",
+      "insufficient_funds": "Fonds insuffisants pour effectuer cette action.",
+      "refund_failed": "Nous ne pouvons pas traiter le remboursement pour le moment. Veuillez communiquer avec le soutien."
+    },
+    "wallet": {
+      "transfer_self": "Vous ne pouvez pas vous transférer des fonds à vous-même.",
+      "transfer_recipient_not_found": "Nous n'avons pas trouvé ce destinataire. Veuillez vérifier et réessayer."
+    },
+    "system": {
+      "internal": "Un problème est survenu de notre côté. Veuillez réessayer.",
+      "service_unavailable": "Spinr est temporairement indisponible. Veuillez réessayer sous peu.",
+      "rate_limited": "Vous allez un peu trop vite. Veuillez ralentir et réessayer dans un instant.",
+      "database": "Nous avons du mal à joindre nos systèmes. Veuillez réessayer."
+    }
   },
   "heatmap": {
     "legend": {

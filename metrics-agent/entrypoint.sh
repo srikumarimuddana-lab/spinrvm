@@ -28,10 +28,17 @@ BASE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # the Go runtime collects garbage harder as it nears the cap instead of
 # growing until the machine is OOM-killed (which would take metrics down
 # too). Budget: Alloy 250 + Loki 300 + Grafana 200 + Vector (Rust, ~60,
-# uncapped) + OS ~100 = ~910 MiB, with 512 MB swap as a backstop.
+# uncapped) + VictoriaMetrics 150 + OS ~100 = ~1060 MiB of soft caps on a
+# 962 MiB machine, with 512 MB swap as a backstop. These are ceilings, not
+# usage: measured peak for the whole machine was 434 MiB (Fly metrics,
+# 6h window, 2026-09-25) before VictoriaMetrics was added.
 ALLOY_GOMEMLIMIT="250MiB"
 LOKI_GOMEMLIMIT="300MiB"
 GRAFANA_GOMEMLIMIT="200MiB"
+VM_GOMEMLIMIT="150MiB"
+# Set to 1 by start_log_stack once VictoriaMetrics is launched; gates the
+# local-store Alloy fragments and Grafana datasource below.
+LOCAL_STORE=0
 
 supervise() {
   # supervise <name> <cmd...> — restart <cmd> forever, reporting every exit.
@@ -71,10 +78,10 @@ start_log_stack() {
   done
 
   if ! { chmod 755 /data \
-      && mkdir -p /data/loki /data/vector /data/grafana \
-      && chown alloy:alloy /data/loki /data/vector \
+      && mkdir -p /data/loki /data/vector /data/grafana /data/victoria-metrics \
+      && chown alloy:alloy /data/loki /data/vector /data/victoria-metrics \
       && chown grafana:grafana /data/grafana \
-      && chmod 700 /data/loki /data/vector /data/grafana; }; then
+      && chmod 700 /data/loki /data/vector /data/grafana /data/victoria-metrics; }; then
     echo "[entrypoint] ERROR: could not prepare /data for the log stack; NOT starting Loki/Vector/Grafana." >&2
     return 1
   fi
@@ -83,6 +90,20 @@ start_log_stack() {
   supervise loki env -i PATH="$BASE_PATH" HOME=/data/loki GOMEMLIMIT="$LOKI_GOMEMLIMIT" \
     /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
     /usr/local/bin/loki -config.file=/etc/loki/loki.yaml &
+
+  # VictoriaMetrics: local metrics history for this Grafana (Redis, Supabase
+  # server metrics, and a copy of the backend's own metrics). 127.0.0.1 only
+  # and no auth of its own, same as Loki -- Grafana reaches it locally.
+  supervise victoria-metrics env -i PATH="$BASE_PATH" HOME=/data/victoria-metrics \
+    GOMEMLIMIT="$VM_GOMEMLIMIT" \
+    /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
+    /usr/local/bin/victoria-metrics \
+    -storageDataPath=/data/victoria-metrics \
+    -retentionPeriod=30d \
+    -httpListenAddr=127.0.0.1:8428 \
+    -memory.allowedBytes=96MiB \
+    -loggerLevel=WARN &
+  LOCAL_STORE=1
 
   # Vector: needs the org slug + a read-only org token for Fly's log stream.
   if [ -n "${LOG_STREAM_ORG:-}" ] && [ -n "${LOG_STREAM_ACCESS_TOKEN:-}" ]; then
@@ -125,6 +146,22 @@ start_log_stack() {
     echo "[entrypoint] WARNING: FLY_METRICS_READ_TOKEN not set; no Fly server-metrics (CPU/mem/disk) data source." >&2
   fi
 
+  if [ "$LOCAL_STORE" = "1" ]; then
+    if ! cp /etc/grafana/provisioning-optional/local-metrics.yaml \
+      /etc/grafana/provisioning/datasources/; then
+      echo "[entrypoint] ERROR: could not provision the local metrics (VictoriaMetrics) data source." >&2
+    fi
+  fi
+
+  supabase_monitor_password="${SUPABASE_MONITOR_PASSWORD:-}"
+  if [ -n "$supabase_monitor_password" ]; then
+    if ! cp /etc/grafana/provisioning-optional/supabase-postgres.yaml       /etc/grafana/provisioning/datasources/; then
+      echo "[entrypoint] ERROR: could not provision the Supabase Postgres data source." >&2
+    fi
+  else
+    echo "[entrypoint] WARNING: SUPABASE_MONITOR_PASSWORD not set; no Supabase data source." >&2
+  fi
+
   supervise grafana env -i PATH="$BASE_PATH" HOME=/data/grafana \
     GOMEMLIMIT="$GRAFANA_GOMEMLIMIT" \
     GF_PATHS_HOME=/usr/share/grafana \
@@ -148,6 +185,7 @@ start_log_stack() {
     GRAFANA_REMOTE_WRITE_USERNAME="$GRAFANA_REMOTE_WRITE_USERNAME" \
     GRAFANA_CLOUD_METRICS_READ_TOKEN="$metrics_read_token" \
     FLY_METRICS_READ_TOKEN="$fly_metrics_read_token" \
+    SUPABASE_MONITOR_PASSWORD="$supabase_monitor_password" \
     /usr/bin/setpriv --reuid=grafana --regid=grafana --init-groups --no-new-privs \
     /usr/share/grafana/bin/grafana server --homepath=/usr/share/grafana &
 }
@@ -161,9 +199,42 @@ fi
 /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
   /usr/local/bin/discover-targets.sh &
 
+# Alloy's config = config.alloy + optional fragments, chosen at boot by which
+# pieces can actually work: the local-store fragments only when
+# VictoriaMetrics was started, and each credentialed source only when its
+# secret is set (so a missing secret is one WARNING line here, not an auth
+# error every scrape).
+ALLOY_CONFIG=/etc/alloy/config.alloy
+assemble_alloy_config() {
+  out=/etc/alloy/generated.alloy
+  cp /etc/alloy/config.alloy "$out" || return 1
+  if [ "$LOCAL_STORE" != "1" ]; then
+    echo "[entrypoint] WARNING: local metrics store not running; Redis/Supabase metrics off, backend metrics go to Grafana Cloud only." >&2
+  else
+    sed -i 's#/\*LOCAL_STORE_FORWARD\*/#, prometheus.remote_write.local.receiver#' "$out" || return 1
+    cat /etc/alloy/fragments/local-store.alloy >> "$out" || return 1
+    if [ -n "${REDIS_EXPORTER_PASSWORD:-}" ]; then
+      cat /etc/alloy/fragments/redis.alloy >> "$out" || return 1
+    else
+      echo "[entrypoint] WARNING: REDIS_EXPORTER_PASSWORD not set; no Redis metrics." >&2
+    fi
+    if [ -n "${SUPABASE_METRICS_SECRET_KEY:-}" ]; then
+      cat /etc/alloy/fragments/supabase.alloy >> "$out" || return 1
+    else
+      echo "[entrypoint] WARNING: SUPABASE_METRICS_SECRET_KEY not set; no Supabase server metrics." >&2
+    fi
+  fi
+  chown alloy:alloy "$out" || return 1
+  ALLOY_CONFIG="$out"
+}
+if ! assemble_alloy_config; then
+  echo "[entrypoint] ERROR: could not assemble Alloy config from fragments; running the base config.alloy (backend -> Grafana Cloud only)." >&2
+  ALLOY_CONFIG=/etc/alloy/config.alloy
+fi
+
 GOMEMLIMIT="$ALLOY_GOMEMLIMIT"
 export GOMEMLIMIT
 exec /usr/bin/setpriv --reuid=alloy --regid=alloy --init-groups --no-new-privs \
-  /bin/alloy run /etc/alloy/config.alloy \
+  /bin/alloy run "$ALLOY_CONFIG" \
   --storage.path=/var/lib/alloy/data \
   --server.http.listen-addr=0.0.0.0:12345

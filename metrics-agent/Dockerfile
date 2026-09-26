@@ -27,6 +27,12 @@
 FROM grafana/loki:3.4.2 AS loki
 FROM timberio/vector:0.45.0-distroless-static AS vector
 FROM grafana/grafana:11.6.0-ubuntu AS grafana
+# Local metrics store (README "Metrics store"). The -scratch variant is used
+# because a scratch image can only run a statically linked binary, which is
+# what makes it safe to copy onto this Ubuntu base. Pinned by digest,
+# resolved 2026-09-25 from Docker Hub's API for tag v1.152.0-scratch (latest
+# stable single-node release at the time).
+FROM victoriametrics/victoria-metrics:v1.152.0-scratch@sha256:e3711c384913332699be75965b1f55fc214111301ab8edd138f18caa85e013a9 AS vm
 
 FROM grafana/alloy:v1.4.3@sha256:06bdcbb51fc22b16c2e96b31cbdf9cb0972e3bdedfbac2cc55ed36743f7fb9aa AS alloy
 
@@ -71,6 +77,8 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin grafana
 
 COPY --from=loki /usr/bin/loki /usr/local/bin/loki
 COPY --from=vector /usr/local/bin/vector /usr/local/bin/vector
+COPY --from=vm /victoria-metrics-prod /usr/local/bin/victoria-metrics
+COPY alloy-fragments /etc/alloy/fragments
 COPY --from=grafana --chown=grafana:grafana /usr/share/grafana /usr/share/grafana
 COPY loki.yaml /etc/loki/loki.yaml
 COPY vector.toml /etc/vector/vector.toml

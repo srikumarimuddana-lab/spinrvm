@@ -1,0 +1,25 @@
+// Included by entrypoint.sh ONLY when SUPABASE_METRICS_SECRET_KEY is set AND
+// the local store is running. Supabase's own Prometheus endpoint (~200
+// series: DB-server CPU, memory, disk, IO, WAL, connections) -- see
+// https://supabase.com/docs/guides/telemetry/metrics. Basic auth
+// "service_role" / a DEDICATED secret key (Settings -> API Keys -> Secret
+// keys, named "grafana-metrics") so it can be revoked on its own. This key is
+// held by Alloy only; the public-facing Grafana never sees it. 60s interval
+// per Supabase's own recommendation.
+prometheus.scrape "supabase" {
+  targets = [{
+    "__address__" = "soavhtdhefowwvforzwb.supabase.co:443",
+    "provider"    = "supabase",
+  }]
+  forward_to      = [prometheus.remote_write.local.receiver]
+  job_name        = "supabase"
+  scheme          = "https"
+  metrics_path    = "/customer/v1/privileged/metrics"
+  scrape_interval = "60s"
+  scrape_timeout  = "30s"
+
+  basic_auth {
+    username = "service_role"
+    password = env("SUPABASE_METRICS_SECRET_KEY")
+  }
+}

@@ -317,14 +317,97 @@ Grafana Cloud metrics datasource above).
   gauge read. All four dashboard formulas (CPU/memory/disk/network) were
   verified against live data before shipping, not written from memory of
   Fly's metric names.
-- **Sentry and Supabase/Redis metrics were explicitly deferred** (decided
-  2026-09-25, see the session's own request) — Sentry has no native
-  Grafana datasource without installing a plugin, which conflicts with
-  this image's `GF_PLUGINS_PREINSTALL_DISABLED=true`; Supabase/Redis need
-  a new privileged-enough credential sitting inside a now-public Grafana,
-  which needs an explicit decision on scoping (dedicated read-only
-  role/ACL user, not the existing service-role key or `REDIS_URL`) before
-  being wired up.
+- **Sentry was explicitly skipped** (2026-09-25): no native Grafana
+  datasource without installing a plugin, which conflicts with this image's
+  `GF_PLUGINS_PREINSTALL_DISABLED=true`. Supabase and Redis were deferred
+  here and then built the same day with scoped-down credentials — next
+  section.
+
+### Supabase, Redis & the local metrics store
+
+Added 2026-09-25. Three more dashboards, each on a credential scoped to the
+minimum — none of them uses `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` or
+`REDIS_URL`. Full record, including the exact SQL/ACL commands and every
+verification: `docs/change-log/2026-09-25-metrics-agent-supabase-redis-metrics.md`.
+
+**Local metrics store (VictoriaMetrics).** This Grafana had no metrics
+database of its own — Alloy only remote-wrote to Grafana Cloud, which this
+Grafana can't read (`GRAFANA_CLOUD_METRICS_READ_TOKEN` is unset). A
+single-node VictoriaMetrics (`127.0.0.1:8428`, no auth, loopback only,
+`/data/victoria-metrics`, 30-day retention, `-memory.allowedBytes=96MiB`) now
+runs under the same `supervise` loop as Loki. Alloy writes to it in addition
+to Grafana Cloud (backend metrics go to both, unchanged for Grafana Cloud;
+Redis/Supabase go to the local store only, so Grafana Cloud's series count
+doesn't grow). Grafana datasource: "Local metrics (VictoriaMetrics, 30
+days)". Measured 57 MiB RSS; whole machine ~600 of 962 MiB.
+
+How the optional pieces switch on: `entrypoint.sh` assembles
+`/etc/alloy/generated.alloy` at boot from `config.alloy` plus
+`alloy-fragments/*.alloy` — `local-store.alloy` only if VictoriaMetrics
+started, `redis.alloy` / `supabase.alloy` only if their secret is set. A
+missing secret is one `WARNING` line at boot, not an auth error every
+scrape. If assembly itself fails, Alloy falls back to the untouched
+`config.alloy` (backend → Grafana Cloud only), so metrics never stop.
+
+**"Supabase Postgres (production health)" dashboard.** Datasource connects
+as the dedicated `grafana_monitor` role (secret `SUPABASE_MONITOR_PASSWORD`):
+LOGIN, CONNECTION LIMIT 3, `statement_timeout 5s`,
+`default_transaction_read_only`, SELECT on **0** of 167 app tables, no
+`public` schema usage, **not** in `pg_monitor`/`pg_read_all_stats` (those
+would expose every session's query text, which can carry PII). Connection
+counts come from `monitoring.connection_summary()` (migration 489) — a
+`SECURITY DEFINER` function returning counts/ages only, executable by
+`grafana_monitor` and nothing else (`anon`/`authenticated` verified denied).
+Without it, Postgres hides other sessions' `backend_type` from an
+unprivileged role, and a naive count reported **1** connection vs the real
+7. The dashboard also has a "Database errors — as seen by the backend" row
+(Loki): WARNING/ERROR/CRITICAL backend lines mentioning Supabase, PostgREST
+(`PGRST`/`APIError`), "Database operation failed" or GOAWAY. Supabase's
+*own* Postgres/API logs are **not** here — that needs a Supabase log drain
+($60/month + $0.20 per million events + egress, Pro plan), which was
+declined; use Supabase's Log Explorer for those.
+
+**"Redis (Upstash) health" dashboard.** Redis is Fly-managed Upstash
+(`spinr-redis`, pay-as-you-go). Alloy's built-in Redis exporter connects as
+the ACL user `grafana_exporter`: `+info +ping` only, `resetkeys
+resetchannels` — verified NOPERM for GET, SET, DEL, KEYS, SCAN, CONFIG, ACL,
+FLUSHDB. Scraped every **60s**, because Upstash bills per command. Upstash
+quirks found the hard way, all of which matter if you ever recreate this:
+- The password **must** come from `ACL GENTOKEN grafana_exporter` (username
+  required); Upstash rejects any self-chosen `>password`.
+- Upstash rejects per-subcommand grants (`+latency|latest`), and `LATENCY` /
+  `SLOWLOG` don't exist on Upstash at all (the exporter logs that once).
+- **`INFO` is answered by two nodes (primary + replica) with separate
+  counters**, and each scrape lands on either one. A plain `rate()` reads
+  every switch as a counter reset — it reported ~69,000 commands/sec when
+  the real figure was ~0.2/s. The dashboard follows each node's counter
+  separately (rolling 5m max / min) and only counts a minute's increment
+  when both nodes were visible before and after it. If you write new Redis
+  panels, copy that pattern; don't use a bare `rate()` on `redis_*_total`.
+- `used_memory` from Upstash reads a few KB for ~100 keys — not a real
+  figure, so memory is deliberately not on the dashboard.
+
+To recreate the Redis user (Fly-internal host; tunnel first):
+```bash
+fly proxy 16379:6379 fly-spinr-redis.upstash.io -o spinr_backend &
+# as the default user (password from `fly redis status spinr-redis`):
+ACL GENTOKEN grafana_exporter           # -> <token>
+ACL SETUSER grafana_exporter on ><token> resetkeys resetchannels -@all +info +ping
+fly secrets set -a spinr-metrics-agent-yyz REDIS_EXPORTER_PASSWORD=<token>
+```
+
+**Supabase server metrics (CPU/memory/disk/IO trends) — wired, awaiting a
+key.** `alloy-fragments/supabase.alloy` scrapes Supabase's own Prometheus
+endpoint (`/customer/v1/privileged/metrics`, basic auth `service_role` /
+`SUPABASE_METRICS_SECRET_KEY`) every 60s into the local store. The key is
+held by **Alloy only**, never by the public Grafana. It must be a
+*dedicated* secret key (Supabase → Settings → API Keys → Secret keys →
+"grafana-metrics") so it can be revoked without touching the backend:
+```bash
+fly secrets set -a spinr-metrics-agent-yyz SUPABASE_METRICS_SECRET_KEY=sb_secret_...
+```
+A trend dashboard for it gets built once real series exist to verify
+metric names against.
 
 ### Operate
 

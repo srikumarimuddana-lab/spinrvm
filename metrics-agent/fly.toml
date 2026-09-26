@@ -55,6 +55,10 @@ swap_size_mb = 512
 # Server-metrics secret: FLY_METRICS_READ_TOKEN (optional; see README
 # "Server metrics (Fly Prometheus)") -- Fly's own hosted Prometheus, not a
 # new exporter.
+# Database/cache secrets (all optional; see README "Supabase, Redis & the
+# local metrics store"): SUPABASE_MONITOR_PASSWORD (grafana_monitor Postgres
+# role), REDIS_EXPORTER_PASSWORD (Upstash grafana_exporter ACL token),
+# SUPABASE_METRICS_SECRET_KEY (dedicated Supabase secret key, Alloy only).
 # See metrics-agent/README.md for the exact commands and where each value
 # comes from.
 

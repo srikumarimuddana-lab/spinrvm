@@ -5,6 +5,7 @@ import { ensureFreshToken } from '@shared/api/client';
 import { useDriverDashboard } from '../useDriverDashboard';
 import * as Location from 'expo-location';
 import { startBackgroundLocation, TRIP_CADENCE, IDLE_CADENCE } from '../../utils/backgroundLocation';
+import { isUnifiedToastEnabled, setUnifiedToastEnabled } from '../../store/unifiedToastStore';
 
 const mockAppListeners = new Set<(state: string) => void>();
 const mockNetListeners = new Set<(state: object) => void>();
@@ -36,7 +37,8 @@ jest.mock('@shared/api/client', () => ({ __esModule: true,
   default: { get: jest.fn().mockResolvedValue({ data: {} }), post: jest.fn().mockResolvedValue({ data: {} }) },
   ensureFreshToken: jest.fn().mockResolvedValue(undefined), getApiErrorMessage: jest.fn(),
 }));
-jest.mock('@shared/hooks/queries', () => ({ useDriverConfig: () => ({ data: undefined }) }));
+let mockDriverConfigData: object | undefined;
+jest.mock('@shared/hooks/queries', () => ({ useDriverConfig: () => ({ data: mockDriverConfigData }) }));
 // useDriverDashboard now imports queryClient/queryKeys directly (for the
 // WS `new_notification` cache merge) — shared/api/queryClient.ts has a
 // module-load-time AppState.addEventListener side effect (RN focusManager
@@ -128,11 +130,32 @@ beforeEach(() => {
   mockAuth.driver.is_online = true;
   mockDriver.rideState = 'idle';
   mockDriver.activeRide = null;
+  mockDriverConfigData = undefined;
+  setUnifiedToastEnabled(false);
 });
 afterEach(async () => {
   await act(async () => { mounted?.unmount(); }); mounted = undefined;
   jest.clearAllTimers(); jest.useRealTimers(); global.WebSocket = originalSocket;
   mockAppListeners.clear(); mockNetListeners.clear();
+});
+
+it('turns the unified toast on from /drivers/config (migration 490)', async () => {
+  mockDriverConfigData = { driver_unified_toast_enabled: true };
+  await mount();
+  expect(isUnifiedToastEnabled()).toBe(true);
+});
+
+it('turns the unified toast off when /drivers/config serves false or omits it', async () => {
+  setUnifiedToastEnabled(true);
+  mockDriverConfigData = { driver_unified_toast_enabled: false };
+  await mount();
+  expect(isUnifiedToastEnabled()).toBe(false);
+
+  await act(async () => { mounted?.unmount(); }); mounted = undefined;
+  setUnifiedToastEnabled(true);
+  mockDriverConfigData = { ride_offer_timeout_seconds: 15 };
+  await mount();
+  expect(isUnifiedToastEnabled()).toBe(false);
 });
 
 it('does not reconnect after the deliberate background close or a background network event', async () => {

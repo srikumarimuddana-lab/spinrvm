@@ -150,3 +150,8 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - It was built as 489 and renumbered, because `main` gained `489_monitoring_connection_summary.sql` first.
   - The migration's comments were corrected before merge; they had called the new toast a `shared/` component.
   - The driver-app half follows in its own PR. Its accessibility review found nothing new: the contrast failure is the theme follow-up already logged, and the 1.5× text cap follows D1.
+- 2026-09-26: W2.3 backend merged (#5890). W2.3 driver-app half opened, behind that flag:
+  - a driver-app toast store and host modelled on the rider banner;
+  - `showToast` routes to it when the flag is on;
+  - the host is mounted in `_layout.tsx`, and the flag is read from `/drivers/config`.
+  - Flag off is byte-identical to today. Turning the flag on needs a device check `[H]` first, because driver-app has no visual tooling.

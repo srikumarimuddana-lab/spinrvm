@@ -11,6 +11,7 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
+import { setUnifiedToastEnabled } from '../store/unifiedToastStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import {
   isCarRingOwner,
@@ -533,6 +534,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // waiting for the car session's own config fetch.
     setCarOfferToneEnabled(
       (driverConfigQuery.data as { android_auto_offer_tone_enabled?: boolean }).android_auto_offer_tone_enabled === true,
+    );
+    // Migration 490, default off: render every later showToast through the
+    // unified toast. Screens shown before the dashboard first mounts after a
+    // cold start (login, OTP) keep the old toast.
+    setUnifiedToastEnabled(
+      (driverConfigQuery.data as { driver_unified_toast_enabled?: boolean }).driver_unified_toast_enabled === true,
     );
   }, [driverConfigQuery.data, applyDriverConfig]);
 

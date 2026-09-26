@@ -10,6 +10,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AlertDialog } from '../components/AlertDialog';
 import { toastConfig } from '../components/toastConfig';
+import UnifiedToast from '../components/UnifiedToast';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { initMetaSdk } from '@shared/analytics/meta';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
@@ -776,6 +777,9 @@ function DriverRootLayoutInner({
           </Stack>
           <AlertDialog />
           <Toast config={toastConfig} />
+          {/* Migration 490: renders nothing unless driver_unified_toast_enabled
+              routed a toast to it (hooks/useToast.ts). */}
+          <UnifiedToast />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

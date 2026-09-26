@@ -18,6 +18,7 @@ import {
 } from "@/lib/api";
 import { PayoutsCeoHeader } from "./payouts-ceo-header";
 import { PayoutsCompliance } from "./payouts-compliance";
+import { useConfirm } from "@/hooks/useConfirm";
 
 export function PayoutsTab() {
     const [payouts, setPayouts] = useState<any[]>([]);
@@ -35,6 +36,7 @@ export function PayoutsTab() {
     const [retryingId, setRetryingId] = useState<string | null>(null);
     const [bulkRetrying, setBulkRetrying] = useState(false);
     const { toast } = useToast();
+    const { confirm, dialog: confirmDialog } = useConfirm();
 
     useEffect(() => {
         // Service areas list is small and only feeds the dropdown —
@@ -82,9 +84,11 @@ export function PayoutsTab() {
         // matches the Pass 1 daily chart so "retry everything failed in
         // this window" reads as a single coherent action.
         const since = overview.period.start;
-        if (!window.confirm(
-            `Retry every failed/cancelled payout since ${new Date(since).toLocaleString()}? Each will be flipped to pending and the retry loop will pick them up.`
-        )) return;
+        if (!(await confirm({
+            title: `Retry every failed/cancelled payout since ${new Date(since).toLocaleString()}?`,
+            description: "Each will be flipped to pending and the retry loop will pick them up.",
+            confirmLabel: "Retry payouts",
+        }))) return;
         setBulkRetrying(true);
         try {
             const res = await bulkRetryPayouts({ since, max_to_retry: 200 });
@@ -151,6 +155,7 @@ export function PayoutsTab() {
 
     return (
         <div className="space-y-6">
+            {confirmDialog}
             {/* Pass 1 — CEO header. Sits above the legacy stat cards
                 so the page opens to "is payout flow healthy?" instead
                 of a static transaction log. Skeleton-loads independently

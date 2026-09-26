@@ -14,10 +14,12 @@ import { Label } from "@/components/ui/label";
 import { formatDate } from "@/lib/utils";
 import { closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { fmtMoney, fmtPeriodKey } from "./earnings-format";
+import { useConfirm } from "@/hooks/useConfirm";
 
 export function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; onClosed: () => Promise<void> | void }) {
     const { t4a_snapshot, period_locks } = overview;
     const { toast } = useToast();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     const now = new Date();
     // Default closure target: the previous calendar month — what
     // finance typically closes once the month wraps.
@@ -29,10 +31,14 @@ export function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOve
 
     const handleClose = async () => {
         const periodLabel = fmtPeriodKey(`${closeYear}-${String(closeMonth).padStart(2, "0")}`);
-        if (!window.confirm(
-            `Close ${periodLabel}? This writes an audit-log entry snapshotting every completed payout in that month. ` +
-            `Closure is advisory — no payouts are physically locked, but the audit row is permanent.`
-        )) return;
+        if (!(await confirm({
+            title: `Close ${periodLabel}?`,
+            description:
+                "This writes an audit-log entry snapshotting every completed payout in that month. " +
+                "Closure is advisory — no payouts are physically locked, but the audit row is permanent.",
+            confirmLabel: "Close period",
+            destructive: true,
+        }))) return;
         setClosing(true);
         try {
             const res = await closePayoutPeriod(closeYear, closeMonth);
@@ -55,6 +61,7 @@ export function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOve
 
     return (
         <div className="space-y-4">
+            {confirmDialog}
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                 Compliance &amp; finance
             </h2>

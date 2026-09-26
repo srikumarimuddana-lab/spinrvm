@@ -19,6 +19,7 @@ import {
   type Venue, type VenueUpsert, type VenuePickupPoint,
 } from "@/lib/api";
 import { isVenueNameValid } from "@/lib/venueFormSchema";
+import { useConfirm } from "@/hooks/useConfirm";
 
 const EMPTY: VenueUpsert = {
   name: "", center_lat: 0, center_lng: 0, radius_m: 150, pickup_points: [], service_area_id: null, is_active: true,
@@ -41,6 +42,7 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 }
 
 export default function VenuesPage() {
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [venues, setVenues] = useState<Venue[]>([]);
   const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
   const [areaFilter, setAreaFilter] = useState<string>("");
@@ -191,7 +193,12 @@ export default function VenuesPage() {
   };
 
   const remove = async (v: Venue) => {
-    if (!confirm(`Delete venue "${v.name}"? This removes its curated pickup points.`)) return;
+    if (!(await confirm({
+      title: `Delete venue "${v.name}"?`,
+      description: "This removes its curated pickup points.",
+      confirmLabel: "Delete",
+      destructive: true,
+    }))) return;
     try { await deleteVenue(v.id); await load(); } catch (e: any) { alert(e?.message || "Delete failed"); }
   };
 
@@ -199,6 +206,7 @@ export default function VenuesPage() {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <PageHeader
         className="flex items-start justify-between gap-4 flex-wrap"
         title={

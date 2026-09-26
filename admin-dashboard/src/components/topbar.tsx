@@ -31,9 +31,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuthStore } from "@/store/authStore";
 import { useSidebarStore } from "@/store/sidebarStore";
 import { logoutAllAdmin } from "@/lib/api";
+import { useConfirm } from "@/hooks/useConfirm";
 
 export function Topbar() {
     const router = useRouter();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     const { theme, setTheme } = useTheme();
     const { logout, user } = useAuthStore();
     const collapsed = useSidebarStore((s) => s.collapsed);
@@ -51,9 +53,13 @@ export function Topbar() {
     // See docs/runbooks/auth-tokens.md for incident-response context.
     const handleLogoutEverywhere = async () => {
         if (
-            !window.confirm(
-                "Sign out every admin session for this account? You will be signed out everywhere this admin is logged in. Use this if your laptop was lost or you suspect compromise.",
-            )
+            !(await confirm({
+                title: "Sign out every admin session for this account?",
+                description:
+                    "You will be signed out everywhere this admin is logged in. Use this if your laptop was lost or you suspect compromise.",
+                confirmLabel: "Sign out everywhere",
+                destructive: true,
+            }))
         )
             return;
         try {
@@ -139,6 +145,7 @@ export function Topbar() {
                     </DropdownMenuContent>
                 </DropdownMenu>
             </div>
+            {confirmDialog}
         </header>
     );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Trash2, Gift, ToggleLeft, ToggleRight } from "lucide-react";
 import { getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { useConfirm } from "@/hooks/useConfirm";
 import { Badge } from "@/components/ui/badge";
 
 // --- Incentives Tab ---
@@ -19,6 +20,7 @@ const INCENTIVE_TYPES = [
 
 export default function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; areaName: string; vehicleTypes: { id: string; name: string }[] }) {
   const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [incentives, setIncentives] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -62,12 +64,13 @@ export default function IncentivesTab({ areaId, areaName, vehicleTypes }: { area
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this incentive?')) return;
+    if (!(await confirm({ title: 'Delete this incentive?', confirmLabel: 'Delete', destructive: true }))) return;
     try { await deleteIncentive(id); await load(); } catch (e) { console.error('[incentives] delete:', e); }
   };
 
   return (
     <div>
+      {confirmDialog}
       <div className="flex items-center justify-between mb-4">
         <div>
           <h4 className="font-bold text-foreground">Driver Ride Incentives</h4>

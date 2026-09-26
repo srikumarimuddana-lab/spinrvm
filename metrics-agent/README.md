@@ -147,14 +147,24 @@ just be noise to suppress later).
 
 Added 2026-09-24. This machine also stores the last **7 days of Fly logs**
 (every app in the org — the same feed `fly logs` shows) and runs a
-**private Grafana** for searching those logs and viewing the Grafana Cloud
-metrics. Nothing here is public: there is still no `[http_service]`, and
-Grafana is reached only through `fly proxy`.
+**Grafana** for searching those logs and viewing the Grafana Cloud metrics.
+
+**Updated 2026-09-25: Grafana is now public.** `fly.toml` has an
+`[http_service]` forwarding `https://spinr-metrics-agent-yyz.fly.dev` (or
+its custom domain, if one is later added) to Grafana's port 3000. This was
+a deliberate choice to make Grafana reachable from any browser without a
+Fly account or `fly proxy`. The only gate is Grafana's own admin login —
+anonymous access and self-sign-up are both disabled in `entrypoint.sh`, but
+a single shared admin/password is a materially weaker perimeter than
+requiring Fly account access, so treat `GRAFANA_ADMIN_PASSWORD` with the
+same care as a production credential (see "Known gaps" below for the full
+tradeoff). `fly proxy` still works too, if you'd rather not put the URL in
+a browser history.
 
 ```
 Fly log stream (NATS, 6PN) ─► Vector ─► Loki (127.0.0.1:3100, /data volume, 168h retention)
                                              ▲
-Grafana Cloud Prometheus ◄── (metrics:read) ─ Grafana :3000 ◄── fly proxy ◄── you
+Grafana Cloud Prometheus ◄── (metrics:read) ─ Grafana :3000 ◄── [http_service] ◄── anyone with the URL + admin login
 Backend /metrics ─► Alloy ─► Grafana Cloud        (unchanged)
 ```
 
@@ -163,7 +173,7 @@ Backend /metrics ─► Alloy ─► Grafana Cloud        (unchanged)
 | Alloy (metrics, PID 1) | `alloy` | `0.0.0.0:12345` (pre-existing) | rootfs, **not** `/data` |
 | Loki | `alloy` | `127.0.0.1:3100` only | `/data/loki` |
 | Vector | `alloy` | nothing inbound | `/data/vector` |
-| Grafana | `grafana` | `:3000` (6PN only — no public service) | `/data/grafana` |
+| Grafana | `grafana` | `:3000` — **public**, via `[http_service]` (2026-09-25) | `/data/grafana` |
 
 Metrics come first: `entrypoint.sh` starts each log-stack process in its
 own restart loop and **never** lets a log-stack failure stop Alloy. A
@@ -216,21 +226,105 @@ steps 1–3 must be done **before** the change is merged.
 
 ### Open Grafana
 
+Open <https://spinr-metrics-agent-yyz.fly.dev> directly (public, per the
+2026-09-25 change above) and log in as `admin`. `fly proxy` still works too
+if preferred:
+
 ```bash
 fly proxy 3000 -a spinr-metrics-agent-yyz
 ```
 
-Then open <http://localhost:3000> and log in as `admin`. Logs are under
+then <http://localhost:3000>. Either way, log in as `admin`. Logs are under
 **Explore → "Fly logs (Loki, 7 days)"**, for example:
 
 ```logql
 {app="spinr-backend-yyz"} |= "error"
-{app="spinr-backend-yyz", level="error"}
+{app="spinr-backend-yyz"} | json app_level="record.level.name" | app_level="ERROR"
 {app="spinr-backend-yyz"} |= "<request_id or ride_id>"
 ```
 
+**Do not filter on the `level` label for real severity** (a previous
+version of this doc suggested `{app="spinr-backend-yyz", level="error"}` —
+that was wrong, corrected 2026-09-25). `level` is Vector's/Fly's own
+stream-based classification and is `info` for every single backend log
+line, because the backend's loguru sink writes everything to stderr
+regardless of severity (`server.py`'s `logger.add(sys.stderr, ...)`). The
+backend's real severity lives inside the JSON line itself, at
+`record.level.name` (loguru's `serialize=True` output) — extract it
+explicitly as shown above, and give the extracted field a name other than
+`level` (e.g. `app_level`), or Loki silently renames yours to
+`level_extracted` to avoid colliding with the pre-existing `level` label,
+which is an easy, silent way to end up querying the wrong field. There's
+also a **"Backend log analysis" dashboard** (provisioned, see
+"Dashboards" below) that does this correctly and shows the counts/trend/
+drill-down without hand-writing LogQL.
+
+### Dashboards
+
+`grafana/provisioning/dashboards/files/backend-log-analysis.json` (added
+2026-09-25) is auto-provisioned on every deploy — no manual import needed.
+It has: INFO/WARNING/ERROR/CRITICAL count stats over the dashboard's time
+range, a raw-text crash/segfault-signature stat (for interpreter-level
+crashes that bypass loguru entirely), a stacked time-series of log volume
+by severity, a drill-down raw-logs panel filterable by an `$app`/`$level`
+dropdown, and two "further analysis" panels: one for loguru-captured
+exceptions (`record.exception`) and one for raw segfault-style text
+matches. It's a Grafana **file-provisioned** dashboard
+(`allowUiUpdates: true` in `dashboards.yaml`), so UI edits are allowed but
+won't survive a redeploy unless also saved back to the JSON file — treat
+the file as the source of truth, same as the datasource config.
+
 Labels available: `app`, `region`, `instance` (Fly machine ID), `level`.
 Metrics are under the "Spinr metrics (Grafana Cloud)" data source.
+
+### Server metrics (Fly Prometheus)
+
+Added 2026-09-25. A second dashboard, **"Server metrics (Fly CPU/memory/
+disk/network)"**, shows real machine-level resource usage for `$app`
+(default `spinr-backend-yyz`): CPU %, memory %, disk %, network in/out,
+and load average, per machine, with a `$instance` variable to isolate one
+machine or view all.
+
+This is **not** a new exporter — it's Fly.io's own hosted Prometheus
+endpoint (`https://api.fly.io/prometheus/spinr_backend/`), which already
+has CPU/memory/disk/network for every machine in the org with zero scrape
+config on our side. Added as a Grafana datasource
+(`grafana/provisioning-optional/fly-prometheus.yaml`, copied into
+`provisioning/datasources/` by `entrypoint.sh` only when
+`FLY_METRICS_READ_TOKEN` is set — same optional-secret pattern as the
+Grafana Cloud metrics datasource above).
+
+- **Token**: `fly tokens create readonly spinr_backend` (20-year expiry by
+  default; add `-x <duration>` for a shorter one). The printed value
+  **already includes its own `FlyV1 ` prefix** — store the whole string as
+  the secret, don't add another prefix.
+  ```bash
+  fly secrets set -a spinr-metrics-agent-yyz \
+    "FLY_METRICS_READ_TOKEN=FlyV1 <the rest of what the command printed>"
+  ```
+- **This is machine/OS-level metrics only** (CPU, memory, disk, network) —
+  not the app's own custom counters (dispatch latency, fare calc duration,
+  payment settlement, etc. per `CLAUDE.md`'s metric-naming conventions).
+  Those are a separate thing: Alloy already remote-writes them to Grafana
+  Cloud (the original ADR-010 MVP), but viewing them **in this
+  self-hosted Grafana** needs `GRAFANA_CLOUD_METRICS_READ_TOKEN`, which is
+  still unset as of this writing — see "Logs & Grafana" secrets above. In
+  the meantime they're visible directly in Grafana Cloud's own UI.
+- **PromQL note**: `fly_instance_cpu` is a per-core, per-mode cumulative
+  counter (`mode` label: `idle`, `user`, `system`, ...) — the same shape as
+  node_exporter's `node_cpu_seconds_total`. CPU used % is `rate()` over
+  everything-but-idle divided by `rate()` over all modes, not a direct
+  gauge read. All four dashboard formulas (CPU/memory/disk/network) were
+  verified against live data before shipping, not written from memory of
+  Fly's metric names.
+- **Sentry and Supabase/Redis metrics were explicitly deferred** (decided
+  2026-09-25, see the session's own request) — Sentry has no native
+  Grafana datasource without installing a plugin, which conflicts with
+  this image's `GF_PLUGINS_PREINSTALL_DISABLED=true`; Supabase/Redis need
+  a new privileged-enough credential sitting inside a now-public Grafana,
+  which needs an explicit decision on scoping (dedicated read-only
+  role/ACL user, not the existing service-role key or `REDIS_URL`) before
+  being wired up.
 
 ### Operate
 
@@ -270,9 +364,38 @@ Metrics are under the "Spinr metrics (Grafana Cloud)" data source.
   run Loki/Vector/Grafana (no registry or module-proxy access in that
   session). `entrypoint.sh`'s control flow was tested with stub binaries.
   The first deploy is the real test — watch `fly logs` for config errors.
-- **Private network reachability.** Grafana (password-protected) and the
-  pre-existing Alloy UI on `:12345` (no auth) are reachable from any app on
-  the org's private 6PN network, not only via `fly proxy`.
+  **This bit us 2026-09-25:** `Dockerfile`'s `COPY --from=vector /usr/bin/vector
+  …` was wrong — the `timberio/vector:0.45.0-distroless-static` image ships
+  the binary at `/usr/local/bin/vector`, not `/usr/bin/vector` — so every
+  `deploy-metrics-agent.yml` run since this feature merged failed the
+  Docker build outright (`"/usr/bin/vector": not found`). The machine kept
+  running whatever image had last deployed successfully — an older,
+  pre-log-stack `entrypoint.sh` with no Loki/Vector/Grafana code at all —
+  so the `fly_logs` volume sat at ~24 KB used with none of `/data/loki`,
+  `/data/vector`, `/data/grafana` ever created, and nothing surfaced the
+  gap: `fly status`/`fly releases` showed a healthy "complete" deploy the
+  whole time, because that deploy really did succeed — it just wasn't
+  running the code anyone thought it was. Fixed by correcting the COPY
+  source path. If `/data` looks suspiciously empty after a deploy, check
+  `deploy-metrics-agent.yml`'s run history before assuming a runtime issue
+  — a build that silently fell back to an old image looks identical to a
+  healthy deploy from `fly releases` alone.
+  `entrypoint.sh`'s one-shot `mountpoint -q /data` check (no retry) was
+  also hardened into a 10s-bounded wait loop at the same time, since a
+  genuine mount race on a machine replace would otherwise disable the log
+  stack for that machine's entire lifetime with only a single easily-missed
+  `ERROR` line to show for it.
+- **Public exposure (2026-09-25).** Grafana is now reachable from the
+  public internet at `https://spinr-metrics-agent-yyz.fly.dev`, gated only
+  by its own admin/password login — anonymous access and self-sign-up are
+  disabled, but there's no MFA, no rate-limit beyond Grafana's own defaults,
+  and no IP allowlist. `GRAFANA_ADMIN_PASSWORD` is now effectively an
+  internet-facing credential guarding 7 days of backend logs; rotate it if
+  it's ever shared over an insecure channel, and treat a "Grafana login
+  failed" spike the same as any other credential-stuffing signal. The
+  pre-existing Alloy UI on `:12345` (no auth at all) is **not** exposed by
+  `[http_service]` — it remains reachable only from other apps on the org's
+  private 6PN network or via `fly proxy`, same as before.
 - **Secrets briefly visible as process arguments.** `entrypoint.sh` passes
   each process's secrets through `env -i KEY=VALUE …` so no process inherits
   another's secrets; for the instant before `env` execs, those values are in

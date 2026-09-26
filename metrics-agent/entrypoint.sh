@@ -54,10 +54,21 @@ start_log_stack() {
     echo "[entrypoint] log stack disabled (LOGS_STACK_ENABLED=${LOGS_STACK_ENABLED}); metrics only"
     return 0
   fi
-  if ! mountpoint -q /data; then
-    echo "[entrypoint] ERROR: /data is not a mounted Fly volume; NOT starting Loki/Vector/Grafana (logs would be lost on every restart). Create the volume per metrics-agent/README.md." >&2
-    return 0
-  fi
+  # Fly mounts the volume before this entrypoint starts, but the check is
+  # given a short grace period anyway in case a machine replace ever lags
+  # (observed empty 2026-09-25: not this exact cause that day - the deployed
+  # image was stale - but a one-shot check here would permanently disable
+  # the log stack for the machine's whole lifetime on a genuine race, with
+  # no automatic recovery short of a manual restart).
+  mount_wait=0
+  while ! mountpoint -q /data; do
+    if [ "$mount_wait" -ge 10 ]; then
+      echo "[entrypoint] ERROR: /data is not a mounted Fly volume after ${mount_wait}s; NOT starting Loki/Vector/Grafana (logs would be lost on every restart). Create the volume per metrics-agent/README.md." >&2
+      return 0
+    fi
+    sleep 1
+    mount_wait=$((mount_wait + 1))
+  done
 
   if ! { chmod 755 /data \
       && mkdir -p /data/loki /data/vector /data/grafana \
@@ -104,6 +115,16 @@ start_log_stack() {
     echo "[entrypoint] WARNING: GRAFANA_CLOUD_METRICS_READ_TOKEN not set; Grafana will show logs only (no metrics data source)." >&2
   fi
 
+  fly_metrics_read_token="${FLY_METRICS_READ_TOKEN:-}"
+  if [ -n "$fly_metrics_read_token" ]; then
+    if ! cp /etc/grafana/provisioning-optional/fly-prometheus.yaml \
+      /etc/grafana/provisioning/datasources/; then
+      echo "[entrypoint] ERROR: could not provision the Fly server-metrics data source." >&2
+    fi
+  else
+    echo "[entrypoint] WARNING: FLY_METRICS_READ_TOKEN not set; no Fly server-metrics (CPU/mem/disk) data source." >&2
+  fi
+
   supervise grafana env -i PATH="$BASE_PATH" HOME=/data/grafana \
     GOMEMLIMIT="$GRAFANA_GOMEMLIMIT" \
     GF_PATHS_HOME=/usr/share/grafana \
@@ -126,6 +147,7 @@ start_log_stack() {
     GRAFANA_CLOUD_PROM_QUERY_URL="$prom_query_url" \
     GRAFANA_REMOTE_WRITE_USERNAME="$GRAFANA_REMOTE_WRITE_USERNAME" \
     GRAFANA_CLOUD_METRICS_READ_TOKEN="$metrics_read_token" \
+    FLY_METRICS_READ_TOKEN="$fly_metrics_read_token" \
     /usr/bin/setpriv --reuid=grafana --regid=grafana --init-groups --no-new-privs \
     /usr/share/grafana/bin/grafana server --homepath=/usr/share/grafana &
 }

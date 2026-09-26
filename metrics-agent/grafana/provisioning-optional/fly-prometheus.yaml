@@ -1,0 +1,27 @@
+# Copied into Grafana's provisioning directory by entrypoint.sh ONLY when
+# FLY_METRICS_READ_TOKEN is set. This is Fly.io's own hosted Prometheus
+# endpoint -- CPU/memory/disk/network for every machine in the org, no
+# exporter or scrape config needed on our side. See
+# https://docs.fly.io/reference/metrics/ "Connecting Grafana to Fly.io
+# Prometheus". The org slug (spinr_backend) matches LOG_STREAM_ORG in
+# fly.toml -- confirm with `fly orgs list` if it ever changes.
+# $VAR references are expanded by Grafana from its own environment --
+# entrypoint.sh passes FLY_METRICS_READ_TOKEN through explicitly to the
+# `env -i` Grafana invocation, since nothing not listed there is visible
+# to Grafana at all.
+#
+# FLY_METRICS_READ_TOKEN must be the FULL string `fly tokens create
+# readonly <org>` prints, including its own leading "FlyV1 " -- that
+# prefix is part of the token value itself, not something to add here.
+apiVersion: 1
+datasources:
+  - name: Fly server metrics (CPU/mem/disk/network)
+    uid: fly-prometheus
+    type: prometheus
+    access: proxy
+    url: https://api.fly.io/prometheus/spinr_backend/
+    editable: false
+    jsonData:
+      httpHeaderName1: 'Authorization'
+    secureJsonData:
+      httpHeaderValue1: '$FLY_METRICS_READ_TOKEN'

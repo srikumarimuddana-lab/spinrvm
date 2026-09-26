@@ -341,7 +341,7 @@ jobs:
             echo "::warning::semgrep reported findings — visible in the Security tab (advisory rules only; SR-03 is enforced separately)"
           fi
 
-      # ── SR-03: money arithmetic — BLOCKING ────────────────────────────────
+      # ── SR-03 + SR-11: money arithmetic — BLOCKING ─────────────────────────
       #
       # Promoted from advisory on 2026-08-14, after actually running semgrep
       # rather than reasoning about it. That run mattered: the previous note
@@ -353,10 +353,21 @@ jobs:
       # and is now an explicit inline nosemgrep with its reason. So: do not
       # promote a rule on a code read. Run it.
       #
-      # Scoped to SR-03 by filtering the ruleset's own JSON rather than
-      # splitting the rule into a second file — one source of truth for the
+      # SR-11 (spinr-no-bare-sum-in-money) joined this same blocking step on
+      # 2026-09-26 (review blocker on the PR that added it: the rule existed
+      # in .semgrep/spinr-rules.yml but this step's filter only ever matched
+      # `spinr-no-float-in-money`, so a real SR-11 finding was uploaded to the
+      # Security tab as advisory-only and never failed the job). It closes
+      # the exact gap SR-03 cannot see — a raw sum() over unwrapped DB values
+      # — see SR-11's own comment block in spinr-rules.yml and
+      # docs/change-log/2026-09-25-float-money-writes.md. Verified 0 findings
+      # for both rules on every file in their (identical) `include` list
+      # before promoting.
+      #
+      # Scoped to these two rules by filtering the ruleset's own JSON rather
+      # than splitting them into a second file — one source of truth for the
       # pattern and its allowlist, which is what drifted last time.
-      - name: Money-safety gate (SR-03, blocking)
+      - name: Money-safety gate (SR-03 + SR-11, blocking)
         run: |
           rc=0
           semgrep scan \
@@ -374,20 +385,38 @@ jobs:
 
           python3 - <<'PY'
           import json, sys
-          results = json.load(open("spinr-rules.json")).get("results", [])
-          hits = [r for r in results if r.get("check_id", "").endswith("spinr-no-float-in-money")]
-          for h in hits:
-              print(
-                  f"::error file={h['path']},line={h['start']['line']}::"
+          BLOCKING_CHECKS = ("spinr-no-float-in-money", "spinr-no-bare-sum-in-money")
+          MESSAGES = {
+              "spinr-no-float-in-money": (
                   "float arithmetic in money code. Use Decimal via _d()/_round(), and _f() only "
                   "at the JSON response boundary (CLAUDE.md, Money arithmetic). If this is a "
                   "display label rather than a value, add an inline `# nosemgrep: "
                   "spinr-no-float-in-money` with the reason."
+              ),
+              "spinr-no-bare-sum-in-money": (
+                  "raw sum() over a money-shaped value outside Decimal. Wrap each summed value in "
+                  "_d()/Decimal() — sum((_d(x) for x in rows), Decimal(\"0\")) — and convert to "
+                  "float only at the response boundary with _f() (CLAUDE.md, Money arithmetic; "
+                  "MONEY-001). If this is a non-money sum, add an inline `# nosemgrep: "
+                  "spinr-no-bare-sum-in-money` with the reason."
+              ),
+          }
+          results = json.load(open("spinr-rules.json")).get("results", [])
+          hits = [
+              r for r in results
+              if r.get("check_id", "").endswith(BLOCKING_CHECKS)
+          ]
+          for h in hits:
+              check_id = h.get("check_id", "")
+              rule = next((c for c in BLOCKING_CHECKS if check_id.endswith(c)), check_id)
+              print(
+                  f"::error file={h['path']},line={h['start']['line']}::"
+                  f"{MESSAGES.get(rule, 'money-safety violation — see ' + rule)}"
               )
           if hits:
-              print(f"::error::SR-03 money gate: {len(hits)} finding(s) — blocking.")
+              print(f"::error::SR-03/SR-11 money gate: {len(hits)} finding(s) — blocking.")
               sys.exit(1)
-          print("SR-03 money gate: 0 findings.")
+          print("SR-03/SR-11 money gate: 0 findings.")
           PY
 
       # Additive, non-blocking: makes the raw Spinr-rules findings available

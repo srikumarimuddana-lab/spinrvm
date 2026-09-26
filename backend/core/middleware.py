@@ -46,6 +46,11 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
+        # Public website assistant. Browser requests carry Origin but have no
+        # authenticated session (and therefore no CSRF cookie) yet. The route
+        # is anonymous by design and protected by its kill switches and
+        # per-IP rate limit rather than cookie authentication.
+        "/api/v1/ai/public-chat",
         # Stripe embedded onboarding: the driver app's WebView posts here from
         # an in-page fetch, which carries an Origin header (so it's not caught
         # by the native-app no-Origin exemption) but no csrf_token cookie. Safe
@@ -200,6 +205,18 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # only once that ARN is configured.
     "/api/v1/webhooks/stripe",
     "/api/v1/webhooks/twilio-inbound",
+    # Public website assistant (spinr.ca chat widget). A browser surface, so like
+    # the tracking page it can never attach X-Firebase-AppCheck — without this,
+    # every visitor's message got 401 "App Check token required" (production
+    # access log, 2026-09-25). The endpoint is anonymous by design
+    # (routes/ai.py ai_public_chat): a "web" turn reaches only the read-only
+    # search_faqs/get_company_info tools, it is gated by the
+    # ai_public_chat_enabled kill switch, and rate limited 6/min per IP
+    # (ai_public_chat_limit). App Check was never its control. Accepted risk:
+    # abuse costs LLM spend only; flip ai_public_chat_enabled off to stop it.
+    # Prefix safety: the only route under this prefix is POST /ai/public-chat;
+    # every other /api/v1/ai/* route keeps App Check and its JWT dependency.
+    "/api/v1/ai/public-chat",
 )
 
 

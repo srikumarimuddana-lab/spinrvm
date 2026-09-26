@@ -97,6 +97,7 @@ There is no toast in `shared/`; only the length-cap helper `shared/utils/toastMe
   - The slide-in animation is a spring rather than react-native-toast-message's own animation.
   - A screen reader reads the banner as one combined label.
   - An identical toast fired twice re-animates and is announced twice. This is the same as today (no de-dupe, per decision 3).
+  - Text follows the OS text size up to 1.5× (`MAX_FONT_SCALE`, program decision D1), like the driver app's other overlays. Today's toast has no cap. Both truncate at the same one-line title and two-line message, so above 1.5× the new banner shows smaller text rather than less of it.
 - **Mid-session:**
   - The flag is read only from `/drivers/config`, which only the dashboard fetches.
   - After a cold start, screens shown before the dashboard mounts (login, OTP, profile setup, onboarding) keep the old toast.
@@ -196,7 +197,11 @@ export function showToast(type: ToastType, title: string, message?: string) {
 - **No production build.** Neither `expo export` nor an EAS build was run. Only `tsc --noEmit` and jest.
 - **Database:** the migration was not applied to any database.
 - **Full backend suite:** not run; only the two affected files were.
-- **Reviewers:** the accessibility review of the driver-app half has not run yet; it runs before that PR.
+- **Accessibility review (`spinr-accessibility-reviewer`, code reading only):** nothing new introduced by this change. It noted:
+  - **Contrast:** white text on the success (about 2.5:1) and warning (about 2.1:1) colours fails AA. This is the same in today's toast and the rider banner, and is already a logged follow-up (a `shared/theme` decision).
+  - **Text cap:** the 1.5× cap (above) differs from today's uncapped toast. It follows D1.
+  - **Parity with today:** 3.5 s with no pause or extend, swipe-only dismiss, no Reduce Motion handling, and a possible double announcement on Android (live region plus an explicit announce).
+  - No VoiceOver or TalkBack pass was possible here.
 - **Reduce Motion:** the new banner's slide/spring does not respect Reduce Motion. Neither does the rider banner or react-native-toast-message, so this is parity, not a regression. It is a follow-up for the motion work.
 
 ## 10. Sign-off

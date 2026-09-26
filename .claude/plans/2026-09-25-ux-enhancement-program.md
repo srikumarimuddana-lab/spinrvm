@@ -85,7 +85,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 7: content and housekeeping
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W7.1 | Translations per D3 | apps | — | key-parity test en vs fr |
+| W7.1 `[~]` | Translations per D3 | apps | — | key-parity test en vs fr |
 | W7.2 `[x]` | Correct stale counts in the rider/driver design skill | docs | — | — |
 | W7.3 | Remove unused `ErrorScreen`, `FormScreen` and `shared/validators`. **Deletion: ask first** | shared | approval | tests |
 
@@ -159,3 +159,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - migration 490 must be applied in production;
   - a device check `[H]` is needed.
 - 2026-09-26: W4.2 opened: the public `/track` page glides the car with W4.1's util, uses the admin tokens (fixed light), and shows clear "The driver has arrived" and trip-ended states. Its privacy review was clean; the older address exposure it found is B44.
+- 2026-09-26: W4.2 merged (#5892). W7.1 part 1 of 2 opened: French is complete in both apps (key parity with English, pinned by a test), and Spanish and Chinese are hidden from both pickers (decision D3). Part 2 follows: the picker title, restoring the saved language at start-up, and the load-vs-pick race fix.

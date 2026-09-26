@@ -13,11 +13,14 @@ import zh from './zh.json';
 
 export type Language = 'en' | 'fr' | 'es' | 'zh';
 
+// The languages the settings picker offers. Only complete languages belong
+// here: Spanish ('es') and Chinese ('zh') are hidden until their files cover
+// every English key (decision D3, W7.1). es.json/zh.json and their codes stay
+// so re-enabling is a one-line change, gated by
+// __tests__/i18n/localeParity.test.ts.
 export const LANGUAGES: { code: Language; name: string; nativeName: string; flag: string }[] = [
   { code: 'en', name: 'English',              nativeName: 'English',  flag: '🇨🇦' },
   { code: 'fr', name: 'French',               nativeName: 'Français', flag: '🇫🇷' },
-  { code: 'es', name: 'Spanish',              nativeName: 'Español',  flag: '🇪🇸' },
-  { code: 'zh', name: 'Chinese (Simplified)', nativeName: '简体中文',  flag: '🇨🇳' },
 ];
 
 const LANGUAGE_KEY = '@spinr_rider_language';
@@ -94,7 +97,11 @@ export const useLanguageStore = create<LanguageState>((set) => ({
   hydrate: async () => {
     try {
       const stored = await AsyncStorage.getItem(LANGUAGE_KEY);
-      if (stored === 'en' || stored === 'fr' || stored === 'es' || stored === 'zh') {
+      // Only honour a stored choice the picker still offers. A rider who
+      // picked Spanish/Chinese before they were hidden stays on English (the
+      // complete fallback) instead of a language they can no longer see or
+      // re-select. The stored value itself is left untouched.
+      if (LANGUAGES.some((l) => l.code === stored)) {
         set({ language: stored as Language });
       }
     } catch {}

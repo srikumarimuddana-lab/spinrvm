@@ -210,6 +210,12 @@ _STRIPE_IGNORED_EVENTS = frozenset(
         "customer.updated",
         "setup_intent.created",
         "setup_intent.succeeded",
+        # CRIMSON-SMOKE-7445-HC: missed sibling of payment_intent.requires_action
+        # above -- a setup_intent needing 3DS/authentication is a routine
+        # lifecycle echo, not a stuck event, and was re-firing the daily
+        # stuck-event reconcile sweep (utils/stripe_reconcile.py) forever
+        # since it was never stamped processed_at.
+        "setup_intent.requires_action",
         "invoice.created",
         "invoice.finalized",
         "invoice.updated",

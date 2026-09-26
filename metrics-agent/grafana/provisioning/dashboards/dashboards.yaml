@@ -1,0 +1,14 @@
+# Provisions the dashboard(s) in ./files into this Grafana instance.
+# Same pattern as ../datasources/loki.yaml. Added 2026-09-25 alongside
+# backend-log-analysis.json (see README "Logs & Grafana" / "Dashboards").
+apiVersion: 1
+providers:
+  - name: 'Spinr log analysis'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/files

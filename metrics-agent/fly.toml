@@ -2,15 +2,14 @@
 # Deliberately NOT colocated with backend/fly.toml — see
 # metrics-agent/README.md for the Option A vs. B tradeoff (issue #3295).
 #
-# NOT YET DEPLOYED. This app does not exist on Fly yet — a human must run
-# `fly apps create spinr-metrics-agent-yyz` (or via `fly launch`) before
-# `fly deploy` will work. See metrics-agent/README.md "What's blocked".
-#
-# No [http_service] block: this app makes only outbound connections
-# (scrapes the backend over Fly's private 6PN network, remote_writes to
-# Grafana Cloud over the public internet) and serves nothing inbound except
-# Alloy's own local UI/health port, which is intentionally not exposed
-# publicly.
+# Grafana (port 3000) is exposed publicly via [http_service] below — a
+# deliberate choice made 2026-09-25 so it's reachable from any browser
+# without a Fly account or `fly proxy` (see README "Logs & Grafana" /
+# "Open Grafana" for the tradeoff and what it's gated by). Alloy's own
+# UI/health port (:12345) and Loki (127.0.0.1:3100 only, no auth of its
+# own) are NOT exposed — [http_service] forwards only to Grafana's port,
+# and Grafana is the only process here with its own login (admin/password;
+# anonymous access and sign-up are both disabled in entrypoint.sh).
 app = "spinr-metrics-agent-yyz"
 primary_region = "yyz"
 kill_signal = "SIGTERM"
@@ -37,11 +36,29 @@ swap_size_mb = 512
   # infra/burst_controller/fly.toml's FLY_ORG; confirm with `fly orgs list`.
   LOG_STREAM_ORG = "spinr_backend"
 
+# Public entrypoint for Grafana only (see header comment). auto_stop/start
+# are both pinned off/false — this machine must keep scraping and ingesting
+# logs continuously regardless of HTTP traffic to Grafana, unlike a normal
+# request-driven service.
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
 # Secrets (set via `fly secrets set -a spinr-metrics-agent-yyz`, never in
 # this file): METRICS_AUTH_TOKEN, GRAFANA_REMOTE_WRITE_URL,
 # GRAFANA_REMOTE_WRITE_USERNAME, GRAFANA_REMOTE_WRITE_API_KEY.
 # Log stack secrets: LOG_STREAM_ACCESS_TOKEN, GRAFANA_ADMIN_PASSWORD, and
 # optionally GRAFANA_CLOUD_METRICS_READ_TOKEN (see README "Logs & Grafana").
+# Server-metrics secret: FLY_METRICS_READ_TOKEN (optional; see README
+# "Server metrics (Fly Prometheus)") -- Fly's own hosted Prometheus, not a
+# new exporter.
+# Database/cache secrets (all optional; see README "Supabase, Redis & the
+# local metrics store"): SUPABASE_MONITOR_PASSWORD (grafana_monitor Postgres
+# role), REDIS_EXPORTER_PASSWORD (Upstash grafana_exporter ACL token),
+# SUPABASE_METRICS_SECRET_KEY (dedicated Supabase secret key, Alloy only).
 # See metrics-agent/README.md for the exact commands and where each value
 # comes from.
 

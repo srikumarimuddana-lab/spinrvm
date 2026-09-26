@@ -1,0 +1,9 @@
+// Included by entrypoint.sh ONLY when VictoriaMetrics is running on this
+// machine (127.0.0.1:8428, /data/victoria-metrics). Gives this Grafana its
+// own queryable metrics history -- Grafana Cloud still receives the backend
+// metrics exactly as before; this is an additional copy, not a replacement.
+prometheus.remote_write "local" {
+  endpoint {
+    url = "http://127.0.0.1:8428/api/v1/write"
+  }
+}

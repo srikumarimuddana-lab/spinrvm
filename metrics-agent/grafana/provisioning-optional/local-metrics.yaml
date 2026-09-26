@@ -1,0 +1,16 @@
+# Copied into Grafana's provisioning directory by entrypoint.sh ONLY when the
+# local VictoriaMetrics store is running (127.0.0.1:8428, 30-day retention on
+# the /data volume). Holds Redis (Upstash) metrics, Supabase server metrics
+# (when SUPABASE_METRICS_SECRET_KEY is set), and a copy of the backend's own
+# /metrics -- everything Alloy scrapes, queryable with PromQL. No auth of its
+# own: bound to loopback, reachable only by Grafana on this machine.
+apiVersion: 1
+datasources:
+  - name: Local metrics (VictoriaMetrics, 30 days)
+    uid: local-metrics
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:8428
+    editable: false
+    jsonData:
+      timeInterval: 15s

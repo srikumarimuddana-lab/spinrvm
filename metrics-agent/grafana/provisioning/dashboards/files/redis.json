@@ -1,0 +1,859 @@
+{
+  "uid": "spinr-redis",
+  "title": "Redis (Upstash) health",
+  "description": "Fly-managed Upstash Redis (spinr-redis, yyz), scraped every 60s by Alloy's built-in Redis exporter as the restricted grafana_exporter ACL user (INFO/PING only, no key access) into the local VictoriaMetrics store (30-day history). Memory is deliberately not shown: Upstash reports used_memory as a few KB for ~100 keys, which isn't a real figure.",
+  "tags": [
+    "spinr",
+    "redis",
+    "infra"
+  ],
+  "timezone": "America/Regina",
+  "schemaVersion": 39,
+  "version": 3,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Overview",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Redis up",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "max(redis_up)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "1 = the exporter's last INFO call succeeded."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Connected clients (busiest node)",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "max(max_over_time(redis_connected_clients[5m]))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Keys",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "sum(max_over_time(redis_db_keys[5m]))",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Cache hit ratio (range)",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "100 * ((sum(sum_over_time((((max_over_time(redis_keyspace_hits_total[5m]) - max_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[$__range:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_hits_total[5m]) - min_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[$__range:1m])) or vector(0))) / (((sum(sum_over_time((((max_over_time(redis_keyspace_hits_total[5m]) - max_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[$__range:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_hits_total[5m]) - min_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[$__range:1m])) or vector(0))) + ((sum(sum_over_time((((max_over_time(redis_keyspace_misses_total[5m]) - max_over_time(redis_keyspace_misses_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_misses_total[5m]) != min_over_time(redis_keyspace_misses_total[5m])) and (max_over_time(redis_keyspace_misses_total[5m] offset 1m) != min_over_time(redis_keyspace_misses_total[5m] offset 1m)))[$__range:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_misses_total[5m]) - min_over_time(redis_keyspace_misses_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_misses_total[5m]) != min_over_time(redis_keyspace_misses_total[5m])) and (max_over_time(redis_keyspace_misses_total[5m] offset 1m) != min_over_time(redis_keyspace_misses_total[5m] offset 1m)))[$__range:1m])) or vector(0))))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Share of key lookups that found the key, over the selected time range. Misses are normal for a cache (a miss triggers a DB read), but a sudden drop means the cache stopped helping. Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Evicted keys (range)",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "((sum(sum_over_time((((max_over_time(redis_evicted_keys_total[5m]) - max_over_time(redis_evicted_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_evicted_keys_total[5m]) != min_over_time(redis_evicted_keys_total[5m])) and (max_over_time(redis_evicted_keys_total[5m] offset 1m) != min_over_time(redis_evicted_keys_total[5m] offset 1m)))[$__range:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_evicted_keys_total[5m]) - min_over_time(redis_evicted_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_evicted_keys_total[5m]) != min_over_time(redis_evicted_keys_total[5m])) and (max_over_time(redis_evicted_keys_total[5m] offset 1m) != min_over_time(redis_evicted_keys_total[5m] offset 1m)))[$__range:1m])) or vector(0)))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Keys Upstash removed because memory hit the plan limit. Should stay 0 -- any eviction means cached data (sessions, rate-limit, OTP-lockout state) is being dropped. Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Commands/sec (now)",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_commands_processed_total[5m]) - max_over_time(redis_commands_processed_total[5m] offset 1m)) >= 0) and (max_over_time(redis_commands_processed_total[5m]) != min_over_time(redis_commands_processed_total[5m])) and (max_over_time(redis_commands_processed_total[5m] offset 1m) != min_over_time(redis_commands_processed_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_commands_processed_total[5m]) - min_over_time(redis_commands_processed_total[5m] offset 1m)) >= 0) and (max_over_time(redis_commands_processed_total[5m]) != min_over_time(redis_commands_processed_total[5m])) and (max_over_time(redis_commands_processed_total[5m] offset 1m) != min_over_time(redis_commands_processed_total[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Upstash pay-as-you-go bills per command, so this is also the cost driver. Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Trends (60s scrape -- Upstash bills per command, so not faster)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Throughput: reads vs writes (ops/sec)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_total_reads_processed[5m]) - max_over_time(redis_total_reads_processed[5m] offset 1m)) >= 0) and (max_over_time(redis_total_reads_processed[5m]) != min_over_time(redis_total_reads_processed[5m])) and (max_over_time(redis_total_reads_processed[5m] offset 1m) != min_over_time(redis_total_reads_processed[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_total_reads_processed[5m]) - min_over_time(redis_total_reads_processed[5m] offset 1m)) >= 0) and (max_over_time(redis_total_reads_processed[5m]) != min_over_time(redis_total_reads_processed[5m])) and (max_over_time(redis_total_reads_processed[5m] offset 1m) != min_over_time(redis_total_reads_processed[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "legendFormat": "reads",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_total_writes_processed[5m]) - max_over_time(redis_total_writes_processed[5m] offset 1m)) >= 0) and (max_over_time(redis_total_writes_processed[5m]) != min_over_time(redis_total_writes_processed[5m])) and (max_over_time(redis_total_writes_processed[5m] offset 1m) != min_over_time(redis_total_writes_processed[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_total_writes_processed[5m]) - min_over_time(redis_total_writes_processed[5m] offset 1m)) >= 0) and (max_over_time(redis_total_writes_processed[5m]) != min_over_time(redis_total_writes_processed[5m])) and (max_over_time(redis_total_writes_processed[5m] offset 1m) != min_over_time(redis_total_writes_processed[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "legendFormat": "writes",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Commands/sec per Upstash node",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "description": "The two nodes Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(sum(sum_over_time((((max_over_time(redis_commands_processed_total[5m]) - max_over_time(redis_commands_processed_total[5m] offset 1m)) >= 0) and (max_over_time(redis_commands_processed_total[5m]) != min_over_time(redis_commands_processed_total[5m])) and (max_over_time(redis_commands_processed_total[5m] offset 1m) != min_over_time(redis_commands_processed_total[5m] offset 1m)))[10m:1m])) or vector(0)) / 600",
+          "legendFormat": "higher-count node (primary)",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(sum(sum_over_time((((min_over_time(redis_commands_processed_total[5m]) - min_over_time(redis_commands_processed_total[5m] offset 1m)) >= 0) and (max_over_time(redis_commands_processed_total[5m]) != min_over_time(redis_commands_processed_total[5m])) and (max_over_time(redis_commands_processed_total[5m] offset 1m) != min_over_time(redis_commands_processed_total[5m] offset 1m)))[10m:1m])) or vector(0)) / 600",
+          "legendFormat": "lower-count node (replica)",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Cache hit ratio (%)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "100 * ((sum(sum_over_time((((max_over_time(redis_keyspace_hits_total[5m]) - max_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_hits_total[5m]) - min_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[10m:1m])) or vector(0))) / (((sum(sum_over_time((((max_over_time(redis_keyspace_hits_total[5m]) - max_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_hits_total[5m]) - min_over_time(redis_keyspace_hits_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_hits_total[5m]) != min_over_time(redis_keyspace_hits_total[5m])) and (max_over_time(redis_keyspace_hits_total[5m] offset 1m) != min_over_time(redis_keyspace_hits_total[5m] offset 1m)))[10m:1m])) or vector(0))) + ((sum(sum_over_time((((max_over_time(redis_keyspace_misses_total[5m]) - max_over_time(redis_keyspace_misses_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_misses_total[5m]) != min_over_time(redis_keyspace_misses_total[5m])) and (max_over_time(redis_keyspace_misses_total[5m] offset 1m) != min_over_time(redis_keyspace_misses_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_keyspace_misses_total[5m]) - min_over_time(redis_keyspace_misses_total[5m] offset 1m)) >= 0) and (max_over_time(redis_keyspace_misses_total[5m]) != min_over_time(redis_keyspace_misses_total[5m])) and (max_over_time(redis_keyspace_misses_total[5m] offset 1m) != min_over_time(redis_keyspace_misses_total[5m] offset 1m)))[10m:1m])) or vector(0))))",
+          "legendFormat": "hit %",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Connected clients",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "max(max_over_time(redis_connected_clients[5m]))",
+          "legendFormat": "busiest node",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "Includes every backend replica's connection pool plus this exporter."
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Keys",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "sum(max_over_time(redis_db_keys[5m]))",
+          "legendFormat": "keys",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "sum(max_over_time(redis_db_keys_expiring[5m]))",
+          "legendFormat": "with TTL",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Expirations & evictions (per sec)",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_expired_keys_total[5m]) - max_over_time(redis_expired_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_expired_keys_total[5m]) != min_over_time(redis_expired_keys_total[5m])) and (max_over_time(redis_expired_keys_total[5m] offset 1m) != min_over_time(redis_expired_keys_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_expired_keys_total[5m]) - min_over_time(redis_expired_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_expired_keys_total[5m]) != min_over_time(redis_expired_keys_total[5m])) and (max_over_time(redis_expired_keys_total[5m] offset 1m) != min_over_time(redis_expired_keys_total[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "legendFormat": "expired",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_evicted_keys_total[5m]) - max_over_time(redis_evicted_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_evicted_keys_total[5m]) != min_over_time(redis_evicted_keys_total[5m])) and (max_over_time(redis_evicted_keys_total[5m] offset 1m) != min_over_time(redis_evicted_keys_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_evicted_keys_total[5m]) - min_over_time(redis_evicted_keys_total[5m] offset 1m)) >= 0) and (max_over_time(redis_evicted_keys_total[5m]) != min_over_time(redis_evicted_keys_total[5m])) and (max_over_time(redis_evicted_keys_total[5m] offset 1m) != min_over_time(redis_evicted_keys_total[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "legendFormat": "evicted",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "New connections (per sec)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "(((sum(sum_over_time((((max_over_time(redis_connections_received_total[5m]) - max_over_time(redis_connections_received_total[5m] offset 1m)) >= 0) and (max_over_time(redis_connections_received_total[5m]) != min_over_time(redis_connections_received_total[5m])) and (max_over_time(redis_connections_received_total[5m] offset 1m) != min_over_time(redis_connections_received_total[5m] offset 1m)))[10m:1m])) or vector(0)) + (sum(sum_over_time((((min_over_time(redis_connections_received_total[5m]) - min_over_time(redis_connections_received_total[5m] offset 1m)) >= 0) and (max_over_time(redis_connections_received_total[5m]) != min_over_time(redis_connections_received_total[5m])) and (max_over_time(redis_connections_received_total[5m] offset 1m) != min_over_time(redis_connections_received_total[5m] offset 1m)))[10m:1m])) or vector(0))) / 600)",
+          "legendFormat": "connections",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "A spike here without a matching traffic spike usually means clients are reconnecting (network blips or pool churn). Upstash answers INFO from two nodes (primary + replica) with separate counters, and each scrape lands on either one -- a plain rate() reads every switch as a counter reset (observed: 69k cmd/s naive vs ~0.2 cmd/s real). So each node's counter is followed separately (rolling 5m max = higher-count node, min = lower-count node), a minute's increment is only counted when both nodes were visible in the window before and after it, and the two are summed. Rates are 10-minute averages."
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Exporter scrape time",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local-metrics"
+          },
+          "expr": "max(redis_exporter_last_scrape_duration_seconds)",
+          "legendFormat": "scrape duration",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "description": "How long one INFO round-trip to Upstash takes from the metrics machine -- a rough Redis latency signal (Upstash doesn't support LATENCY)."
+    }
+  ]
+}

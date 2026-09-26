@@ -34,7 +34,11 @@ discovery.relabel "backend_targets" {
 
 prometheus.scrape "backend" {
   targets    = discovery.relabel.backend_targets.output
-  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  // entrypoint.sh replaces the marker comment below with
+  // ", prometheus.remote_write.local.receiver" only when the local
+  // VictoriaMetrics store is running (alloy-fragments/local-store.alloy);
+  // otherwise it stays a no-op comment and this is Grafana Cloud only.
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver /*LOCAL_STORE_FORWARD*/]
 
   // Matches ADR-010 §5 step 2 (15s scrape interval).
   scrape_interval = "15s"

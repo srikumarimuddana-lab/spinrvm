@@ -1,0 +1,25 @@
+// Included by entrypoint.sh ONLY when REDIS_EXPORTER_PASSWORD is set AND the
+// local store is running. Connects to the Fly-managed Upstash Redis as the
+// restricted `grafana_exporter` ACL user: +info +ping ONLY (Upstash rejects
+// per-subcommand grants), no key or channel access. Verified 2026-09-25:
+// GET, SET, DEL, KEYS, SCAN, CONFIG, ACL LIST, FLUSHDB all NOPERM; SLOWLOG is
+// not available on Upstash at all. Its password is an Upstash
+// `ACL GENTOKEN grafana_exporter` token (Upstash rejects any other password).
+// Upstash bills per command, so this scrapes every 60s, not 15s.
+prometheus.exporter.redis "upstash" {
+  redis_addr      = "fly-spinr-redis.upstash.io:6379"
+  redis_user      = "grafana_exporter"
+  redis_password  = env("REDIS_EXPORTER_PASSWORD")
+  // "-" skips CONFIG GET (Upstash doesn't support it and the ACL user can't
+  // run it); set_client_name=false avoids a CLIENT SETNAME per connection.
+  config_command  = "-"
+  set_client_name = false
+}
+
+prometheus.scrape "redis" {
+  targets         = prometheus.exporter.redis.upstash.targets
+  forward_to      = [prometheus.remote_write.local.receiver]
+  job_name        = "redis"
+  scrape_interval = "60s"
+  scrape_timeout  = "30s"
+}

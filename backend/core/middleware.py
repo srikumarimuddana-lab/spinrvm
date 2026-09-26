@@ -46,6 +46,11 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
+        # Public website assistant. Browser requests carry Origin but have no
+        # authenticated session (and therefore no CSRF cookie) yet. The route
+        # is anonymous by design and protected by its kill switches and
+        # per-IP rate limit rather than cookie authentication.
+        "/api/v1/ai/public-chat",
         # Stripe embedded onboarding: the driver app's WebView posts here from
         # an in-page fetch, which carries an Origin header (so it's not caught
         # by the native-app no-Origin exemption) but no csrf_token cookie. Safe

@@ -17,7 +17,12 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES, FirebaseAppCheckMiddleware
+from backend.core.middleware import (
+    _APP_CHECK_EXEMPT_PREFIXES,
+    _CSRF_EXEMPT_EXACT,
+    CSRFMiddleware,
+    FirebaseAppCheckMiddleware,
+)
 
 PUBLIC_CHAT = "/api/v1/ai/public-chat"
 ENFORCED = ("/api/v1/ai/chat", "/api/v1/ai/config", "/api/v1/ai/conversations")
@@ -30,11 +35,18 @@ def enforced_client():
 
     app = Starlette(routes=[Route(path, handler, methods=["GET", "POST"]) for path in (PUBLIC_CHAT, *ENFORCED)])
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=True)
+    # Match the live relative ordering: init_middleware registers CSRF after
+    # App Check, making CSRF the outer layer that sees browser requests first.
+    app.add_middleware(CSRFMiddleware)
     return TestClient(app)
 
 
 def test_public_chat_reaches_its_handler_without_app_check(enforced_client):
-    resp = enforced_client.post(PUBLIC_CHAT, json={"message": "hi"})
+    resp = enforced_client.post(
+        PUBLIC_CHAT,
+        json={"message": "hi"},
+        headers={"Origin": "https://spinr.ca"},
+    )
 
     assert resp.status_code == 200, resp.text
     assert resp.text == "handler reached"
@@ -52,6 +64,7 @@ def test_exemption_is_the_exact_route_not_the_ai_prefix():
     assert "/api/v1/ai/" not in _APP_CHECK_EXEMPT_PREFIXES
     assert "/api/v1/ai" not in _APP_CHECK_EXEMPT_PREFIXES
     assert PUBLIC_CHAT in _APP_CHECK_EXEMPT_PREFIXES
+    assert PUBLIC_CHAT in _CSRF_EXEMPT_EXACT
 
 
 def test_exempt_path_is_the_real_public_chat_route():

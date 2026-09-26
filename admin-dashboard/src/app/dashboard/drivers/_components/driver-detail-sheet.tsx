@@ -53,6 +53,7 @@ import { DriverRidesTab } from "./driver-rides-tab";
 import DriverOverviewTab from "./driver-overview-tab";
 import DriverDocumentsTab from "./driver-documents-tab";
 import DriverSubscriptionsTab from "./driver-subscriptions-tab";
+import { useConfirm } from "@/hooks/useConfirm";
 
 interface DocSummary {
     expiry?: string;
@@ -219,6 +220,7 @@ export default function DriverDetailSheet({
     setSubPageSize: (v: number) => void;
 }) {
     const { toast } = useToast();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     return (
             <Sheet open={!!selected} onOpenChange={(open) => { if (!open) { setSelected(null); setEditing(false); } }}>
                 <SheetContent side="right" showCloseButton={false} className="w-full sm:max-w-none sm:w-[90vw] lg:w-[80vw] xl:w-[70vw] p-0 overflow-hidden flex flex-col" aria-describedby={undefined}>
@@ -573,7 +575,12 @@ export default function DriverDetailSheet({
                                         onRevealSin={async () => {
                                             // Confirm before triggering — every reveal writes an
                                             // audit_log row and admins should not click it idly.
-                                            if (!window.confirm("Reveal this driver's SIN?\n\nThis decrypts Spinr's encrypted copy. The call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
+                                            if (!(await confirm({
+                                                title: "Reveal this driver's SIN?",
+                                                description: "This decrypts Spinr's encrypted copy. The call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.",
+                                                confirmLabel: "Reveal SIN",
+                                                destructive: true,
+                                            }))) return;
                                             try {
                                                 const res = await revealDriverSin(selected.id);
                                                 setRevealedSin({ sin: res.sin, expiresAt: Date.now() + 30_000 });
@@ -664,6 +671,7 @@ export default function DriverDetailSheet({
                             </div>
                         </Tabs>
                     </>)}
+                    {confirmDialog}
                 </SheetContent>
             </Sheet>
     );

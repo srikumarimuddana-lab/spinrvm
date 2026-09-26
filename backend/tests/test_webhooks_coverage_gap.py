@@ -474,6 +474,38 @@ class TestHandlerLogicGapGuard:
 
 
 # ---------------------------------------------------------------------------
+# setup_intent.requires_action — CRIMSON-SMOKE-7445-HC ignore-list gap
+# ---------------------------------------------------------------------------
+
+
+class TestSetupIntentRequiresActionIgnored:
+    def test_setup_intent_requires_action_is_ignored_not_unhandled(self):
+        """Regression for CRIMSON-SMOKE-7445-HC: this event type was missing
+        from _STRIPE_IGNORED_EVENTS despite its sibling
+        payment_intent.requires_action being listed, so it fell into the
+        genuinely-unhandled branch and was never stamped processed_at --
+        re-flagged as "stuck" by the daily stripe_reconcile sweep forever.
+        A correctly-ignored event calls mark_stripe_event_processed and never
+        sets result["unhandled"]."""
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "seti_gap_1"}
+        raw = _make_stripe_event("setup_intent.requires_action", data_obj, event_id="evt_gap_seti")
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(__import__("stripe").Webhook, "construct_event", return_value=_event_obj(raw)),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()) as mark_mock,
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_req()))
+
+        assert result["received"] is True
+        assert result.get("unhandled") is not True
+        mark_mock.assert_awaited_once_with("evt_gap_seti")
+
+
+# ---------------------------------------------------------------------------
 # _extract_invoice_payment_intent — successful Invoice.retrieve fallback
 # ---------------------------------------------------------------------------
 

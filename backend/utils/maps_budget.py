@@ -35,6 +35,7 @@ try:
         redis_mget,
     )
 except ImportError:  # pragma: no cover - dual import path
+    from utils import metrics  # type: ignore
     from utils.redis_client import (  # type: ignore
         redis_delete,
         redis_eval,

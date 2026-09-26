@@ -106,6 +106,44 @@ Which files each app actually loads at runtime (from `*/i18n/index.ts`):
      is English. In practice it is covered by the splash, not guaranteed by a gate.
 8. **Rider picker title:** `app/settings.tsx` now renders `t('settings.selectLanguage')`.
    This shows "Choisir la langue" in French. English is unchanged ("Select Language").
+9. **Load-vs-pick race (edge-case review, reproduced in both apps).**
+   - **The bug:** the saved-language restore is asynchronous (driver `loadLanguage()`,
+     rider `hydrate()`) and used to write its result unconditionally. If the user picked
+     a language while the storage read was still in flight, the late read overwrote the
+     fresh choice in memory. The stored value was still correct, so the next start fixed
+     it. In the driver app, the Settings-mount re-read made this reachable on every
+     Settings visit, not only at start-up.
+   - **The fix:** each store now has a `hasUserChosen` flag. `setLanguage()` sets it when
+     it accepts a pick, and the restore drops its result when the flag is set. A pick
+     made at any point in the session always wins over a restore that finishes later.
+   - **Why a flag, not a sequence counter:** a counter only protects restores that
+     *started* before the pick. A restore that starts after a pick but before the pick's
+     own write lands would still read the old value. The flag covers both orderings.
+   - **A refused pick does not set the flag** (item 10), so it cannot block the restore.
+10. **Write-side guard.** `setLanguage()` in both stores now refuses any code the picker
+    list does not offer (`languages` / `LANGUAGES`). It keeps the current language, does
+    not write storage, and warns in dev only.
+    - **Dev-only warning:** `if (__DEV__) console.warn(...)` is the existing pattern in
+      stores and hooks (`rider-app/store/rideStore.ts`, `driver-app/hooks/useRideOfferSound.ts`).
+    - **Compat shims:** rider-app's two `changeLanguage()` shims still map
+      `es`/`zh`/`zh-CN`. They route through `setLanguage()`, so they are refused too,
+      with one enforcement point.
+11. **Driver Settings-mount re-read removed.** `app/driver/settings.tsx` no longer calls
+    `loadLanguage()` on mount, so `loadLanguage()` now has one caller, the app-start
+    restore.
+    - **Why the start-up restore fully covers it:** `settings.tsx` imports the store,
+      which imports i18n. Any path to Settings has therefore already started the restore.
+      The only writer of the stored value is `setLanguage()`, which also sets it in
+      memory. So the mount call could only re-read the same value, and it was a second
+      source of the race.
+    - **One behaviour lost:** if the start-up read fails (now logged), opening Settings no
+      longer retries it. The driver stays on English and can re-pick.
+12. **Silent catches now log.**
+    - **Rider:** `hydrate()` logs a read failure with `console.error` instead of
+      `catch {}`. Its fire-and-forget `setItem` catch now logs too.
+    - **Driver:** `getStoredLanguage()`'s read failure also logs now. It was silent as
+      well, so neither side was logging before. This matches the `console.error` that
+      driver `setStoredLanguage()` already used.
 
 Alternative considered: keep es/zh in the list with a `selectable: false` flag and
 filter in each picker screen. This was rejected because it adds a field and a filter in
@@ -125,13 +163,20 @@ insurance paths.
 - `languages` (driver-app) has exactly one consumer: `app/driver/settings.tsx`, for the
   picker list and the row subtitle. `LANGUAGES` (rider-app) has exactly one consumer:
   `app/settings.tsx`, for the picker list and the subtitle. Both already fall back to
-  `'English'` when a code is missing from the list. The driver screen is unmodified. The
-  rider screen's only change is the picker title (item 8).
-- `getStoredLanguage()` is called only by `store/languageStore.ts` → `loadLanguage()`.
-  `loadLanguage()` now has two callers: the new start-up call in `i18n/index.ts` and
-  `app/driver/settings.tsx`, which is unchanged. Both calls run the same action, which
-  reads the value and never writes it back, so they are idempotent. Settings' call now
-  just re-reads the same value. `hydrate()` (rider-app) has one caller, `RootLayout`.
+  `'English'` when a code is missing from the list.
+  - **Driver screen:** its only change is dropping the mount-time `loadLanguage()`
+    (item 11).
+  - **Rider screen:** its only change is the picker title (item 8).
+- **Store callers:** `getStoredLanguage()` is called only by `store/languageStore.ts` →
+  `loadLanguage()`, and `loadLanguage()` now has exactly one caller, the start-up call in
+  `i18n/index.ts`. `hydrate()` (rider-app) has one caller, `RootLayout`.
+  - **`setLanguage()` callers (both stores):** only the picker rows in each app's
+    settings screen, and in rider-app the two `changeLanguage()` compat shims, which
+    have no callers in app code.
+  - **Why the guard is safe:** the picker only offers en/fr, so the new write-side guard
+    cannot refuse anything a user can actually tap.
+  - **`hasUserChosen`:** a new state field that is only read inside each store. The
+    tests that stub the stores replace them wholesale, so they need no change.
 - **Every screen affected at start-up.** The restored language now applies from the
   first frame to every consumer of each app's language store, not only after a visit to
   Settings (driver) or never (rider). Users with no saved language, or with English
@@ -161,9 +206,6 @@ insurance paths.
 - `tKey()` / `translate()` / `t()` are unchanged, and so are the translation maps. The new
   keys only fill gaps, and no existing French value was edited. English files are
   untouched.
-- The rider-app store's `setLanguage` and the `i18n.changeLanguage` compat shim still
-  accept `es`/`zh`. No app code calls `changeLanguage`, and the picker is the only
-  caller of `setLanguage`.
 - Existing tests that mock `../i18n` (`settingsScreen.test.tsx` and others) supply their
   own `LANGUAGES`/`t`, so they are unaffected. Their stubs give no coverage of this
   change. The coverage comes from the new parity tests, which use the real module.
@@ -189,6 +231,10 @@ insurance paths.
   saved choice was `es`/`zh` sees English from app start. Before this change, a rider
   never got their saved choice back at all, and a driver only got it once they opened
   Settings.
+- **Race fix:** a language picked right after launch (or, for drivers, on any Settings
+  visit) can no longer snap back to the previously saved one a moment later. Nobody sees
+  a new screen or new copy. The write-side guard is invisible to users because the
+  picker only offers en/fr.
 - **Mid-session:** nothing changes for anyone until they install an app update carrying
   this change (OTA/EAS). JSON and TS bundle changes are not visible in an already-running
   app.
@@ -213,6 +259,12 @@ insurance paths.
 | `rider-app/__tests__/i18n/startupLanguage.test.tsx` | New, 6 tests | Contract (RootLayout calls `hydrate()` on mount) plus a cold-start simulation for `fr`/`es`/`zh`/none |
 | `rider-app/app/settings.tsx` | Picker title `"Select Language"` → `t('settings.selectLanguage')` | Translate the title (item 8) |
 | `rider-app/__tests__/i18n/languagePickerTitle.test.tsx` | New, 2 tests | Renders the real screen with the real i18n module; checks the title in French and English |
+| `driver-app/store/languageStore.ts` | `hasUserChosen` flag; `loadLanguage()` drops a late result after a pick; `setLanguage()` refuses non-picker codes | Race fix and write-side guard (items 9–10) |
+| `driver-app/i18n/index.ts` (again) | `getStoredLanguage()` logs read failures; start-up comment updated | Stop swallowing errors silently (item 12) |
+| `driver-app/app/driver/settings.tsx` | Mount-time `loadLanguage()` removed | Redundant with the start-up restore and a second race source (item 11) |
+| `driver-app/__tests__/i18n/languageStoreGuards.test.ts` | New, 5 tests | Slow read resolving after a pick (via the real start-up path); read landing before the pick's write; refused `es`; refused pick not blocking the restore |
+| `rider-app/i18n/index.ts` (again) | `hasUserChosen` flag; `hydrate()` drops a late result after a pick and logs errors; `setLanguage()` refuses non-picker codes and logs write failures | Race fix, write-side guard and logging (items 9, 10, 12) |
+| `rider-app/__tests__/i18n/languageStoreGuards.test.ts` | New, 12 tests | Slow `getItem` resolving after `setLanguage`; refused `es`/`zh` through `setLanguage` and both `changeLanguage` shims (`es`/`zh`/`zh-CN`); `en-CA` still accepted; refused pick not blocking the restore; `hydrate()` error is logged |
 | `docs/change-log/2026-09-26-french-complete-hide-es-zh.md` | New | This log |
 
 Key counts (flattened leaf keys):
@@ -273,6 +325,33 @@ Promise.resolve()
 <Text style={styles.langTitle}>{t('settings.selectLanguage')}</Text>
 ```
 
+Race fix and write-side guard (the driver store is shown; the rider store is the same
+shape):
+
+```ts
+// Before — driver-app/store/languageStore.ts
+setLanguage: async (language) => { await setStoredLanguage(language); set({ language }); },
+loadLanguage: async () => {
+    set({ isLoading: true });
+    const language = await getStoredLanguage();
+    set({ language, isLoading: false });        // overwrites a pick made during the read
+},
+
+// After
+setLanguage: async (language) => {
+    if (!languages.some((l) => l.code === language)) { if (__DEV__) console.warn(...); return; }
+    set({ hasUserChosen: true });
+    await setStoredLanguage(language);
+    set({ language });
+},
+loadLanguage: async () => {
+    set({ isLoading: true });
+    const language = await getStoredLanguage();
+    if (get().hasUserChosen) { set({ isLoading: false }); return; }   // a pick wins
+    set({ language, isLoading: false });
+},
+```
+
 ## 8. Rollback plan
 
 There is no feature flag. The mobile i18n bundles have no runtime `app_settings` hook,
@@ -283,6 +362,10 @@ additive. Reverting them only brings back the English fallbacks and raw keys des
 §2. The start-up restore only reads the stored value. Reverting its two commits brings
 back the old behaviour: rider always English at cold start, driver English until
 Settings opens. The picker title commit reverts independently.
+
+The guard commits (race and write-side) are in-memory only and revert independently. The
+driver Settings re-read removal (`96c9e1d`) reverts on its own. With the guard still in
+place, restoring that re-read is harmless.
 
 ## 9. Verification performed
 
@@ -299,12 +382,26 @@ Settings opens. The picker title commit reverts independently.
   - rider `settings.tsx` reverted: 1 of 2 `languagePickerTitle` tests fail (the French
     title).
   - All pass with the change.
+- [x] **Guard tests fail without the guard.** Each store was reverted on its own, with the
+  new `languageStoreGuards` test kept:
+  - **Driver store reverted:** 2 of 5 fail. These are the race (a slow `getItem`
+    resolving after `setLanguage('fr')` restores `en`) and the refused-`es` case.
+  - **Rider `i18n/index.ts` reverted:** 9 of 12 fail. These are the race, all 7
+    refused-code cases (`setLanguage` plus both `changeLanguage` shims) and the
+    `hydrate()` error log.
+  - **Tests that are not bug detectors:** the remaining tests pass either way by design.
+    They are sanity checks that the guard does not break the normal restore, a read
+    landing before the pick's write, or a restore after a refused pick.
 - [x] `npx tsc --noEmit -p .`: driver-app exit 0, rider-app exit 0. Both were re-run
-  after the start-up and title changes.
-- [x] Full `npx jest`, baseline → first round (parity and picker) → final:
-  - driver-app: 174 suites / 2159 tests → 175 / 2168 → **176 / 2171**, all passing.
-    0 "Failed to restore the saved language" logs in the full run.
-  - rider-app: 173 suites / 2340 tests → 174 / 2351 → **176 / 2359**, all passing.
+  after the start-up and title changes, and again after the guards.
+- [x] Full `npx jest`, baseline → first round (parity and picker) → start-up and title →
+  final (guards):
+  - driver-app: 174 suites / 2159 tests → 175 / 2168 → 176 / 2171 → **177 / 2176**, all
+    passing.
+  - rider-app: 173 suites / 2340 tests → 174 / 2351 → 176 / 2359 → **177 / 2371**, all
+    passing.
+  - The final runs logged no "Failed to restore / read / store language" lines in either
+    app.
 - [x] Blast-radius grep: `languages`, `LANGUAGES`, `getStoredLanguage`, `loadLanguage`,
   `hydrate`, `setLanguage`, `changeLanguage`, `from '../i18n'` across both apps, plus
   `expo-localization`/`getLocales` repo-wide (no hits).
@@ -332,10 +429,14 @@ Settings opens. The picker title commit reverts independently.
     the first translated screen or `lib/alert.ts` module loads. This was confirmed by
     reading expo-router 57's route loading: only layouts load eagerly, and no layout
     imports i18n. It was not traced on a device.
+- **The race was reproduced in jest only.** It was reproduced with a controllable
+  `getItem` promise, not on a device with genuinely slow storage.
+- **Closed here:** open questions 1–4 are now resolved.
+  - **1–3:** rider start-up restore, driver start-up restore and rider picker title
+    (items 6–8).
+  - **4:** `setLanguage`/`changeLanguage` accepting es/zh, closed by the write-side guard
+    (item 10).
 - **Follow-ups (not changed here, by decision):**
-  - **Store still accepts es/zh (open question 4):** rider-app's store `setLanguage`
-    and the `i18n.changeLanguage` compat shim still accept `es`/`zh`. No app code calls
-    `changeLanguage`, and the picker only offers en/fr.
   - **Two key sets (open question 5):** rider-app keeps two parallel key sets:
     snake_case in `en-CA`/`fr-CA` and camelCase in `en`/`fr`/`es`/`zh`. About 44 of the
     53 non-error camelCase keys that exist only in `en.json` (e.g. `home.whereToGo`,

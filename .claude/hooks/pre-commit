@@ -110,8 +110,17 @@ else
 fi
 
 # 6. Float money check
+# Non-blocking local hint only — a bash regex can't tell Decimal arithmetic
+# from float arithmetic by syntax alone (both look identical), so this stays
+# a WARNING rather than BLOCKED to avoid false-positiving on correct code.
+# The actual enforcement is .semgrep/spinr-rules.yml's spinr-no-float-in-money
+# (SR-03, literal float()/*1.0 casts) and spinr-bare-dict-arithmetic-in-money-file
+# (SR-11, #5817 — dict/subscript arithmetic and round()/+= over dict values),
+# both merge-blocking and AST-aware rather than regex-based.
 echo "6/12 Checking money arithmetic..."
-FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE "(fare|price|amount|earning|payout)\s*[+\-\*\/]\s*[0-9]*\.[0-9]+" 2>/dev/null)
+FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE \
+  "(fare|price|amount|earning|payout|total|fee|tip|balance|charge|subtotal|refund|tax)[a-zA-Z_]*['\"]?\s*[+\-\*\/]=?\s*([0-9]*\.[0-9]+|[a-zA-Z_])|round\([^)]*[+\-][^)]*\)" \
+  2>/dev/null)
 if [ -n "$FLOAT" ]; then
   echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
 else

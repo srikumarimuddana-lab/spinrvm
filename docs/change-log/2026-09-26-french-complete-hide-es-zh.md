@@ -8,7 +8,7 @@
 | Author | Claude Code (agent), for UX program item W7.1 |
 | Surface(s) | rider-app, driver-app |
 | Domain (Sentry tag) | rides / drivers (UI copy and settings only; no backend, money or state-machine change) |
-| PR / commit link | branch `wip/w7-1`, not pushed |
+| PR / commit link | W7.1 part 1: #5893 (merged). Part 2: branch `claude/spinr-animations-admin-ux-x7nl5x` (this PR). |
 | Related issue or gap ID | W7.1, decision D3: finish French to 100% of the keys the apps use; hide `es` and `zh` from the language pickers until they are complete. Extended by the user to also restore the saved language at app start in both apps and translate the rider picker title (§3, items 6–8). |
 
 > **[H] Human action required before release:** every French string added here was
@@ -402,6 +402,9 @@ place, restoring that re-read is harmless.
     passing.
   - The final runs logged no "Failed to restore / read / store language" lines in either
     app.
+- [x] **Re-verified on this PR's app code** (W7.1 files identical to the reviewed branch, rebuilt on `main`):
+  - `tsc` exits 0 in both apps;
+  - full `jest`: driver-app **179 suites / 2198 tests**, rider-app **177 suites / 2373 tests**, all passing.
 - [x] Blast-radius grep: `languages`, `LANGUAGES`, `getStoredLanguage`, `loadLanguage`,
   `hydrate`, `setLanguage`, `changeLanguage`, `from '../i18n'` across both apps, plus
   `expo-localization`/`getLocales` repo-wide (no hits).
@@ -410,8 +413,8 @@ place, restoring that re-read is harmless.
 
 ## What was NOT verified
 
-- **No production build** (`eas build` / `expo export`) was run. Only `tsc --noEmit` and
-  jest were.
+- **No local production build** (`eas build` / `expo export`). Only `tsc --noEmit` and
+  jest were run locally. CI's `expo export (android + ios)` job builds both apps on the PR.
 - **No device, simulator or visual check.** rider-app and driver-app have no visual
   regression tooling. Text length in French (typically 15–30% longer) was reasoned about,
   not screenshotted. Error strings render in native `Alert` dialogs, which wrap, and the
@@ -441,12 +444,14 @@ place, restoring that re-read is harmless.
     snake_case in `en-CA`/`fr-CA` and camelCase in `en`/`fr`/`es`/`zh`. About 44 of the
     53 non-error camelCase keys that exist only in `en.json` (e.g. `home.whereToGo`,
     `wallet.*`, `loyalty.*`, `support.*`) have no literal `t('…')` reference in the app.
-    They look dead but were not deleted, because deletion needs approval.
+    They look dead but were not deleted, because deletion needs approval. This is logged as
+    `ACTION_ITEMS.md` C139 (#5889).
   - **Driver restore location:** if the queued `driver-app/app/_layout.tsx` PR lands, the
     driver restore could move into RootLayout for a deterministic, earlier call
     (§3, alternative for item 7).
   - No locale **file** is dead: all 9 are imported by their app's `i18n/index.ts`.
     `driver-app/i18n/es.json`, `rider-app/i18n/es.json` and `rider-app/i18n/zh.json` are
     now unreachable to users but are still bundled.
-- The `spinr-*` reviewer agents were not run against this diff, because the agent tool is
-  unavailable in this session.
+- **Review:** `spinr-edge-case-reviewer` ran on the full W7.1 branch on 2026-09-26. It found no blockers.
+  - It reproduced the load-vs-pick race; that is fixed here, together with refusing hidden codes in the stores.
+  - No accessibility or copy review was run.

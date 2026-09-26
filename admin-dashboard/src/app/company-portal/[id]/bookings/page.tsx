@@ -13,6 +13,7 @@ import {
     CompanyBookingRow,
 } from "@/lib/companyApi";
 import { useCompanyAuthStore } from "@/store/companyAuthStore";
+import { useConfirm } from "@/hooks/useConfirm";
 
 /**
  * Live company bookings — polls every 12s (v1; a socket feed is overkill for
@@ -46,6 +47,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function CompanyBookingsPage() {
     const params = useParams();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     const companyId = typeof params?.id === "string" ? params.id : "";
     const memberships = useCompanyAuthStore((s) => s.memberships);
     const isCompanyAdmin = useMemo(() => {
@@ -83,7 +85,13 @@ export default function CompanyBookingsPage() {
     }, [load]);
 
     const handleCancel = async (rideId: string) => {
-        if (!window.confirm("Cancel this booking? The customer will be notified by text.")) return;
+        if (!(await confirm({
+            title: "Cancel this booking?",
+            description: "The customer will be notified by text.",
+            confirmLabel: "Cancel booking",
+            cancelLabel: "Keep booking",
+            destructive: true,
+        }))) return;
         setCancelling(rideId);
         try {
             await cancelCompanyBooking(companyId, rideId);
@@ -97,6 +105,7 @@ export default function CompanyBookingsPage() {
 
     return (
         <div className="space-y-4">
+            {confirmDialog}
             <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h1 className="flex items-center gap-2 text-xl font-semibold">

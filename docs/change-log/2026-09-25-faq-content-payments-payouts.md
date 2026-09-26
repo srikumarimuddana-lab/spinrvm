@@ -107,4 +107,20 @@ Single rows can also be switched off in Admin → FAQs (`is_active = false`).
 - How the answers render in the apps, and whether the live model (gpt-5.4) quotes them correctly.
 - Not reviewed by the team first — added at the product owner's direct request; the 8 "Needs a decision" drafts remain unpublished.
 - "Payout section" / "ride history" / "Payment" screen names were taken from code file names and the existing FAQs, not checked in the running apps.
-- Not added as a migration, so a fresh environment built from `backend/migrations/` will not have these rows.
+- ~~Not added as a migration~~ — fixed 2026-09-26: `backend/migrations/490_seed_payment_payout_faqs.sql` (see Addendum).
+
+## Addendum — 2026-09-26 corrections (Codex review on srikumarimuddana-lab/spinrvm#5831)
+
+Three of the new answers overstated what the product does. Corrected in production (Supabase SQL, same row ids) and in the test snapshot:
+
+| FAQ | Was wrong | Now says |
+|---|---|---|
+| How do I tip my driver? | "You can also add a tip later from the trip in your ride history" — no such entry point exists (`walletStore.addTip` has no caller; `ride-details.tsx` only displays a tip) | Ride-complete screen only |
+| Why do I see a pending charge…? | Described the booking-time hold as universal | Scheduled rides get the hold shortly before pickup, at dispatch (`utils/scheduled_rides.py`) |
+| My card was declined… | "we retry it automatically over the next 24 hours" — `payment_retry.py` retries 3 times, 5 minutes apart (~15 min); and "the ride isn't created" is only true at interactive booking | "a few times shortly afterwards"; scheduled rides still go ahead after a decline at dispatch (`block_on_decline=False`) |
+
+Also added:
+- **Migration 490** (`backend/migrations/490_seed_payment_payout_faqs.sql`) — idempotent seed of all 11 rows with the corrected text (insert skipped when question+audience exists; rewrites match old or new question). Dry-run against production inside a rolled-back transaction: **0 rows added, 0 rows' text changed** — it matches production exactly.
+- **Website-mode retrieval test** — the public assistant searches the whole corpus with the visitor type as a tie-break; floors 22/36 (raw) and 44/50 (keyword). The one keyword miss, "accident insurance during ride" for a rider visitor, ranks three driver insurance FAQs first — a real website-path ranking gap, not fixed here.
+
+Rollback for the corrections: the section 8 script still applies (it deletes the 8 new rows and restores the 3 original rewritten answers). To revert only the corrections, re-set the three answers to the texts in the table above's "Was wrong" state — not recommended, since they are inaccurate.

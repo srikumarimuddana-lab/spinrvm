@@ -41,8 +41,14 @@ def _rows_for(audience):
     return [r for r in CORPUS if r["audience"] in (audience, "both")]
 
 
-def _ranked_ids(audience, query):
-    results = tools_support._lexical_results(_rows_for(audience), query, None)
+def _ranked_ids(audience, query, web=False):
+    if web:
+        # Public website assistant: _faq_audiences() searches the WHOLE corpus
+        # for the "web" tool audience, and _preferred_audience() turns the
+        # visitor_type into a tie-break, so rider and driver rows compete.
+        results = tools_support._lexical_results(CORPUS, query, audience)
+    else:
+        results = tools_support._lexical_results(_rows_for(audience), query, None)
     return [_ID_BY_QUESTION[r["question"]] for r in results]
 
 
@@ -146,14 +152,21 @@ FLOOR_NATURAL_TOP1 = 26
 FLOOR_NATURAL_TOP5 = 36
 FLOOR_KEYWORD_TOP1 = 45
 FLOOR_KEYWORD_TOP5 = 51
+# Website mode (whole corpus, visitor type as tie-break). Lower than signed-in
+# because rider and driver rows compete: e.g. "accident insurance during ride"
+# ranks three driver insurance FAQs above the rider one.
+FLOOR_WEB_NATURAL_TOP1 = 22
+FLOOR_WEB_NATURAL_TOP5 = 36
+FLOOR_WEB_KEYWORD_TOP1 = 44
+FLOOR_WEB_KEYWORD_TOP5 = 50
 
 
-def _score(query_index):
+def _score(query_index, web=False):
     top1 = top5 = 0
     misses = []
     for case in CASES:
         audience, query, want = case[0], case[query_index], case[3]
-        ids = _ranked_ids(audience, query)
+        ids = _ranked_ids(audience, query, web=web)
         rank = next((i for i, fid in enumerate(ids) if fid in want), None)
         top1 += rank == 0
         top5 += rank is not None
@@ -182,3 +195,14 @@ def test_keyword_query_retrieval_does_not_regress():
     report = "\n".join(f"  [{a}] {q!r} -> {got}" for a, q, got in misses)
     assert top1 >= FLOOR_KEYWORD_TOP1, f"top-1 {top1}/{len(CASES)} < floor {FLOOR_KEYWORD_TOP1}"
     assert top5 >= FLOOR_KEYWORD_TOP5, f"top-5 {top5}/{len(CASES)} < floor {FLOOR_KEYWORD_TOP5}\n{report}"
+
+
+def test_web_mode_retrieval_does_not_regress():
+    for query_index, floor1, floor5 in (
+        (1, FLOOR_WEB_NATURAL_TOP1, FLOOR_WEB_NATURAL_TOP5),
+        (2, FLOOR_WEB_KEYWORD_TOP1, FLOOR_WEB_KEYWORD_TOP5),
+    ):
+        top1, top5, misses = _score(query_index, web=True)
+        report = "\n".join(f"  [{a}] {q!r} -> {got}" for a, q, got in misses)
+        assert top1 >= floor1, f"web top-1 {top1}/{len(CASES)} < floor {floor1}"
+        assert top5 >= floor5, f"web top-5 {top5}/{len(CASES)} < floor {floor5}\n{report}"

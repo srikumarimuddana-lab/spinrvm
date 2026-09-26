@@ -140,3 +140,9 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - wire the util into the live-ride map;
   - ignore a poll position older than the one already shown;
   - profile the animation loop at fleet scale (hundreds of markers).
+- 2026-09-26: W4.1 merged (#5888). Review follow-ups from W4.2, W5.1, W7.1 and the document reviewer fix are now in `ACTION_ITEMS.md`, each re-checked against `main`. Priorities are proposed, not decided:
+  - B44 (P1): the public `/track` link keeps exact pickup and drop-off addresses for up to 24 h after the trip ends.
+  - C137 (P3): four sidebar links are gated on a different module from their data, including a decision on who may flush Redis prefixes.
+  - C138 (P3): the backend guard against two racing document reviews, the follow-up above. Re-checking showed it must be a compare-and-set, not a plain "still pending" filter, because editing a rejection's reason is a supported re-review.
+  - C139 (P3): rider-app's two translation-key sets.
+  - The `/track` page's own older issues stay in W4.2's change log, which ships with W4.2: the ETA label, a blank map after one failed poll, the `scheduled` label, the developer-facing no-key message, and polling after the trip ends.

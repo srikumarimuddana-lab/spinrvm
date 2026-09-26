@@ -25,6 +25,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Pagination } from "@/components/ui/pagination";
 import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
 import {
     Ticket, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Search, Download,
     RefreshCw, Tag, Users, Lock, Globe,
@@ -567,7 +568,11 @@ export default function PromotionsPage() {
                     {loading ? (
                         <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                     ) : filtered.length === 0 ? (
-                        <div className="text-center py-12"><Ticket className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" /><h2 className="text-lg font-semibold">No {promoTab === "expired" ? "expired codes" : promoTab === "public" ? "promo codes" : "coupons"} found</h2><p className="text-muted-foreground mt-1">{promoTab === "expired" ? "No expired promo codes." : "Create one to get started."}</p></div>
+                        <EmptyState
+                            icon={Ticket}
+                            title={<>No {promoTab === "expired" ? "expired codes" : promoTab === "public" ? "promo codes" : "coupons"} found</>}
+                            description={promoTab === "expired" ? "No expired promo codes." : "Create one to get started."}
+                        />
                     ) : (
                         <div className="border rounded-lg">
                             <Table>

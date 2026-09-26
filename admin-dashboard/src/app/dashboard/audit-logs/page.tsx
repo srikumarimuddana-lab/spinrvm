@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import {
     Table,
@@ -502,15 +503,11 @@ export default function AuditLogsPage() {
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         </div>
                     ) : logs.length === 0 ? (
-                        <div className="text-center py-16">
-                            <Shield className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
-                            <h2 className="text-lg font-semibold">No audit logs found</h2>
-                            <p className="text-muted-foreground mt-1">
-                                {hasFilters
-                                    ? "Try adjusting your filters."
-                                    : "Admin actions will be recorded here."}
-                            </p>
-                        </div>
+                        <EmptyState
+                            icon={Shield}
+                            title="No audit logs found"
+                            description={hasFilters ? "Try adjusting your filters." : "Admin actions will be recorded here."}
+                        />
                     ) : (
                         <>
                             <div className="overflow-x-auto">

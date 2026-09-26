@@ -180,7 +180,8 @@ class TestRideLifecycleHappyPath:
 class TestRideLifecycleConcurrency:
     """Guard invariants that only break under concurrency."""
 
-    async def test_two_drivers_accepting_same_ride_one_wins(self):
+    @pytest.mark.parametrize("users", [("user_a", "user_b"), ("user_b", "user_a")])
+    async def test_two_drivers_accepting_same_ride_one_wins(self, users):
         """One driver gets 200, the loser gets 409 — never both 200."""
         import asyncio
 
@@ -192,7 +193,14 @@ class TestRideLifecycleConcurrency:
         driver_a = {"id": "driver_a", "user_id": "user_a", "is_online": True}
         driver_b = {"id": "driver_b", "user_id": "user_b", "is_online": True}
         ride = {"id": RIDE_ID, "status": "searching", "driver_id": None, "rider_id": RIDER_ID}
-        accepted = {**ride, "status": "driver_accepted", "driver_id": "driver_a"}
+        # One shared row with a compare-and-set update, like the real
+        # conditional UPDATE: whichever driver's write lands first wins, and
+        # re-reads see that winner. A fixed "driver_a won" row made the test
+        # depend on scheduling — if driver_b's write landed first, driver_a
+        # re-read a row naming itself and took the idempotent 200.
+        # get_ride stays the pre-race snapshot: both drivers passed the read
+        # check before either wrote, which is the window this test is about.
+        ride_row = dict(ride)
 
         async def _get_rows(table, filters=None, **kwargs):
             if table == "drivers":
@@ -200,22 +208,34 @@ class TestRideLifecycleConcurrency:
             # ride_offers lookup on the broadcast/searching path — pending for both.
             return [{"id": "offer-1", "ride_id": RIDE_ID, "status": "pending"}]
 
+        async def _update_one(table, filters, update, **kwargs):
+            assert table == "rides"
+            if any(ride_row.get(k) != v for k, v in filters.items()):
+                return None
+            ride_row.update(update["$set"])
+            return dict(ride_row)
+
+        async def _find_one(table, filters, **kwargs):
+            return dict(ride_row)
+
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted, None])),
-            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(side_effect=_find_one)),
             patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             results = await asyncio.gather(
-                drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": "user_a"}),
-                drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": "user_b"}),
+                *(drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": u}) for u in users),
                 return_exceptions=True,
             )
 
-        statuses = sorted([200 if isinstance(r, dict) else r.status_code for r in results])
-        assert statuses == [200, 409]
+        by_user = {u: 200 if isinstance(r, dict) else r.status_code for u, r in zip(users, results)}
+        assert sorted(by_user.values()) == [200, 409]
+        # The 200 belongs to the driver the row names, not just to someone.
+        winner = "user_a" if ride_row["driver_id"] == "driver_a" else "user_b"
+        assert by_user[winner] == 200
 
 
 @pytest.mark.e2e

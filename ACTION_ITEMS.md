@@ -13562,6 +13562,17 @@ record of what was assumed vs. what was actually true</summary>
 - **Acceptance:** `npx jest __tests__/components/CarMarker.test.tsx` passes
   25/25 on `main`.
 
+### B44. Public `/track` share link keeps showing exact pickup and drop-off addresses for up to 24 h after the trip ends
+- [ ] **Status:** open. Found 2026-09-26 by the PIPEDA review of UX program W4.2 (the `/track` page's smooth marker). Pre-existing; not caused by that change. Priority proposed, not decided.
+- **What's wrong:** `track_shared_ride` (`backend/routes/rides/sharing.py`) returns the full `pickup_address` and `dropoff_address` in its terminal-status branch, and the public page (`admin-dashboard/src/app/track/[rideId]/page.tsx`) shows them. A timestamped share token stays valid for 24 h from creation whatever the ride status, so a link forwarded once can show a stranger the rider's exact street addresses for up to 24 h after the trip. Legacy tokens with no timestamp already expire once the ride ends; timestamped ones don't.
+- **Why it matters:** PIPEDA data minimization. The legacy-token branch's own comment already says that once the ride is terminal "there is no safety purpose left in the link".
+- **Options:**
+  - (a) return city/area only for terminal rides;
+  - (b) expire every token once the ride is terminal, the rule legacy tokens already follow;
+  - or both. (b) follows existing precedent. Either changes a live public endpoint and needs its own Change Impact Log.
+- **Files:** `backend/routes/rides/sharing.py` (`track_shared_ride`), `admin-dashboard/src/app/track/[rideId]/page.tsx` (ended-state rendering), and their tests.
+- **Acceptance:** a share link for a completed or cancelled ride no longer returns street-level addresses, tested for both token kinds.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -19965,6 +19976,42 @@ mechanical follow-up work, prioritizable independently.
   location_write_gate.py` (or wherever `persist_trip_location_batch`/
   `persist_ride_breadcrumbs` live), a new `backend/migrations/NN_*.sql`.
 - **Tracking:** srikumarimuddana-lab/spinrvm#5357.
+
+### C137. Four admin sidebar links are gated on a different module from the endpoints their page calls
+- [ ] **Status:** open. Found 2026-09-26 by the RBAC review of UX program W5.1 (command palette). Pre-existing; not caused by W5.1, which moves the same entries into a shared nav config. Priority proposed, not decided.
+- **What's wrong** (`admin-dashboard/src/components/sidebar.tsx` on `main`):
+  - **Legal** (`/dashboard/support?tab=legal`) is gated on `support`, but its data (`/api/admin/legal-documents`) is mounted under `require_module("documents")`. An admin with `support` but not `documents` sees the link and gets a 403 on every call.
+  - **Live Monitoring** is gated on `rides` (the sidebar and the page's `useRequireModule("rides")`), but `/api/admin/monitoring/drivers` and `/api/admin/monitoring/rides` are under `require_module("dashboard")`. An admin with `rides` but not `dashboard` gets partial 403s.
+  - **Redis & Infra** and **Dispatch Geo Status** are gated on `settings`, but their endpoints are under `dashboard`, so the sidebar hides them from `dashboard`-only admins.
+- **Decision needed before fixing the Redis link:**
+  - The same router carries `POST /api/admin/monitoring/redis/flush-prefix`: allowlisted prefixes, a typed `FLUSH` confirmation, and an audit log.
+  - Any `dashboard` admin can call it today. The sidebar's `settings` gate suggests `settings` was the intended permission.
+  - Lowering the sidebar gate to `dashboard` would show that button to every dashboard admin, so decide the intended permission first (possibly tightening the backend) rather than aligning the nav downward.
+- **Files:** `admin-dashboard/src/components/sidebar.tsx` (or the shared nav config once W5.1 lands), `backend/routes/admin/__init__.py`, `backend/routes/admin/monitoring.py`.
+- **Acceptance:**
+  - every nav entry's module matches what its page's endpoints require, pinned by a test;
+  - the flush endpoint's permission is an explicit, recorded decision;
+  - `spinr-admin-rbac-reviewer` has reviewed the fix.
+
+### C138. Two racing reviews of one driver document both apply — no compare-and-set on its status
+- [ ] **Status:** open. Found 2026-09-26 while fixing the document reviewer's keyboard shortcuts (#5887), which closed the single-tab double-submit client-side only. Priority proposed, not decided.
+- **What's wrong:** `admin_review_driver_document` (`backend/routes/admin/documents.py`) reads the document, then updates `driver_documents` by `id` alone. Two reviews of the same document (two tabs, or two admins) both apply, and the last write wins. Each one writes a driver-timeline entry and an admin audit row. When both read the document as pending, two rejections both push the driver.
+- **Fix direction:** make the update a compare-and-set on the status read at the start of the request, and treat 0 rows as "changed by someone else" (409), like ride acceptance's `{'status': 'searching'}` guard.
+  - Not a blanket `status = 'pending'` filter: re-rejecting an already-rejected document is a supported edit (fixing the reason text, deliberately without a new push), and the endpoint also accepts `pending` as a target status.
+- **Files:** `backend/routes/admin/documents.py` and its tests. The admin reviewer should show a clear message on a 409.
+- **Acceptance:**
+  - a test where the second of two reviews that both read the same status gets a 409 and writes no timeline entry, audit row or push;
+  - the reason-text edit on a rejected document still works.
+
+### C139. rider-app keeps two parallel translation-key sets
+- [ ] **Status:** open, needs a decision. Raised 2026-09-26 while finishing French (UX program W7.1). Priority proposed, not decided.
+- **What's wrong:** `rider-app/i18n/` has two separate sets:
+  - `en-CA.json` / `fr-CA.json`: mostly snake_case, about 155–159 keys on `main` today;
+  - `en.json` / `fr.json`: a different, smaller set.
+
+  `index.ts` falls back from one to the other. The W7.1 work reported keys that look unused; that is unverified. Every copy change has to find the right set, and translations drift between them.
+- **Decision:** merge into one set (and pick its naming), or keep both and document which screens read which.
+- **Files:** `rider-app/i18n/*.json`, `rider-app/i18n/index.ts`.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 

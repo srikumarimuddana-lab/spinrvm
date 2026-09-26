@@ -76,7 +76,9 @@ describe("Toaster policy", () => {
         render(<Toaster />);
         show({ title: "Save failed", variant: "destructive" });
         const close = screen.getByRole("button", { name: "Dismiss notification" });
-        expect(close).toHaveClass("group-[.destructive]:opacity-100");
+        expect(close).toHaveClass("group-[.destructive]:opacity-100", "group-[.destructive]:text-destructive-foreground");
+        // 70% white on red is 2.98:1, under SC 1.4.11's 3:1 for an always-visible icon.
+        expect(close.className).not.toContain("text-destructive-foreground/70");
         act(() => { close.click(); });
         advance(1_000);
         expect(screen.queryByText("Save failed")).toBeNull();

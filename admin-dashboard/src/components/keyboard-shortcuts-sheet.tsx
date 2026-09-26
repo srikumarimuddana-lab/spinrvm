@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useId, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -137,8 +137,18 @@ export function KeyboardShortcutsSheet() {
     const [open, setOpen] = useState(false);
     const [singleKeyOn, setSingleKeyOn] = useSingleKeyShortcuts();
     const switchId = useId();
+    // Radix Dialog returns focus to its DialogTrigger on close, and this
+    // sheet has none (it opens from a key or the palette), so focus would
+    // fall to <body>. Remember where it was and put it back ourselves.
+    const returnFocusRef = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
+        const openSheet = () => {
+            if (!returnFocusRef.current && document.activeElement instanceof HTMLElement) {
+                returnFocusRef.current = document.activeElement;
+            }
+            setOpen(true);
+        };
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
             // Turned off with the switch below (WCAG 2.1.4). Read at key
@@ -149,9 +159,9 @@ export function KeyboardShortcutsSheet() {
             // or the document reviewer, which runs its own focus trap).
             if (document.querySelector("[role='dialog'], [role='alertdialog']")) return;
             e.preventDefault();
-            setOpen(true);
+            openSheet();
         };
-        const onOpenRequest = () => setOpen(true);
+        const onOpenRequest = () => openSheet();
         window.addEventListener("keydown", onKeyDown);
         window.addEventListener(OPEN_EVENT, onOpenRequest);
         return () => {
@@ -161,11 +171,17 @@ export function KeyboardShortcutsSheet() {
     }, []);
 
     // Radix Dialog supplies the rest: focus moves in and is trapped while
-    // open, Escape / the close button / an overlay click close it, and
-    // focus returns to where it was.
+    // open, and Escape / the close button / an overlay click close it.
     return (
         <Dialog open={open} onOpenChange={setOpen}>
-            <DialogContent className="max-h-[85vh] overflow-y-auto">
+            <DialogContent
+                className="max-h-[85vh] overflow-y-auto"
+                onCloseAutoFocus={(e) => {
+                    e.preventDefault();
+                    returnFocusRef.current?.focus();
+                    returnFocusRef.current = null;
+                }}
+            >
                 <DialogHeader>
                     <DialogTitle>Keyboard shortcuts</DialogTitle>
                     <DialogDescription>Shortcuts are off while you are typing in a field.</DialogDescription>

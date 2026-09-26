@@ -50,6 +50,18 @@ describe("KeyboardShortcutsSheet", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     });
 
+    it("returns focus to the previously focused element after Escape", async () => {
+        const user = setup();
+        const pageButton = screen.getByRole("button", { name: "Page button" });
+        pageButton.focus();
+        await user.keyboard("?");
+        const dialog = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        await waitFor(() => expect(pageButton).toHaveFocus());
+    });
+
     it.each([
         ["an input", <input key="f" aria-label="field" />],
         ["a textarea", <textarea key="f" aria-label="field" />],

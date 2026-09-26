@@ -8,8 +8,8 @@
 | Author | Claude Code (agent), for UX program item W7.1 |
 | Surface(s) | rider-app, driver-app |
 | Domain (Sentry tag) | rides / drivers (UI copy and settings only; no backend, money or state-machine change) |
-| PR / commit link | Branch `claude/spinr-animations-admin-ux-x7nl5x` (this PR, W7.1 part 1 of 2). Part 2 (picker title, start-up language restore, load-vs-pick race fix) follows. |
-| Related issue or gap ID | W7.1, decision D3: finish French to 100% of the keys the apps use; hide `es` and `zh` from the language pickers until they are complete |
+| PR / commit link | branch `wip/w7-1`, not pushed |
+| Related issue or gap ID | W7.1, decision D3: finish French to 100% of the keys the apps use; hide `es` and `zh` from the language pickers until they are complete. Extended by the user to also restore the saved language at app start in both apps and translate the rider picker title (§3, items 6–8). |
 
 > **[H] Human action required before release:** every French string added here was
 > drafted by an agent. A fluent French speaker, ideally one familiar with Canadian
@@ -22,7 +22,8 @@
 French was incomplete in both apps, and the language pickers offered Spanish (both
 apps) and Chinese (rider-app) even though those translations cover well under half
 the keys. In some places the missing keys showed English, and in others they showed
-raw dotted keys.
+raw dotted keys. On top of that, neither app reliably restored the saved language at
+start-up, and the rider picker title was hardcoded English (§2, last bullets).
 
 ## 2. Root cause
 
@@ -50,6 +51,14 @@ Which files each app actually loads at runtime (from `*/i18n/index.ts`):
 - **Device locale:** neither app auto-detects it. There is no `expo-localization` or
   `getLocales` use. Both default to `'en'`, so the only way onto `es`/`zh` was a choice
   the user made earlier in the picker and that was saved in AsyncStorage.
+- **Saved language not restored at start-up (rider):** `useLanguageStore.hydrate()`, the
+  only code that reads the saved choice back, had **no caller**. Every cold start was
+  English, even for a rider who had picked French.
+- **Saved language restored late (driver):** `loadLanguage()` was called only from
+  `app/driver/settings.tsx`. A French driver saw English on login, OTP, the dashboard and
+  in alerts after every cold start, until they happened to open Settings.
+- **Rider picker title:** `app/settings.tsx` rendered the literal `"Select Language"`,
+  even though a `settings.selectLanguage` key already existed in `en.json`/`fr.json`.
 
 ## 3. Fix / remediation
 
@@ -69,11 +78,44 @@ Which files each app actually loads at runtime (from `*/i18n/index.ts`):
    if a language is re-enabled later, the user's old choice comes back without any
    further change.
 5. Added a jest parity test per app (§9).
+6. **Rider start-up restore:** `RootLayout` in `rider-app/app/_layout.tsx` now calls
+   `useLanguageStore.getState().hydrate()` once, in a mount-only effect. The change is
+   one line plus the import.
+   - **English flash:** avoided in practice without a new gate. `hydrate()` is one
+     AsyncStorage read, started on RootLayout's first render. No screen mounts until
+     the existing `navReady` gate, which already holds the branded splash for at least
+     `SPLASH_MIN_DISPLAY_MS` (1.8 s).
+   - **Why not gate on it:** I deliberately did **not** add `hydrate()` to `navReady`.
+     That would put a storage read on the boot-critical path, and a hung read would
+     leave the rider stuck on the splash, for no practical gain over the existing hold.
+     The residual risk is a brief English flash if the read takes longer than 1.8 s.
+7. **Driver start-up restore:** `driver-app/i18n/index.ts` now calls the store's
+   existing `loadLanguage()` once, when the module first loads.
+   - **Why not `_layout.tsx`:** that file is owned by another queued PR, so I left it
+     untouched. No hook or provider already mounted at the root was a fit either:
+     `useSplashPhase` is a pure timing hook with its own tests, and
+     `store/languageStore.ts` was off-limits.
+   - **Why this runs in time:** the root layout does not import i18n, but every
+     translated screen and `lib/alert.ts` do. So the restore starts before the first
+     translated string renders. That first screen is still under the launch splash for
+     its 250 ms settle (`SPLASH_EXIT_SETTLE_MS`) while the single AsyncStorage read
+     completes.
+   - **Implementation detail:** the call is deferred to a microtask, because
+     `store/languageStore.ts` imports i18n.
+   - **Residual risk:** in theory, the very first frame of the first translated screen
+     is English. In practice it is covered by the splash, not guaranteed by a gate.
+8. **Rider picker title:** `app/settings.tsx` now renders `t('settings.selectLanguage')`.
+   This shows "Choisir la langue" in French. English is unchanged ("Select Language").
 
 Alternative considered: keep es/zh in the list with a `selectable: false` flag and
 filter in each picker screen. This was rejected because it adds a field and a filter in
 two screen files for no behavioural gain. Removing the rows keeps the picker screens
 untouched, and the parity test gates re-adding a language.
+
+Alternative considered for item 7: a one-line `loadLanguage()` effect in
+`driver-app/app/_layout.tsx`, mirroring the rider change. This would be deterministic and
+earlier. It was rejected only because another queued PR owns that file. If that PR lands
+first, moving the call there is a safe follow-up.
 
 ## 4. Risk & impact on existing functionality
 
@@ -82,11 +124,40 @@ insurance paths.
 
 - `languages` (driver-app) has exactly one consumer: `app/driver/settings.tsx`, for the
   picker list and the row subtitle. `LANGUAGES` (rider-app) has exactly one consumer:
-  `app/settings.tsx`, for the picker list and the subtitle. Neither screen file was
-  modified. Both already fall back to `'English'` when a code is missing from the list.
-- `getStoredLanguage()` is called only by `store/languageStore.ts` → `loadLanguage()`,
-  which is called only from `app/driver/settings.tsx`. `hydrate()` (rider-app) has
-  **no caller** in app code (see "What was NOT verified / found").
+  `app/settings.tsx`, for the picker list and the subtitle. Both already fall back to
+  `'English'` when a code is missing from the list. The driver screen is unmodified. The
+  rider screen's only change is the picker title (item 8).
+- `getStoredLanguage()` is called only by `store/languageStore.ts` → `loadLanguage()`.
+  `loadLanguage()` now has two callers: the new start-up call in `i18n/index.ts` and
+  `app/driver/settings.tsx`, which is unchanged. Both calls run the same action, which
+  reads the value and never writes it back, so they are idempotent. Settings' call now
+  just re-reads the same value. `hydrate()` (rider-app) has one caller, `RootLayout`.
+- **Every screen affected at start-up.** The restored language now applies from the
+  first frame to every consumer of each app's language store, not only after a visit to
+  Settings (driver) or never (rider). Users with no saved language, or with English
+  saved, see no change.
+  - **driver-app:** `app/login.tsx`, `app/otp.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/driver/(tabs)/index.tsx`, `app/driver/(tabs)/activity.tsx`,
+    `app/driver/destination-mode.tsx`, `app/driver/emergency-contacts.tsx`,
+    `app/driver/notifications.tsx` and `app/driver/settings.tsx`.
+  - **driver-app components:** `components/DestinationModeBanner.tsx` and the dashboard
+    panels (`ActiveRidePanel`, `DemandLegend`, `DriverIdlePanel`, `DriverTopBar`,
+    `ForecastStrip`, `HotspotChips`, `TripCompletedPanel`).
+  - **driver-app non-UI:** `hooks/useDriverDashboard.ts` and every `lib/alert.ts` error
+    alert (`tKey`). The shared `SOSButton`, which receives driver-app's `t`, is also
+    affected.
+  - **rider-app:** `app/(tabs)/index.tsx`, `app/(tabs)/activity.tsx`,
+    `app/driver-arriving.tsx`, `app/driver-arrived.tsx`, `app/ride-in-progress.tsx`,
+    `app/otp.tsx`, `app/verify-email.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/privacy-settings.tsx` and `app/settings.tsx`.
+  - **rider-app components and non-UI:** `components/NoDriversSheetHost.tsx` and every
+    `lib/alert.ts` error alert (`tKey`).
+- **Start-up side effect (driver):** `driver-app/i18n/index.ts` now does one
+  AsyncStorage read when it is first imported. In jest this also runs in any test that
+  imports the real module. The full suite logged 0 restore errors, and tests that stub
+  the store never load the real i18n module.
+- **Rider `_layout.tsx`:** the change is one import plus one mount-only effect. It does
+  not touch `navReady`, the splash phases, auth or location init, or any other effect.
 - `tKey()` / `translate()` / `t()` are unchanged, and so are the translation maps. The new
   keys only fill gaps, and no existing French value was edited. English files are
   untouched.
@@ -106,8 +177,18 @@ insurance paths.
 - **French-speaking riders:** the "Terms of Service" row on Privacy settings and the
   "More policies" row on Settings now show French labels instead of raw keys. Structured
   API errors now show in French instead of the backend's English message.
+- **French users, from app start (biggest visible change):**
+  - **Riders:** a rider who picked French now gets French from the first screen after
+    every cold start. Previously every cold start was English.
+  - **Drivers:** a driver who picked French now gets French from the first screen,
+    including login, OTP, the dashboard and error alerts. Previously they had to open
+    Settings in each app session first.
+  - **Both apps:** users with English or no saved choice see no change.
+  - **Picker title:** the rider picker title now reads "Choisir la langue" in French.
 - **Spanish/Chinese users:** the picker now lists only English and Français. A user whose
-  saved choice was `es`/`zh` sees English the next time their stored language is loaded.
+  saved choice was `es`/`zh` sees English from app start. Before this change, a rider
+  never got their saved choice back at all, and a driver only got it once they opened
+  Settings.
 - **Mid-session:** nothing changes for anyone until they install an app update carrying
   this change (OTA/EAS). JSON and TS bundle changes are not visible in an already-running
   app.
@@ -126,6 +207,12 @@ insurance paths.
 | `rider-app/i18n/index.ts` | `es`/`zh` removed from `LANGUAGES`; `hydrate()` honours only picker-offered codes | Hide incomplete Spanish/Chinese (D3) |
 | `driver-app/__tests__/i18n/localeParity.test.ts` | New, 9 tests | Parity, placeholder and picker gate |
 | `rider-app/__tests__/i18n/localeParity.test.ts` | New, 11 tests | Parity, placeholder and picker gate |
+| `driver-app/i18n/index.ts` (again) | Calls the store's `loadLanguage()` once when the module first loads | Restore the saved language at app start (item 7) |
+| `driver-app/__tests__/i18n/startupLanguage.test.tsx` | New, 3 tests | Simulated cold starts: saved `fr` shows French without Settings; `es`/none show English |
+| `rider-app/app/_layout.tsx` | Imports `useLanguageStore`; one mount-only effect calls `hydrate()` | Restore the saved language at app start (item 6) |
+| `rider-app/__tests__/i18n/startupLanguage.test.tsx` | New, 6 tests | Contract (RootLayout calls `hydrate()` on mount) plus a cold-start simulation for `fr`/`es`/`zh`/none |
+| `rider-app/app/settings.tsx` | Picker title `"Select Language"` → `t('settings.selectLanguage')` | Translate the title (item 8) |
+| `rider-app/__tests__/i18n/languagePickerTitle.test.tsx` | New, 2 tests | Renders the real screen with the real i18n module; checks the title in French and English |
 | `docs/change-log/2026-09-26-french-complete-hide-es-zh.md` | New | This log |
 
 Key counts (flattened leaf keys):
@@ -164,6 +251,28 @@ export const LANGUAGES = [ en, fr ];            // es/zh hidden until complete (
 if (LANGUAGES.some((l) => l.code === stored)) set({ language: stored as Language });
 ```
 
+Start-up restore and picker title:
+
+```tsx
+// Before — rider-app/app/_layout.tsx (RootLayout): hydrate() never called
+useEffect(() => { void clearLegacyScheduledReminders(); }, []);
+
+// After
+useEffect(() => { void clearLegacyScheduledReminders(); }, []);
+useEffect(() => { void useLanguageStore.getState().hydrate(); }, []);
+
+// Before — driver-app: loadLanguage() only in app/driver/settings.tsx's mount effect
+// After — end of driver-app/i18n/index.ts
+Promise.resolve()
+    .then(() => require('../store/languageStore').useLanguageStore.getState().loadLanguage())
+    .catch((error) => console.error('Failed to restore the saved language at startup:', error));
+
+// Before — rider-app/app/settings.tsx
+<Text style={styles.langTitle}>Select Language</Text>
+// After
+<Text style={styles.langTitle}>{t('settings.selectLanguage')}</Text>
+```
+
 ## 8. Rollback plan
 
 There is no feature flag. The mobile i18n bundles have no runtime `app_settings` hook,
@@ -171,7 +280,9 @@ so rollback means shipping a new app build or OTA update with the commits revert
 live data is touched: the AsyncStorage language value is never overwritten, so a revert
 restores every user's previous `es`/`zh` choice exactly. The French additions are purely
 additive. Reverting them only brings back the English fallbacks and raw keys described in
-§2.
+§2. The start-up restore only reads the stored value. Reverting its two commits brings
+back the old behaviour: rider always English at cold start, driver English until
+Settings opens. The picker title commit reverts independently.
 
 ## 9. Verification performed
 
@@ -180,13 +291,20 @@ additive. Reverting them only brings back the English fallbacks and raw keys des
 - [x] **New tests fail on `origin/main` and pass after the change.** With the pre-change
   `i18n/` files checked out: driver-app 4 of 9 failed and rider-app 7 of 11 failed. After
   the change: 9 of 9 and 11 of 11 pass.
-- [x] `npx tsc --noEmit -p .`: driver-app exit 0, rider-app exit 0.
-- [x] Full `npx jest`, before → after:
-  - driver-app: 174 suites / 2159 tests → 175 / 2168, all passing.
-  - rider-app: 173 suites / 2340 tests → 174 / 2351, all passing.
-- [x] **Re-verified on the PR branch**, rebuilt from `main` after #5892:
-  - `tsc` exits 0 in both apps;
-  - full `jest`: driver-app 177 suites / 2190 tests, rider-app 174 suites / 2353 tests, all passing.
+- [x] **Start-up and title tests fail without their change.** Each changed file was
+  reverted on its own, with the new test kept:
+  - driver `i18n/index.ts` reverted: 3 of 3 `startupLanguage` tests fail. Without the
+    restore, no AsyncStorage read happens and a saved `fr` stays English.
+  - rider `_layout.tsx` reverted: 2 of 6 fail (both RootLayout contract checks).
+  - rider `settings.tsx` reverted: 1 of 2 `languagePickerTitle` tests fail (the French
+    title).
+  - All pass with the change.
+- [x] `npx tsc --noEmit -p .`: driver-app exit 0, rider-app exit 0. Both were re-run
+  after the start-up and title changes.
+- [x] Full `npx jest`, baseline → first round (parity and picker) → final:
+  - driver-app: 174 suites / 2159 tests → 175 / 2168 → **176 / 2171**, all passing.
+    0 "Failed to restore the saved language" logs in the full run.
+  - rider-app: 173 suites / 2340 tests → 174 / 2351 → **176 / 2359**, all passing.
 - [x] Blast-radius grep: `languages`, `LANGUAGES`, `getStoredLanguage`, `loadLanguage`,
   `hydrate`, `setLanguage`, `changeLanguage`, `from '../i18n'` across both apps, plus
   `expo-localization`/`getLocales` repo-wide (no hits).
@@ -202,22 +320,32 @@ additive. Reverting them only brings back the English fallbacks and raw keys des
   not screenshotted. Error strings render in native `Alert` dialogs, which wrap, and the
   4 policy-row labels are about as long as neighbouring French rows that already exist.
 - **Translation quality** was not checked by a fluent speaker. See the [H] item at the top.
-- **Found, not fixed (out of scope / forbidden files):**
-  - rider-app `hydrate()` has **no caller** (fixed in W7.1 part 2). `useLanguageStore.hydrate` is never invoked
-    (the natural home, `rider-app/app/_layout.tsx`, was off-limits for this change). So
-    a rider's language choice does not survive an app restart: every cold start is
-    English. The stored-language fallback added here is correct but dormant until
-    `hydrate()` is wired.
-  - driver-app `loadLanguage()` is called only from `app/driver/settings.tsx` (fixed in W7.1 part 2). A driver
-    who chose French sees English after a cold start until they open Settings.
-  - rider-app's picker title `"Select Language"` (`app/settings.tsx`) is hardcoded
-    English (fixed in W7.1 part 2). An unused `settings.selectLanguage` key exists in `en.json`/`fr.json`.
-  - rider-app keeps two parallel key sets: snake_case in `en-CA`/`fr-CA` and camelCase in
-    `en`/`fr`/`es`/`zh`. About 44 of the 53 non-error camelCase keys that exist only in
-    `en.json` (e.g. `home.whereToGo`, `wallet.*`, `loyalty.*`, `support.*`) have no
-    literal `t('…')` reference in the app. They look dead but were not deleted, because
-    deletion needs approval. This is logged as `ACTION_ITEMS.md` C139.
+- **Start-up restore was not observed on a device.**
+  - **"No English flash" is reasoned, not measured.** The claim rests on timing: 1.8 s
+    minimum splash hold (rider) and a 250 ms splash settle (driver) against one
+    AsyncStorage read. There is no device or visual check (no mobile visual tooling).
+  - **The rider RootLayout is not rendered in any test.** The repo has no harness for
+    it (about 60 native/SDK imports). The rider start-up test is therefore a
+    source-level contract (RootLayout calls `hydrate()` in a mount-only effect) plus a
+    behavioural simulation of that call. It does not mount the real layout.
+  - **The driver restore depends on the first translated module loading.** It runs when
+    the first translated screen or `lib/alert.ts` module loads. This was confirmed by
+    reading expo-router 57's route loading: only layouts load eagerly, and no layout
+    imports i18n. It was not traced on a device.
+- **Follow-ups (not changed here, by decision):**
+  - **Store still accepts es/zh (open question 4):** rider-app's store `setLanguage`
+    and the `i18n.changeLanguage` compat shim still accept `es`/`zh`. No app code calls
+    `changeLanguage`, and the picker only offers en/fr.
+  - **Two key sets (open question 5):** rider-app keeps two parallel key sets:
+    snake_case in `en-CA`/`fr-CA` and camelCase in `en`/`fr`/`es`/`zh`. About 44 of the
+    53 non-error camelCase keys that exist only in `en.json` (e.g. `home.whereToGo`,
+    `wallet.*`, `loyalty.*`, `support.*`) have no literal `t('…')` reference in the app.
+    They look dead but were not deleted, because deletion needs approval.
+  - **Driver restore location:** if the queued `driver-app/app/_layout.tsx` PR lands, the
+    driver restore could move into RootLayout for a deterministic, earlier call
+    (§3, alternative for item 7).
   - No locale **file** is dead: all 9 are imported by their app's `i18n/index.ts`.
     `driver-app/i18n/es.json`, `rider-app/i18n/es.json` and `rider-app/i18n/zh.json` are
     now unreachable to users but are still bundled.
-- **Review:** `spinr-edge-case-reviewer` ran on the full W7.1 branch (both parts) on 2026-09-26 and found no blockers in this part. It reproduced a race where a slow language load overwrites a fresh pick; that is fixed in part 2, alongside the start-up restore. No accessibility or copy review was run on this part.
+- The `spinr-*` reviewer agents were not run against this diff, because the agent tool is
+  unavailable in this session.

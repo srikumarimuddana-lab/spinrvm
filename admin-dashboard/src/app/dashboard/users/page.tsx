@@ -50,6 +50,7 @@ import { maskEmail, maskPhone } from "@/lib/pii";
 import { getWalletActionError } from "@/lib/userWalletActionSchema";
 import { isModerationReasonValid } from "@/lib/userModerationSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/components/ui/use-toast";
 
 const PAGE_SIZE = 50;
@@ -57,6 +58,7 @@ const PAGE_SIZE = 50;
 export default function UsersPage() {
     const { allowed } = useRequireModule("users");
     const { toast } = useToast();
+    const { confirm, dialog: confirmDialog } = useConfirm();
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -273,16 +275,19 @@ export default function UsersPage() {
             }
             const newly = preview.changes.filter(c => !c.had_email).length;
             const corrected = preview.updated - newly;
-            if (!window.confirm(
-                `Sync rider emails to Stripe (${account} account)?\n\n` +
+            if (!(await confirm({
+                title: `Sync rider emails to Stripe (${account} account)?`,
+                description:
                 `First batch: ${preview.updated} of ${preview.scanned} customer(s) need updating — ` +
                 `${newly} have no email at all, ${corrected} carry a different address.\n\n` +
                 "This sends those riders' email addresses to Stripe so they can be found by " +
                 "address in the dashboard. Only the email field is written — no customer is " +
                 "created, no saved card is touched. Riders who have requested deletion are skipped." +
                 (stranded ? `\n\n${stranded} customer(s) are unreachable on the current Stripe key and will be skipped — those repair themselves on the rider's next visit to their own payment screen.` : "") +
-                (preview.has_more ? "\n\nMore riders remain beyond this batch. Confirming processes ALL remaining batches, not just this one." : "")
-            )) return;
+                (preview.has_more ? "\n\nMore riders remain beyond this batch. Confirming processes ALL remaining batches, not just this one." : ""),
+                confirmLabel: "Sync emails",
+                destructive: true,
+            }))) return;
 
             const totals = { updated: 0, unchanged: 0, stranded: 0, throttled: 0, failed: 0 };
             let cursor: string | undefined;
@@ -339,6 +344,7 @@ export default function UsersPage() {
 
     return (
         <div className="space-y-6">
+            {confirmDialog}
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-2">

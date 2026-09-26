@@ -178,6 +178,7 @@ interface UseDriverDashboardReturn {
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
 let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean; reclaim?: boolean }) => Promise<void>) | null = null;
+let _dismissDeliveredOfferAlerts: ((rideId?: string) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
     // Guarded native-module require — notifeeService.ts statically imports
@@ -188,10 +189,27 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
     const _notifee = require('../services/notifeeService');
     _dismissRideOfferNotification = _notifee.dismissRideOfferNotification;
     _displayRideOfferNotification = _notifee.displayRideOfferNotification;
+    _dismissDeliveredOfferAlerts = _notifee.dismissDeliveredOfferAlerts;
   } catch {
     _dismissRideOfferNotification = null;
     _displayRideOfferNotification = null;
+    _dismissDeliveredOfferAlerts = null;
   }
+}
+
+// iOS foreground handover: the backend's APNs offer alert is a different
+// notification from the one Notifee posts, so the handover's own cancel never
+// reaches it and the card lingers after the driver has opened the app. Remove
+// it — but ONLY when the driver is actually in front of the app. iOS wakes a
+// killed app in the background for an offer push and this hook mounts with
+// rideState 'idle'; removing the alert then would delete the driver's only
+// card. (An iOS sound that has already started cannot be stopped; this clears
+// the card only.) Never rejects. Android has no such alert: no-op there.
+function _removeDeliveredOfferAlertsIfForeground(rideId?: string): Promise<void> {
+  if (Platform.OS !== 'ios' || !_dismissDeliveredOfferAlerts) return Promise.resolve();
+  const state = AppState.currentState;
+  if (state !== 'active' && state !== 'inactive') return Promise.resolve();
+  return _dismissDeliveredOfferAlerts(rideId).catch(() => undefined);
 }
 
 // Surface the heads-up / lock-screen Notifee card for every incoming offer.
@@ -2103,6 +2121,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // here by construction — never let AppState decide, since this also runs
       // at mount (see _surfaceOfferNotification's own comment).
       if (offer) {
+        // iOS only: clear the delivered APNs alert first (see the helper).
+        if (Platform.OS === 'ios') await _removeDeliveredOfferAlertsIfForeground(offer.ride_id);
         await _surfaceOfferNotification(offer, true);
         audioOwnerRef.current = { rideId: offer.ride_id, owner: 'app' };
       }
@@ -2182,7 +2202,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // Idempotent. iOS emits inactive→active around every interruption (and
       // both platforms can repeat a state), and re-running a handover cancels
       // and re-posts the card — a visible blink for no behavioural gain.
-      if (prev && prev.rideId === offer.ride_id && prev.owner === owner) return;
+      if (prev && prev.rideId === offer.ride_id && prev.owner === owner) {
+        // iOS: a handover that ran while the app was still backgrounded (a
+        // background wake) recorded 'app' ownership but correctly skipped
+        // removing the delivered APNs alert (the helper is foreground-gated).
+        // When the driver then opens the app this is the only place left that
+        // can — it is idempotent, and a no-op off iOS / when not in front.
+        if (Platform.OS === 'ios' && owner === 'app') {
+          void _removeDeliveredOfferAlertsIfForeground(offer.ride_id);
+        }
+        return;
+      }
       audioOwnerRef.current = { rideId: offer.ride_id, owner };
 
       if (owner === 'car') {
@@ -2194,7 +2224,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         // consumePendingOffer. .finally, not .then: the tone starts even if the
         // handover failed, so a broken cancel degrades to a double ring rather
         // than to silence.
-        void _surfaceOfferNotification(offer, true).finally(() => offerSound.play());
+        // iOS also clears the delivered APNs alert first; the Android call is
+        // exactly the original, with no extra await in front of it.
+        const handover = Platform.OS === 'ios'
+          ? _removeDeliveredOfferAlertsIfForeground(offer.ride_id).then(() => _surfaceOfferNotification(offer, true))
+          : _surfaceOfferNotification(offer, true);
+        void handover.finally(() => offerSound.play());
       } else {
         offerSound.stop();
         // Android only. iOS has no insistent loop to reclaim, and the backend

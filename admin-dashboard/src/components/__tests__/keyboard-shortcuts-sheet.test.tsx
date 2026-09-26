@@ -3,10 +3,10 @@
  * focus-trapping dialog that Escape closes — and is ignored while the
  * admin is typing in a field or another dialog is already open.
  */
-import { describe, it, expect } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { KeyboardShortcutsSheet } from "@/components/keyboard-shortcuts-sheet";
+import { KeyboardShortcutsSheet, openKeyboardShortcuts } from "@/components/keyboard-shortcuts-sheet";
 
 function setup(extra?: React.ReactNode) {
     const user = userEvent.setup();
@@ -19,6 +19,8 @@ function setup(extra?: React.ReactNode) {
     );
     return user;
 }
+
+beforeEach(() => localStorage.clear());
 
 describe("KeyboardShortcutsSheet", () => {
     it("opens on ? as a titled dialog listing the existing shortcuts", async () => {
@@ -70,5 +72,66 @@ describe("KeyboardShortcutsSheet", () => {
         await user.keyboard("{Control>}?{/Control}");
         await user.keyboard("{Meta>}?{/Meta}");
         expect(screen.queryByRole("dialog")).toBeNull();
+    });
+});
+
+describe("single-key shortcuts switch (WCAG 2.1.4)", () => {
+    const STORAGE_KEY = "spinr-admin-single-key-shortcuts";
+
+    it("is on by default; switching it off stops ? from opening the sheet", async () => {
+        const user = setup();
+        await user.keyboard("?");
+        const toggle = await screen.findByRole("switch", { name: "Single-key shortcuts" });
+        expect(toggle).toHaveAttribute("aria-checked", "true");
+        await user.click(toggle);
+        expect(toggle).toHaveAttribute("aria-checked", "false");
+        expect(localStorage.getItem(STORAGE_KEY)).toBe("off");
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+        await user.keyboard("?");
+        expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("survives a remount, and the sheet still opens without ?", async () => {
+        localStorage.setItem(STORAGE_KEY, "off");
+        const user = userEvent.setup();
+        const first = render(<KeyboardShortcutsSheet />);
+        first.unmount();
+        render(<KeyboardShortcutsSheet />);
+
+        await user.keyboard("?");
+        expect(screen.queryByRole("dialog")).toBeNull();
+
+        act(() => openKeyboardShortcuts());
+        await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        const toggle = screen.getByRole("switch", { name: "Single-key shortcuts" });
+        expect(toggle).toHaveAttribute("aria-checked", "false");
+        // Switching back on works from the same place.
+        await user.click(toggle);
+        expect(localStorage.getItem(STORAGE_KEY)).toBe("on");
+    });
+
+    it("defaults to on and still switches off for the session when storage is blocked", async () => {
+        const blocked = () => {
+            throw new Error("storage blocked");
+        };
+        const getItem = vi.spyOn(window.localStorage, "getItem").mockImplementation(blocked);
+        const setItem = vi.spyOn(window.localStorage, "setItem").mockImplementation(blocked);
+        try {
+            const user = setup();
+            await user.keyboard("?");
+            const toggle = await screen.findByRole("switch", { name: "Single-key shortcuts" });
+            expect(toggle).toHaveAttribute("aria-checked", "true");
+            await user.click(toggle);
+            expect(toggle).toHaveAttribute("aria-checked", "false");
+            await user.keyboard("{Escape}");
+            await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+            await user.keyboard("?");
+            expect(screen.queryByRole("dialog")).toBeNull();
+        } finally {
+            getItem.mockRestore();
+            setItem.mockRestore();
+        }
     });
 });

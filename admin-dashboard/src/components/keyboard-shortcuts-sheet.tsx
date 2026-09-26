@@ -1,7 +1,9 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useId, useState, useSyncExternalStore } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 
 /**
  * "?" keyboard shortcut sheet (UX program W5.1). Mounted by
@@ -15,6 +17,55 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
  * - J/K/A/R/Esc: app/dashboard/drivers/_components/document-reviewer.tsx
  *   (used from Drivers, Drivers → Approvals and Licence Backfill)
  */
+
+// ── Single-key shortcuts setting (WCAG 2.1.4 Character Key Shortcuts) ──
+// "?" is a one-character shortcut, so an admin must be able to turn it off
+// (speech-input users can fire it by accident). Per admin and browser, in
+// localStorage, default on. If storage is blocked (private window, site
+// data off) the choice still holds for this page session, in memory.
+const SINGLE_KEY_STORAGE_KEY = "spinr-admin-single-key-shortcuts";
+const SINGLE_KEY_CHANGE_EVENT = "spinr:single-key-shortcuts-change";
+const OPEN_EVENT = "spinr:open-keyboard-shortcuts";
+let singleKeySessionValue = true;
+
+function readSingleKeyShortcuts(): boolean {
+    try {
+        return localStorage.getItem(SINGLE_KEY_STORAGE_KEY) !== "off";
+    } catch {
+        return singleKeySessionValue;
+    }
+}
+
+function writeSingleKeyShortcuts(on: boolean) {
+    singleKeySessionValue = on;
+    try {
+        localStorage.setItem(SINGLE_KEY_STORAGE_KEY, on ? "on" : "off");
+    } catch {
+        // Blocked storage: the in-memory value above covers this session.
+    }
+    window.dispatchEvent(new Event(SINGLE_KEY_CHANGE_EVENT));
+}
+
+function subscribeSingleKeyShortcuts(onChange: () => void) {
+    window.addEventListener(SINGLE_KEY_CHANGE_EVENT, onChange);
+    window.addEventListener("storage", onChange); // changed in another tab
+    return () => {
+        window.removeEventListener(SINGLE_KEY_CHANGE_EVENT, onChange);
+        window.removeEventListener("storage", onChange);
+    };
+}
+
+/** Whether single-key shortcuts ("?") are on for this admin, and a setter. */
+export function useSingleKeyShortcuts(): [boolean, (on: boolean) => void] {
+    const enabled = useSyncExternalStore(subscribeSingleKeyShortcuts, readSingleKeyShortcuts, () => true);
+    return [enabled, writeSingleKeyShortcuts];
+}
+
+/** Opens the sheet without "?" (the command palette's "Keyboard shortcuts"
+ *  entry), so it stays reachable when single-key shortcuts are off. */
+export function openKeyboardShortcuts() {
+    window.dispatchEvent(new Event(OPEN_EVENT));
+}
 
 interface Shortcut {
     /** Alternative key combos ("Ctrl K" or "⌘ K"); each combo is its keys. */
@@ -84,10 +135,15 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 export function KeyboardShortcutsSheet() {
     const [open, setOpen] = useState(false);
+    const [singleKeyOn, setSingleKeyOn] = useSingleKeyShortcuts();
+    const switchId = useId();
 
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+            // Turned off with the switch below (WCAG 2.1.4). Read at key
+            // time so the listener never works from a stale value.
+            if (!readSingleKeyShortcuts()) return;
             if (isTypingTarget(e.target)) return;
             // Never stack over a dialog that is already open (the palette,
             // or the document reviewer, which runs its own focus trap).
@@ -95,8 +151,13 @@ export function KeyboardShortcutsSheet() {
             e.preventDefault();
             setOpen(true);
         };
+        const onOpenRequest = () => setOpen(true);
         window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
+        window.addEventListener(OPEN_EVENT, onOpenRequest);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener(OPEN_EVENT, onOpenRequest);
+        };
     }, []);
 
     // Radix Dialog supplies the rest: focus moves in and is trapped while
@@ -109,6 +170,21 @@ export function KeyboardShortcutsSheet() {
                     <DialogTitle>Keyboard shortcuts</DialogTitle>
                     <DialogDescription>Shortcuts are off while you are typing in a field.</DialogDescription>
                 </DialogHeader>
+                <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                    <div className="space-y-1">
+                        <Label htmlFor={switchId}>Single-key shortcuts</Label>
+                        <p id={`${switchId}-hint`} className="text-xs text-muted-foreground">
+                            When off, ? does nothing. Open this list from the page jumper (Ctrl+K or Cmd+K)
+                            instead. The document reviewer&apos;s letter keys only work inside the reviewer.
+                        </p>
+                    </div>
+                    <Switch
+                        id={switchId}
+                        checked={singleKeyOn}
+                        onCheckedChange={setSingleKeyOn}
+                        aria-describedby={`${switchId}-hint`}
+                    />
+                </div>
                 {SECTIONS.map((section) => (
                     <section key={section.title}>
                         <h3 className="pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">

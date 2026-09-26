@@ -28,6 +28,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-warning: var(--warning);
   --color-success: var(--success);
   --color-info: var(--info);
@@ -81,6 +82,11 @@
   --accent: #f3f4f6;
   --accent-foreground: #1f2937;
   --destructive: #dc2626;
+  /* Text on --destructive. 23 components and every error toast use
+     `text-destructive-foreground`; without this token the class generated
+     nothing and the text inherited --foreground (#111827, 3.67:1 on red).
+     White is 4.83:1 on #dc2626 in both themes. */
+  --destructive-foreground: #ffffff;
   /* Admin Portal UX Audit P2: no first-class "pending"/"success" token
      existed before this — every status badge in the codebase hardcoded
      Tailwind amber/emerald classes instead (113 files, see #2816). Picked
@@ -154,6 +160,7 @@
   --accent: #18181b;
   --accent-foreground: #fafafa;
   --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
   /* Same tokens as :root above (Admin Portal UX Audit P2). Reuse the
      existing --chart-4/--chart-2 dark values rather than inventing new
      ones — both already clear AA text contrast on --card (#0a0a0c) by a

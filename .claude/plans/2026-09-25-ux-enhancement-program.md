@@ -86,7 +86,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
 | W7.1 | Translations per D3 | apps | — | key-parity test en vs fr |
-| W7.2 `[~]` | Correct stale counts in the rider/driver design skill | docs | — | — |
+| W7.2 `[x]` | Correct stale counts in the rider/driver design skill | docs | — | — |
 | W7.3 | Remove unused `ErrorScreen`, `FormScreen` and `shared/validators`. **Deletion: ask first** | shared | approval | tests |
 
 ## Cannot be done from an agent session `[H]`
@@ -125,3 +125,5 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - The surge form's on/off toggle, multiplier and justification textarea have no accessible names.
   - Check with a screen reader whether error toasts fired while other modal dialogs are open get announced. It's app-wide and pre-existing.
 - 2026-09-26: W2.1c merged (#5877). W7.2 opened: the rider/driver design skill's counts, rechecked on `main` (about 143 `showToast` calls in rider-app; 5 driver-app files import the shared Button; UX4 resolved by `shared/utils/motion.ts`).
+- 2026-09-26: W7.2 merged (#5880). Driver SOS toast fix opened: while designing W2.3 we found that every driver toast (full width, 60 pt from the top, 3.5 s) covers the dashboard's top-right SOS and blocks taps on it. Toasts now end 76 pt from the right (`SOS_COLUMN_CLEARANCE`). User chose "narrow both toasts": this live fix ships unflagged like #5841, and W2.3's flagged banner uses the same constant. The safety review found no blockers; a rider-app fix follows as its own PR.
+- Follow-up found while reviewing the SOS fix, not scheduled: white text on the toast status colours fails AA contrast in both apps (success about 2.5:1, warning about 2.1:1). It's a theme-level change in `shared/theme`, so it needs its own decision.

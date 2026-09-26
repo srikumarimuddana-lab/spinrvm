@@ -55,14 +55,43 @@ Alternatives considered (presented to and decided by the user):
   (gains location, ride context, photos), but needs a mobile release and installed
   builds would keep hitting the old path. Recommended follow-up, not a substitute.
 
+### Codex review round 1 (PR #5876) — both findings verified true and fixed
+
+- **P1 — response waited on the alert fan-out.** `submit_safety_report` awaited
+  `notify_safety_team`, whose email loop is sequential per recipient (AWS SES
+  via boto3, falling back to Resend with a 10s timeout). The apps' request
+  timeout is 15s (`shared/api/client.ts` `REQUEST_TIMEOUT`), so a slow provider
+  could show "Submit Failed" for a report that was already saved, and a retry
+  would create a duplicate incident plus duplicate alerts. The notification now
+  runs via `_spawn` after the incident is persisted (the same fire-and-forget
+  pattern the handler already used for the urgent Zoho ticket), and still logs
+  its result, or the failure with a traceback. **This also changes the driver
+  app's `/safety/report`** — same shared code, same improvement.
+- **P2 — dual-role accounts filed as drivers.** `get_current_user` sets
+  `is_driver=True` for any account with a driver row, whichever app is in use,
+  and one account can hold both roles. The body of `submit_safety_report` is now
+  `record_safety_incident(body, user, *, role)`; `/safety/report` passes the
+  same `is_driver`-derived role as before, and the rider-app endpoint passes
+  `role="rider"`.
+
 ## 4. Risk & impact on existing functionality
 
 - **Callers of `/tickets/safety-report`**: only `rider-app/app/report-safety.tsx`
   (grep across rider-app, driver-app, shared, admin-dashboard). It awaits the call
   and ignores the response body, so the response shape changing from a ticket
   object to `{"success": true, "incident_id": ...}` is invisible to it.
-- **`submit_safety_report` itself is unchanged** — same insert, same notify, same
-  Zoho spawn, same 503 on DB failure. It gains one more caller.
+- **`submit_safety_report` (driver app)**: same insert, same Zoho spawn, same
+  503 on DB failure, same role derivation. Two changes after the Codex review:
+  its body moved into `record_safety_incident`, and `notify_safety_team` now runs
+  in the background after the insert instead of before the response. Trade-off:
+  there's no shutdown drain for background tasks, so an alert in flight when a
+  machine stops could be lost; the incident row itself is already saved and
+  visible in the admin queue. Before this change, an awaited notify could be cut
+  off the same way, and the app would also show the report as failed. A durable
+  outbox would close that gap; it's a follow-up, not part of this fix.
+- **Other `notify_safety_team` callers** (route-deviation alerter, safety
+  check-in loop, SOS) are untouched: they call it directly, not through
+  `record_safety_incident`.
 - **Safety team load**: rider reports now reach the safety queue, alerts and
   email. That is the intended behaviour; previously there were none because the
   endpoint never succeeded.
@@ -146,6 +175,14 @@ be kept regardless.
       both import branches, no PII in logs, admin safety queue renders
       category "Other"/role "rider", no rate-limit asymmetry. Its two notes are
       recorded in section 4.
+- [x] Codex round 1: the updated tests were run against the pre-fix handler
+      first and failed on both findings (notify awaited before the response;
+      dual-role reporter stored as "driver"), then pass with the fix. Also
+      green: all `/safety/report` tests, SOS e2e, route-deviation alerter,
+      safety check-in loop, dual-import guards, and 247 support/ticket/features
+      tests. One unrelated failure, `test_dual_import_symmetry` on
+      `utils/maps_budget.py`, predates this branch and is already fixed on
+      `main` (#5866); PR CI runs on the merge ref, which includes it.
 
 ## 10. What was NOT verified
 

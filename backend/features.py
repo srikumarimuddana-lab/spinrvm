@@ -311,18 +311,21 @@ async def create_safety_report(req: SafetyReportRequest, current_user: dict = De
     would have skipped safety_incidents, notify_safety_team and the urgent
     Zoho ticket. Delegating means installed rider builds get the real
     pipeline without an app release. "Other" matches the driver app's
-    catch-all category; the rider screen collects free text only.
+    catch-all category; the rider screen collects free text only. role is
+    pinned to "rider": only the rider app reaches this endpoint, and
+    `is_driver` is true for any dual-role account.
     """
     try:
         from .routes.safety import SafetyReportRequest as IncidentReportRequest
-        from .routes.safety import submit_safety_report
+        from .routes.safety import record_safety_incident
     except ImportError:
         from routes.safety import SafetyReportRequest as IncidentReportRequest
-        from routes.safety import submit_safety_report
+        from routes.safety import record_safety_incident
 
-    return await submit_safety_report(
+    return await record_safety_incident(
         IncidentReportRequest(category="Other", description=req.description),
         current_user,
+        role="rider",
     )
 
 

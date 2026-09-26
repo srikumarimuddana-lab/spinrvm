@@ -50,6 +50,25 @@ describe("KeyboardShortcutsSheet", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     });
 
+    it("pairs keys (dt) with what they do (dd), spells out Escape, and says when ? is off", async () => {
+        const user = setup();
+        await user.keyboard("?");
+        const dialog = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+        const terms = Array.from(dialog.querySelectorAll("dt"));
+        expect(terms.length).toBeGreaterThan(0);
+        for (const dt of terms) {
+            expect(dt.querySelector("kbd")).not.toBeNull();
+            expect(dt.nextElementSibling?.tagName).toBe("DD");
+            expect(dt.nextElementSibling?.querySelector("kbd")).toBeNull();
+        }
+        expect(within(dialog).getAllByText("Escape").length).toBe(2);
+        expect(within(dialog).queryByText("Esc")).toBeNull();
+        expect(dialog).toHaveAccessibleDescription(/typing in a field/);
+        expect(dialog).toHaveAccessibleDescription(/another dialog is open/);
+        expect(dialog).toHaveAccessibleDescription(/Ctrl, Cmd or Alt/);
+        expect(dialog).toHaveAccessibleDescription(/switch it off/);
+    });
+
     it("announces key combos with 'plus' and single keys without it", async () => {
         const user = setup();
         await user.keyboard("?");

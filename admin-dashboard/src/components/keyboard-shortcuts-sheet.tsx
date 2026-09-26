@@ -91,7 +91,7 @@ const SECTIONS: ShortcutSection[] = [
         shortcuts: [
             { keys: [["↑"], ["↓"]], description: "Move through matching pages" },
             { keys: [["Enter"]], description: "Go to the highlighted page" },
-            { keys: [["Esc"]], description: "Close the page jumper" },
+            { keys: [["Escape"]], description: "Close the page jumper" },
         ],
     },
     {
@@ -101,7 +101,7 @@ const SECTIONS: ShortcutSection[] = [
             { keys: [["K"]], description: "Previous document" },
             { keys: [["A"]], description: "Approve a pending document (press A again to confirm)" },
             { keys: [["R"]], description: "Reject a pending document (opens the reason box)" },
-            { keys: [["Esc"]], description: "Close the reviewer" },
+            { keys: [["Escape"]], description: "Close the reviewer" },
         ],
     },
 ];
@@ -184,7 +184,11 @@ export function KeyboardShortcutsSheet() {
             >
                 <DialogHeader>
                     <DialogTitle>Keyboard shortcuts</DialogTitle>
-                    <DialogDescription>Shortcuts are off while you are typing in a field.</DialogDescription>
+                    <DialogDescription>
+                        Single-key shortcuts don&apos;t work while you&apos;re typing in a field. ? also
+                        doesn&apos;t work while another dialog is open, while Ctrl, Cmd or Alt is held, or
+                        when you switch it off below.
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="flex items-start justify-between gap-4 rounded-md border p-3">
                     <div className="space-y-1">
@@ -208,9 +212,10 @@ export function KeyboardShortcutsSheet() {
                         </h3>
                         <dl className="divide-y">
                             {section.shortcuts.map((shortcut) => (
-                                <div key={shortcut.description} className="flex items-center justify-between gap-4 py-1.5 text-sm">
-                                    <dt className="text-foreground/80">{shortcut.description}</dt>
-                                    <dd className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                                // Term = the keys, definition = what they do, in
+                                // that order in the DOM and on screen.
+                                <div key={shortcut.description} className="flex items-center gap-4 py-1.5 text-sm">
+                                    <dt className="flex w-40 shrink-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
                                         {shortcut.keys.map((combo, i) => (
                                             <Fragment key={combo.join("+")}>
                                                 {i > 0 && <span>or</span>}
@@ -230,7 +235,8 @@ export function KeyboardShortcutsSheet() {
                                                 ))}
                                             </Fragment>
                                         ))}
-                                    </dd>
+                                    </dt>
+                                    <dd className="text-foreground/80">{shortcut.description}</dd>
                                 </div>
                             ))}
                         </dl>

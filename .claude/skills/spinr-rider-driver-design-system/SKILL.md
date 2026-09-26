@@ -115,7 +115,8 @@ fast-glance context, without tipping into driver-app's urgency.
 
 **Existing patterns worth keeping as the model, not replacing:**
 - `components/Toast.tsx` — mounted once globally (`app/_layout.tsx`),
-  triggered via a single `showToast()` call used 131 times across the app.
+  triggered via a single `showToast()` call used about 143 times across the app
+  (recounted 2026-09-26; it was 131 when first written).
   This is the most consistently-adopted shared UI pattern found in the whole
   inventory — use it as the reference for what "actually shared" looks like
   when proposing a new cross-screen pattern.
@@ -172,11 +173,14 @@ current status before reporting one of these as a new finding:
 - **UX2** — the shared `SPACING`/`FONT` scales (`shared/utils/responsive.ts`)
   exist but are imported in only 1–4 files per app; spacing/type elsewhere
   is ad-hoc numeric literals.
-- **UX3** — `shared/components/Button.tsx` has zero consumers in driver-app;
-  every driver-app button is independently hand-styled.
-- **UX4** — no shared transition timing/easing constants exist anywhere;
-  rider-app's OTP shake and driver-app's PIN shake are the same interaction,
-  independently reimplemented with different values.
+- **UX3** — `shared/components/Button.tsx` is still barely adopted in driver-app:
+  5 files import it as of 2026-09-26 (activity, `AlertDialog`, the ride-offer
+  panel, payout, documents); every other driver-app button is hand-styled.
+- **UX4** — resolved: `shared/utils/motion.ts` now exports `TIMING`, `EASING`
+  and `shakeHorizontal`, and both apps' OTP screens, rider email verification
+  and the driver PIN entry (`ActiveRidePanel`) use the shared shake (checked
+  2026-09-26). Most other animations still hardcode their own durations; see
+  the Motion section of `docs/design/rider-driver-app-design-system.md`.
 - **UX5** — (live bug, not adoption debt) `driver-app/components/toastConfig.tsx`
   hardcodes toast colors matching neither the current nor previous theme
   tokens, with no dark-mode awareness.

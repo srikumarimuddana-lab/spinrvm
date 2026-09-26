@@ -129,3 +129,9 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 - Follow-up found while reviewing the SOS fix, not scheduled: white text on the toast status colours fails AA contrast in both apps (success about 2.5:1, warning about 2.1:1). It's a theme-level change in `shared/theme`, so it needs its own decision.
 - 2026-09-26: Driver SOS toast fix merged (#5885). Rider SOS toast fix opened: the safety review of the driver fix found that the rider toast (full width, `insets.top + 8`, 4 s) covers the floating SOS on ride-in-progress, driver-arriving and driver-arrived. User chose its own small safety PR: rider toasts end at the same 76 pt clearance.
 - Follow-up from the rider SOS review, not scheduled: on tablets (768 pt or wider), ride-in-progress places its floating SOS in the map column, so the toast still covers it. This is pre-existing. The side panel's own SOS stays reachable below the toast band. Fixing it means moving that floating SOS or making the toast aware of SOS position; the user was offered both.
+- 2026-09-26: Rider SOS toast fix merged (#5886). Document reviewer fix opened. While reviewing W5.1 we found the driver document reviewer's A/R/J/K shortcuts could approve a pending document by accident, in three ways:
+  - Ctrl/Cmd+A twice (select all), or holding A;
+  - letters typed in the reject-reason picker;
+  - a quick third A resending the review.
+  Documents that need an expiry date were protected. Fixed client-side, ahead of W4.1 because it's a live accidental-approval path on driver eligibility.
+- Follow-up, not scheduled: `admin_review_driver_document` (`backend/routes/admin/documents.py`) has no `status = 'pending'` condition, so two racing reviews (for example two tabs) both apply, with duplicate audit rows and driver notifications. It needs a backend "0 rows means already reviewed" guard in its own PR.

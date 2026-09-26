@@ -114,6 +114,84 @@ describe('DocumentReviewer', () => {
     );
   });
 
+  describe('keyboard shortcuts are single keys only', () => {
+    it('approves a document with A, then A again', async () => {
+      await renderWithDocs([nonExpiryDoc]);
+
+      fireEvent.keyDown(document, { key: 'a' });
+      fireEvent.keyDown(document, { key: 'a' });
+
+      await waitFor(() => expect(reviewDocument).toHaveBeenCalledWith('doc-2', 'approved', undefined, undefined));
+    });
+
+    it.each([
+      ['Ctrl', { ctrlKey: true }],
+      ['Cmd', { metaKey: true }],
+      ['Alt', { altKey: true }],
+    ])('ignores %s+A pressed twice (e.g. select all) and never arms approval', async (_label, mods) => {
+      await renderWithDocs([nonExpiryDoc]);
+
+      fireEvent.keyDown(document, { key: 'a', ...mods });
+      fireEvent.keyDown(document, { key: 'a', ...mods });
+
+      expect(screen.queryByRole('button', { name: /Confirm approval/ })).toBeNull();
+      expect(reviewDocument).not.toHaveBeenCalled();
+    });
+
+    it('ignores Ctrl+R (reload) and stays out of reject mode', async () => {
+      await renderWithDocs([nonExpiryDoc]);
+
+      fireEvent.keyDown(document, { key: 'r', ctrlKey: true });
+
+      expect(screen.queryByRole('button', { name: /Confirm rejection/ })).toBeNull();
+      expect(reviewDocument).not.toHaveBeenCalled();
+    });
+
+    it.each(['option', 'combobox', 'listbox'])(
+      'ignores letters typed while a %s has focus (dropdown type-to-select)',
+      async (role) => {
+        await renderWithDocs([nonExpiryDoc]);
+        const el = document.createElement('div');
+        el.setAttribute('role', role);
+        el.tabIndex = 0;
+        document.body.appendChild(el);
+        el.focus();
+
+        fireEvent.keyDown(el, { key: 'a' });
+        fireEvent.keyDown(el, { key: 'a' });
+        fireEvent.keyDown(el, { key: 'r' });
+
+        expect(screen.queryByRole('button', { name: /Confirm approval/ })).toBeNull();
+        expect(reviewDocument).not.toHaveBeenCalled();
+        el.remove();
+      },
+    );
+
+    it('sends one review when A is pressed again while the first is in flight', async () => {
+      reviewDocument.mockImplementation(() => new Promise(() => {}));
+      await renderWithDocs([nonExpiryDoc]);
+
+      fireEvent.keyDown(document, { key: 'a' });
+      fireEvent.keyDown(document, { key: 'a' });
+      fireEvent.keyDown(document, { key: 'a' });
+      fireEvent.keyDown(document, { key: 'a' });
+
+      await waitFor(() => expect(reviewDocument).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(reviewDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not approve when A is held down (auto-repeat)', async () => {
+      await renderWithDocs([nonExpiryDoc]);
+
+      fireEvent.keyDown(document, { key: 'a' });
+      fireEvent.keyDown(document, { key: 'a', repeat: true });
+      fireEvent.keyDown(document, { key: 'a', repeat: true });
+
+      expect(reviewDocument).not.toHaveBeenCalled();
+    });
+  });
+
   it('approves with an expiry date once one is provided', async () => {
     await renderWithDocs([licenseDoc]);
 

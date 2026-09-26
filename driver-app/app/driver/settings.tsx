@@ -45,7 +45,7 @@ export default function SettingsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { logout } = useAuthStore();
-    const { language, setLanguage, loadLanguage, t } = useLanguageStore();
+    const { language, setLanguage, t } = useLanguageStore();
     const { navApp, setNavApp, autoNavigate, setAutoNavigate, loadNavApp } = useNavStore();
     const { colors, colorScheme, setTheme } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -61,13 +61,14 @@ export default function SettingsScreen() {
     // (alertPrefsStore), not notification_preferences on the server.
     const { soundEffects, vibration, setSoundEffects, setVibration, loadAlertPrefs } = useAlertPrefsStore();
 
+    // The saved language is restored once at app start (i18n/index.ts), so it
+    // is not re-read here: a re-read on mount could only race a fresh pick.
     useEffect(() => {
-        loadLanguage();
         loadNavApp();
         loadAlertPrefs();
-        // All three are stable store actions; adding them doesn't change
-        // this mount-only effect's firing.
-    }, [loadLanguage, loadNavApp, loadAlertPrefs]);
+        // Both are stable store actions; adding them doesn't change this
+        // mount-only effect's firing.
+    }, [loadNavApp, loadAlertPrefs]);
 
     // Preference states (local)
     const [pushNotifications, setPushNotifications] = useState(true);

@@ -107,3 +107,24 @@ export function tKey(key: string, fallback?: string): string {
 }
 
 export { translations };
+
+// Restore the driver's saved language at app start, not only when Settings
+// mounts (loadLanguage() used to have no other caller, so a cold start was
+// English until the driver opened Settings). Every translated screen and the
+// alert helpers import this module, so this runs before the first translated
+// string renders; the launch splash still covers that first screen while the
+// single AsyncStorage read settles. Deferred to a microtask because
+// store/languageStore imports this module: both have finished evaluating by
+// then. A saved language the picker no longer offers resolves to English
+// (getStoredLanguage()).
+Promise.resolve()
+    .then(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { useLanguageStore } = require('../store/languageStore') as {
+            useLanguageStore: { getState: () => { loadLanguage: () => Promise<void> } };
+        };
+        return useLanguageStore.getState().loadLanguage();
+    })
+    .catch((error) => {
+        console.error('Failed to restore the saved language at startup:', error);
+    });

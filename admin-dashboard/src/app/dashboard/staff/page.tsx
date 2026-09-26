@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
@@ -410,11 +411,11 @@ export default function StaffPage() {
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
           ) : staff.length === 0 ? (
-            <div className="text-center py-16">
-              <Users className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
-              <h2 className="text-lg font-semibold">No staff members yet</h2>
-              <p className="text-muted-foreground mt-1">Add your first team member to share admin access</p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No staff members yet"
+              description="Add your first team member to share admin access"
+            />
           ) : (
             <Table>
               <TableHeader>

@@ -80,6 +80,7 @@
    - Example: typing "set", then ArrowDown, highlighted Dispatch Geo Status, but Enter opened Live Monitoring.
    - `results` now is the rendered order, so the highlight, the arrow keys, `aria-activedescendant` and Enter all agree.
 10. **Palette footer hint.** The user asked for this too. The footer reads "Press ? for shortcuts" while single-key shortcuts are on, and otherwise 'Type "shortcuts" to see keyboard shortcuts', which points at the palette entry.
+11. **Ctrl/⌘+K no longer opens the palette over another open dialog.** This came from review round 2 and uses the same guard as `?`. While any `[role=dialog]` or `[role=alertdialog]` is open, Ctrl/⌘+K is left alone: the palette doesn't open and the browser default isn't prevented. That covers the document reviewer, a confirm dialog and the shortcut sheet. When the palette itself is the open dialog, Ctrl/⌘+K still closes it. Before this fix, the palette opened on top of other dialogs, and over the reviewer it opened hidden behind it (`z-50` under `z-[100]`).
 
 **Alternatives considered (gate 10):**
 - *Keep both lists and add a drift test that asserts they match.* This has zero sidebar risk, but every route change would still need two hand edits. It also wouldn't fix the missing `requiresAllModules` in the palette filter unless the rule were copied a second time. Rejected: it doesn't give one source of truth.
@@ -123,7 +124,8 @@ No other entry changed visibility, label or group for any combination. Palette o
 **Keyboard conflicts**
 - The `?` listener is on `window` and refuses to act inside text fields or over an open dialog, so it can't interfere with typing, the palette or the document reviewer.
 - A pre-existing quirk, noted but not changed: the document reviewer's J/K handler ignores modifier keys. With the palette flag on, Ctrl+K inside the reviewer both toggles the palette and steps to the previous document. This predates W5.1.
-- Ctrl/⌘+K while the "?" sheet is open opens the palette on top of it, because the palette's listener has no open-dialog check. Radix handles the two stacked dialogs: Escape closes the top one first. This is awkward but not broken, and was left as is.
+- Ctrl/⌘+K while the "?" sheet, or any other dialog, is open no longer opens the palette (§3 item 11).
+  - **Side effect:** because the guard sees any open dialog, including one still playing its close animation, a Ctrl/⌘+K pressed within about 200 ms of closing a dialog can be ignored.
 - **Pre-existing palette bug, now fixed (§3 item 9).** The highlighted row and the Enter target could differ. Only `activeIndex` consumers changed: rendered rows and their order are unchanged for every query.
 - **Single-key setting scope.** The new switch governs `?` only. The document reviewer's J/K/A/R are separate: its file (`document-reviewer.tsx`) is outside this change's boundary. The switch's own hint says the reviewer's letter keys only work inside the reviewer.
 - **Document reviewer J/K/A/R: global or focus-scoped?** Reported, not changed.
@@ -133,7 +135,7 @@ No other entry changed visibility, label or group for any combination. Palette o
     - Pressing Ctrl/⌘+A twice (select all, twice) on a pending document **approves it**: the first press arms approve mode and the second submits.
     - Ctrl/⌘+R arms reject mode and cancels the browser reload.
     - With the palette flag on, Ctrl/⌘+K steps to the previous document **and** opens the palette. The palette is a Radix dialog at `z-50`, so it opens *behind* the reviewer's `z-[100]` overlay, with focus trapped in it.
-  - **Recommended follow-up:** add a `!e.ctrlKey && !e.metaKey && !e.altKey` guard to the reviewer's handler, and have the palette not open while the reviewer is open, or raise its z-index. The reviewer file wasn't touched here.
+  - **Follow-up:** the palette side is now fixed (§3 item 11). The reviewer's own missing Ctrl/Cmd/Alt check is being fixed by the coordinator on a separate branch. `document-reviewer.tsx` isn't touched here.
 
 **Not touched:** backend, ride, money and auth paths, `ui/**`, `topbar.tsx`, `globals.css`.
 
@@ -170,7 +172,7 @@ No other entry changed visibility, label or group for any combination. Palette o
 | `admin-dashboard/src/components/keyboard-shortcuts-sheet.tsx` (new) | The "?" dialog. Follow-ups: single-key switch with `useSingleKeyShortcuts()`/`openKeyboardShortcuts()`; focus return; "plus" between combo keys; dt/dd order, "Escape", fuller description | W5.1 item 2; WCAG 2.1.4; review nits |
 | `admin-dashboard/src/app/dashboard/layout.tsx` | Mounts the sheet under `admin_command_palette_enabled` | Same flag as the palette |
 | `admin-dashboard/src/components/__tests__/sidebar.test.tsx` (new) | Pins the sidebar's rendered item list, 7 cases | Visual-baseline safety for the refactor |
-| `admin-dashboard/src/components/__tests__/command-palette.test.tsx` (new) | Palette hrefs equal the rendered sidebar hrefs for 8 grants; rendered-palette RBAC and navigation; Enter matches the highlight; focus return; the "Keyboard shortcuts" entry; footer hints. 18 cases | RBAC parity, bug fixes, WCAG 2.1.4 fallback |
+| `admin-dashboard/src/components/__tests__/command-palette.test.tsx` (new) | Palette hrefs equal the rendered sidebar hrefs for 8 grants; rendered-palette RBAC and navigation; Enter matches the highlight; focus return; the "Keyboard shortcuts" entry; footer hints; Ctrl/⌘+K not over another dialog but still closing the palette. 23 cases | RBAC parity, bug fixes, WCAG 2.1.4 fallback |
 | `admin-dashboard/src/components/__tests__/keyboard-shortcuts-sheet.test.tsx` (new) | `?` opens, focus trap, Escape, focus return, ignored in input/textarea/contenteditable, ignored over a dialog or with modifiers; single-key switch (off, remount, blocked storage); "plus" combos; dt/dd, "Escape" and description. 13 cases | Accessibility and guard behaviour |
 | `admin-dashboard/src/app/dashboard/layout.test.tsx` (new) | Flag off: nothing opens and no extra shell children. Flag on: both open. 2 cases | Flag gating |
 
@@ -248,6 +250,15 @@ const results = useMemo(() => grouped.flatMap(([, items]) => items), [grouped]);
 - [x] **Blast-radius grep** as in §4.
 - [x] **Adversarial review (gate 10).** `/code-review` at medium effort over `origin/main...wip/w5-1`: no bugs in the diff. Its two side observations are recorded in §4.
 - [x] **Coordinator review round 1.** The RBAC review was clean. Its accessibility blocker (WCAG 2.1.4), should-fixes, nits and the two user asks are addressed in §3 items 5–10.
+- [x] **Round 2 decisions.**
+  - The switch stays scoped to `?`.
+  - The footer keeps the "Press ? for shortcuts" copy.
+  - The Ctrl/⌘+K guard is §3 item 11. Its 4 guard tests fail without it; the toggle-closed test passes both ways.
+  - Re-run after the guard:
+    - full vitest: 101 files, 842/842 passed (45 W5.1 cases in total);
+    - `tsc --noEmit`: 0;
+    - ESLint on the 10 files: 0 errors, the 2 pre-existing `sidebar.tsx` warnings;
+    - `npm run build`: exit 0, 80/80 static pages.
 - [x] **Feature flag.** Everything user-visible stays behind `admin_command_palette_enabled`. The sidebar refactor is invisible by construction.
 - [ ] **Flag flip.** Not done. Turning `admin_command_palette_enabled` on in staging, then production, is a human step, via the Settings page toggle or the SQL in §8.
 

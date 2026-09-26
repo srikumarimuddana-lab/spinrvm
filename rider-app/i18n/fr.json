@@ -85,5 +85,58 @@
     "fr": "Français",
     "es": "Espagnol",
     "zh": "Chinois (simplifié)"
+  },
+  "errors": {
+    "auth": {
+      "account_suspended": "Votre compte a été suspendu. Veuillez communiquer avec le soutien.",
+      "otp_invalid": "Ce code ne correspond pas. Vérifiez le texto et réessayez.",
+      "otp_expired": "Ce code a expiré. Touchez « Renvoyer le code » pour en obtenir un nouveau.",
+      "otp_locked": "Trop de tentatives infructueuses. Veuillez patienter un moment avant de réessayer.",
+      "consent_required": "Veuillez accepter les Conditions d'utilisation et la Politique de confidentialité pour continuer.",
+      "invalid_credentials": "Les informations de connexion ne correspondent pas. Veuillez réessayer.",
+      "token_expired": "Votre session a expiré. Veuillez vous reconnecter."
+    },
+    "driver": {
+      "documents_expired": "Vos documents ont expiré. Veuillez les renouveler pour continuer à conduire.",
+      "documents_pending": "Vos documents sont toujours en cours d'examen. Nous vous aviserons dès leur approbation.",
+      "documents_rejected": "Certains de vos documents ont été refusés. Veuillez les vérifier et les soumettre de nouveau.",
+      "subscription_required": "Un abonnement Spinr Pass actif est requis pour continuer.",
+      "not_available": "Ce chauffeur n'est pas disponible pour le moment.",
+      "offline": "Le chauffeur est actuellement hors ligne.",
+      "license_class_ineligible": "La classe de permis de ce chauffeur exige une approbation distincte.",
+      "vehicle_too_old": "Le véhicule de ce chauffeur ne répond plus aux critères d'admissibilité de Spinr.",
+      "insufficient_experience": "Ce chauffeur ne répond pas encore aux critères d'admissibilité de Spinr.",
+      "underage": "Ce chauffeur n'a pas l'âge minimum requis pour conduire avec Spinr.",
+      "crc_consent_required": "Ce chauffeur n'a pas donné le consentement requis à la vérification des antécédents."
+    },
+    "ride": {
+      "not_found": "Nous n'avons pas trouvé cette course. Elle a peut-être été supprimée.",
+      "already_cancelled": "Cette course a déjà été annulée.",
+      "invalid_status": "Cette action n'est pas permise dans l'état actuel de la course.",
+      "no_drivers_available": "Aucun chauffeur n'est disponible pour le moment. Veuillez réessayer dans quelques minutes.",
+      "price_mismatch": "Le prix a changé depuis votre dernière consultation. Veuillez le vérifier et confirmer de nouveau.",
+      "taken": "Un autre chauffeur a pris cette course. Nous vous trouverons la prochaine."
+    },
+    "payment": {
+      "failed": "Votre paiement n'a pas abouti. Veuillez réessayer ou utiliser un autre mode de paiement.",
+      "method_invalid": "Ce mode de paiement n'est pas valide. Veuillez en ajouter un autre.",
+      "insufficient_funds": "Solde insuffisant dans votre portefeuille. Veuillez le recharger ou utiliser une carte.",
+      "refund_failed": "Nous ne pouvons pas traiter le remboursement pour le moment. Veuillez communiquer avec le soutien."
+    },
+    "wallet": {
+      "transfer_self": "Vous ne pouvez pas vous transférer des fonds à vous-même.",
+      "transfer_recipient_not_found": "Nous n'avons pas trouvé ce destinataire. Veuillez vérifier et réessayer."
+    },
+    "profile": {
+      "email_missing": "Ajoutez une adresse courriel à votre profil avant de la vérifier.",
+      "email_verification_stale": "Votre adresse courriel a changé depuis l'envoi de ce code. Demandez un nouveau code."
+    },
+    "system": {
+      "internal": "Un problème est survenu de notre côté. Veuillez réessayer.",
+      "service_unavailable": "Spinr est temporairement indisponible. Veuillez réessayer sous peu.",
+      "rate_limited": "Vous allez un peu trop vite. Veuillez ralentir et réessayer dans un instant.",
+      "database": "Nous avons du mal à joindre nos systèmes. Veuillez réessayer."
+    },
+    "unknown": "Un problème est survenu. Veuillez réessayer."
   }
 }

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Money helpers — keep tax / fee arithmetic in Decimal so 5% GST + 6% PST
 # on values like $47.83 stays bit-exact and matches the receipt.
@@ -296,26 +296,37 @@ async def create_ticket(req: CreateTicketRequest, current_user: dict = Depends(g
 
 
 class SafetyReportRequest(BaseModel):
-    description: str
+    # Same bounds as routes.safety.SafetyReportRequest, so an out-of-range
+    # description is a 422 here rather than a 500 when re-validated below.
+    description: str = Field(..., min_length=1, max_length=4000)
 
 
 @support_router.post("/tickets/safety-report")
 async def create_safety_report(req: SafetyReportRequest, current_user: dict = Depends(get_current_user)):
-    """Create a new safety report ticket (high priority)."""
-    ticket = {
-        "id": str(uuid.uuid4()),
-        "user_id": current_user["id"],
-        "subject": "SAFETY INCIDENT REPORT",
-        "message": req.description,
-        "category": "safety",
-        "status": "open",
-        "priority": "critical",
-        "replies": [],
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    }
-    await db_supabase.insert_one("support_tickets", ticket)
-    return ticket
+    """Rider app's legacy safety-report path -- routed into the real safety pipeline.
+
+    The rider app posts here (the driver app uses POST /safety/report). This
+    used to write a `support_tickets` row with a `priority` column that never
+    existed, so every report failed with PGRST204 -- and even on success it
+    would have skipped safety_incidents, notify_safety_team and the urgent
+    Zoho ticket. Delegating means installed rider builds get the real
+    pipeline without an app release. "Other" matches the driver app's
+    catch-all category; the rider screen collects free text only. role is
+    pinned to "rider": only the rider app reaches this endpoint, and
+    `is_driver` is true for any dual-role account.
+    """
+    try:
+        from .routes.safety import SafetyReportRequest as IncidentReportRequest
+        from .routes.safety import record_safety_incident
+    except ImportError:
+        from routes.safety import SafetyReportRequest as IncidentReportRequest
+        from routes.safety import record_safety_incident
+
+    return await record_safety_incident(
+        IncidentReportRequest(category="Other", description=req.description),
+        current_user,
+        role="rider",
+    )
 
 
 @support_router.get("/tickets")

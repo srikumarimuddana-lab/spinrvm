@@ -716,6 +716,41 @@ class TestUpdateDriverOptimisticLock:
         # The drivers write is attempted and rejected before anything else.
         assert [c.args[0] for c in upd.await_args_list] == ["drivers"]
 
+    def test_users_write_failure_after_drivers_cas_reports_partial_save(self, test_client, super_admin_override):
+        """Edge-case review BLOCKER: the drivers CAS write committed, then the
+        users write failed. The response must say the driver half landed
+        (not a generic 500) so the admin reloads and re-applies."""
+        driver_with_user = {**DRIVER, "user_id": "usr-1"}
+
+        async def _update(table, filters, payload):
+            if table == "users":
+                raise RuntimeError("users write failed")
+            return {**driver_with_user, **payload}
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver_with_user)),
+            patch("db_supabase.update_one", AsyncMock(side_effect=_update)) as upd,
+            patch("routes.admin.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            resp = test_client.put(
+                "/api/admin/drivers/drv-1",
+                json={"city": "Regina", "email": "new@example.com", "expected_admin_edited_at": self.TS},
+            )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "ERR_DRIVER_PARTIAL_SAVE" in str(body)
+        assert [c.args[0] for c in upd.await_args_list] == ["drivers", "users"]
+
+    def test_lock_path_does_not_bump_updated_at(self, test_client, super_admin_override):
+        """updated_at is the stale-intent reconciler's liveness signal; an
+        admin save must not refresh it (same as the unlocked path)."""
+        upd_patch = patch("db_supabase.update_one", AsyncMock(return_value={**DRIVER, "city": "Regina"}))
+        p1, p2, p3, p4, p5 = self._ok_patches(upd_patch)
+        with p1, p2 as upd, p3, p4, p5:
+            test_client.put("/api/admin/drivers/drv-1", json={"city": "Regina", "expected_admin_edited_at": self.TS})
+        driver_call = [c for c in upd.await_args_list if c.args[0] == "drivers"][0]
+        assert "updated_at" not in driver_call.args[2]
+
     def test_race_with_deleted_driver_returns_404(self, test_client, super_admin_override):
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(side_effect=[DRIVER, None])),

@@ -695,6 +695,13 @@ export const updateDriver = async (id: string, data: Record<string, any>) => {
         if (typeof e?.message === "string" && e.message.includes("changed by someone else")) {
             throw new DriverConflictError(e.message);
         }
+        // The drivers row saved but the linked account (name/email/phone)
+        // update failed; the backend can only send an ERR_* code on a 5xx.
+        if (typeof e?.message === "string" && e.message.includes("ERR_DRIVER_PARTIAL_SAVE")) {
+            throw new Error(
+                "Driver details were saved, but the name/email/phone update failed. Reload the driver and re-apply that change.",
+            );
+        }
         throw e;
     }
 };

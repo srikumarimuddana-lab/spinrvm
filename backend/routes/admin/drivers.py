@@ -1932,7 +1932,6 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             # paths.
             driver_payload = await _encrypt_driver_pii(driver_updates)
             driver_payload["admin_edited_at"] = edited_at
-            driver_payload["updated_at"] = edited_at
             write_result = await db_supabase.update_one(
                 "drivers", {"id": driver_id, "admin_edited_at": expected_admin_edited_at}, driver_payload
             )
@@ -1947,7 +1946,19 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
                     detail="This driver was changed by someone else. Reload and try again.",
                 )
             if user_updates and user_id:
-                await db_supabase.update_one("users", {"id": user_id}, user_updates)
+                try:
+                    await db_supabase.update_one("users", {"id": user_id}, user_updates)
+                except Exception as users_err:
+                    # The drivers half already committed and moved
+                    # admin_edited_at, so a generic 500 would hide a partial
+                    # write and a blind retry would 409. Say exactly what
+                    # landed: after a reload the admin can re-apply the
+                    # account fields against the new marker.
+                    logger.exception(f"Driver {driver_id} saved but its users row update failed")
+                    # An ERR_* sentinel is the only 5xx detail the global
+                    # handler passes through (utils/error_handling.py); the
+                    # dashboard maps it to a readable message.
+                    raise HTTPException(status_code=500, detail="ERR_DRIVER_PARTIAL_SAVE") from users_err
         else:
             # Legacy path, unchanged: write the account row first — list/stats
             # views prefer the user row over the driver mirror, so if the

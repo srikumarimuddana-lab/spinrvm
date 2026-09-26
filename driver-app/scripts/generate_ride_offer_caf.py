@@ -30,6 +30,7 @@ SAMPLE_RATE = 44100
 OUT_PATH = Path(__file__).resolve().parent.parent / "assets" / "sounds" / "ride_offer.caf"
 
 
+FADE_OUT_SECONDS = 0.05  # the 15 s cut lands mid-note; ramp to zero so it ends without a click
 RING_SECONDS = 15.0  # the offer window: iOS plays a push sound once, never loops it
 PEAK = 0.98          # normalise to just under full scale — the level ceiling a file can reach
 
@@ -73,7 +74,11 @@ def synth_ring() -> list[float]:
     total = int(SAMPLE_RATE * RING_SECONDS)
     samples = [chime[i % len(chime)] for i in range(total)]
     peak = max(abs(s) for s in samples)
-    return [s * PEAK / peak for s in samples]
+    samples = [s * PEAK / peak for s in samples]
+    fade = int(SAMPLE_RATE * FADE_OUT_SECONDS)
+    for i in range(fade):
+        samples[total - fade + i] *= 1.0 - (i + 1) / fade  # ends at exactly 0.0
+    return samples
 
 
 def write_caf(samples: list[float], path: Path) -> None:

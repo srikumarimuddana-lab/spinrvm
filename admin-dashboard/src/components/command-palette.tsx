@@ -49,6 +49,10 @@ export function CommandPalette() {
     const [query, setQuery] = useState("");
     const [activeIndex, setActiveIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
+    // Radix Dialog returns focus to its DialogTrigger on close, and the
+    // palette has none (it opens from Ctrl/Cmd+K), so focus used to fall to
+    // <body>. Remember where it was and put it back ourselves.
+    const returnFocusRef = useRef<HTMLElement | null>(null);
 
     const isSuperAdmin = user?.role === "super_admin";
     const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
@@ -94,6 +98,9 @@ export function CommandPalette() {
         if (next) {
             setQuery("");
             setActiveIndex(0);
+            if (!returnFocusRef.current && document.activeElement instanceof HTMLElement) {
+                returnFocusRef.current = document.activeElement;
+            }
         }
         setOpen(next);
     };
@@ -146,6 +153,11 @@ export function CommandPalette() {
                 onOpenAutoFocus={(e) => {
                     e.preventDefault();
                     inputRef.current?.focus();
+                }}
+                onCloseAutoFocus={(e) => {
+                    e.preventDefault();
+                    returnFocusRef.current?.focus();
+                    returnFocusRef.current = null;
                 }}
             >
                 <DialogTitle className="sr-only">Jump to a page</DialogTitle>

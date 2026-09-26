@@ -155,6 +155,24 @@ describe("CommandPalette (rendered)", () => {
         }
     });
 
+    it("Escape returns focus to where it was before the palette opened", async () => {
+        state.user = PROFILES.operations;
+        const ue = userEvent.setup();
+        render(
+            <>
+                <button type="button">Page button</button>
+                <CommandPalette />
+            </>,
+        );
+        const pageButton = screen.getByRole("button", { name: "Page button" });
+        pageButton.focus();
+        await ue.keyboard("{Control>}k{/Control}");
+        await screen.findByRole("dialog", { name: "Jump to a page" });
+        await ue.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        await waitFor(() => expect(pageButton).toHaveFocus());
+    });
+
     it("finds a child route by name and navigates to it", async () => {
         const ue = await openPalette(PROFILES.operations);
         await ue.keyboard("unpaid");

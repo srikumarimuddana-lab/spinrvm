@@ -17,6 +17,7 @@
 2. **The flag comes from `/drivers/config`,** set in `useDriverDashboard.ts` the same way migration 487's `android_auto_offer_tone_enabled` is.
 3. **Keep the driver app's behaviour** under the flag:
    - a fixed 60 px top offset;
+   - ending `SOS_COLUMN_CLEARANCE` (76 pt) from the right, like the current toast after the SOS fix, so SOS stays visible and tappable (user chose "narrow both toasts");
    - no de-duplication;
    - 3.5 s duration;
    - `error` maps to the danger styling.
@@ -92,7 +93,7 @@ There is no toast in `shared/`; only the length-cap helper `shared/utils/toastMe
 ## 5. User-experience effect
 
 - **Flag off (default):** none. The driver sees the react-native-toast-message banner exactly as today.
-- **Flag on:** drivers see the rider-style banner. It slides down from a fixed 60 px from the top and uses the same theme colours and icons as today. Title and message clamps are the same, and it stays for 3.5 s. Differences from today:
+- **Flag on:** drivers see the rider-style banner. It slides down from a fixed 60 px from the top, ends left of the SOS column like today's toast, and uses the same theme colours and icons as today. Title and message clamps are the same, and it stays for 3.5 s. Differences from today:
   - The slide-in animation is a spring rather than react-native-toast-message's own animation.
   - A screen reader reads the banner as one combined label.
   - An identical toast fired twice re-animates and is announced twice. This is the same as today (no de-dupe, per decision 3).
@@ -115,8 +116,8 @@ There is no toast in `shared/`; only the length-cap helper `shared/utils/toastMe
 | `backend/tests/test_drivers_shared_status_profile_coverage.py` | Parametrized flag test, absent-column default, failure default | Coverage |
 | `driver-app/store/unifiedToastStore.ts` | New store + flag holder | State for the new banner |
 | `driver-app/store/__tests__/unifiedToastStore.test.ts` | New | No-dedupe, guarded dismiss, default-off flag |
-| `driver-app/components/UnifiedToast.tsx` | New host component | The unified banner |
-| `driver-app/__tests__/components/UnifiedToast.test.tsx` | New | Role, label, live region, 60 px, theme, font cap, no-dedupe, auto-dismiss |
+| `driver-app/components/UnifiedToast.tsx` | New host component; right edge uses `SOS_COLUMN_CLEARANCE` from `toastConfig.tsx` | The unified banner, keeping SOS clear |
+| `driver-app/__tests__/components/UnifiedToast.test.tsx` | New | Role, label, live region, 60 px, SOS clearance, theme, font cap, no-dedupe, auto-dismiss |
 | `driver-app/hooks/useToast.ts` | Flag-on branch before the unchanged `Toast.show` block | Route to the new banner |
 | `driver-app/__tests__/hooks/useToast.test.ts` | Flag off/on cases | Old call exact; new routing |
 | `driver-app/hooks/useDriverDashboard.ts` | `setUnifiedToastEnabled(...)` in the config effect | Apply the flag |

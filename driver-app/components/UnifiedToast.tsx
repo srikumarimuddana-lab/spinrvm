@@ -7,6 +7,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT, MAX_FONT_SCALE } from '@shared/utils/responsive';
 import { useUnifiedToastStore, type UnifiedToastVariant } from '../store/unifiedToastStore';
 import { useAnimatedValue, useStableRef } from '../hooks/useAnimatedValue';
+import { SOS_COLUMN_CLEARANCE } from './toastConfig';
 
 /**
  * The unified driver toast host, mounted once in app/_layout.tsx. It renders
@@ -16,7 +17,9 @@ import { useAnimatedValue, useStableRef } from '../hooks/useAnimatedValue';
  * Modelled on rider-app/components/Toast.tsx. Differences, chosen to keep the
  * driver app's current placement and timing: a fixed 60 px top offset (the
  * old Toast.show topOffset) instead of the safe-area inset, and no
- * de-duplication (see store/unifiedToastStore.ts).
+ * de-duplication (see store/unifiedToastStore.ts). Like the current toast, it
+ * ends SOS_COLUMN_CLEARANCE from the right so the dashboard's SOS stays
+ * visible and tappable.
  */
 
 // Same top offset react-native-toast-message used (hooks/useToast.ts).
@@ -159,7 +162,7 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     left: SPACING.md,
-    right: SPACING.md,
+    right: SOS_COLUMN_CLEARANCE,
     borderRadius: 12,
     paddingHorizontal: SPACING.md,
     paddingVertical: 14,

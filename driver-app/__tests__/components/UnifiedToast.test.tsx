@@ -15,6 +15,7 @@ import UnifiedToast, { UNIFIED_TOAST_TOP_OFFSET } from '../../components/Unified
 import { useUnifiedToastStore } from '../../store/unifiedToastStore';
 import { lightColors } from '@shared/theme/index';
 import { MAX_FONT_SCALE } from '@shared/utils/responsive';
+import { SOS_COLUMN_CLEARANCE } from '../../components/toastConfig';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
@@ -71,6 +72,13 @@ describe('UnifiedToast host', () => {
 
     expect(UNIFIED_TOAST_TOP_OFFSET).toBe(60);
     expect(flatStyle(getByRole('alert')).top).toBe(60);
+  });
+
+  it('ends left of the SOS column, like the current toast', () => {
+    const { getByRole } = render(<UnifiedToast />);
+    show('Heads up', undefined, 'info');
+
+    expect(flatStyle(getByRole('alert')).right).toBe(SOS_COLUMN_CLEARANCE);
   });
 
   it('uses the danger token for danger and the live theme for the others', () => {

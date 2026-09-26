@@ -82,21 +82,40 @@ export function tKey(key: string, fallback?: string): string {
 // ── Zustand store ─────────────────────────────────────────────────────────────
 interface LanguageState {
   language: Language;
+  /**
+   * True once the rider has picked a language this session. A restore of the
+   * saved value (hydrate) that finishes afterwards must not overwrite that
+   * fresh choice with the stale stored one.
+   */
+  hasUserChosen: boolean;
   setLanguage: (lang: Language) => void;
   hydrate: () => Promise<void>;
 }
 
-export const useLanguageStore = create<LanguageState>((set) => ({
+export const useLanguageStore = create<LanguageState>((set, get) => ({
   language: 'en',
+  hasUserChosen: false,
 
   setLanguage: (lang) => {
-    set({ language: lang });
-    AsyncStorage.setItem(LANGUAGE_KEY, lang).catch(() => {});
+    // Only languages the picker offers can be chosen; hidden, incomplete ones
+    // (es, zh — including via the changeLanguage compat shims below) are
+    // refused and the current language is kept.
+    if (!LANGUAGES.some((l) => l.code === lang)) {
+      if (__DEV__) console.warn(`[i18n] Ignoring setLanguage('${lang}'): not offered in the language picker.`);
+      return;
+    }
+    set({ language: lang, hasUserChosen: true });
+    AsyncStorage.setItem(LANGUAGE_KEY, lang).catch((error) => {
+      console.error('Failed to store language:', error);
+    });
   },
 
   hydrate: async () => {
     try {
       const stored = await AsyncStorage.getItem(LANGUAGE_KEY);
+      // The rider picked a language while the read was in flight (or earlier
+      // this session): keep their choice.
+      if (get().hasUserChosen) return;
       // Only honour a stored choice the picker still offers. A rider who
       // picked Spanish/Chinese before they were hidden stays on English (the
       // complete fallback) instead of a language they can no longer see or
@@ -104,7 +123,9 @@ export const useLanguageStore = create<LanguageState>((set) => ({
       if (LANGUAGES.some((l) => l.code === stored)) {
         set({ language: stored as Language });
       }
-    } catch {}
+    } catch (error) {
+      console.error('Failed to restore the saved language:', error);
+    }
   },
 }));
 

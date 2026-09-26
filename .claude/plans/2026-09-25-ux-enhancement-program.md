@@ -160,3 +160,9 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - a device check `[H]` is needed.
 - 2026-09-26: W4.2 opened: the public `/track` page glides the car with W4.1's util, uses the admin tokens (fixed light), and shows clear "The driver has arrived" and trip-ended states. Its privacy review was clean; the older address exposure it found is B44.
 - 2026-09-26: W4.2 merged (#5892). W7.1 part 1 of 2 opened: French is complete in both apps (key parity with English, pinned by a test), and Spanish and Chinese are hidden from both pickers (decision D3). Part 2 follows: the picker title, restoring the saved language at start-up, and the load-vs-pick race fix.
+- 2026-09-26: W7.1 part 1 merged (#5893). Part 2 opened:
+  - the rider picker title is translated;
+  - both apps restore the saved language at start-up;
+  - a language pick always beats a slow restore (the race the edge-case review found);
+  - the stores refuse hidden language codes.
+  Still open for W7.1: a fluent speaker's review of the French `[H]`, and C139 (rider-app's two key sets).

@@ -14,6 +14,7 @@ import {
 } from "@/lib/companyApi";
 import { useCompanyAuthStore } from "@/store/companyAuthStore";
 import { useConfirm } from "@/hooks/useConfirm";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 /**
  * Live company bookings — polls every 12s (v1; a socket feed is overkill for
@@ -80,8 +81,7 @@ export default function CompanyBookingsPage() {
     useEffect(() => {
         setLoading(true);
         load();
-        const t = setInterval(load, POLL_MS);
-        return () => clearInterval(t);
+        return setVisibleInterval(load, POLL_MS);
     }, [load]);
 
     const handleCancel = async (rideId: string) => {

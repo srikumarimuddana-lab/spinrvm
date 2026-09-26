@@ -15,6 +15,7 @@ import { getApprovalQueue, getExpiringDocs } from "@/lib/api";
 // Nav config (NAV_GROUPS) and its visibility rules live in a shared module
 // so the command palette derives its routes from the same source (W5.1).
 import { NAV_GROUPS, isNavItemVisible, isNavChildVisible } from "@/lib/admin-nav-config";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 function SidebarInner() {
     const pathname = usePathname();
@@ -125,8 +126,8 @@ function SidebarInner() {
             } catch {}
         };
         load();
-        const t = setInterval(load, 60_000);
-        return () => { cancelled = true; clearInterval(t); };
+        const stopPolling = setVisibleInterval(load, 60_000);
+        return () => { cancelled = true; stopPolling(); };
     }, [isSuperAdmin, userModules]);
 
     // Map href → numeric badge count. Centralised so we only update one

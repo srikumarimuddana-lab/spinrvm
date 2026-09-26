@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 try:
+    from . import metrics
     from .redis_client import (
         redis_delete,
         redis_eval,
@@ -114,6 +115,11 @@ def _key(sku: Sku, day: str | None = None) -> str:
 
 def _daily_budget_usd() -> float:
     return float(getattr(settings, "MAPS_DAILY_BUDGET_USD", 5.0))
+
+
+def _record_budget_gauge(spent: float, budget: float) -> None:
+    """Publish spend/budget as a gauge wherever both are freshly computed together."""
+    metrics.set_gauge("spinr_maps_budget_spent_ratio", (spent / budget) if budget else 0.0)
 
 
 async def record_call(sku: Sku) -> None:
@@ -247,6 +253,7 @@ async def check_budget() -> tuple[bool, float, float]:
     """
     budget = _daily_budget_usd()
     spent = await estimate_today_usd()
+    _record_budget_gauge(spent, budget)
     return spent < budget, spent, budget
 
 
@@ -344,7 +351,9 @@ async def reserve_budget(sku: Sku) -> tuple[bool, float, float]:
             str(_BUCKET_TTL_SECONDS),
         )
         allowed_flag, total_str = raw_result
-        return bool(int(allowed_flag)), float(total_str), budget
+        total = float(total_str)
+        _record_budget_gauge(total, budget)
+        return bool(int(allowed_flag)), total, budget
     except RuntimeError:
         # No REDIS_URL configured: check_budget()/record_call() hit the same
         # in-process dict fallback redis_eval() itself has no equivalent

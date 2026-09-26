@@ -14,6 +14,7 @@ try:
     )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils import metrics
     from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars
     from ..utils.payment_collection import SETTLED_PAYMENT_STATUSES
@@ -31,6 +32,7 @@ except ImportError:
     )
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils import metrics  # type: ignore
     from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars
     from utils.payment_collection import SETTLED_PAYMENT_STATUSES
@@ -39,6 +41,7 @@ except ImportError:
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 _TWO_PLACES = Decimal("0.01")
@@ -659,113 +662,132 @@ async def _sync_corporate_subscription_event(event_type: str, data_object: dict,
 @api_router.post("/stripe")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events for server-side payment confirmation."""
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    settings = await get_app_settings()
-    # An admin-pasted secret frequently carries a leading/trailing newline or
-    # space (copy-paste from the Stripe Dashboard, a password manager, or a
-    # terminal). That raw value is used verbatim as the HMAC key below, so a
-    # single stray whitespace character makes EVERY signature verification
-    # fail with no other symptom ("No signatures found matching the expected
-    # signature for payload"). Normalize on read so an already-corrupted
-    # stored value doesn't take down webhook processing until an admin
-    # re-saves it — routes/admin/settings.py strips on write too, but that
-    # only protects saves made after this fix ships.
-    webhook_secret = (settings.get("stripe_webhook_secret") or "").strip()
-    connect_webhook_secret = (settings.get("stripe_connect_webhook_secret") or "").strip()
-    stripe_secret = (settings.get("stripe_secret_key") or "").strip()
-
-    if not webhook_secret:
-        logger.error("stripe_webhook_secret not set — rejecting unverified webhook")
-        raise HTTPException(
-            status_code=500,
-            detail="Webhook signature verification not configured",
-        )
-
-    if not stripe_secret:
-        logger.error("Stripe secret key not configured in app settings")
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-
-    import stripe
-
-    # Both the platform endpoint and the Connected-accounts endpoint POST to
-    # this same URL, but Stripe signs each with that endpoint's own whsec_.
-    # We can't tell them apart before verifying, so try the platform secret
-    # first, then the connect secret (if configured). A SignatureVerification
-    # failure on one is expected for events from the other — only reject when
-    # BOTH fail. ValueError = malformed payload, reject immediately.
-    candidate_secrets = [webhook_secret]
-    if connect_webhook_secret:
-        candidate_secrets.append(connect_webhook_secret)
-
-    event = None
-    last_sig_error: Exception | None = None
-    for secret in candidate_secrets:
-        try:
-            event = stripe.Webhook.construct_event(payload, sig_header, secret)
-            break
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid payload") from None
-        except stripe.error.SignatureVerificationError as e:
-            last_sig_error = e
-            continue
-        except Exception as e:
-            last_sig_error = e
-            continue
-
-    if event is None:
-        logger.error(f"Stripe webhook signature verification failed: {last_sig_error}")
-        raise HTTPException(status_code=400, detail="Invalid signature") from last_sig_error
-
-    # stripe-python v15: the returned Event is NOT a dict subclass — it has no
-    # ``.get()`` or ``.to_dict_recursive()`` (both raise AttributeError via
-    # __getattr__, which 500'd every webhook). Normalize it to a plain,
-    # recursively-plain dict for all field access + jsonb storage.
-    event = _event_to_plain_dict(event)
-
-    event_id = event.get("id", "")
-    event_type = event.get("type", "")
-    data_object = event.get("data", {}).get("object", {})
-
-    if not event_id:
-        # Should never happen for real Stripe events, but guard anyway —
-        # we cannot dedup without a stable key.
-        logger.error("Stripe webhook event missing id — cannot dedup")
-        raise HTTPException(status_code=400, detail="Missing event id")
-
-    # ── Idempotency gate ─────────────────────────────────────────────
-    # Stripe retries every event (network blip, >20s handler, any non-2xx)
-    # so we MUST treat a replay of the same event.id as a no-op. The
-    # stripe_events table (migration 22) has event_id as PRIMARY KEY;
-    # claim_stripe_event returns False on a unique-violation replay. event is
-    # already a plain (json.loads) dict, safe to store directly in jsonb.
-    event_payload = event
-
+    # spinr_payments_webhook_duration_ms (CLAUDE.md SLA: < 500ms). event_type
+    # is only known once the payload is parsed below, so the label starts as
+    # "other" and is upgraded in place once resolved; try/finally covers
+    # every early-return/exception exit (bad signature, missing config,
+    # persistence failure, dispatch failure) without changing the response.
+    _webhook_t0 = time.monotonic()
+    _webhook_event_type_label = "other"
     try:
-        is_new = await claim_stripe_event(event_id, event_type, event_payload)
-    except Exception as e:
-        # Surface the REAL cause: for DatabaseError, str(e) is only
-        # "Database operation failed" — the underlying Postgres error (e.g.
-        # "relation stripe_events does not exist") lives in details["original"].
-        # Without this the webhook just logs a generic message and the root cause
-        # (missing table / RLS / schema drift) stays invisible.
-        _orig = e.details.get("original") if isinstance(e, DatabaseError) else None
-        logger.error(
-            "Failed to persist stripe event %s (type=%s): %s | original=%s",
-            event_id,
-            event_type,
-            e,
-            _orig,
-            exc_info=True,
+        payload = await request.body()
+        sig_header = request.headers.get("stripe-signature")
+
+        settings = await get_app_settings()
+        # An admin-pasted secret frequently carries a leading/trailing newline or
+        # space (copy-paste from the Stripe Dashboard, a password manager, or a
+        # terminal). That raw value is used verbatim as the HMAC key below, so a
+        # single stray whitespace character makes EVERY signature verification
+        # fail with no other symptom ("No signatures found matching the expected
+        # signature for payload"). Normalize on read so an already-corrupted
+        # stored value doesn't take down webhook processing until an admin
+        # re-saves it — routes/admin/settings.py strips on write too, but that
+        # only protects saves made after this fix ships.
+        webhook_secret = (settings.get("stripe_webhook_secret") or "").strip()
+        connect_webhook_secret = (settings.get("stripe_connect_webhook_secret") or "").strip()
+        stripe_secret = (settings.get("stripe_secret_key") or "").strip()
+
+        if not webhook_secret:
+            logger.error("stripe_webhook_secret not set — rejecting unverified webhook")
+            raise HTTPException(
+                status_code=500,
+                detail="Webhook signature verification not configured",
+            )
+
+        if not stripe_secret:
+            logger.error("Stripe secret key not configured in app settings")
+            raise HTTPException(status_code=500, detail="Stripe not configured")
+
+        import stripe
+
+        # Both the platform endpoint and the Connected-accounts endpoint POST to
+        # this same URL, but Stripe signs each with that endpoint's own whsec_.
+        # We can't tell them apart before verifying, so try the platform secret
+        # first, then the connect secret (if configured). A SignatureVerification
+        # failure on one is expected for events from the other — only reject when
+        # BOTH fail. ValueError = malformed payload, reject immediately.
+        candidate_secrets = [webhook_secret]
+        if connect_webhook_secret:
+            candidate_secrets.append(connect_webhook_secret)
+
+        event = None
+        last_sig_error: Exception | None = None
+        for secret in candidate_secrets:
+            try:
+                event = stripe.Webhook.construct_event(payload, sig_header, secret)
+                break
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid payload") from None
+            except stripe.error.SignatureVerificationError as e:
+                last_sig_error = e
+                continue
+            except Exception as e:
+                last_sig_error = e
+                continue
+
+        if event is None:
+            logger.error(f"Stripe webhook signature verification failed: {last_sig_error}")
+            raise HTTPException(status_code=400, detail="Invalid signature") from last_sig_error
+
+        # stripe-python v15: the returned Event is NOT a dict subclass — it has no
+        # ``.get()`` or ``.to_dict_recursive()`` (both raise AttributeError via
+        # __getattr__, which 500'd every webhook). Normalize it to a plain,
+        # recursively-plain dict for all field access + jsonb storage.
+        event = _event_to_plain_dict(event)
+
+        event_id = event.get("id", "")
+        event_type = event.get("type", "")
+        data_object = event.get("data", {}).get("object", {})
+        # Bound the metric's label cardinality to event types this handler
+        # actually recognizes — anything else stays bucketed as "other"
+        # rather than minting a new Prometheus series per distinct value.
+        if event_type in _STRIPE_HANDLED_EVENTS or event_type in _STRIPE_IGNORED_EVENTS:
+            _webhook_event_type_label = event_type
+
+        if not event_id:
+            # Should never happen for real Stripe events, but guard anyway —
+            # we cannot dedup without a stable key.
+            logger.error("Stripe webhook event missing id — cannot dedup")
+            raise HTTPException(status_code=400, detail="Missing event id")
+
+        # ── Idempotency gate ─────────────────────────────────────────────
+        # Stripe retries every event (network blip, >20s handler, any non-2xx)
+        # so we MUST treat a replay of the same event.id as a no-op. The
+        # stripe_events table (migration 22) has event_id as PRIMARY KEY;
+        # claim_stripe_event returns False on a unique-violation replay. event is
+        # already a plain (json.loads) dict, safe to store directly in jsonb.
+        event_payload = event
+
+        try:
+            is_new = await claim_stripe_event(event_id, event_type, event_payload)
+        except Exception as e:
+            # Surface the REAL cause: for DatabaseError, str(e) is only
+            # "Database operation failed" — the underlying Postgres error (e.g.
+            # "relation stripe_events does not exist") lives in details["original"].
+            # Without this the webhook just logs a generic message and the root cause
+            # (missing table / RLS / schema drift) stays invisible.
+            _orig = e.details.get("original") if isinstance(e, DatabaseError) else None
+            logger.error(
+                "Failed to persist stripe event %s (type=%s): %s | original=%s",
+                event_id,
+                event_type,
+                e,
+                _orig,
+                exc_info=True,
+            )
+            # Let Stripe retry — 5xx keeps the event in their queue.
+            raise HTTPException(status_code=500, detail="Event persistence failed") from e
+
+        if not is_new:
+            return {"received": True, "duplicate": True, "event_id": event_id}
+
+        return await _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret)
+    finally:
+        metrics.observe(
+            "spinr_payments_webhook_duration_ms",
+            (time.monotonic() - _webhook_t0) * 1000.0,
+            {"event_type": _webhook_event_type_label},
         )
-        # Let Stripe retry — 5xx keeps the event in their queue.
-        raise HTTPException(status_code=500, detail="Event persistence failed") from e
-
-    if not is_new:
-        return {"received": True, "duplicate": True, "event_id": event_id}
-
-    return await _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret)
 
 
 async def _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret=""):

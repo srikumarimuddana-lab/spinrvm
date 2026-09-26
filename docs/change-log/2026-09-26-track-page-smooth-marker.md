@@ -8,7 +8,7 @@
 | Author | Claude Code (agent session) |
 | Surface(s) | admin-dashboard (public `/track/[rideId]` page only) |
 | Domain (Sentry tag) | rides |
-| PR / commit link | Local branch `wip/w4-2`, not pushed. Built on W4.1 (`87e5ff1`, `8085ac6`, `3c67947`). Commits: `01f2409` feat(track): glide the driver's car between location polls; `d4e76ec` style(track): use admin design tokens on the public tracking page; `92529b3` feat(track): clear driver-arrived and trip-ended states |
+| PR / commit link | Local branch `wip/w4-2`, not pushed. Built on W4.1 (`87e5ff1`, `8085ac6`, `3c67947`). Commits: `01f2409` feat(track): glide the driver's car between location polls; `d4e76ec` style(track): use admin design tokens on the public tracking page; `92529b3` feat(track): clear driver-arrived and trip-ended states; `062d656` fix(track): say "The driver has arrived" for riders' contacts |
 | Related issue or gap ID | UX enhancement program W4.2 (`.claude/plans/2026-09-25-ux-enhancement-program.md`); #2816 (token migration) |
 
 `/track/[rideId]` is the **public, unauthenticated** page a rider shares with a contact (`track.spinr.ca/{token}` rewrites to it). Real riders and their contacts use it during live app testing.
@@ -46,8 +46,10 @@
 - The route legend dots use the shared `ROUTE_PIN_COLORS` that the map pins already use.
 - The car SVG illustration keeps its own fills. It is a drawing, not UI chrome.
 
-**Arrived / ended (commit `92529b3`)**
-- **`driver_arrived`:** the sheet headline reads "Your driver has arrived". The drop-off ETA is removed from the sheet and the pill. The car, driver name and plate stay as they were.
+**Arrived / ended (commits `92529b3`, `062d656`)**
+- **`driver_arrived`:** the sheet headline reads "The driver has arrived". The drop-off ETA is removed from the sheet and the pill. The car, driver name and plate stay as they were.
+  - The first version said "Your driver has arrived". `062d656` changed it at the user's request, because people viewing a shared link are usually the rider's contacts, not the rider.
+  - No other text on the page addresses the viewer as the rider. The other status labels ("Finding driver", "Driver on the way", "Driver arrived", …) are already neutral.
 - **`completed` / `cancelled`** (`ENDED_STATUSES`, mirroring `RideStatus.terminal_statuses()`):
   - The route line is cleared, and any in-flight OSRM request is voided (`routeFetchSeqRef++`).
   - The car stays off the map even if a payload ever carried a driver.
@@ -97,11 +99,11 @@
   - The "Pickup" / "Drop-off" labels and the footer went from `gray-400` (2.5:1, below AA) to `--muted-foreground` (4.8:1).
   - The map placeholder is `--muted` instead of `gray-200`.
 - **Copy changes:**
-  - "Your driver has arrived" (new sheet headline).
+  - "The driver has arrived" (new sheet headline; the screen-reader announcement uses the same string).
   - "Trip ended" (was "Trip complete").
   - "Live location is no longer shared." (new).
   - "Trip cancelled" is unchanged.
-  - These strings have not had copy review. See the open question on "Your driver" wording.
+  - The user chose the arrival wording (see Decisions below). The other strings have not had a separate copy review.
 - **Screen readers:** status changes are now announced politely.
 
 ## 6. Files modified
@@ -155,7 +157,7 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
 ```tsx
 // After
 <p className="sr-only" role="status">{headline}</p>
-{isArrived ? (<div …>{headline}</div>)   // "Your driver has arrived"
+{isArrived ? (<div …>{headline}</div>)   // "The driver has arrived"
  : ride.eta_minutes != null && isActive ? (<… min away …>) : (<… {statusCfg.label} …>)}
 ```
 
@@ -173,15 +175,17 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
   - motion: 4/8 failed on the original page (glide, heading glide, driver released, unmount). The other 4 (first placement, >500 m snap, Reduce Motion, map rotation) are regression guards and pass on both.
   - tokens: 2/3 failed (live and loading/invalid states not in the light scope). The parity test passes on both by design.
   - states: 5/6 failed (arrived copy, completed, cancelled, late OSRM, opened-after-end). The expired-link test is a regression guard.
+  - wording (`062d656`): the arrived test failed against the "Your driver" page (1/6) and passes now. It checks that the visible headline and the `role="status"` announcement are exactly "The driver has arrived", and that "your driver" appears nowhere on the page.
   - All 17 pass on the final page.
-- [x] **Full suite:** `npx vitest run` passed, 94 files / 822 tests.
-- [x] **Typecheck:** `npx tsc --noEmit` is clean (exit 0).
+- [x] **Full suite:** `npx vitest run` passed, 94 files / 822 tests (re-run after `062d656`, same result).
+- [x] **Typecheck:** `npx tsc --noEmit` is clean (exit 0), including after `062d656`.
 - [x] **ESLint on changed files:** 0 errors. `page.tsx` has the same 2 warnings it had before (an unused `no-explicit-any` directive and `<img>` LCP). The new files have 0. The 33 `no-restricted-syntax` suppressions are gone, and the rule reports 0 on the page.
-- [x] **Production build:** a real `npm run build` (Turbopack) passed: compiled successfully and generated 80/80 static pages, with `ƒ /track/[rideId]` listed.
+- [x] **Production build:** a real `npm run build` (Turbopack) passed: compiled successfully and generated 80/80 static pages, with `ƒ /track/[rideId]` listed. Re-run after `062d656` with the same result.
   - The worktree's `node_modules` was a real copy of the main checkout's, not a symlink, because Turbopack rejects a symlink that points outside its root.
   - No config was changed.
   - The built CSS was checked: `.bg-card{background-color:var(--card)}` and `.bg-success{…var(--success)}`. This confirms the scoped override mechanism.
-- [x] **Code review:** a `/code-review` (medium) pass on the three commits found no correctness issues.
+- [x] **Code review:** a `/code-review` (medium) pass on the three code commits found no correctness issues.
+- [x] **PIPEDA review:** the coordinator ran the privacy review of `wip/w4-2`. Verdict: **clean**. The branch adds no new personal data, and nothing is retained after the trip ends. The reviewer raised one pre-existing, backend-side follow-up about ended-trip addresses; it is recorded under "Pre-existing issues" below.
 - [x] **Blast-radius grep:**
   - importers of `marker-interpolation` and of the page;
   - `/track` and `rides/track` references across `admin-dashboard/src`, rider-app and driver-app;
@@ -198,13 +202,13 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
   - No screenshots were taken. The colour and contrast notes in §5 come from the token values, not from rendered pixels, and no axe run was done.
 - **Not tested against the live backend** or a real share token. Payloads were shaped from `sharing.py` by reading it.
 - **"Renders light under `.dark`" is shown only indirectly:** jsdom does not compute CSS custom properties from the stylesheet. The tests prove the scope is on the root and that its values match `:root`, and the production CSS proves the classes read those variables. Nobody looked at a dark-mode browser.
-- **No PIPEDA reviewer agent was run.** The plan names `spinr-regulatory-compliance-checker`, but this session had no agent-dispatch tool. The privacy reasoning in §4 is a self-review.
+- **The PIPEDA review covered this branch's diff only.** Its verdict is recorded in §9. Backend retention of addresses was out of scope and is listed as a follow-up below.
 - **Thresholds:** the util's 1 s / 500 m / 30 s thresholds were designed for a ~4 s ping. This page polls every 5 s and was not tuned separately.
 
-## Open questions (for the product owner)
+## Decisions (user, 2026-09-26)
 
-- **Theme:** should `/track` stay fixed-light (kept here, as recorded in the earlier #2816 decisions) or follow the visitor's theme? Following it would flip it to dark for most first-time visitors, because `defaultTheme` is `"dark"`, not `"system"`.
-- **Copy:** most people viewing a shared link are the rider's contact, not the rider. "Your driver has arrived" (the wording asked for) may read oddly to them. An alternative is "The driver has arrived".
+- **Theme:** `/track` stays fixed-light, as built. It does not follow the visitor's theme.
+- **Copy:** the arrival headline is "The driver has arrived", not "Your driver has arrived", because viewers are usually the rider's contacts. Done in `062d656`.
 
 ## Pre-existing issues noticed, not changed (out of scope)
 
@@ -213,6 +217,14 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
 - A `scheduled` status falls back to the "Finding driver" label.
 - With no Maps key, visitors see a developer-facing message ("set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` in Vercel").
 - Polling continues every 5 s after the trip ends.
+- **Privacy follow-up from the PIPEDA review (backend, not changed here):**
+  - After a trip ends, the public endpoint's terminal branch (`track_shared_ride` in `backend/routes/rides/sharing.py`) still returns the full pickup and drop-off street addresses, and this page shows them.
+  - The share token stays valid for 24 h from its creation whatever the ride status. A link that has been forwarded can therefore show exact addresses for up to 24 h after the trip.
+  - Legacy tokens with no creation timestamp already expire once the ride ends. Timestamped tokens do not.
+  - Proposed fix, either:
+    - return only city/area-level addresses for ended rides, or
+    - shorten the token's life once the trip ends.
+  - Either option is a backend change to a live public endpoint and needs its own Change Impact Log.
 
 ## 10. Sign-off
 

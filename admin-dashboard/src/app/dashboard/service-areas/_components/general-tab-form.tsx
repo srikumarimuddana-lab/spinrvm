@@ -7,11 +7,13 @@ import { getSettings } from "@/lib/api/settings-ai";
 import {
   GeofenceMap, regulatoryDefaultsForProvince, getAreaPolygon, getAreaCenter,
 } from "./service-area-shared";
+import { useToast } from "@/components/ui/use-toast";
 
 // --- General Tab with single Save button ---
 // Extracted verbatim from service-areas/page.tsx.
 
 export default function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (updates: any) => Promise<void>; onDelete: () => void }) {
+  const { toast } = useToast();
   const [form, setForm] = useState({
     name: area.name || "",
     city: area.city || "",
@@ -97,7 +99,11 @@ export default function GeneralTabForm({ area, onSave, onDelete }: { area: any; 
     // actually applying an above-cap surge — not when saving an unrelated
     // field on an already-justified above-cap area.
     if (surgeTouched && needsJustification && !isSurgeJustificationValid(form.surge_justification)) {
-      alert("A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).");
+      toast({
+        title: "Justification required",
+        description: "A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).",
+        variant: "destructive",
+      });
       return;
     }
     setSaving(true);

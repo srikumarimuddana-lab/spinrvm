@@ -22,6 +22,8 @@ vi.mock("@/store/sidebarStore", () => ({
         selector({ collapsed: false, toggleCollapsed: vi.fn() }),
 }));
 vi.mock("@/lib/api", () => ({ logoutAllAdmin: () => logoutAllAdmin() }));
+const toast = vi.fn();
+vi.mock("@/components/ui/use-toast", () => ({ useToast: () => ({ toast }) }));
 
 import { Topbar } from "@/components/topbar";
 
@@ -56,5 +58,17 @@ describe("Topbar sign out everywhere", () => {
         await waitFor(() => expect(logoutAllAdmin).toHaveBeenCalledTimes(1));
         await waitFor(() => expect(push).toHaveBeenCalledWith("/login"));
         expect(logout).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows an error toast and still signs out locally when the request fails", async () => {
+        logoutAllAdmin.mockRejectedValueOnce(new Error("Refused for the env super admin"));
+        const user = await openSignOutEverywhere();
+        await user.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+        await waitFor(() => expect(push).toHaveBeenCalledWith("/login"));
+        expect(logout).toHaveBeenCalledTimes(1);
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+            description: "Refused for the env super admin",
+            variant: "destructive",
+        }));
     });
 });

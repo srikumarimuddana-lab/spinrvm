@@ -32,10 +32,12 @@ import { useAuthStore } from "@/store/authStore";
 import { useSidebarStore } from "@/store/sidebarStore";
 import { logoutAllAdmin } from "@/lib/api";
 import { useConfirm } from "@/hooks/useConfirm";
+import { useToast } from "@/components/ui/use-toast";
 
 export function Topbar() {
     const router = useRouter();
     const { confirm, dialog: confirmDialog } = useConfirm();
+    const { toast } = useToast();
     const { theme, setTheme } = useTheme();
     const { logout, user } = useAuthStore();
     const collapsed = useSidebarStore((s) => s.collapsed);
@@ -68,7 +70,11 @@ export function Topbar() {
             // Surface server-side rejection (e.g. super-admin guard) but
             // still tear down the local session — leaving the operator on
             // a screen that thinks they're signed in is the worse failure.
-            window.alert(e?.message || "Sign-out-everywhere request failed; clearing this session anyway.");
+            toast({
+                title: "Couldn't sign out other sessions",
+                description: e?.message || "Sign-out-everywhere request failed; clearing this session anyway.",
+                variant: "destructive",
+            });
         } finally {
             logout();
             router.push("/login");

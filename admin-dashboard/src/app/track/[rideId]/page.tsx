@@ -584,7 +584,7 @@ export default function TrackRide() {
   const isArrived    = ride?.status === 'driver_arrived';
   // The ETA is to the drop-off, so it means nothing while the driver waits at
   // pickup; "arrived" replaces it rather than sitting next to it.
-  const headline     = isArrived ? 'Your driver has arrived' : statusCfg.label;
+  const headline     = isArrived ? 'The driver has arrived' : statusCfg.label;
   const driverName   = ride?.driver?.name || 'Driver';
   const vehicleLine  = useMemo(() => {
     const dr = ride?.driver;

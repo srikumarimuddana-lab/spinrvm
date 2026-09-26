@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 describe("/track driver arrived", () => {
-    it("says 'Your driver has arrived' in place of the drop-off ETA", async () => {
+    it("says 'The driver has arrived' in place of the drop-off ETA", async () => {
         const { unmount } = await mount();
         expect(screen.getByText("min away")).toBeInTheDocument();
         expect(screen.getByText("ETA 7 min")).toBeInTheDocument();
@@ -75,8 +75,14 @@ describe("/track driver arrived", () => {
         harness.ride = activeRide("driver_arrived", DRIVER);
         await poll();
 
-        expect(screen.getAllByText("Your driver has arrived").length).toBeGreaterThan(0);
-        expect(screen.getByRole("status")).toHaveTextContent("Your driver has arrived");
+        // Viewers are usually the rider's contacts, so the copy is not "Your
+        // driver". The visible headline and the screen-reader announcement
+        // say exactly the same thing.
+        const status = screen.getByRole("status");
+        expect(status).toHaveTextContent(/^The driver has arrived$/);
+        const visible = screen.getAllByText("The driver has arrived").filter((el) => el !== status);
+        expect(visible).toHaveLength(1);
+        expect(screen.queryByText(/your driver/i)).not.toBeInTheDocument();
         expect(screen.queryByText("min away")).not.toBeInTheDocument();
         expect(screen.queryByText("ETA 7 min")).not.toBeInTheDocument();
         // The car stays where the driver is — only the status copy changes.

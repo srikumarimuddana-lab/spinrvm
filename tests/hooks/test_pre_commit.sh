@@ -164,6 +164,37 @@ _run_gate "float-shaped text in a comment in a money file passes" \
 +    # amount is within [server_fare, server_fare+0.01]" \
   0
 
+# Review blocker: a trailing/inline comment (not the whole line) with a
+# float-shaped tolerance note must not block, when the code before the
+# comment has no real float arithmetic.
+_run_gate "float-shaped text in a trailing inline comment passes" \
+"diff --git a/backend/routes/wallet.py b/backend/routes/wallet.py
++++ b/backend/routes/wallet.py
+@@ -0,0 +1,1 @@
++    x = 1  # fare+0.01 tolerance" \
+  0
+
+# Review blocker: a float-shaped tolerance note inside a Python docstring
+# (triple-quoted) must not block.
+_run_gate "float-shaped text inside a docstring passes" \
+"diff --git a/backend/routes/wallet.py b/backend/routes/wallet.py
++++ b/backend/routes/wallet.py
+@@ -0,0 +1,3 @@
++    \"\"\"
++    amount is within [server_fare, server_fare+0.01] tolerance band.
++    \"\"\"" \
+  0
+
+# Review blocker regression guard: real float arithmetic on a line that ALSO
+# carries a trailing comment must still block — the comment-stripping fix
+# must not become a bypass.
+_run_gate "real float arithmetic with a trailing comment still BLOCKED" \
+"diff --git a/backend/routes/wallet.py b/backend/routes/wallet.py
++++ b/backend/routes/wallet.py
+@@ -0,0 +1,1 @@
++    fare = amount + 1.5  # oops still a bug" \
+  1
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

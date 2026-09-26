@@ -34,6 +34,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/components/ui/use-toast";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 import {
     flushRedisPrefix,
@@ -182,18 +183,15 @@ export default function RedisMonitoringPage() {
 
     // Stats polling (O(1) — safe on an interval)
     useEffect(() => {
-        const id = setInterval(fetchRedis, STATS_POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(fetchRedis, STATS_POLL_MS);
     }, [fetchRedis]);
 
     useEffect(() => {
-        const id = setInterval(fetchInfra, INFRA_POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(fetchInfra, INFRA_POLL_MS);
     }, [fetchInfra]);
 
     useEffect(() => {
-        const id = setInterval(fetchWs, INFRA_POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(fetchWs, INFRA_POLL_MS);
     }, [fetchWs]);
 
     const handleManualRefresh = async () => {

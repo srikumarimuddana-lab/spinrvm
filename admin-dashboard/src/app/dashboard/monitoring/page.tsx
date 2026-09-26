@@ -30,6 +30,7 @@ import { AlertFeed } from "./alert-feed";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { Badge } from "@/components/ui/badge";
+import { setVisibleInterval } from "@/lib/visible-interval";
 import type {
   AlertEvent,
   AreaDemandSupply,
@@ -491,8 +492,7 @@ export default function MonitoringPage() {
   useEffect(() => {
     const intervalMs = wsStatus === "connected" ? POLL_INTERVAL_MS : DEGRADED_POLL_INTERVAL_MS;
     loadData();
-    const interval = setInterval(loadData, intervalMs);
-    return () => clearInterval(interval);
+    return setVisibleInterval(loadData, intervalMs);
   }, [loadData, wsStatus]);
 
   // Poll demand/supply data when overlay is on (matches surge engine tick: 2 min)

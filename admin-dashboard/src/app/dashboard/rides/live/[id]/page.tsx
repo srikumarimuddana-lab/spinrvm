@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { getLiveRideData } from "@/lib/api";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Phone, Car, User, Radio } from "lucide-react";
 import dynamic from "next/dynamic";
+import { setVisibleInterval } from "@/lib/visible-interval";
 
 const LiveRideMap = dynamic(() => import("./live-map"), { ssr: false });
 
@@ -15,7 +16,6 @@ export default function LiveRideTrackingPage() {
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const [trail, setTrail] = useState<{ lat: number; lng: number }[]>([]);
 
     const fetchData = useCallback(async () => {
@@ -42,10 +42,7 @@ export default function LiveRideTrackingPage() {
 
     useEffect(() => {
         fetchData();
-        intervalRef.current = setInterval(fetchData, 5000);
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
+        return setVisibleInterval(fetchData, 5000);
     }, [fetchData]);
 
     const isActive = ride && ["searching", "driver_assigned", "driver_arrived", "in_progress"].includes(ride.status);

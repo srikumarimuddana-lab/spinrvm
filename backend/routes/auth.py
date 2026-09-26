@@ -408,6 +408,15 @@ def _fire_signup_conversion(
         return None
 
 
+# Twilio codes for a permanently-undeliverable destination — retrying (what a
+# 503 tells the client to do) can never succeed until the rider fixes the
+# number. CRIMSON-SMOKE-7445 OTP cluster: these were all mapped to the same
+# generic 503 as a real Twilio outage, misleading the rider and burying
+# genuine-outage signal in the same Sentry bucket. 21211 = invalid 'To'
+# number; 21614 = not an SMS-capable number (e.g. a landline).
+_TWILIO_PERMANENT_INPUT_ERROR_CODES = frozenset({21211, 21614})
+
+
 @api_router.post("/send-otp")
 # 6/minute: 3/minute proved too tight in production — the key is per client IP
 # (CF-Connecting-IP), and carrier CGNAT can put several riders behind one IP;
@@ -523,6 +532,15 @@ async def send_otp(request: Request, body: SendOTPRequest):
         )
         if not sms_result.get("success"):
             logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
+            if sms_result.get("error_code") in _TWILIO_PERMANENT_INPUT_ERROR_CODES:
+                # A permanent input error, not a service outage — retrying
+                # (the 503 path below) can never succeed. 400 so the client
+                # prompts the rider to re-check the number instead of "try
+                # again later".
+                raise HTTPException(
+                    status_code=400,
+                    detail="This phone number can't receive SMS. Please check it and try again.",
+                )
             raise SpinrException(
                 message="Failed to send verification code",
                 error_code=ErrorCode.SERVICE_UNAVAILABLE,

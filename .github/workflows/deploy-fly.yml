@@ -72,6 +72,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # A re-run of only this job reuses the cached gate output without
+      # re-running the gate; on attempt 2+ confirm this SHA is still main.
+      - name: Confirm a re-run is still the newest main commit
+        run: python3 scripts/fly_deploy_gate.py --check-still-main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify production probe configuration
         run: python3 scripts/fly_deploy_gate.py --check-probes
         env:

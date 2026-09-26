@@ -42,7 +42,7 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
-}), { virtual: true });
+}));
 
 jest.mock('../../../config', () => ({
   API_URL: 'http://localhost:8000',

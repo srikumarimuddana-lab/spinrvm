@@ -307,11 +307,74 @@ def test_existing_home_in_db_downgrades_legacy_home_to_location(monkeypatch):
     assert len(plan.rows_to_insert) == 1
     row = plan.rows_to_insert[0]
     assert row["icon"] == "location"
-    # Label is kept ("Home") -- only the icon is downgraded, so the row still
-    # reads as the rider's old home address, just not the DB's one Home slot.
-    assert row["name"] == "Home"
+    # Renamed, not kept as "Home": an untyped row named exactly "Home" is
+    # still the rider's Home to routes/addresses.py _singleton_type.
+    assert row["name"] == "Previous Home"
     assert plan.downgraded_duplicate_home_work == 1
     assert plan.skipped_already_imported == 0
+
+
+def test_downgraded_row_is_not_read_back_as_home_or_work_by_the_live_app(monkeypatch):
+    """Regression: a downgraded duplicate must not round-trip to Home/Work.
+
+    If it did, the rider's next edit of it would make update_saved_address
+    treat it as a new Home and delete the real one (_drop_other_singletons).
+    """
+    from backend.routes.addresses import _singleton_type
+
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [
+                {"user_id": "rider-1", "address": "An existing home address", "icon": "home"},
+                {"user_id": "rider-1", "address": "An existing work address", "icon": "work"},
+            ],
+        },
+    )
+    rows = [
+        _address_row(_id="addr-1", name="111 First Street, Saskatoon, SK", type="home"),
+        _address_row(_id="addr-2", name="222 Second Street, Saskatoon, SK", type="work"),
+    ]
+    plan = svc.build_saved_address_import_plan(rows, [_customer_row()], batch="b1")
+    assert plan.downgraded_duplicate_home_work == 2
+    for row in plan.rows_to_insert:
+        assert row["icon"] == "location"
+        assert _singleton_type(row["name"], row["icon"]) is None
+
+
+def test_existing_untyped_row_named_home_counts_as_the_riders_home(monkeypatch):
+    """An older 'location' row named exactly "Home" is already the rider's
+    Home to the live app, so a legacy home must not become a second Home."""
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [
+                {"user_id": "rider-1", "name": "Home", "address": "An existing home address", "icon": "location"}
+            ],
+        },
+    )
+    plan = svc.build_saved_address_import_plan([_address_row()], [_customer_row()], batch="b1")
+    assert len(plan.rows_to_insert) == 1
+    assert plan.rows_to_insert[0]["icon"] == "location"
+    assert plan.rows_to_insert[0]["name"] == "Previous Home"
+    assert plan.downgraded_duplicate_home_work == 1
+
+
+def test_existing_gym_row_named_home_does_not_count_as_home(monkeypatch):
+    """A typed icon wins over the label, as in routes/addresses.py."""
+    _install(
+        monkeypatch,
+        store={
+            "users": [_rider()],
+            "saved_addresses": [{"user_id": "rider-1", "name": "Home", "address": "A gym address", "icon": "gym"}],
+        },
+    )
+    plan = svc.build_saved_address_import_plan([_address_row()], [_customer_row()], batch="b1")
+    assert plan.rows_to_insert[0]["icon"] == "home"
+    assert plan.rows_to_insert[0]["name"] == "Home"
+    assert plan.downgraded_duplicate_home_work == 0
 
 
 def test_two_home_rows_in_one_batch_only_first_stays_home(monkeypatch):

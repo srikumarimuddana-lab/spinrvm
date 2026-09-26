@@ -972,6 +972,7 @@ class LiveLocationRequest(BaseModel):
 
 @router.post("/location-live")
 @location_update_limit
+@metrics.timed("spinr_drivers_location_write_duration_ms")
 async def update_live_location(
     point: LiveLocationRequest,
     background_tasks: BackgroundTasks,
@@ -1055,6 +1056,7 @@ async def update_live_location(
 
 @router.post("/location-batch")
 @location_update_limit
+@metrics.timed("spinr_drivers_location_write_duration_ms")
 async def update_location_batch(
     batch: Union[List[dict], dict, LocationBatchRequest],
     background_tasks: BackgroundTasks,

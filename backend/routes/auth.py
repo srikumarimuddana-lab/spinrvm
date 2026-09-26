@@ -49,6 +49,7 @@ try:
     from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from ..utils.insurance_periods import record_period_transition
     from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import timed as _metric_timed
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.rate_limiter import get_real_client_ip
     from ..utils.redis_client import (
@@ -112,6 +113,7 @@ except ImportError:
     from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from utils.insurance_periods import record_period_transition
     from utils.metrics import inc as _metric_inc
+    from utils.metrics import timed as _metric_timed
     from utils.rate_limiter import default_limiter as limiter
     from utils.rate_limiter import get_real_client_ip
     from utils.redis_client import (
@@ -1929,6 +1931,7 @@ class LogoutRequest(BaseModel):
 
 @api_router.post("/refresh", response_model=RefreshResponse)
 @limiter.limit("20/minute")
+@_metric_timed("spinr_auth_token_refresh_duration_ms")
 async def refresh_access_token(request: Request, response: Response, body: Optional[RefreshRequest] = None):
     """Exchange a refresh token for a new access token + rotated refresh token.
 

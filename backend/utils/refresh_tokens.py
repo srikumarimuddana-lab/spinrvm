@@ -36,11 +36,13 @@ from loguru import logger
 try:
     from ..core.config import settings
     from ..db import db
+    from ..utils.env_admin_tokens import ENV_ADMIN_USER_ID, bump_env_admin_token_version
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
     from ..utils.log_context import get_request_id
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
+    from utils.env_admin_tokens import ENV_ADMIN_USER_ID, bump_env_admin_token_version
     from utils.error_handling import DatabaseError, DuplicateRecordError, db_error_text, pg_error_code
     from utils.log_context import get_request_id
 
@@ -679,29 +681,39 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
     revoke_ok = False
     target_table: Optional[str] = None
     try:
-        if audience in _USERS_TABLE_AUDIENCES:
-            target_table = "users"
-        elif audience in _ADMIN_STAFF_AUDIENCES and user_id and user_id != "admin-001":
-            # admin-001 is the env-var-creds super admin — has no row to bump.
-            target_table = "admin_staff"
-        if target_table and user_id:
-            current = await db.find_one(target_table, {"id": user_id})
-            new_version = int((current or {}).get("token_version") or 0) + 1
-            bump = {"token_version": new_version}
-            if target_table == "users":
-                # Firebase ID tokens carry no token_version claim, so the Firebase
-                # auth paths (HTTP + WS) enforce revocation via the
-                # sessions_invalid_before watermark. Stamp it here so a
-                # refresh-token-reuse compromise also kills Firebase sessions,
-                # not just the JWT ones.
-                bump["sessions_invalid_before"] = datetime.now(timezone.utc).isoformat()
-            await db.update_one(
-                target_table,
-                {"id": user_id},
-                {"$set": bump},
-            )
-        # A bump that is not applicable (admin-001's env-var creds, an
-        # unknown audience) is complete by design, not a failure.
+        if user_id == ENV_ADMIN_USER_ID:
+            # admin-001 is the env-var-creds super admin — it has no admin_staff
+            # row, but migration 434 gave it its own revocable token_version on
+            # the settings row (utils/env_admin_tokens.py), the same mechanism
+            # /admin/auth/logout-all already bumps for it. Mirror that here so a
+            # detected reuse of a stolen admin-001 refresh token actually
+            # invalidates its live access tokens, not just the refresh chain —
+            # previously this fell through the branches below and did nothing,
+            # a gap that predates 434 and was never closed when it landed.
+            new_version = await bump_env_admin_token_version()
+        else:
+            if audience in _USERS_TABLE_AUDIENCES:
+                target_table = "users"
+            elif audience in _ADMIN_STAFF_AUDIENCES and user_id:
+                target_table = "admin_staff"
+            if target_table and user_id:
+                current = await db.find_one(target_table, {"id": user_id})
+                new_version = int((current or {}).get("token_version") or 0) + 1
+                bump = {"token_version": new_version}
+                if target_table == "users":
+                    # Firebase ID tokens carry no token_version claim, so the Firebase
+                    # auth paths (HTTP + WS) enforce revocation via the
+                    # sessions_invalid_before watermark. Stamp it here so a
+                    # refresh-token-reuse compromise also kills Firebase sessions,
+                    # not just the JWT ones.
+                    bump["sessions_invalid_before"] = datetime.now(timezone.utc).isoformat()
+                await db.update_one(
+                    target_table,
+                    {"id": user_id},
+                    {"$set": bump},
+                )
+        # A bump that is not applicable (an unknown audience) is complete by
+        # design, not a failure.
         bump_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")

@@ -8,7 +8,7 @@
 | Author | Claude Code (agent session) |
 | Surface(s) | admin-dashboard (public `/track/[rideId]` page only) |
 | Domain (Sentry tag) | rides |
-| PR / commit link | Local branch `wip/w4-2`, not pushed. Built on W4.1 (`87e5ff1`, `8085ac6`, `3c67947`). Commits: `01f2409` feat(track): glide the driver's car between location polls; `d4e76ec` style(track): use admin design tokens on the public tracking page; `92529b3` feat(track): clear driver-arrived and trip-ended states; `062d656` fix(track): say "The driver has arrived" for riders' contacts |
+| PR / commit link | Branch `claude/spinr-animations-admin-ux-x7nl5x` (this PR). Builds on W4.1 (#5888, merged), whose `marker-interpolation` util it reuses unchanged. |
 | Related issue or gap ID | UX enhancement program W4.2 (`.claude/plans/2026-09-25-ux-enhancement-program.md`); #2816 (token migration) |
 
 `/track/[rideId]` is the **public, unauthenticated** page a rider shares with a contact (`track.spinr.ca/{token}` rewrites to it). Real riders and their contacts use it during live app testing.
@@ -178,6 +178,11 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
   - wording (`062d656`): the arrived test failed against the "Your driver" page (1/6) and passes now. It checks that the visible headline and the `role="status"` announcement are exactly "The driver has arrived", and that "your driver" appears nowhere on the page.
   - All 17 pass on the final page.
 - [x] **Full suite:** `npx vitest run` passed, 94 files / 822 tests (re-run after `062d656`, same result).
+- [x] **Re-verified on the PR branch**, rebuilt from `main` after #5888–#5891:
+  - `npx vitest run`: 102 files, 858 tests passed;
+  - `npx tsc --noEmit`: exit 0;
+  - ESLint on the 6 changed files: 0 errors, and the same 2 pre-existing warnings on `page.tsx`;
+  - `npm run build`: 80/80 pages, with `ƒ /track/[rideId]` listed.
 - [x] **Typecheck:** `npx tsc --noEmit` is clean (exit 0), including after `062d656`.
 - [x] **ESLint on changed files:** 0 errors. `page.tsx` has the same 2 warnings it had before (an unused `no-explicit-any` directive and `<img>` LCP). The new files have 0. The 33 `no-restricted-syntax` suppressions are gone, and the rule reports 0 on the page.
 - [x] **Production build:** a real `npm run build` (Turbopack) passed: compiled successfully and generated 80/80 static pages, with `ƒ /track/[rideId]` listed. Re-run after `062d656` with the same result.
@@ -225,6 +230,7 @@ moveCar({ lat: here.latitude, lng: here.longitude, bearing: carBearingRef.curren
     - return only city/area-level addresses for ended rides, or
     - shorten the token's life once the trip ends.
   - Either option is a backend change to a live public endpoint and needs its own Change Impact Log.
+  - Logged as `ACTION_ITEMS.md` **B44** (#5889), with P1 proposed.
 
 ## 10. Sign-off
 

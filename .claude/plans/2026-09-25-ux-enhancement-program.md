@@ -68,7 +68,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 5: admin efficiency
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W5.1 | Command palette routes derived from the sidebar config (one source), plus a `?` shortcut sheet | admin | existing `admin_command_palette_enabled` (flip `[H]`) | tests |
+| W5.1 `[~]` | Command palette routes derived from the sidebar config (one source), plus a `?` shortcut sheet | admin | existing `admin_command_palette_enabled` (flip `[H]`) | tests |
 | W5.2 | Saved filter views (per admin, browser-local) on Rides and Drivers | admin | none | tests |
 | W5.3 | Shared `EmptyState` component; pollers pause while the tab is hidden and refresh on focus | admin | none | tests |
 | W5.5 | Sticky table headers. Needs the table scroll container restructured (or `thead` sticky inside a vertically scrolling table wrapper) without changing baselined pages | admin | none | baselines, which may need re-capture `[H]` |
@@ -85,7 +85,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 ### Wave 7: content and housekeeping
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
-| W7.1 `[~]` | Translations per D3 | apps | — | key-parity test en vs fr |
+| W7.1 `[x]` | Translations per D3 | apps | — | key-parity test en vs fr |
 | W7.2 `[x]` | Correct stale counts in the rider/driver design skill | docs | — | — |
 | W7.3 | Remove unused `ErrorScreen`, `FormScreen` and `shared/validators`. **Deletion: ask first** | shared | approval | tests |
 
@@ -166,3 +166,8 @@ Waves run in order. The surfaces within a wave touch different files, but they s
   - a language pick always beats a slow restore (the race the edge-case review found);
   - the stores refuse hidden language codes.
   Still open for W7.1: a fluent speaker's review of the French `[H]`, and C139 (rider-app's two key sets).
+- 2026-09-26: W7.1 part 2 merged (#5894), so W7.1 is done in code; the French review `[H]` remains. W5.1 is split into three PRs:
+  - A: the admin nav as one source for the sidebar and the palette (no visible sidebar change; the palette catches up with the sidebar);
+  - B: palette fixes (Enter opens the highlighted row; focus returns on close);
+  - C: the "?" shortcut sheet with its per-admin off switch (WCAG 2.1.4), the Ctrl/Cmd+K dialog guard, and the change log.
+  Part A opened.

@@ -147,6 +147,105 @@ rules:
     severity: ERROR
     languages: [python]
 
+  # SR-12: Bare dict/subscript arithmetic in money-handling code (#5817)
+  #
+  # SR-03 above only catches float(...) casts and *1.0/1.0 literals. It does
+  # NOT catch the actual shape both 2026-09-25 float-money bugs took:
+  # `round(subtotal + fees_result["fees_total"] + ...)` and
+  # `tips += r["tip_amount"]` — arithmetic between two already-numeric values
+  # pulled straight from a dict/DB row, with no literal float and no float()
+  # cast anywhere in the diff. docs/change-log/2026-09-25-receipts-float-fallback.md
+  # confirmed SR-03 finds 0 matches on both the old (buggy) and new (fixed)
+  # code for exactly this reason.
+  #
+  # This rule flags: round(a + b), dict[k] +/- x, dict.get(k)/dict.get(k, default)
+  # +/- x (either operand), and x += dict[k]/dict.get(k)/dict.get(k, default) —
+  # the accumulator-loop shape. The two-arg .get(k, default) variants were
+  # added after spinr-money-auditor review found the single-arg-only patterns
+  # missed them, and two-arg .get() (avoids KeyError) is likely the more common
+  # real-world form for a money field than the bare single-arg one.
+  # Verified 2026-09-26 against every file below plus
+  # backend/routes/rides/receipts.py and backend/routes/rides/_shared.py
+  # (proposed additions to SR-03's own include list, per #5817 — not added
+  # there yet: SR-03 itself has 19 pre-existing, untriaged float() findings in
+  # _shared.py that need the same fix-or-annotate pass earnings.py/features.py
+  # got on 2026-09-25 before that list can safely take them; tracked as a
+  # separate follow-up, not rushed into this same change). **_shared.py and
+  # receipts.py have SR-12 coverage only, not SR-03 coverage, until that
+  # follow-up lands** — do not read "0 SR-12 findings here" as "this file is
+  # fully money-safe." Result: 0 findings anywhere in this list. Reconstructed
+  # both original bug shapes in isolation and confirmed this rule catches both.
+  #
+  # Known limitations (accepted, not fixed — same ceiling every AST-pattern
+  # rule has): does not cover `*`/`/` on dict values, only `+`/`-`/`+=`/round();
+  # trivially bypassed by extracting the dict access to an intermediate
+  # variable first (`v = d["x"]; total += v`) since that's then plain-variable
+  # arithmetic indistinguishable from correct Decimal code by syntax alone.
+  - id: spinr-bare-dict-arithmetic-in-money-file
+    patterns:
+      - pattern-either:
+          - pattern: round($A + $B)
+          - pattern: round($A + $B, ...)
+          - pattern: $DICT[$K] + $Y
+          - pattern: $X + $DICT[$K]
+          - pattern: $DICT[$K] - $Y
+          - pattern: $X - $DICT[$K]
+          - pattern: $DICT.get($K) + $Y
+          - pattern: $X + $DICT.get($K)
+          - pattern: $DICT.get($K) - $Y
+          - pattern: $X - $DICT.get($K)
+          - pattern: $X += $DICT[$K]
+          - pattern: $X += $DICT.get($K)
+          # Two-arg .get(key, default) is the more common real-world form
+          # (avoids KeyError) and was missed by the single-arg patterns above
+          # (found by spinr-money-auditor review before this rule was
+          # committed — verified `fees_result.get("fees_total", 0) + subtotal`
+          # produced 0 findings without these).
+          - pattern: $DICT.get($K, $DEFAULT) + $Y
+          - pattern: $X + $DICT.get($K, $DEFAULT)
+          - pattern: $DICT.get($K, $DEFAULT) - $Y
+          - pattern: $X - $DICT.get($K, $DEFAULT)
+          - pattern: $X += $DICT.get($K, $DEFAULT)
+      # Same false-positive guard as SR-03: don't flag the helpers themselves.
+      - pattern-not-inside: |
+          def _f(...):
+              ...
+      - pattern-not-inside: |
+          def _fd(...):
+              ...
+      - pattern-not-inside: |
+          def _d(...):
+              ...
+      - pattern-not-inside: |
+          def _round(...):
+              ...
+    paths:
+      include:
+        - "backend/routes/fares.py"
+        - "backend/routes/payments.py"
+        - "backend/routes/wallet.py"
+        - "backend/routes/rides/payments.py"
+        - "backend/routes/rides/receipts.py"
+        - "backend/routes/rides/_shared.py"
+        - "backend/services/fare_service.py"
+        - "backend/services/payment_service.py"
+        - "backend/services/corporate_wallet_service.py"
+        - "backend/services/corporate_allowance_service.py"
+        - "backend/services/corporate_subscription_service.py"
+        - "backend/utils/stripe_charge.py"
+        - "backend/utils/receipt_pdf.py"
+        - "backend/utils/email_receipt.py"
+        - "backend/routes/drivers/earnings.py"
+        - "backend/features.py"
+        - "backend/utils/referral_payout.py"
+    message: |
+      Arithmetic directly on a dict/subscript value in money-handling code.
+      Wrap operands in _d() before doing arithmetic, and _f()/_round() at the
+      response/DB-write boundary. See CLAUDE.md "Money arithmetic" rule and
+      #5817.
+    severity: ERROR
+    languages: [python]
+
   # SR-04: Direct ride-state update bypasses state-machine guard
   - id: spinr-ride-state-needs-guard
     patterns:

@@ -117,7 +117,7 @@ fi
 # `include` list — the files that rule and its sibling spinr-no-bare-sum-in-
 # money already gate in CI, so this hook and that gate never disagree on
 # which files are "money files" (tests/hooks/test_money_file_list_parity.py
-# asserts this hook's list, SR-03's include and SR-11's include never drift).
+# asserts this hook's list, SR-03's include and SR-12's include never drift).
 # Scoped by parsing diff file headers (like check 12's phone scan below)
 # instead of a `git diff -- <pathspec>`, so it also works correctly in front
 # of tests/hooks/test_pre_commit.sh's fake git shim, which returns the whole
@@ -144,7 +144,7 @@ fi
 # hunks in this diff. This is a known, accepted limitation: the tracker is
 # deliberately conservative (any line it's unsure about is skipped, never
 # blocked), so the failure mode is a missed real violation, never a false
-# block — the same trade-off CI's SR-03/SR-11 semgrep gate exists to catch
+# block — the same trade-off CI's SR-03/SR-11/SR-12 semgrep gate exists to catch
 # with real AST parsing. Verified against every line of every file in the
 # list below as a synthetic full-file addition (2026-09-25, re-verified
 # 2026-09-26 after this fix): 0 hits. See tests/hooks/test_pre_commit.sh

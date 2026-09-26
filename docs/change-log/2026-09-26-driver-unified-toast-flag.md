@@ -90,10 +90,15 @@ Purely additive; no existing behaviour changed.
   - Every place 487's column is registered also registers this one, except the driver-app consumer, which is the next PR.
 - **Comment fix:** the migration's header and its `COMMENT ON COLUMN` were corrected before merge. They had described the unified toast as a `shared/` component, which it is not.
 - Blast-radius greps: `android_auto_offer_tone_enabled` (the precedent), `drivers/config`, `react-native-toast-message`, `hooks/useToast`, `docs/known-forks.md`.
+- **Migration and rollback, run for real** on a throwaway local PostgreSQL 16 with a minimal `public.settings` table (`id` plus 487's column, one `app_settings` row):
+  - applying twice is idempotent; the second run only prints the `already exists, skipping` notice;
+  - the column is `boolean NOT NULL DEFAULT false`, the row reads `false`, and the column comment is set;
+  - the operational rollback (`UPDATE ... = false`) works;
+  - the schema rollback (`DROP COLUMN`) removes the column, and the migration re-applies cleanly afterwards.
 
 ### What was NOT verified
 
-- The migration was not applied to any database, local or staging. The SQL was only reviewed.
+- The migration was not applied to Supabase, staging or production. It was applied only to a throwaway local PostgreSQL 16 whose `settings` table was a minimal stand-in (see §9), so interactions with the real table's other columns, triggers and grants were not exercised.
 - The full backend suite was not run, only the two affected test files.
 - No driver-app code is in this PR, so no driver-app check applies here.
 

@@ -8,7 +8,7 @@
 | Author | Claude Code session (claude.ai/code) |
 | Surface(s) | admin-dashboard (internal staff only) |
 | Domain (Sentry tag) | admin |
-| PR / commit link | UX program W5.1, branch `wip/w5-1` |
+| PR / commit link | UX program W5.1, built on branch `wip/w5-1` and shipped in three PRs: part A #5895 (nav single source), part B #5896 (palette Enter matches the highlight; focus returns on close), and part C, the PR that adds this file (the "?" sheet, its WCAG 2.1.4 switch, the palette entry and footer hints, and the Ctrl/⌘+K dialog guard) |
 | Related issue or gap ID | Plan W5.1; follows the palette's original ship in `2026-08-30-admin-dashboard-design-ux-audit-fixes.md` (item L) |
 
 ## 1. Issue / gap identified

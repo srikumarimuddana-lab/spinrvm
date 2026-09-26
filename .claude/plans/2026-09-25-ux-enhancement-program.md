@@ -86,7 +86,7 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 | ID | Item | Surface | Gate | Verify |
 |---|---|---|---|---|
 | W7.1 | Translations per D3 | apps | — | key-parity test en vs fr |
-| W7.2 | Correct stale counts in the rider/driver design skill | docs | — | — |
+| W7.2 `[~]` | Correct stale counts in the rider/driver design skill | docs | — | — |
 | W7.3 | Remove unused `ErrorScreen`, `FormScreen` and `shared/validators`. **Deletion: ask first** | shared | approval | tests |
 
 ## Cannot be done from an agent session `[H]`
@@ -124,3 +124,4 @@ Waves run in order. The surfaces within a wave touch different files, but they s
 - 2026-09-26: W2.1c prepared: the 5 browser `alert()` errors become error toasts, except the ride force-cancel failure, which shows inside its dialog (a modal Dialog hides toasts from screen readers). Follow-ups, not scheduled:
   - The surge form's on/off toggle, multiplier and justification textarea have no accessible names.
   - Check with a screen reader whether error toasts fired while other modal dialogs are open get announced. It's app-wide and pre-existing.
+- 2026-09-26: W2.1c merged (#5877). W7.2 opened: the rider/driver design skill's counts, rechecked on `main` (about 143 `showToast` calls in rider-app; 5 driver-app files import the shared Button; UX4 resolved by `shared/utils/motion.ts`).

@@ -24,6 +24,7 @@ import {
   prefersReducedMotion,
   type MarkerPose,
 } from '@/lib/map/marker-interpolation';
+import { setVisibleInterval } from '@/lib/visible-interval';
 import { TRACK_LIGHT_TOKENS } from './light-tokens';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
@@ -241,8 +242,8 @@ export default function TrackRide() {
       }
     };
     fetchStatus();
-    const id = setInterval(fetchStatus, 5000);
-    return () => { cancelled = true; clearInterval(id); };
+    const stopPolling = setVisibleInterval(fetchStatus, 5000);
+    return () => { cancelled = true; stopPolling(); };
   }, [shareToken]);
 
   // ── Initialise Google Maps once the script has loaded ───────────────────────

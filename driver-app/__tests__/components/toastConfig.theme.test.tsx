@@ -11,7 +11,7 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
-import { toastConfig } from '../../components/toastConfig';
+import { toastConfig, SOS_COLUMN_CLEARANCE } from '../../components/toastConfig';
 import { ThemeProvider } from '@shared/theme/ThemeContext';
 import { lightColors, darkColors } from '@shared/theme/index';
 
@@ -51,5 +51,21 @@ describe('toastConfig — theme-driven colors', () => {
     // than asserting the pre-hydration light-mode default.
     await findByRole('alert');
     expect(backgroundOf(getByRole('alert'))).toBe(darkColors.error);
+  });
+});
+
+describe('toastConfig — keeps clear of the SOS control', () => {
+  it('ends every toast left of the SOS column', () => {
+    for (const variant of ['success', 'error', 'warning', 'info'] as const) {
+      const { getByRole } = render(<>{(toastConfig[variant] as any)({ text1: 'Heads up' })}</>);
+      const style = StyleSheet.flatten(getByRole('alert').props.style);
+      expect(style.marginRight).toBe(SOS_COLUMN_CLEARANCE);
+    }
+  });
+
+  it('clears the widest SOS control (SafetyShield ring) with a gap', () => {
+    // SafetyShield is 46 pt at right 16; its 54 pt ring is centred on it, so
+    // the ring's left edge is 16 + 46/2 + 54/2 = 66 pt from the screen edge.
+    expect(SOS_COLUMN_CLEARANCE).toBeGreaterThanOrEqual(16 + 46 / 2 + 54 / 2 + 8);
   });
 });

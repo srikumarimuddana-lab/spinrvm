@@ -7,6 +7,15 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 
+/**
+ * Toasts sit 60 pt from the top, where the dashboard's SOS control also sits
+ * (top-right, 16 pt from the edge; SafetyShield is 46 pt with a 54 pt ring).
+ * Ending every toast this far from the right keeps SOS visible and tappable
+ * while a toast shows: the library's full-width wrapper is pointerEvents
+ * "box-none", so taps outside the visible toast reach SOS.
+ */
+export const SOS_COLUMN_CLEARANCE = 76;
+
 // Icon glyphs only — colors come from the live theme (see ICON_NAMES usage
 // below), so this stays in sync with `shared/theme/index.ts` automatically
 // instead of needing a second hardcoded palette kept in sync by hand.
@@ -84,7 +93,8 @@ export const toastConfig = {
 
 const styles = StyleSheet.create({
   container: {
-    marginHorizontal: SPACING.md,
+    marginLeft: SPACING.md,
+    marginRight: SOS_COLUMN_CLEARANCE,
     borderRadius: 12,
     paddingHorizontal: SPACING.md,
     paddingVertical: 14,
